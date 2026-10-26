@@ -295,3 +295,10 @@ func TestOpaqueSignaturesPreserved(t *testing.T) {
 		t.Errorf("thinking signature lost: %+v", p.Flat[0].Assistant.Content[0])
 	}
 }
+
+func TestUnknownRoleRefuses(t *testing.T) {
+	m := AgentMessage{Role: "deferredThing", Raw: []byte(`{"role":"deferredThing"}`)}
+	if err := CheckContinuable([]AgentMessage{m}, nil); err == nil {
+		t.Errorf("unknown context role must refuse")
+	}
+}
