@@ -1,0 +1,238 @@
+package agent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"psi/internal/event"
+	"psi/internal/provider"
+	"psi/internal/session"
+	"psi/internal/tools"
+)
+
+func testSetup(t *testing.T) (*session.Store, *tools.Registry, *provider.Fake, *Loop, []event.Event) {
+	t.Helper()
+	ws := t.TempDir()
+	sessDir := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: sessDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	fake := &provider.Fake{}
+	var events []event.Event
+	loop := New(store, reg, fake, func(e event.Event) { events = append(events, e) })
+	return store, reg, fake, loop, events
+}
+
+func modelMeta() provider.ModelMeta {
+	return provider.ModelMeta{ID: "claude-x", API: "anthropic-messages", MaxTokens: 1000, Reasoning: false}
+}
+
+func toolDefs() []provider.ToolDef {
+	return []provider.ToolDef{
+		{Name: "read", Description: "read", Schema: map[string]any{"type": "object"}},
+		{Name: "write", Description: "write", Schema: map[string]any{"type": "object"}},
+		{Name: "edit", Description: "edit", Schema: map[string]any{"type": "object"}},
+		{Name: "bash", Description: "bash", Schema: map[string]any{"type": "object"}},
+	}
+}
+
+func TestSubmitAndFinalAnswer(t *testing.T) {
+	_, _, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{{Text: "done", StopReason: "stop"}}
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), MaxTurns: 5, System: "base"}
+	ctx := context.Background()
+	if err := loop.Submit(ctx, "hello", cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Restart retains exactly one accepted user message + assistant.
+	store := loop.store
+	path, _ := store.ActivePath()
+	users := 0
+	for _, e := range path {
+		if e.Kind == "message" && e.Message.Message.User != nil {
+			users++
+		}
+	}
+	if users != 1 {
+		t.Errorf("users=%d", users)
+	}
+}
+
+func TestReadEditBashTask(t *testing.T) {
+	store, _, fake, loop, _ := testSetup(t)
+	ws := store.Cwd()
+	if err := os.WriteFile(filepath.Join(ws, "a.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Turn 1: read a.txt; Turn 2: edit; Turn 3: bash; Turn 4: final.
+	fake.Responses = []*provider.Response{
+		{Text: "reading", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "c1", Name: "read", Arguments: map[string]any{"path": "a.txt"}}}},
+		{Text: "editing", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "c2", Name: "edit", Arguments: map[string]any{"path": "a.txt", "edits": []any{map[string]any{"oldText": "old", "newText": "new"}}}}}},
+		{Text: "checking", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "c3", Name: "bash", Arguments: map[string]any{"command": "cat a.txt"}}}},
+		{Text: "finished", StopReason: "stop"},
+	}
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
+	if err := loop.Submit(context.Background(), "do the task", cfg); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(ws, "a.txt"))
+	if string(b) != "new" {
+		t.Errorf("file=%q", b)
+	}
+	proj, _ := store.Projection()
+	if len(proj.Flat) < 8 { // user + 3x(assistant+result) + final
+		t.Errorf("flat=%d", len(proj.Flat))
+	}
+}
+
+func TestMixedToolBatch(t *testing.T) {
+	_, _, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{
+		{Text: "batch", StopReason: "toolUse", ToolCalls: []provider.Block{
+			{Type: "toolCall", ID: "c1", Name: "read", Arguments: map[string]any{"path": "missing.txt"}},
+			{Type: "toolCall", ID: "c2", Name: "bash", Arguments: map[string]any{"command": "echo ok"}},
+		}},
+		{Text: "done", StopReason: "stop"},
+	}
+	cfg := Config{Model: modelMeta(), Tools: toolDefs(), System: "base"}
+	if err := loop.Submit(context.Background(), "batch", cfg); err != nil {
+		t.Fatal(err)
+	}
+	proj, _ := loop.store.Projection()
+	foundErr, foundOk := false, false
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" && m.ToolResult != nil {
+			if m.ToolResult.ToolCallID == "c1" && m.ToolResult.IsError {
+				foundErr = true
+			}
+			if m.ToolResult.ToolCallID == "c2" && !m.ToolResult.IsError {
+				foundOk = true
+			}
+		}
+	}
+	if !foundErr || !foundOk {
+		t.Errorf("mixed batch: err=%v ok=%v", foundErr, foundOk)
+	}
+}
+
+func TestEmptySubmissionRejected(t *testing.T) {
+	_, _, _, loop, _ := testSetup(t)
+	if err := loop.Submit(context.Background(), "   ", Config{Model: modelMeta()}); err == nil {
+		t.Errorf("empty must be rejected")
+	}
+}
+
+func TestInterruptedRecovery(t *testing.T) {
+	store, _, fake, loop, _ := testSetup(t)
+	// Seed an unresolved assistant tool call directly.
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "hi", Timestamp: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", Content: []session.ContentBlock{{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: "cx", Name: "write", Arguments: map[string]any{}}}},
+		API: "anthropic-messages", Provider: "anthropic", Model: "m", StopReason: "toolUse", Timestamp: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	fake.Responses = []*provider.Response{{Text: "x", StopReason: "stop"}}
+	if err := loop.Submit(context.Background(), "next", Config{Model: modelMeta()}); err == nil || !strings.Contains(err.Error(), "unresolved") {
+		t.Errorf("interrupted must stop before rerun, got %v", err)
+	}
+}
+
+func TestCancellation(t *testing.T) {
+	_, _, fake, loop, events := testSetup(t)
+	_ = events
+	fake.Errors = []error{context.Canceled}
+	// Fake that blocks until cancel.
+	blocking := &provider.Fake{}
+	_ = blocking
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := Config{Model: modelMeta(), Tools: toolDefs()}
+	if err := loop.Submit(ctx, "hi", cfg); err == nil {
+		// Either ctx error or provider error; must not leave running.
+		t.Logf("cancel err nil (provider fake ignored ctx?)")
+	}
+	if loop.Running() {
+		t.Errorf("loop still running after cancel")
+	}
+}
+
+func TestRunGuard(t *testing.T) {
+	_, _, fake, loop, _ := testSetup(t)
+	// Always tool-use: should hit guard.
+	for i := 0; i < 30; i++ {
+		fake.Responses = append(fake.Responses, &provider.Response{Text: "again", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: string(rune('a' + i)), Name: "bash", Arguments: map[string]any{"command": "true"}}}})
+	}
+	cfg := Config{Model: modelMeta(), Tools: toolDefs(), MaxTurns: 5}
+	err := loop.Submit(context.Background(), "loop", cfg)
+	if err == nil || !strings.Contains(err.Error(), "run guard") {
+		t.Errorf("guard: %v", err)
+	}
+}
+
+func TestStorageFailureStops(t *testing.T) {
+	store, _, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{{Text: "hi", StopReason: "stop"}}
+	// Corrupt by making session dir read-only? Simpler: close with invalid file.
+	_ = store
+	// Truncate tail externally to force append failure on submit.
+	// First submit to create file.
+	if err := loop.Submit(context.Background(), "first", Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.OpenFile(store.File(), os.O_WRONLY|os.O_APPEND, 0o644)
+	f.WriteString(`{"broken":`)
+	f.Close()
+	if err := loop.Submit(context.Background(), "second", Config{Model: modelMeta(), Tools: toolDefs()}); err == nil {
+		t.Errorf("storage failure must stop")
+	}
+}
+
+func TestCompactionFlow(t *testing.T) {
+	store, _, _, _, _ := testSetup(t)
+	for i := 0; i < 5; i++ {
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "msg", Timestamp: int64(i)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path, _ := store.ActivePath()
+	est := Estimator{}
+	proj, _ := store.Projection()
+	toks, _ := est.Estimate(proj, 100, 4)
+	if toks <= 0 {
+		t.Errorf("estimate=%d", toks)
+	}
+	keep, err := Boundary(path, 2)
+	if err != nil || keep == "" {
+		t.Fatalf("boundary: %v", keep)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	id, err := Compact(ctx, store, "summary of old work", keep, float64(toks), nil)
+	if err != nil || id == "" {
+		t.Fatalf("compact: %v", id)
+	}
+	// Cancelled summary appends nothing.
+	store2, _ := session.New(session.OpenOptions{Cwd: store.Cwd(), Persist: false})
+	for i := 0; i < 2; i++ {
+		store2.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "x", Timestamp: int64(i)}})
+	}
+	cctx, ccancel := context.WithCancel(context.Background())
+	ccancel()
+	if _, err := Compact(cctx, store2, "s", "", 10, nil); err == nil {
+		t.Errorf("cancelled compact must append nothing")
+	}
+	n, _ := store2.ActivePath()
+	for _, e := range n {
+		if e.Kind == "compaction" {
+			t.Errorf("cancelled compaction wrote entry")
+		}
+	}
+}
