@@ -21,9 +21,10 @@ func jsonDecoder(data []byte) *json.Decoder {
 // keys keep last-wins semantics (matching JSON.parse). Unknown fields stay
 // in the raw map for preservation.
 func exactObject(data []byte) (map[string]json.RawMessage, error) {
-	dec := jsonDecoder(data)
 	var obj map[string]json.RawMessage
-	if err := dec.Decode(&obj); err != nil {
+	// Unmarshal (not streaming Decode) so trailing bytes after the record
+	// are rejected, matching Pi's JSON.parse on each line.
+	if err := json.Unmarshal(data, &obj); err != nil {
 		return nil, err
 	}
 	if obj == nil {
