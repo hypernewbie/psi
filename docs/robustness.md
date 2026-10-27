@@ -1,81 +1,131 @@
 # Robustness ledger (PLAN3)
 
-Reference: `temp/pi-mono` rev `d5b3de22d0e24a3e9c38a9410d3329b099717283`, session v3.
-psi baseline: `d45a88b8563b7c1cde13e0f33f89b9abacb6cf24`.
-Environment: Linux amd64, WSL2, Go 1.26.4 (module declares 1.24.2), Node v24.11.1.
+**PLAN3 acceptance remains incomplete.** Implementation commits do not close unrun acceptance cells.
+This review starts at `2bb1c55`, after the original implementation against baseline `d45a88b`.
+The pinned Pi revision is `d5b3de22d0e24a3e9c38a9410d3329b099717283`, with session JSONL v3.
 
 ## Evidence classes
 
 | Label | Meaning |
 |---|---|
-| Reproduced | Synthetic psi probe observed the stated behavior. |
-| Reference executed | Probe ran pinned Pi source or stated Node primitive. |
-| Reference reviewed | Comparison from pinned Pi source. |
-| Review risk | Code path needs deterministic test; no failure claim. |
-| Shared limitation | Pi shares it; no new psi requirement. |
-| Existing protection | Current implementation already guards/tests. |
+| Reproduced | A synthetic psi probe observed the defect. |
+| Reference executed | A probe ran pinned Pi source or the stated Node primitive. |
+| Reference reviewed | The comparison uses pinned Pi source. |
+| Review risk | A code path needs a deterministic test. No failure claim applies. |
+| Shared limitation | Pi shares the limitation. No new psi requirement applies. |
+| Existing protection | An executable regression covers the existing safeguard. |
 
-Survey probes that observe a target defect report `PASS` as instruments,
-not as acceptance. Permanent regressions assert corrected behavior.
+Survey probes report the observed defect, not successful acceptance.
+Permanent regressions assert the corrected behavior.
+The tests use synthetic data, isolated subprocess environments, and loopback provider fixtures.
+No live provider calls ran.
 
 ## Finding ledger
 
-| ID | Pri | Finding | Evidence | Status |
-|---|---|---|---|---|
-| F01 | P1 | Auth reads ignore writer lease | Reproduced, reference reviewed (R01); `auth_lease_test.go` concurrent read-during-exclusive-write, SelectAPIKey lease + missing-file env fallback, 8-client + Pi mixed contention, failover successor allowed | Fixed (P3-007–012) |
-| F02 | P1 | Abandoned auth leases never recover | Reproduced, reference executed (R02); stale/ownership/heartbeat matrices, crash/partial-write successor, mode-preserving revocation | Fixed (P3-007–012) |
-| F03 | P2 | OAuth refresh changes existing permissions | Reproduced, reference executed; refresh preserves mode/0600/atomicity, symlink/permission/disk faults, single pre-stream recovery, token-auth mismatch refused | Fixed (P3-007–012) |
-| F04 | P1 | Lazy reads mix file generations | Reproduced, reference reviewed (R03); pinned inode+hash+size+mtime identity, per-read recheck, LoadHook seam, same-length/same-ID rewrite, external replacement, truncation, mid-read replacement matrices | Fixed (P3-013–018) |
-| F05 | P1 | Decoders accept case aliases | Reproduced, Node primitive executed; exact probes, byte-exact hand scanner, alias-defold, 22M+120s differential fuzz execs, 7 fuzzer-found divergences fixed and pinned as corpus | Fixed (P3-013–018, P3-049–054) |
-| F06 | P1 | Mutation continues after cancellation | Reproduced with barriers, reference reviewed (R05/R06); context-aware checkpoints, settlement barrier, sequential dispatch, persistence-before-RunEnd | Fixed (P3-019–024) |
-| F07 | P1 | Fixed drain deadline loses descendant output | Reproduced, reference executed (R08); idle-grace drain (100ms re-armed), 16-chunk Pi-parity timing 0.67s, quiet-pipe status preservation, group cleanup | Fixed (P3-025–030) |
-| F08 | P1 | Anthropic accumulation quadratic | Reproduced, source reviewed, V8 microcheck; amortized builders, allocation gate ≤15x per 10x (measured ~10x), 1k/10k text+thinking+signature benchmarks | Fixed (P3-031–036) |
-| F09 | P1 | Word deletion scans prefixes quadratically | Reproduced, reference executed (R13); single-pass segmentation, 18/19 Pi parity + documented CJK dictionary divergence, 256 KiB in 69ms (was ~days extrapolated) | Fixed (P3-037–042) |
-| F10 | P1 | Multiline status breaks row accounting | Reproduced, reference reviewed (R14); SanitizeStatusRow single-line boundary, VT emulator + scrollback-sentinel tests | Fixed (P3-037–042) |
-| F11 | P2 | Recall bypasses editor limit | Reproduced, psi invariant defect; whole-draft admission on SetHistory/Prev/Next, skip-with-notice, draft preserved | Fixed (P3-037–042) |
-| F12 | P2 | Stream failure discards known usage | Reproduced, reference reviewed (R10/R11/R12); StreamInterrupt partial path, usage exactly once (777-input test), no retry after partial, no unfinished-tool execution, compaction coverage | Fixed (P3-031–036) |
-| F13 | P2 | Tool modes differ from Node defaults | Reproduced, Node primitive executed; 0666/0777 modes, child-process umask matrix 0002/0022/0077 + Node reference agreement, existing/symlink preservation | Fixed (P3-019–024) |
-| F14 | P2 | Compaction threshold addition can overflow | Reproduced, arithmetic reviewed (R15); subtraction-form threshold, MaxInt boundaries, monotonicity, related-arithmetic audit | Fixed (P3-043–048) |
-| F15 | P2 | Discovery retains full skill bodies | Reproduced, reference reviewed (R16); metadata-only discovery, ≤4 MiB retained for 256×128 KiB bodies, invoke-after-edit freshness | Fixed (P3-043–048) |
+“Corrected” describes the implementation and the listed regressions, not completion of every stress profile.
+Reference anchors R01–R18 remain in `temp/PLAN3.md`, section 4.
+Reference provenance and optional test inputs are in [reference-manifest.md](reference-manifest.md).
 
-Reference anchors R01–R18: see `temp/PLAN3.md` §4.
-Installed `proper-lockfile@4.1.2` provenance recorded in `docs/reference-manifest.md`.
+| ID | Finding | Correction and executable evidence |
+|---|---|---|
+| F01 | Auth reads ignore the writer lease | Corrected. Both credential readers coordinate through the lease. Torn-write and mixed Pi/psi tests pass. |
+| F02 | Abandoned auth leases never recover | Corrected after review. Empty lock directories permit Pi recovery. Identity checks, heartbeat advancement, replacement ownership, and killed-holder recovery have regressions. |
+| F03 | OAuth refresh changes existing permissions | Corrected. Tests cover modes 0600/0640/0660, unrelated fields, chmod failure, rename failure, and temporary-file cleanup. |
+| F04 | Lazy reads mix file generations | Corrected. Descriptor identity, size, mtime, and record hashes guard lazy reads. Mutation barriers cover rewrite, replacement, truncation, append, and unlink. |
+| F05 | Decoders accept case aliases | Corrected after review. Schema-based raw views replace the hand scanner. Semantic regressions cover headers, images, usage, duplicates, provenance, and nested exact keys. |
+| F06 | Mutation continues after cancellation | Corrected after review. Checkpoints cover queue waits, reads, transforms, and writes. Barriers prove settlement of an in-flight write before return. |
+| F07 | A fixed drain deadline loses descendant output | Corrected after review. Idle grace starts at leader exit. Post-exit cancellation kills the group. Closing the reader bounds quiet escaped-pipe waits. |
+| F08 | Anthropic accumulation is quadratic | Corrected. Builders and 1k/10k allocation tests cover text, thinking, signatures, and many-block assembly. The 100k cell remains unrun. |
+| F09 | Word deletion repeatedly scans prefixes | Corrected after review. ASCII navigation needs no grapheme table. Symbol and emoji cases match pinned Pi. CJK dictionary segmentation remains different. |
+| F10 | Multiline status breaks row accounting | Corrected. Console and VT helpers cover single-row status and a committed scrollback sentinel. The provider-to-app journey remains unrun. |
+| F11 | Recall bypasses the editor limit | Corrected. Whole-draft admission covers history installation and recall. Oversized prompts produce a notice without a truncated replacement. |
+| F12 | Stream failure discards known usage | Corrected after review. Cancellation retains typed partial metadata. An HTTP fixture proves durable usage exactly once, correct provider identity, and no tool execution. |
+| F13 | Tool modes differ from Node defaults | Corrected. Child-process umask tests cover 0002/0022/0077 and Node agreement. Existing-file and symlink cases retain their behavior. |
+| F14 | Compaction threshold addition can overflow | Corrected after review. Subtraction preserves strict comparison, including empty context with reserve above the window. Boundary and monotonicity tests pass. |
+| F15 | Discovery retains skill bodies | Corrected. Discovery retains metadata. Tests cover 16/256 skills, retained heap, invocation after file changes, and symlink cycles. |
 
-## Measurement record (Phase J, P3-055–060)
+## Additional review corrections
 
-Host: Linux amd64 (WSL2 kernel 6.6.87.2-microsoft-standard), AMD Ryzen 9 3950X (32 threads), ext4, Go 1.26.4, Node v24.11.1. Measurements are helper-level unless noted; race instrumentation excluded. Unrun cells stay partial — a passing fixture never replaces a required journey.
+- The original auth lease contained an owner file. Pi uses directory removal, which fails for a nonempty directory.
+- The shell drain used the last pre-exit chunk as its timer origin. A quiet leader consumed the descendant grace period.
+- The metadata scanner rejected valid image results and lost usage totals. Identity-only fuzz comparisons did not detect these differences.
+- Cancellation replaced a typed stream interruption with a bare context error. The agent then lost known usage.
+- Interrupted usage records used an API name instead of the provider identity.
+- An edit waiter checked cancellation before its mutex wait, but not before the subsequent read.
+- Word navigation treated emoji and symbols as letters. Ctrl+W also deleted the preceding word.
+- The compaction special case changed the strict threshold for an empty context with an excessive reserve.
+- Fault tests now close injected descriptors and assert unchanged logical state and an intact durable prefix.
+- The status helper no longer claims to run the actual app. Its scrollback sentinel is now an executable assertion.
 
-| Profile | Workload run | Result | Status |
-|---|---|---|---|
-| S01 Auth contention | 8-client + mixed Pi/psi contention suites, repeated `-race -count=10` | No torn parse, stale-owner commit, or leak | Pass (`auth_lease_test.go`, repeated race profile) |
-| S02 Lease failure | stale/fresh/replaced/killed/cancelled/coarse-clock schedules | One current owner, bounded recovery | Pass |
-| S03 Lazy mutation | rewrite/append/truncate/rename/unlink barriers on every lazy API | No stale context success, no provider request on failed projection | Pass (`generation_test.go`) |
-| S04 Storage faults | open/write/short-write/sync/close/stat injection + terminal/spool faults | Fail-stop, bytes and logical state unchanged | Pass (`fault_test.go`, `TestF53*`) |
-| S05 Delta scale | 1k vs 10k fixed 16-byte deltas (text, thinking+signatures, many-block) | Allocation ratios 9.8–10.4x per 10x (gate ≤15x); exact output | Pass at 1k/10k; 100k cell partial (not run) |
-| S06 Editor scale | 1 KiB / 4 KiB / 64 KiB / 256 KiB single words | 236µs / 1.0ms / 22ms / 69ms, linear | Pass (helper); actual-app timings partial |
-| S07 Large paste | 256 KiB paste paths via decoder/console tests | Whole-edit admit/reject, bounded notice | Pass (helper); PTY input-to-frame timestamps partial |
-| S08 Cancellation | dispatch/tool/compact/cancel + drain group-kill tests | Bounded cleanup, no leaked descendants in tested schedules | Partial (100-sample profile not run) |
-| S09 Idle and frames | scheduler 30fps/64KiB tests, flash bounded-frame tests | Coalescing, no ED2/ED3J, ordered text | Pass (helper); 10s-idle + 10k-delta trace partial |
-| S10 Shell lifecycle | 6 drain/schedule tests incl. 16-chunk Pi-parity timing (0.67s) | No missing chunks, no leaks, true exit codes | Pass (helper); 100-run profile partial |
-| S11 Skills | 16 and 256 skills × 128 KiB bodies | Heap delta <4 MiB (metadata only); invoke-after-edit fresh | Pass (`retention_test.go`) |
-| S12 Session scale | 512 MiB fixture: activation 2447ms (<3s), peak RSS 45672 KiB (<160MiB), 15331 entries; 10k-discovery first page 781ms (<2s) | Within budget | Pass (`TestScale512MiBActivation`, `TestScale10000MetadataFirstPage`) |
-| S13 Lifecycle | cancel/activate stress, schedule/generation tests | No stale events, no leaked locks/files in tested schedules | Partial (100-schedule profile not run) |
-| S14 Full replay | lazy replay + hidden-payload tests | Display tracks current record, no hidden-body output | Pass (helper); large-history RSS profile partial |
-| Differential fuzz | exact-key 45M+ execs PASS; decode/index/SSE/editor/decoder 60s+ each PASS | 7 divergences found, fixed, pinned as corpus | Pass |
-| Reference matrix | Pi→psi→Pi + pinned projector, both provider families | Agreement | Pass (`TestReferencePi*`, requires `PSI_PI_SESSION_MODULE`) |
-| Delivered binary | copied exe, no Node on PATH, 4-tool offline journey | STAN​DALONE_DONE, no body leak | Pass (`TestActualCopiedBinaryWithoutNodeUsesAllFourTools`) |
+## Local measurement record
+
+Host: Linux amd64, WSL2 kernel `6.6.87.2-microsoft-standard-WSL2`, ext4, AMD Ryzen 9 3950X.
+Toolchain: Go 1.26.4, module Go 1.24.2, Node v24.11.1.
+Review implementation revision: `414202c`, followed by test and ledger corrections.
+Absolute performance measurements exclude race instrumentation.
+Helper timings do not establish actual-app latency budgets.
+
+| Profile | Evidence | Status and missing cells |
+|---|---|---|
+| S01 Auth contention | Two concurrent refresh clients, leased readers, mixed Pi/psi fixtures. Targeted race suites pass ten repetitions. | Partial. Eight child clients and 100 mixed operations remain unrun. |
+| S02 Lease failure | Stale/fresh/replaced leases, cancelled waits, observed heartbeat advancement, killed child holder, and Pi recovery. | Partial. The coarse-clock schedule remains unrun. |
+| S03 Lazy mutation | Deterministic generation tests and indexed/eager semantic regressions pass. | Partial. Complete every lazy-API and provider-request-count cell before acceptance. |
+| S04 Storage faults | Open/write/short-write/sync/close/stat faults stop further writes. Append tests assert unchanged logical state and an intact prefix. | Partial. First-flush and full app fault journeys remain incomplete. An uncertain appended tail is not rolled back. |
+| S05 Delta scale | Existing 1k/10k allocation regressions pass the relative 15-fold growth limit. | Partial. The 100k cell and complete heap profiles remain unrun. |
+| S06 Editor scale | One-word helpers cover 1/4/64/256 KiB. The 256-KiB ASCII helper took 0.316 ms in the recorded sample. | Partial. Mixed-Unicode and actual-app p95 measurements remain incomplete. |
+| S07 Large paste | Decoder and console helpers cover whole-edit admission or rejection at 256 KiB. | Partial. PTY end-marker-to-frame timestamps remain unrun. |
+| S08 Cancellation | Queue-wait, in-flight write, stream interruption, and post-exit shell cancellation regressions pass. | Partial. The 100-sample dispatch and descendant-liveness profile remains unrun. |
+| S09 Idle and frames | Scheduler, bounded-write, and flash regressions pass. | Partial. The actual-app ten-second idle and 10k-delta trace remain unrun. |
+| S10 Shell lifecycle | Active chunks, quiet pipes, failures, timeout, post-exit cancellation, and escaped quiet pipes have regressions. | Partial. The 100-run descriptor/process profile remains unrun. |
+| S11 Skills | Metadata retention, fresh invocation, duplicate, and cycle tests pass for the recorded fixtures. | Partial. Complete the post-GC heap-profile evidence before closing the full profile. |
+| S12 Session scale | Three runs: activation 2443–2466 ms, peak RSS 40492–44248 KiB, 15331 entries. Discovery first page: 698–746 ms. | Pass for these fixtures. Budgets are 3 s, 160 MiB RSS, and 2 s discovery. |
+| S13 Lifecycle | Existing schedule, stale-generation, and actual-app regressions pass. | Partial. The 100 lifecycle schedules remain unrun. |
+| S14 Full replay | Lazy replay and hidden-payload regressions pass. | Partial. Large visible-history RSS, output-size, and canary measurements remain incomplete. |
+
+### Review checks
+
+| Check | Result | Scope |
+|---|---|---|
+| `./scripts/check.sh` | Pass | Local formatting, vet, ordinary tests, and race tests. |
+| Semantic session fuzzing | Pass, 6394895 executions over 300 seconds | Eager/indexed agreement across retained semantic state, not just record identity. |
+| Targeted auth and shell race suites | Pass, ten repetitions | Includes explicit public `proper-lockfile@4.1.2` input. |
+| Pinned Pi session matrix | Pass, two repetitions | Both continuation directions and both supported provider families. |
+| Pinned Pi word navigation | Pass, three repetitions | 24 supported cases. CJK dictionary segmentation remains a documented exception. |
+| Actual-app executable suite | Pass, three repetitions | Explicit binary input, including copied-executable four-tool coverage without Node on PATH. |
+| Vci | Blocked | No client configuration. All reported checks ran locally. |
+
+The old 45M-execution claim used a weaker identity comparison.
+It does not establish the stronger semantic property from this review.
+Other fuzz targets need their final timed release runs before full PLAN3 acceptance.
+The delivered executable revision and SHA-256 accompany the final handoff.
+
+## Gate status
+
+No full PLAN3 gate closes from these helper results alone.
+
+| Gate | Status | Remaining evidence |
+|---|---|---|
+| G3-01 Baseline and provenance | Partial | Complete retained artifact and fixture-hash records. |
+| G3-02 Shared auth | Partial | Full S01/S02 profiles and remaining rotation-failure cells. |
+| G3-03 Session reads and semantics | Partial | Complete S03 API coverage and acceptance mapping. |
+| G3-04 Tools and processes | Partial | Full S04/S08/S10 fault and cleanup profiles. |
+| G3-05 Provider resources and settlement | Partial | The 100k allocation cells and remaining timed fuzz runs. |
+| G3-06 Terminal and editor | Partial | Actual-app latency, paste, idle, frame, platform, and human checks. |
+| G3-07 Numeric, discovery, race, and faults | Partial | Complete arithmetic audit, heap profiles, lifecycle schedules, and fuzz budgets. |
+| G3-08 Executable and evidence ledger | Partial | Remaining actual-app measurements and supported-platform cells. |
+
+Unavailable SSH and human terminal cells remain blocked.
+No emulator result replaces selection, copy, flicker, or native-scrollback checks by a person.
+These open requirements remain separate from the PLAN2 acceptance ledger.
 
 ## Scope rule
 
-Pi defines the boundary. Shared limitations (§5 of plan) do not become psi
-requirements. Go-specific regressions stay in scope despite similar sources.
-Preserved psi safety choices: bounded input, strict session reads, refusal
-after uncertain storage writes.
+Pi defines the retained feature boundary.
+Shared limitations do not become new psi requirements.
+Go-specific regressions remain in scope.
+Existing psi safeguards include bounded input, strict session reads, and refusal after uncertain storage writes.
+Atomic tool rollback, hostile-filesystem snapshots, and concurrent Pi/psi session writers remain outside scope.
 
-## Product limits
-
-Four tools (`read/write/edit/bash`), two provider families (Anthropic
-Messages, `openai-codex`), inline main-screen terminal, native scrollback,
-no tool args/results/diffs in terminal, Pi JSONL v3 compatible, no
-extensions/MCP/RPC/sandbox/session-tree/login/telemetry/updates/background
-service, no live provider calls without explicit approval.
+The product retains four tools, two provider families, and an inline main-screen terminal.
+It excludes extensions, MCP, RPC, sandboxing, login, telemetry, and updates.
+Live provider tests require explicit operator approval and the `liveprovider` build tag.

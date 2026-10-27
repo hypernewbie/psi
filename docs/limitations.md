@@ -23,7 +23,8 @@ Regression shell processes instead use an isolated environment.
 
 Anthropic uses API keys.
 Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock.
-Refresh preserves unrelated fields and uses atomic persistence with restrictive permissions.
+Refresh preserves unrelated fields and existing permission bits.
+It persists credential changes through atomic replacement.
 
 psi has no login interface and does not support Anthropic OAuth or `!command` execution.
 Codex login remains Pi `/login openai-codex`.
@@ -48,7 +49,10 @@ The fixtures cover branches, context edits, compaction, signed reasoning, images
 The acceptance ledger separates these results from unfinished user journeys.
 
 The editor uses `uniseg` for grapheme segmentation and width, with an explicit keycap-width correction.
-Word navigation treats a non-ASCII run as one word; Pi's ICU dictionary segments CJK ideograph runs further (18/19 differential parity, divergence pinned in `wordnav_test.go`). Usage alias-case keys are outside the F05 boundary: both readers fold them identically, while Pi ignores them. These are documented permanent port simplifications, not deferred work.
+Word navigation groups adjacent CJK ideographs without the ICU dictionary segmentation that Pi uses.
+`wordnav_test.go` records this port limitation separately from the 24 supported reference cases.
+Emoji and symbols no longer count as letters.
+Session decoders use exact field names, including nested usage fields.
 Prompts and bracketed pastes have a 256 KiB UTF-8 budget.
 The terminal writer changes only its owned tail and uses writes of at most 64 KiB.
 Stream output coalesces at scheduled frames and flushes at semantic boundaries.
@@ -71,5 +75,6 @@ Context-limit recovery permits at most one compaction and retry before visible p
 Synthetic loop/provider tests cover that path.
 Full compaction, provider, storage-fault, and actual-binary journeys remain incomplete acceptance requirements.
 
-The complete status and required measurements are in [the acceptance ledger](acceptance.md).
-These incomplete requirements are not new permanent exclusions or a deferred PLAN3.
+The required measurements remain in [the acceptance ledger](acceptance.md) and [the robustness ledger](robustness.md).
+PLAN3 acceptance remains incomplete.
+These requirements are not new permanent exclusions.

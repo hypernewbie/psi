@@ -16,6 +16,10 @@ import (
 func TestF10StatusRowAccounting(t *testing.T) {
 	vt := testutil.NewVTModel(80, 24)
 	w := NewWriter(vtFeed{vt})
+	const sentinel = "COMMITTED_STATUS_SENTINEL"
+	if err := w.Emit(Frame{Append: sentinel + "\r\n" + strings.Repeat("committed\r\n", 24)}); err != nil {
+		t.Fatal(err)
+	}
 	names := []string{
 		"read\ninjected: done",
 		"evil\r\nsecond: running",
@@ -35,6 +39,9 @@ func TestF10StatusRowAccounting(t *testing.T) {
 		if err := w.Emit(Frame{Tail: []string{TruncateToWidth(row, 79)}}); err != nil {
 			t.Fatal(err)
 		}
+		if !strings.Contains(strings.Join(vt.Scrollback, "\n")+vt.Text(), sentinel) {
+			t.Fatal("status update destroyed committed scrollback")
+		}
 	}
 	// Owned rows: one per status update; no cursor escape; scrollback keeps
 	// only committed transcript (status is live tail, never scrollback).
@@ -45,9 +52,8 @@ func TestF10StatusRowAccounting(t *testing.T) {
 	}
 }
 
-func TestF10UnsupportedNameThroughApp(t *testing.T) {
-	// End-to-end: an unsupported tool name from a provider fixture reaches
-	// Console.Status through the app event path and stays one row.
+func TestF10UnsupportedNameThroughConsole(t *testing.T) {
+	// Helper coverage only. This test does not run the provider or app loop.
 	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}, writer: NewWriter(&strings.Builder{}), decoder: NewDecoder()}
 	evil := "pwn\nsecond: running\x1b[2J"
 	c.Status(FormatStatus(evil, ToolRunning))
@@ -59,16 +65,12 @@ func TestF10UnsupportedNameThroughApp(t *testing.T) {
 	if len(c.visibleTail) != 1 {
 		t.Fatalf("owned rows = %d, want 1", len(c.visibleTail))
 	}
-	// Settled statuses stay compact: no arguments, results, or payloads.
+	// A running status emits nothing, then settlement commits one line.
 	var sb strings.Builder
 	sw := NewStatusWriter(&sb)
 	sw.Update("tool\nname", "c1", ToolRunning)
 	sw.Update("tool\nname", "c1", ToolDone)
-	out := sb.String()
-	if strings.ContainsAny(out, "\n\r\x1b") && strings.Count(out, "\n") != 1 {
-		t.Fatalf("settled status not compact: %q", out)
-	}
-	if strings.Contains(out, "payload") || strings.Contains(out, "args") {
-		t.Fatalf("status leaks bodies: %q", out)
+	if out := sb.String(); out != "tool name: done\n" {
+		t.Fatalf("wrong settled status: %q", out)
 	}
 }
