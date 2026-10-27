@@ -1,131 +1,88 @@
 package terminal
 
-// Phase G regressions for PLAN3 F09: word deletion segments once (linear)
-// and preserves supported Pi word boundaries.
-//
-// Differential corpus against the Pi findWordBackward algorithm (compiled
-// word-navigation.js from the installed package; pinned-rev parity by source
-// review of temp/pi-mono word-navigation.ts). JS cursors are UTF-16 units;
-// the harness converts through rune indices (BMP corpus) so byte offsets
-// stay comparable.
-
 import (
-	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
-	"os"
+	"flag"
 	"os/exec"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
+	"unicode/utf16"
+
+	"psi/internal/testutil"
 )
 
-const piWordNavJS = "/home/hypernewbie/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/word-navigation.js"
+// The adapter built by scripts/build-reference.mjs imports unmodified source
+// from the pinned Pi checkout. No private installation path or inherited
+// Node environment participates in this optional reference test.
+var testPiWordModule = flag.String("psi-test-pi-word-module", "", "pinned Pi reference adapter URL for word-navigation tests")
 
 type wordCase struct {
 	text   string
 	cursor int // byte offset
 }
 
-func byteToRuneIdx(s string, byteOff int) int {
-	n := 0
-	for i := range s {
-		if i >= byteOff {
-			break
-		}
-		n++
-	}
-	return n
-}
-
-func runeToByteIdx(s string, runeIdx int) int {
-	i := 0
-	for pos := range s {
-		if i == runeIdx {
-			return pos
-		}
-		i++
-	}
-	return len(s)
-}
-
 func piWordBackward(t *testing.T, cases []wordCase) []int {
 	t.Helper()
-	if _, err := os.Stat(piWordNavJS); err != nil {
-		t.Skip("pi word-navigation dist unavailable: blocked cell")
+	if *testPiWordModule == "" {
+		t.Skip("Pi word-navigation reference cell blocked: supply -psi-test-pi-word-module")
 	}
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node unavailable: blocked cell")
+		t.Fatal("Node is required for the explicitly requested reference test")
 	}
-	script := `const m=require(` + "`" + piWordNavJS + "`" + `);
-const rl=require('readline').createInterface({input:process.stdin});
-rl.on('line',l=>{const c=JSON.parse(l);console.log(m.findWordBackward(c.text,c.cursor));});`
-	cmd := exec.Command(node, "-e", script)
-	stdin, _ := cmd.StdinPipe()
-	stdout, _ := cmd.StdoutPipe()
-	if err := cmd.Start(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	script := `import {readFileSync} from 'node:fs';
+const m=await import(process.argv[1]);
+const cases=JSON.parse(readFileSync(0,'utf8'));
+console.log(JSON.stringify(await Promise.all(cases.map(c=>m.findWordBackward(c.text,c.cursor)))));`
+	cmd := exec.CommandContext(ctx, node, "--input-type=module", "-e", script, *testPiWordModule)
+	cmd.Env = testutil.ChildEnv(t.TempDir(), map[string]string{"LANG": "C.UTF-8"})
+	var input []map[string]any
+	for _, c := range cases {
+		input = append(input, map[string]any{"text": c.text, "cursor": len(utf16.Encode([]rune(c.text[:c.cursor])))})
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
 		t.Fatal(err)
 	}
-	go func() {
-		for _, c := range cases {
-			// BMP corpus: UTF-16 units equal rune indices.
-			if !isBMP(c.text) {
-				t.Error("non-BMP case in differential corpus")
-				continue
+	cmd.Stdin = bytes.NewReader(data)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("pinned word-navigation reference failed: %v", err)
+	}
+	var units []int
+	if err := json.Unmarshal(out, &units); err != nil || len(units) != len(cases) {
+		t.Fatalf("invalid reference output: %v", err)
+	}
+	var offsets []int
+	for i, target := range units {
+		n, offset := 0, len(cases[i].text)
+		for pos, r := range cases[i].text {
+			if n == target {
+				offset = pos
+				break
 			}
-			json.NewEncoder(stdin).Encode(map[string]any{"text": c.text, "cursor": byteToRuneIdx(c.text, c.cursor)})
+			n += utf16.RuneLen(r)
 		}
-		stdin.Close()
-	}()
-	var out []int
-	sc := bufio.NewScanner(stdout)
-	for i := 0; i < len(cases); i++ {
-		if !sc.Scan() {
-			t.Fatalf("pi helper exited early at case %d", i)
-		}
-		units, err := strconv.Atoi(strings.TrimSpace(sc.Text()))
-		if err != nil {
-			t.Fatalf("bad pi output %q", sc.Text())
-		}
-		out = append(out, runeToByteIdx(cases[i].text, units))
+		offsets = append(offsets, offset)
 	}
-	cmd.Wait()
-	return out
-}
-
-func isBMP(s string) bool {
-	for _, r := range s {
-		if r > 0xFFFF {
-			return false
-		}
-	}
-	return true
+	return offsets
 }
 
 func TestF09WordParityWithPi(t *testing.T) {
-	mk := func(text string, cursor int) wordCase { return wordCase{text, cursor} }
 	end := func(text string) wordCase { return wordCase{text, len(text)} }
 	cases := []wordCase{
-		end("hello world"),
-		end("hello world   "),
-		mk("hello world", 5),
-		mk("hello world", 0),
-		end("foo,bar;baz"),
-		end("foo...bar"),
-		end("a  b\tc\nd"),
-		end("trailing\n\n"),
-		end("hello, 世界"),
-		end("世界"),
-		end("école café"), // combining marks (BMP)
-		end("naïve résumé"),
-		end("under_score name"),
-		end("a/b\\c-d_e+f=g"),
-		end(strings.Repeat("ab ", 200)),
-		end("word " + strings.Repeat("x", 500)),
-		end("...!!!???"),
-		end("mixed-word_with,punct!"),
+		end("hello world"), end("hello world   "), {"hello world", 5}, {"hello world", 0},
+		end("foo,bar;baz"), end("foo...bar"), end("a  b\tc\nd"), end("trailing\n\n"),
+		end("hello, 世界"), end("世界"), end("école café"), end("naïve résumé"),
+		end("under_score name"), end("under_score"), end("a/b\\c-d_e+f=g"),
+		end(strings.Repeat("ab ", 200)), end("word " + strings.Repeat("x", 500)),
+		end("...!!!???"), end("mixed-word_with,punct!"),
+		end("a🙂"), end("a👩‍🚀"), end("hello 🇳🇿"), end("word™"), end("a🛰️"),
 	}
 	want := piWordBackward(t, cases)
 	for i, c := range cases {
@@ -135,8 +92,19 @@ func TestF09WordParityWithPi(t *testing.T) {
 	}
 }
 
+func TestWordBackwardSymbolsKeepPrecedingWord(t *testing.T) {
+	for text, prefix := range map[string]string{"a🙂": "a", "a👩‍🚀": "a", "word™": "word", "a🛰️": "a"} {
+		e := NewEditor()
+		e.Insert(text)
+		e.DeleteWordBackward()
+		if e.Text() != prefix {
+			t.Errorf("Ctrl+W on %q: got %q want %q", text, e.Text(), prefix)
+		}
+	}
+}
+
 func TestF09LongWordScaling(t *testing.T) {
-	for _, size := range []int{1024, 4096, 65536} {
+	for _, size := range []int{1024, 4096, 65536, 256 * 1024} {
 		text := strings.Repeat("x", size)
 		start := time.Now()
 		got := wordBackward(text, len(text))
@@ -145,29 +113,19 @@ func TestF09LongWordScaling(t *testing.T) {
 			t.Fatalf("size %d: got %d", size, got)
 		}
 		t.Logf("long word %d bytes: %v", size, elapsed)
-		if size == 65536 && elapsed > 2*time.Second {
-			t.Fatalf("64KiB word took %v (quadratic regression?)", elapsed)
+		// Deadlock guard only. Latency acceptance needs actual-app samples.
+		if elapsed > 2*time.Second {
+			t.Fatalf("long-word navigation stalled: %v", elapsed)
 		}
 	}
-	// 256 KiB single word must complete (old code extrapolated to days).
-	text256 := strings.Repeat("z", 256*1024)
-	start := time.Now()
-	if got := wordBackward(text256, len(text256)); got != 0 {
-		t.Fatalf("256KiB: got %d", got)
-	}
-	t.Logf("256KiB word: %v", time.Since(start))
-	// Documented divergence: ICU dictionary segments CJK ideograph runs
-	// ("世界|你好"); psi treats a non-ASCII run as one word by design.
-	// Pinned here so the simplification cannot silently change.
+	// Documented dictionary limitation, separate from the supported corpus.
 	if got := wordBackward("世界你好", len("世界你好")); got != 0 {
 		t.Fatalf("CJK run behavior changed: got %d want 0", got)
 	}
-	// Actual-app path: Ctrl+W through the editor on a long word.
 	e := NewEditor()
 	e.Insert(strings.Repeat("q", 4096) + " tail")
 	e.DeleteWordBackward()
 	if e.Text() != strings.Repeat("q", 4096)+" " {
-		t.Fatalf("editor Ctrl+W wrong: %q...", e.Text()[4090:])
+		t.Fatal("editor Ctrl+W deleted the wrong prefix")
 	}
-	_ = utf8.RuneCountInString
 }

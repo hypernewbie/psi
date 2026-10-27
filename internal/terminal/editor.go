@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/rivo/uniseg"
 )
@@ -366,22 +367,29 @@ func wordBackward(s string, off int) int {
 		return 0
 	}
 	prefix := s[:off]
-	// Single segmentation pass collecting grapheme start offsets.
+	// ASCII graphemes need no offset table. CRLF is a whitespace pair,
+	// so skipping both bytes gives the same boundary as segmentation.
+	ascii := true
+	for i := 0; i < len(prefix); i++ {
+		if prefix[i] >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return wordBackwardASCII(prefix)
+	}
+	// Keep offsets only, not a second array of grapheme strings.
 	gr := uniseg.NewGraphemes(prefix)
 	starts := []int{0}
-	graphemes := []string{}
 	for gr.Next() {
-		start, _ := gr.Positions()
-		graphemes = append(graphemes, string(gr.Str()))
-		starts = append(starts, start+len(gr.Str()))
-	}
-	if len(graphemes) == 0 {
-		return 0
+		_, end := gr.Positions()
+		starts = append(starts, end)
 	}
 	// Walk back: skip trailing whitespace, then one word/punct run.
-	i := len(graphemes)
+	i := len(starts) - 1
 	for i > 0 {
-		g := graphemes[i-1]
+		g := prefix[starts[i-1]:starts[i]]
 		if strings.TrimSpace(g) != "" {
 			break
 		}
@@ -390,11 +398,11 @@ func wordBackward(s string, off int) int {
 	if i <= 0 {
 		return 0
 	}
-	last := graphemes[i-1]
+	last := prefix[starts[i-1]:starts[i]]
 	lastEnd := starts[i]
 	isWord := _isWordLike(last)
 	for i > 0 {
-		g := graphemes[i-1]
+		g := prefix[starts[i-1]:starts[i]]
 		if strings.TrimSpace(g) == "" {
 			break
 		}
@@ -417,12 +425,31 @@ func wordBackward(s string, off int) int {
 	return starts[i]
 }
 
+func wordBackwardASCII(s string) int {
+	space := func(c byte) bool { return c == ' ' || c >= '\t' && c <= '\r' }
+	word := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+	}
+	i := len(s)
+	for i > 0 && space(s[i-1]) {
+		i--
+	}
+	if i == 0 {
+		return 0
+	}
+	wordLike := word(s[i-1])
+	for i > 0 && !space(s[i-1]) && word(s[i-1]) == wordLike {
+		i--
+	}
+	return i
+}
+
 func _isWordLike(s string) bool {
 	if s == "" || strings.TrimSpace(s) == "" {
 		return false
 	}
 	for _, r := range s {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r > 0x7F {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_' {
 			return true
 		}
 	}
