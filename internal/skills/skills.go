@@ -15,14 +15,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Skill is a discovered SKILL.md (metadata + path; body loaded on demand).
+// Skill is a discovered SKILL.md: metadata and paths only (F15). The body
+// is never retained after frontmatter extraction; Invoke rereads the file.
 type Skill struct {
 	Name        string
 	Description string
 	FilePath    string
 	BaseDir     string
 	Disable     bool
-	Body        string
 }
 
 // Diagnostic for malformed files and duplicate names.
@@ -222,7 +222,7 @@ func loadFile(path string) (*Skill, []Diagnostic) {
 	if len(b) > 256*1024 {
 		return nil, []Diagnostic{{Path: path, Message: "skill file too large"}}
 	}
-	fm, body := parseFrontmatter(string(b))
+	fm, _ := parseFrontmatter(string(b))
 	name, _ := fm["name"].(string)
 	desc, _ := fm["description"].(string)
 	disable, _ := fm["disable-model-invocation"].(bool)
@@ -244,7 +244,9 @@ func loadFile(path string) (*Skill, []Diagnostic) {
 		}
 		return nil, dg
 	}
-	return &Skill{Name: name, Description: desc, FilePath: path, BaseDir: filepath.Dir(path), Disable: disable, Body: body}, nil
+	// Clone small metadata so no slice of the (up to 256 KiB) source buffer
+	// survives discovery (F15).
+	return &Skill{Name: strings.Clone(name), Description: strings.Clone(desc), FilePath: path, BaseDir: filepath.Dir(path), Disable: disable}, nil
 }
 
 func validateName(name string) []string {
