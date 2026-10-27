@@ -62,15 +62,15 @@ func (r *Registry) Dispatch(inv Invocation) Result {
 // filesystem operations from starting after cancellation.
 func (r *Registry) DispatchCtx(ctx context.Context, inv Invocation) Result {
 	if err := ctx.Err(); err != nil {
-		return errResult(err.Error())
+		return errResult(fmt.Sprintf("cancelled before dispatch: %v", err))
 	}
 	switch inv.Name {
 	case Read:
 		return r.Read.ExecuteCtx(ctx, inv)
 	case Write:
-		return r.Write.Execute(inv)
+		return r.Write.ExecuteCtx(ctx, inv)
 	case Edit:
-		return r.Edit.Execute(inv)
+		return r.Edit.ExecuteCtx(ctx, inv)
 	case Bash:
 		return r.Bash.ExecuteCtx(ctx, inv)
 	default:

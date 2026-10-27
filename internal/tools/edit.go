@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,26 @@ import (
 type EditTool struct {
 	Cwd string
 	mu  sync.Mutex // serialize mutation per file (first release: global)
+	// ReadFile/WriteFile/AfterRead seams admit deterministic schedules.
+	ReadFile  func(string) ([]byte, error)
+	WriteFile func(string, []byte, os.FileMode) error
+	AfterRead func()
+}
+
+func (t *EditTool) doRead(abs string) ([]byte, error) {
+	if t.ReadFile != nil {
+		return t.ReadFile(abs)
+	}
+	return os.ReadFile(abs)
+}
+
+func (t *EditTool) doWrite(abs string, out []byte) error {
+	if t.WriteFile != nil {
+		return t.WriteFile(abs, out, 0o666)
+	}
+	// Ordinary recreated tool files follow the Node default (0666);
+	// existing targets keep their mode under WriteFile.
+	return os.WriteFile(abs, out, 0o666)
 }
 
 type editItem struct {
@@ -22,6 +43,18 @@ type editItem struct {
 // Execute supports current {path, edits[]} plus legacy {oldText,newText} and
 // JSON-string edits (model normalization, Pi parity).
 func (t *EditTool) Execute(inv Invocation) Result {
+	return t.ExecuteCtx(context.Background(), inv)
+}
+
+// ExecuteCtx checks cancellation between read, transform, write, and result
+// settlement (F06). The mutation mutex stays held until an in-flight write
+// settles, so a cancelled call never releases the next mutation early.
+// Cancellation cannot roll a write back: results stay truthful about whether
+// the file changed.
+func (t *EditTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("edit: cancelled before start: %v", err))
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	path, _ := argString(inv.Arguments, "path")
@@ -33,9 +66,18 @@ func (t *EditTool) Execute(inv Invocation) Result {
 		return errResult(fmt.Sprintf("edit: %v", err))
 	}
 	abs := resolvePath(t.Cwd, path)
-	data, err := os.ReadFile(abs)
+	data, err := t.doRead(abs)
 	if err != nil {
 		return errResult(fmt.Sprintf("edit: %v", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("edit: cancelled after read, before write (no file change by this call): %v", err))
+	}
+	if t.AfterRead != nil {
+		t.AfterRead()
+	}
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("edit: cancelled before write (no file change by this call): %v", err))
 	}
 	orig := string(data)
 	bom := strings.HasPrefix(orig, "\xef\xbb\xbf")
@@ -85,8 +127,11 @@ func (t *EditTool) Execute(inv Invocation) Result {
 	if bom {
 		out = "\xef\xbb\xbf" + out
 	}
-	if err := os.WriteFile(abs, []byte(out), 0o644); err != nil {
+	if err := t.doWrite(abs, []byte(out)); err != nil {
 		return errResult(fmt.Sprintf("edit: failed to write: %v", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("edit: cancelled after write completed (file was modified): %v", err))
 	}
 	return textResult(fmt.Sprintf("Successfully edited %s (%d edit(s))", path, len(edits)))
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // RunIsolated shields direct shell-tool regression tests from BASH_ENV, real
@@ -42,6 +43,12 @@ func RunIsolated(run func() int) int {
 		"LANG": "C.UTF-8", "TERM": "xterm",
 	} {
 		os.Setenv(key, value)
+	}
+	// Probe markers for subprocess helpers survive isolation (P3-004).
+	for _, entry := range saved {
+		if strings.HasPrefix(entry, "PSI_UMASK_PROBE=") {
+			os.Setenv("PSI_UMASK_PROBE", strings.TrimPrefix(entry, "PSI_UMASK_PROBE="))
+		}
 	}
 	return run()
 }
