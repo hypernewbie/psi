@@ -143,3 +143,34 @@ func itoaF07(i int) string {
 	}
 	return string(b)
 }
+
+// TestF53SpoolFailure injects a capture-descriptor failure: the error is
+// recorded, the run is cancelled, and no output is trusted.
+func TestF53SpoolFailure(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.CreateTemp("", "psi-spool-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	// Reopen closed semantics: use a file then close its descriptor.
+	f2, err := os.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := false
+	cap := &tailCapture{file: f2, cancel: func() { cancelled = true }}
+	_ = f2.Close() // descriptor failures from here on
+	if _, err := cap.Write([]byte("chunk")); err == nil {
+		t.Fatal("expected capture error")
+	}
+	if cap.err == nil {
+		t.Fatal("capture error not recorded")
+	}
+	if !cancelled {
+		t.Fatal("capture failure did not cancel the run")
+	}
+	_ = dir
+}

@@ -55,3 +55,55 @@ func FuzzIndexedMetadata(f *testing.F) {
 		_ = BuildContextEntries(path)
 	})
 }
+
+func FuzzExactKeysDifferential(f *testing.F) {
+	seeds := []string{
+		`{"type":"message","id":"u1","message":{"role":"user","content":"hi"}}`,
+		`{"TYPE":"message","ID":"u1","message":{"ROLE":"user","content":"hi"}}`,
+		`{"type":"message","id":"canon","ID":"alias","parentId":"p1","ParentID":"evil","message":{"role":"user","ROLE":"admin","content":"hi"}}`,
+		`{"type":"message","id":"a","id":"b","message":{"role":"user","content":"hi"}}`,
+		`{"type":"message","id":"t1","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","ID":"evil","name":"read","arguments":{}}]}}`,
+		`{"type":"message","id":"x","unknownField":{"a":[1,2]},"nothing":null,"message":{"role":"user","content":"hi"}}`,
+	}
+	for _, s := range seeds {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > 64*1024 {
+			return
+		}
+		line := bytes.TrimSpace(data)
+		if len(line) == 0 || line[0] != '{' {
+			return
+		}
+		eager, eagerErr := UnmarshalEntry(line)
+		// Indexed reader path: metadata identity from the same bytes.
+		// (Disk payload loading is covered with real files in exact_test.go.)
+		idx, indexErr := BuildIndexFrom(bytes.NewReader(append(append([]byte(nil), line...), '\n')), "fuzz.jsonl")
+		var meta *RecordMeta
+		if indexErr == nil {
+			for _, m := range idx.Records {
+				if m.Type == "session" {
+					continue
+				}
+				cp := m
+				meta = &cp
+				break
+			}
+		}
+		// Agreement: both reject, or both accept with identical identity.
+		if (eagerErr == nil) != (indexErr == nil && meta != nil) {
+			t.Fatalf("eager/indexed disagree: %v vs %v on %.80q", eagerErr, indexErr, line)
+		}
+		if eagerErr != nil {
+			return
+		}
+		if eager.ID() != meta.ID || eager.Kind != meta.Type {
+			t.Fatalf("identity mismatch: %s/%s vs %+v", eager.ID(), eager.Kind, meta)
+		}
+		lp, mp := eager.ParentID(), meta.ParentID
+		if (lp == nil) != (mp == "") || (lp != nil && *lp != mp) {
+			t.Fatalf("parent mismatch: %v vs %q", lp, mp)
+		}
+	})
+}

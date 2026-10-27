@@ -178,7 +178,14 @@ func metadataRecord(data []byte) (*Entry, *SessionHeader, error) {
 			Details       objectMetadata  `json:"details"`
 		} `json:"message"`
 	}
-	if err := json.Unmarshal(data, &p); err != nil {
+	// Struct decoding folds ASCII case; decode a defolded copy so
+	// alias-case keys can neither populate fields nor break decoding.
+	// Exact protocol fields were already extracted above.
+	clean := defoldRecord(obj)
+	if clean == nil {
+		return nil, nil, fmt.Errorf("entry missing type")
+	}
+	if err := json.Unmarshal(clean, &p); err != nil {
 		return nil, nil, err
 	}
 	// Exact protocol fields override struct-decoded aliases.
