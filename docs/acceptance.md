@@ -67,7 +67,100 @@ Each case requires visible-output + durable-state checks. Request-body only is i
 - P2-004: `internal/testutil/vtmodel.go` + `internal/terminal/screen_test.go`.
 - P2-005: `internal/terminal/sched.go` + fake clock, counters.
 - P2-006: `internal/testutil/isolate.go` + canary tests.
-- P2-007…P2-100: see phase commits; each task has a focused test or recorded no-change result with source revision.
+- P2-007: internal/app/state.go (explicit states/transitions).
+- P2-008: internal/event/event.go (generation+seq+outcome) + app filter.
+- P2-009: internal/terminal/frame.go single Writer.
+- P2-010: internal/session/timeline.go TranscriptItem.
+- P2-011: timeline CurrentView/AllHistoryView.
+- P2-012: internal/app/activation.go transaction.
+- P2-013: cancel path (busy-only, idempotent, stress_test.go).
+- P2-014: settlement barrier (persistence before RunEnd + drain before Draw).
+- P2-015: uniseg graphemes + width.go (pi utils.ts).
+- P2-016: layout.go shared + goldens.
+- P2-017: key-action table (visual Up/Down, Ctrl+P/N, word, line, doc).
+- P2-018: input.go Decoder (50ms, 256B, splits, CRLF, drain, replies).
+- P2-019: paste txn (single Insert+Draw, no submit/cancel).
+- P2-020: 256 KiB budget, grapheme-prefix, whole-edit reject (A02).
+- P2-021: PromptRecall 200 + SetHistory on activation.
+- P2-022: Complete() + Tab (bounded list, no exec).
+- P2-023: viewport resize-safe (1-col, very short).
+- P2-024: lifecycle (clear/submit/cancel/EOF/exit, stale recall cleared, blank local).
+- P2-025: atomic frames (WriteBounded, no separate clear).
+- P2-026: changed-row + cursor-only + zero-byte unchanged.
+- P2-027: scrollback append-only (no ED2/3J).
+- P2-028: 30fps coalesce + 64 KiB + backpressure + fake clock.
+- P2-029: commitAccepted once (scrollback + session, no duplicate).
+- P2-030: reconcile streamed vs authoritative (suffix-only, contradiction error).
+- P2-031: compact tool states (throttled, no dumps) + 100-call.
+- P2-032: fallback only (no synchronized), tail-only resize.
+- P2-033: sanitize ANSI/OSC/DCS/C1/bidi/split (sanitize_test.go).
+- P2-034: term restore + SIGTSTP/CONT/HUP + PTY (pty_test.go, lifecycle_test.go).
+- P2-035: startup replay before prompt (resume_test.go A07).
+- P2-036: in-process replay + divider + no-op + generation (acceptance_test.go A09).
+- P2-037: tool/interruption replay truthful (timeline + settlement).
+- P2-038: compaction/edit/branch display + projection tests (A12/A13).
+- P2-039: selector 20/page + filter + stable IDs (A11).
+- P2-040: selector cancel/invalid preserves + reprompt (A10).
+- P2-041: /history N/all display-only (A14).
+- P2-042: bounded batches + cancellable replay.
+- P2-043: psi.input custom provenance + recall prefers invocation (A17/A18).
+- P2-044: explicit cross-workspace/in-memory/empty/metadata/offline paths.
+- P2-045: commands_test.go table drives help+parser.
+- P2-046: /model list + syntax + validate-then-record.
+- P2-047: /thinking levels + session-local.
+- P2-048: /new (keep scrollback, reset recall) + /quit (settle+restore).
+- P2-049: /session (provider/api/model/continuation, no $0.00, no secrets).
+- P2-050: precedence_test.go (new vs resumed, offline, CLI usage error).
+- P2-051: resources_test.go declined stays out.
+- P2-052: skills discover/invoke portable journey.
+- P2-053: grouped diagnostics + quiet preserves blocking + next action.
+- P2-054: Submit/SubmitWithProvenance ordering.
+- P2-055: settlement_test.go (terminal/stored/next agree, unsaved explicit).
+- P2-056: aborted partial (no executable call).
+- P2-057: runBatch persist each + stop unstarted + distinct outcomes.
+- P2-058: CheckContinuable + Unresolved block (no auto rerun).
+- P2-059: storage failure stops + unsaved + stress.
+- P2-060: generation filter (no cross-session write/display).
+- P2-061: guards + EOF/signal/suspend + stress no leaks.
+- P2-062: audit_test.go v3 shapes.
+- P2-063: projection branch/state (siblings excluded, recall branch-only).
+- P2-064: ReplaySystem order + checkpoint + stale tools excluded.
+- P2-065: compaction/edits projection (retain-none, checkpoints, no file mutate).
+- P2-066: index.go offsets/on-demand + perf_test.go.
+- P2-067: append/ownership (prefix, truncation, replacement, lock, perms).
+- P2-068: interchange_test.go Pi↔psi + reference projector.
+- P2-069: catalog_test.go bundled + overrides.
+- P2-070: buildRequest roles/grouping/signatures/namespaces.
+- P2-071: thinking/budget/effort + image guard.
+- P2-072: SSE splits/usage/EOF + authoritative before exec.
+- P2-073: error/retry (no invisible replay).
+- P2-074: codex_auth_test.go refresh (preserve/lock/0600/atomic, no fallback).
+- P2-075: accounting separate + no $0.00 + /session agrees.
+- P2-076: offline PTY journeys + liveprovider tag (explicit approval).
+- P2-077: read parity (bounds/offsets/images).
+- P2-078: write (mkdir/perms/symlinks, truthful).
+- P2-079: edit (legacy/BOM/CRLF/Unicode, no partial).
+- P2-080: bash (prefix/cancel/descendants/private temp).
+- P2-081: bounds_test.go (50KiB/32MiB/256KiB, UTF-8, ownership).
+- P2-082: resources_test.go precedence via app.
+- P2-083: skill-to-tool journey (read + explicit + restart).
+- P2-084: coding_task_test.go disposable + resume.
+- P2-085: Estimator (system/tools/images, estimate vs usage).
+- P2-086: Boundary (calls+results, zero/long, kept IDs).
+- P2-087: bounded summary (budget, no reasoning, failure preserves).
+- P2-088: Compact compatible + checkpoint + pi comparison.
+- P2-089: compact UX (static, settled, no redraw).
+- P2-090: Recovery ≤1 + no repeat (recovery_test.go).
+- P2-091: long-session restart (recovery_test.go).
+- P2-092: scripts/check.sh (fmt/vet/test/race/build) + A30.
+- P2-093: perf_test.go thresholds + generator params.
+- P2-094: matrix_test.go + pty_test.go (NO_COLOR, fallback, resize, scrollback).
+- P2-095: stress_test.go (cancel/activation, failures, no leaks).
+- P2-096: privacy_test.go (synthetic, allowlisted, no imports, no secrets).
+- P2-097: docs/ (quickstart/config/keyboard/recovery/sessions/limitations match binary).
+- P2-098: root psi (go build, ignored, platform/Go/rev recorded).
+- P2-099: plain ./psi --help/--version + isolated PTY journey.
+- P2-100: this ledger (no PLAN3, permanent boundaries).
 
 Synthetic only. No real credentials, paths, file contents, or prompts.
 Regression subprocesses use temp HOME/workspace/agent/session dirs and an allowlisted env.
