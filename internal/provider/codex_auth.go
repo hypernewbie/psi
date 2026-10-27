@@ -1,9 +1,7 @@
 package provider
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -46,8 +44,8 @@ type codexCredential struct {
 	AccountID string `json:"accountId"`
 }
 
-// loadLocked reads and parses auth.json. The caller must own the shared lease
-// (or accept a torn read during startup diagnostics); prefer loadShared.
+// loadLocked reads and parses auth.json. The caller must own the shared lease;
+// callers outside a refresh transaction must use loadShared.
 func (a *CodexAuth) loadLocked() (map[string]json.RawMessage, codexCredential, error) {
 	f, err := os.Open(a.Path)
 	if err != nil {
@@ -309,6 +307,9 @@ func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat tim
 				// created between stat and remove is never deleted.
 				if after, err := os.Stat(path); err == nil && os.SameFile(before, after) &&
 					time.Since(after.ModTime()) > staleAfter {
+					// Older psi builds left an owner file in the directory.
+					// Remove only that known entry, never arbitrary contents.
+					_ = os.Remove(filepath.Join(path, "owner"))
 					_ = os.Remove(path)
 				}
 			}
@@ -320,30 +321,29 @@ func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat tim
 		case <-timer.C:
 		}
 	}
-	owner, err := os.Stat(path)
+	// Keep the directory empty for proper-lockfile's rmdir-based recovery.
+	// An open descriptor pins its inode, preventing identity reuse while a
+	// former owner is still alive, without adding a non-Pi owner file.
+	dir, err := os.Open(path)
 	if err != nil {
-		os.Remove(path)
 		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")
 	}
-	// Owner token: SameFile alone cannot distinguish a replaced directory
-	// that reuses an inode number. The token survives only in our lease.
-	token := make([]byte, 16)
-	if _, err := rand.Read(token); err != nil {
-		os.Remove(path)
-		return nil, nil, fmt.Errorf("cannot seed auth.json lock")
-	}
-	if err := os.WriteFile(filepath.Join(path, "owner"), token, 0o600); err != nil {
-		os.Remove(path)
-		return nil, nil, fmt.Errorf("cannot own auth.json lock")
+	owner, err := dir.Stat()
+	if err != nil {
+		dir.Close()
+		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")
 	}
 	var compromised atomic.Bool
-	valid := func() bool {
+	var leaseMu sync.Mutex
+	mtime := owner.ModTime()
+	validLocked := func() bool {
 		st, err := os.Stat(path)
-		if compromised.Load() || err != nil || !os.SameFile(owner, st) {
-			return false
-		}
-		cur, err := os.ReadFile(filepath.Join(path, "owner"))
-		return err == nil && bytes.Equal(cur, token)
+		return !compromised.Load() && err == nil && os.SameFile(owner, st) && st.ModTime().Equal(mtime)
+	}
+	valid := func() bool {
+		leaseMu.Lock()
+		defer leaseMu.Unlock()
+		return validLocked()
 	}
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -355,20 +355,36 @@ func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat tim
 			case <-stop:
 				return
 			case now := <-ticker.C:
-				if !valid() || os.Chtimes(path, now, now) != nil {
+				leaseMu.Lock()
+				ok := validLocked()
+				if ok {
+					ok = os.Chtimes(path, now, now) == nil
+				}
+				if ok {
+					st, err := os.Stat(path)
+					ok = err == nil && os.SameFile(owner, st)
+					if ok {
+						mtime = st.ModTime() // retain filesystem timestamp precision
+					}
+				}
+				leaseMu.Unlock()
+				if !ok {
 					compromised.Store(true)
 					return
 				}
 			}
 		}
 	}()
+	var once sync.Once
 	unlock := func() {
-		close(stop)
-		<-done
-		if valid() {
-			_ = os.Remove(filepath.Join(path, "owner"))
-			_ = os.Remove(path)
-		}
+		once.Do(func() {
+			close(stop)
+			<-done
+			if valid() {
+				_ = os.Remove(path)
+			}
+			dir.Close()
+		})
 	}
 	return unlock, valid, nil
 }

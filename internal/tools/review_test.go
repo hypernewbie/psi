@@ -1,0 +1,76 @@
+package tools
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestReviewDrainGraceStartsAtLeaderExit(t *testing.T) {
+	res := NewRegistry(t.TempDir()).Dispatch(Invocation{Name: Bash, Arguments: map[string]any{
+		"command": "sleep 0.25; (sleep 0.04; printf after-exit) &",
+	}})
+	if res.IsError || !strings.Contains(res.Content[0].Text, "after-exit") {
+		t.Fatalf("quiet leader consumed descendant drain grace: %+v", res)
+	}
+}
+
+func TestReviewCancellationAfterLeaderExit(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "leader.pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan Result, 1)
+	go func() {
+		done <- NewRegistry(dir).DispatchCtx(ctx, Invocation{Name: Bash, Arguments: map[string]any{
+			"command": "echo $$ > leader.pid; (for ((i=0;i<200;i++)); do printf x; sleep 0.02; done) &",
+		}})
+	}()
+	pid := reviewWaitPID(t, pidPath)
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	// The shell has no wait command. Its background child keeps the drain
+	// active after the leader exits, unlike the earlier '& wait' regression.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fixture leader did not exit")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case res := <-done:
+		if !res.IsError || !strings.Contains(strings.ToLower(res.Content[0].Text), "cancel") {
+			t.Fatalf("cancellation lost: %+v", res)
+		}
+	case <-time.After(500 * time.Millisecond):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		<-done
+		t.Fatal("cancellation during post-exit drain did not stop the descendants")
+	}
+}
+
+func reviewWaitPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+			if err == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("fixture did not publish its PID")
+	return 0
+}

@@ -1,107 +1,146 @@
 package provider
 
-// P3-012: mixed Pi/psi contention on the shared auth lease.
-//
-// The Pi role runs pinned proper-lockfile 4.1.2 (the installed public
-// package) against its own lock acquisition, heartbeat, and in-place write.
-// The psi role reads through acquireAuthLock/loadShared. Neither side may
-// inspect a torn document. Skipped when node or the pinned dependency is
-// unavailable (recorded as a blocked cell, not a pass).
-
 import (
 	"bufio"
+	"context"
+	"encoding/json"
+	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"psi/internal/testutil"
 )
 
-const properLockfilePath = "/home/hypernewbie/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/proper-lockfile"
+// Explicit test input, never an inherited opt-in or a private installation path.
+var testProperLockfile = flag.String("psi-test-proper-lockfile", "", "path to public proper-lockfile 4.1.2 for optional Pi auth interoperability tests")
 
-func TestMixedPiPsiAuthContention(t *testing.T) {
-	if _, err := os.Stat(properLockfilePath + "/package.json"); err != nil {
-		t.Skip("pinned proper-lockfile unavailable: blocked cell")
+func properLockfileReference(t *testing.T) (string, string) {
+	t.Helper()
+	if *testProperLockfile == "" {
+		t.Skip("Pi auth reference cell blocked: supply -psi-test-proper-lockfile")
+	}
+	path, err := filepath.Abs(*testProperLockfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(path, "package.json"))
+	if err != nil {
+		t.Fatal("cannot read public proper-lockfile manifest")
+	}
+	var manifest struct{ Name, Version string }
+	if json.Unmarshal(data, &manifest) != nil || manifest.Name != "proper-lockfile" || manifest.Version != "4.1.2" {
+		t.Fatal("reference must be public proper-lockfile 4.1.2")
 	}
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node unavailable: blocked cell")
+		t.Fatal("Node is required for the explicitly requested reference test")
 	}
-	dir := t.TempDir()
-	authPath := filepath.Join(dir, "auth.json")
-	final := codexDoc("pi-final-access", "pi-final-refresh", time.Now().Add(time.Hour).UnixMilli())
-	writeAuthDoc(t, authPath, codexDoc("old", "old", time.Now().Add(time.Hour).UnixMilli()))
+	return path, node
+}
 
-	script := `const lockfile = require(` + "`" + properLockfilePath + "`" + `);
+func runPiAuthReference(t *testing.T, authPath, mode string) (*bufio.Scanner, func()) {
+	t.Helper()
+	module, node := properLockfileReference(t)
+	dir := t.TempDir()
+	script := `const lockfile = require(process.argv[2]);
 const fs = require('fs');
-const path = process.argv[2];
-const final = fs.readFileSync(process.argv[3], 'utf8');
+const path = process.argv[3];
 (async () => {
   const release = await lockfile.lock(path, { realpath: false, stale: 30000 });
-  fs.writeFileSync(path, '{"openai-code');
-  console.log('TRUNCATED');
-  await new Promise(r => setTimeout(r, 800));
-  fs.writeFileSync(path, final);
-  console.log('COMPLETE');
+  console.log('ACQUIRED');
+  if (process.argv[4] === 'writer') {
+    const final = fs.readFileSync(path, 'utf8');
+    fs.writeFileSync(path, '{"openai-code');
+    console.log('TRUNCATED');
+    await new Promise(r => setTimeout(r, 500));
+    fs.writeFileSync(path, final);
+  }
   await release();
   console.log('RELEASED');
-})().catch(e => { console.error('NODE-FAIL ' + e.message); process.exit(1); });`
-	finalPath := filepath.Join(dir, "final.json")
-	if err := os.WriteFile(finalPath, []byte(final), 0o600); err != nil {
+})().catch(() => { process.exitCode = 1; });`
+	file := filepath.Join(dir, "pi-auth.cjs")
+	if err := os.WriteFile(file, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	scriptPath := filepath.Join(dir, "pi-writer.js")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(node, scriptPath, authPath, finalPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	cmd := exec.CommandContext(ctx, node, file, module, authPath, mode)
+	cmd.Env = testutil.ChildEnv(dir, map[string]string{"LANG": "C.UTF-8"})
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		cancel()
 		t.Fatal(err)
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
+		cancel()
 		t.Fatal(err)
 	}
-	sc := bufio.NewScanner(stdout)
-	waitMarker := func(want string) {
-		deadline := time.After(15 * time.Second)
-		for {
-			select {
-			case <-deadline:
-				t.Fatalf("missing %q from Pi writer (stderr: %s)", want, stderr.String())
-			default:
-			}
-			if !sc.Scan() {
-				t.Fatalf("Pi writer exited early (stderr: %s)", stderr.String())
-			}
-			if strings.TrimSpace(sc.Text()) == want {
-				return
-			}
+	var once sync.Once
+	var waitErr error
+	wait := func() { once.Do(func() { waitErr = cmd.Wait() }) }
+	t.Cleanup(func() { cancel(); wait() })
+	return bufio.NewScanner(stdout), func() {
+		wait()
+		if waitErr != nil {
+			t.Fatalf("synthetic Pi auth reference failed: %v", waitErr)
 		}
 	}
-	waitMarker("TRUNCATED")
-	// The psi reader must block on the Pi-held lease, then see the document.
+}
+
+func piAuthMarker(t *testing.T, scanner *bufio.Scanner, marker string) {
+	t.Helper()
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == marker {
+			return
+		}
+	}
+	t.Fatalf("Pi reference did not emit %q", marker)
+}
+
+func TestMixedPiPsiAuthContention(t *testing.T) {
+	properLockfileReference(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	writeAuthDoc(t, authPath, codexDoc("pi-final", "pi-refresh", time.Now().Add(time.Hour).UnixMilli()))
+	scanner, wait := runPiAuthReference(t, authPath, "writer")
+	piAuthMarker(t, scanner, "TRUNCATED")
 	done := make(chan error, 1)
 	go func() { done <- (&CodexAuth{Path: authPath}).Check() }()
 	select {
 	case err := <-done:
-		t.Fatalf("psi Check returned during Pi-held torn write: %v", err)
-	case <-time.After(300 * time.Millisecond):
+		t.Fatalf("psi read during Pi-held torn write: %v", err)
+	case <-time.After(100 * time.Millisecond):
 	}
-	waitMarker("COMPLETE")
-	waitMarker("RELEASED")
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("psi Check after Pi release: %v", err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("psi Check blocked past Pi release")
+	piAuthMarker(t, scanner, "RELEASED")
+	wait()
+	if err := <-done; err != nil {
+		t.Fatalf("psi read after Pi release: %v", err)
 	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("Pi writer failed: %v (stderr: %s)", err, stderr.String())
+}
+
+func TestMixedPiReclaimsAbandonedPsiLease(t *testing.T) {
+	properLockfileReference(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	writeAuthDoc(t, authPath, codexDoc("test-access", "test-refresh", time.Now().Add(time.Hour).UnixMilli()))
+	unlock, valid, err := acquireAuthLock(context.Background(), authPath+".lock", 0, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	// A stopped/killed holder has no heartbeat. Age its real lease without
+	// waiting 30 seconds. Keep its inode pinned to exercise former ownership.
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(authPath+".lock", old, old); err != nil {
+		t.Fatal(err)
+	}
+	scanner, wait := runPiAuthReference(t, authPath, "takeover")
+	piAuthMarker(t, scanner, "ACQUIRED")
+	piAuthMarker(t, scanner, "RELEASED")
+	wait()
+	if valid() {
+		t.Fatal("former psi owner accepted the Pi replacement lease")
 	}
 }

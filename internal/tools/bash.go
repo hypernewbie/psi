@@ -118,7 +118,6 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
 	var runErr error
-	var leaderExited bool
 	var timedOut bool
 	killGroup := func() {
 		if cmd.Process != nil {
@@ -126,15 +125,18 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 		}
 	}
 	drain := func() {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
 		for {
 			select {
 			case <-copyDone:
 				return
 			case <-runCtx.Done():
+				killGroup()
 				return
 			default:
 			}
-			if leaderExited && time.Since(capture.lastWrite()) > idleDrainGrace {
+			if time.Since(capture.lastWrite()) > idleDrainGrace {
 				// Quiet pipe: release with the leader status preserved.
 				killGroup()
 				return
@@ -143,24 +145,31 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 			case <-copyDone:
 				return
 			case <-runCtx.Done():
+				killGroup()
 				return
-			case <-time.After(10 * time.Millisecond):
+			case <-tick.C:
 			}
 		}
 	}
 	select {
 	case runErr = <-waitDone:
-		leaderExited = true
+		// Idle grace starts at exit, not at the last pre-exit chunk.
+		capture.touch()
 		drain()
 	case <-runCtx.Done():
 		killGroup()
 		runErr = <-waitDone
-		leaderExited = true
 		drain()
 	}
 	timedOut = runCtx.Err() == context.DeadlineExceeded
-	<-copyDone
+	if runCtx.Err() != nil {
+		killGroup()
+	}
+	// A descendant can escape the process group but retain the pipe. Close
+	// our reader before joining its goroutine so cancellation/idle never
+	// waits for an unrelated inherited writer to exit.
 	_ = pr.Close()
+	<-copyDone
 	closeErr := f.Close()
 	if capture.err != nil {
 		return errResult(fmt.Sprintf("bash: output capture failed: %v", capture.err))
