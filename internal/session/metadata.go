@@ -44,14 +44,59 @@ type objectMetadata struct {
 }
 
 func (m *objectMetadata) UnmarshalJSON(data []byte) error {
-	if len(data) > 0 && data[0] == '{' {
-		type value objectMetadata
-		var p value
-		if json.Unmarshal(data, &p) == nil {
-			*m = objectMetadata(p)
+	*m = exactObjectMeta(data)
+	return nil
+}
+
+// exactObjectMeta reads targetId/psiOutcome with exact property names.
+func exactObjectMeta(data []byte) objectMetadata {
+	var m objectMetadata
+	if len(data) == 0 || data[0] != '{' {
+		return m
+	}
+	obj, err := exactObject(data)
+	if err != nil {
+		return m
+	}
+	m.TargetID, _ = exactString(obj, "targetId")
+	m.Outcome, _ = exactString(obj, "psiOutcome")
+	return m
+}
+
+// exactContentMeta reads message content with exact block property names.
+// Alias-case block keys ("TYPE", "ID") never populate canonical fields.
+func exactContentMeta(data []byte) contentMetadata {
+	var c contentMetadata
+	if len(data) == 0 {
+		return c
+	}
+	if data[0] == '"' {
+		c.Text = true
+		return c
+	}
+	if data[0] != '[' {
+		return c
+	}
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(data, &blocks); err != nil {
+		return c
+	}
+	for _, b := range blocks {
+		obj, err := exactObject(b)
+		if err != nil {
+			continue
+		}
+		btype, _ := exactString(obj, "type")
+		bid, _ := exactString(obj, "id")
+		bname, _ := exactString(obj, "name")
+		if btype == "text" {
+			c.Text = true
+		}
+		if btype == "toolCall" {
+			c.Calls = append(c.Calls, ContentBlock{Type: "toolCall", Call: &ToolCall{Type: "toolCall", ID: bid, Name: bname}})
 		}
 	}
-	return nil
+	return c
 }
 
 func metadataEntry(data []byte) (*Entry, error) {
@@ -63,6 +108,41 @@ func metadataEntry(data []byte) (*Entry, error) {
 }
 
 func metadataRecord(data []byte) (*Entry, *SessionHeader, error) {
+	// Protocol identity uses exact property names (F05): alias-case keys
+	// such as "ID" or "ROLE" never populate canonical fields, matching Pi.
+	obj, err := exactObject(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	recType, _ := exactString(obj, "type")
+	recID, _ := exactString(obj, "id")
+	if recID == "" {
+		return nil, nil, fmt.Errorf("entry missing id")
+	}
+	if recType == "session" {
+		var version *int
+		if raw, ok := obj["version"]; ok {
+			var v int
+			if err := json.Unmarshal(raw, &v); err == nil {
+				version = &v
+			}
+		}
+		cwd, _ := exactString(obj, "cwd")
+		timestamp, _ := exactString(obj, "timestamp")
+		var parent *string
+		if ps, ok := exactString(obj, "parentSession"); ok {
+			parent = &ps
+		}
+		return nil, &SessionHeader{Type: recType, Version: version, ID: recID, Timestamp: timestamp, Cwd: cwd, ParentSession: parent}, nil
+	}
+	if recType == "" {
+		return nil, nil, fmt.Errorf("entry missing type")
+	}
+	var parentID *string
+	if ps, ok := exactString(obj, "parentId"); ok {
+		parentID = &ps
+	}
+	timestamp, _ := exactString(obj, "timestamp")
 	var p struct {
 		Version       *int           `json:"version"`
 		Cwd           string         `json:"cwd"`
@@ -101,11 +181,33 @@ func metadataRecord(data []byte) (*Entry, *SessionHeader, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, nil, err
 	}
-	if p.ID == "" {
-		return nil, nil, fmt.Errorf("entry missing id")
+	// Exact protocol fields override struct-decoded aliases.
+	p.Type, p.ID, p.ParentID, p.Timestamp = recType, recID, parentID, timestamp
+	if msgRaw, ok := obj["message"]; ok {
+		if msgObj, err := exactObject(msgRaw); err == nil {
+			if role, ok := exactString(msgObj, "role"); ok {
+				p.Message.Role = role
+			} else {
+				p.Message.Role = ""
+			}
+			if id, ok := exactString(msgObj, "toolCallId"); ok {
+				p.Message.CallID = id
+			} else {
+				p.Message.CallID = ""
+			}
+			if name, ok := exactString(msgObj, "toolName"); ok {
+				p.Message.ToolName = name
+			} else {
+				p.Message.ToolName = ""
+			}
+			p.Message.Content = exactContentMeta(msgObj["content"])
+		}
 	}
-	if p.Type == "session" {
-		return nil, &SessionHeader{Type: p.Type, Version: p.Version, ID: p.ID, Timestamp: p.Timestamp, Cwd: p.Cwd, ParentSession: p.ParentSession}, nil
+	if dataRaw, ok := obj["data"]; ok {
+		p.Data = exactObjectMeta(dataRaw)
+	}
+	if detailsRaw, ok := obj["details"]; ok {
+		p.Details = exactObjectMeta(detailsRaw)
 	}
 	e := &Entry{Kind: p.Type, Base: entryBase{Type: p.Type, ID: p.ID, ParentID: p.ParentID, Timestamp: p.Timestamp}}
 	switch p.Type {

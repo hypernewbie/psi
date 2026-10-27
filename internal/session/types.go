@@ -51,12 +51,41 @@ type ToolCall struct {
 }
 
 func (t *ToolCall) UnmarshalJSON(data []byte) error {
-	type plain ToolCall
-	var value plain
-	if err := jsonDecoder(data).Decode(&value); err != nil {
+	obj, err := exactObject(data)
+	if err != nil {
 		return err
 	}
-	*t = ToolCall(value)
+	// Identity fields are case-sensitive protocol fields (F05): an alias-case
+	// key such as "ID" must not populate the canonical field.
+	t.Type, _ = exactString(obj, "type")
+	t.ID, _ = exactString(obj, "id")
+	t.Name, _ = exactString(obj, "name")
+	if raw, ok := obj["arguments"]; ok {
+		dec := jsonDecoder(raw)
+		var args map[string]any
+		if err := dec.Decode(&args); err != nil {
+			return err
+		}
+		t.Arguments = args
+	}
+	if raw, ok := obj["thoughtSignature"]; ok {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			t.ThoughtSignature = &s
+		}
+	}
+	if raw, ok := obj["namespace"]; ok {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			t.Namespace = &s
+		}
+	}
+	if raw, ok := obj["argumentsError"]; ok {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			t.ArgumentsError = &s
+		}
+	}
 	return nil
 }
 
@@ -95,14 +124,13 @@ func (b ContentBlock) MarshalJSON() ([]byte, error) {
 
 func (b *ContentBlock) UnmarshalJSON(data []byte) error {
 	b.Raw = append(b.Raw[:0], data...)
-	var probe struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
+	obj, err := exactObject(data)
+	if err != nil {
 		return err
 	}
-	b.Type = probe.Type
-	switch probe.Type {
+	recType, _ := exactString(obj, "type")
+	b.Type = recType
+	switch recType {
 	case "text":
 		var t TextContent
 		if err := json.Unmarshal(data, &t); err != nil {
@@ -154,14 +182,13 @@ func (b UserContentBlock) MarshalJSON() ([]byte, error) {
 
 func (b *UserContentBlock) UnmarshalJSON(data []byte) error {
 	b.Raw = append(b.Raw[:0], data...)
-	var probe struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
+	obj, err := exactObject(data)
+	if err != nil {
 		return err
 	}
-	b.Type = probe.Type
-	switch probe.Type {
+	recType, _ := exactString(obj, "type")
+	b.Type = recType
+	switch recType {
 	case "text":
 		var t TextContent
 		if err := json.Unmarshal(data, &t); err != nil {
@@ -366,16 +393,15 @@ func (m AgentMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (m *AgentMessage) UnmarshalJSON(data []byte) error {
-	var probe struct {
-		Role string `json:"role"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
+	obj, err := exactObject(data)
+	if err != nil {
 		return err
 	}
-	m.Role = probe.Role
+	role, _ := exactString(obj, "role")
+	m.Role = role
 	raw := append(json.RawMessage(nil), data...)
 	m.Raw = raw
-	switch probe.Role {
+	switch role {
 	case "system":
 		var s SystemMessage
 		if err := json.Unmarshal(data, &s); err != nil {
@@ -433,7 +459,7 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	default:
 		// Unknown role: preserved in Raw, Role kept for diagnostics.
 		// Continuation must refuse unsafe unknown context (checked in projection).
-		m.Role = probe.Role
+		m.Role = role
 	}
 	return nil
 }

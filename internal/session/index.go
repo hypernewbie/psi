@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 )
@@ -17,7 +18,17 @@ type RecordIndex struct {
 type RecordMeta struct {
 	Offset, Length     int64
 	Type, ID, ParentID string
+	Hash               uint64 // FNV-1a over the trimmed record bytes
 	entry              *Entry
+}
+
+// recordHash identifies exact record bytes. Equal-size rewrites that keep
+// offsets and lengths valid still change the hash, so a lazy read can never
+// mix generations silently.
+func recordHash(data []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return h.Sum64()
 }
 
 func BuildIndex(path string) (*RecordIndex, error) {
@@ -54,7 +65,7 @@ func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
 			if parseErr != nil {
 				return nil, &ParseError{Path: path, Line: lineNo, Err: parseErr}
 			}
-			meta := RecordMeta{Offset: offset, Length: length}
+			meta := RecordMeta{Offset: offset, Length: length, Hash: recordHash(data)}
 			if header != nil {
 				meta.Type = "session"
 				if idx.Header != nil || len(idx.Records) > 0 {
@@ -117,7 +128,25 @@ func loadRecord(f *os.File, meta RecordMeta) (*Entry, error) {
 	if _, err := f.ReadAt(buf, meta.Offset); err != nil {
 		return nil, err
 	}
-	return UnmarshalEntry(trimRecord(buf))
+	data := trimRecord(buf)
+	if meta.Hash != 0 && recordHash(data) != meta.Hash {
+		return nil, fmt.Errorf("session file changed externally: record bytes differ from index")
+	}
+	loaded, err := UnmarshalEntry(data)
+	if err != nil {
+		return nil, err
+	}
+	if meta.ID != "" && loaded.ID() != meta.ID {
+		return nil, fmt.Errorf("session file changed externally: record identity changed")
+	}
+	if meta.Type != "" && loaded.Kind != meta.Type {
+		return nil, fmt.Errorf("session file changed externally: record type changed")
+	}
+	lp, mp := loaded.ParentID(), meta.ParentID
+	if (lp == nil) != (mp == "") || (lp != nil && *lp != mp) {
+		return nil, fmt.Errorf("session file changed externally: record parent changed")
+	}
+	return loaded, nil
 }
 func (idx *RecordIndex) LoadEntry(meta RecordMeta) (*Entry, error) {
 	if meta.Offset < 0 || meta.Length <= 0 || meta.Length > MaxRecordBytes+2 {

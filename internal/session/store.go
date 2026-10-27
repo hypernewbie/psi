@@ -32,6 +32,9 @@ type Store struct {
 	writeErr  error
 	records   map[string]RecordMeta // disk-backed payloads; entries contains small metadata only
 	storage   *storageOps
+	// LoadHook fires before each lazy payload read (nil in production).
+	// Deterministic fault schedules use it to rewrite the session mid-walk.
+	LoadHook func(RecordMeta)
 }
 
 // OpenOptions controls Store creation.
@@ -578,12 +581,20 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 				if err != nil {
 					return err
 				}
-				s.records[entry.ID()] = RecordMeta{Offset: offset, Length: int64(len(entry.Raw) + 1), Type: entry.Kind, ID: entry.ID(), entry: thin}
+				parent := ""
+				if entry.ParentID() != nil {
+					parent = *entry.ParentID()
+				}
+				s.records[entry.ID()] = RecordMeta{Offset: offset, Length: int64(len(entry.Raw) + 1), Type: entry.Kind, ID: entry.ID(), ParentID: parent, Hash: recordHash(entry.Raw), entry: thin}
 				offset += int64(len(entry.Raw) + 1)
 				s.entries[i], s.byID[entry.ID()] = thin, thin
 			}
 		} else {
-			s.records[e.ID()] = RecordMeta{Offset: st.Size() - int64(len(data)+1), Length: int64(len(data) + 1), Type: e.Kind, ID: e.ID(), entry: thin}
+			parent := ""
+			if e.ParentID() != nil {
+				parent = *e.ParentID()
+			}
+			s.records[e.ID()] = RecordMeta{Offset: st.Size() - int64(len(data)+1), Length: int64(len(data) + 1), Type: e.Kind, ID: e.ID(), ParentID: parent, Hash: recordHash(data), entry: thin}
 			s.entries[len(s.entries)-1], s.byID[e.ID()] = thin, thin
 		}
 		s.knownSize, s.knownInfo = st.Size(), st

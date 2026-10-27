@@ -14,13 +14,12 @@ type FileEntry struct {
 
 // UnmarshalFileEntry decodes one JSONL record.
 func UnmarshalFileEntry(data []byte) (*FileEntry, error) {
-	var probe struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
+	obj, err := exactObject(data)
+	if err != nil {
 		return nil, err
 	}
-	if probe.Type == "session" {
+	recType, _ := exactString(obj, "type")
+	if recType == "session" {
 		var h SessionHeader
 		if err := json.Unmarshal(data, &h); err != nil {
 			return nil, err
@@ -39,29 +38,32 @@ func UnmarshalFileEntry(data []byte) (*FileEntry, error) {
 
 // UnmarshalEntry decodes a non-header entry, preserving raw bytes.
 func UnmarshalEntry(data []byte) (*Entry, error) {
-	var probe struct {
-		Type      string  `json:"type"`
-		ID        string  `json:"id"`
-		ParentID  *string `json:"parentId"`
-		Timestamp string  `json:"timestamp"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
+	obj, err := exactObject(data)
+	if err != nil {
 		return nil, err
 	}
-	if probe.Type == "" {
+	recType, _ := exactString(obj, "type")
+	recID, _ := exactString(obj, "id")
+	if recType == "" {
 		return nil, fmt.Errorf("entry missing type")
 	}
-	if probe.Type == "session" {
+	if recType == "session" {
 		return nil, fmt.Errorf("unexpected session header")
 	}
-	if probe.ID == "" {
+	if recID == "" {
 		return nil, fmt.Errorf("entry missing id")
 	}
+	var parentID *string
+	if ps, ok := exactString(obj, "parentId"); ok {
+		parentID = &ps
+	}
+	var timestamp string
+	timestamp, _ = exactString(obj, "timestamp")
 	raw := append(json.RawMessage(nil), data...)
-	e := &Entry{Kind: probe.Type, Base: entryBase{
-		Type: probe.Type, ID: probe.ID, ParentID: probe.ParentID, Timestamp: probe.Timestamp,
+	e := &Entry{Kind: recType, Base: entryBase{
+		Type: recType, ID: recID, ParentID: parentID, Timestamp: timestamp,
 	}, Raw: raw}
-	switch probe.Type {
+	switch recType {
 	case "message":
 		var v SessionMessageEntry
 		if err := json.Unmarshal(data, &v); err != nil {
@@ -129,7 +131,7 @@ func UnmarshalEntry(data []byte) (*Entry, error) {
 		}
 		e.SessionInfo = &v
 	default:
-		return nil, fmt.Errorf("unknown entry type %q", probe.Type)
+		return nil, fmt.Errorf("unknown entry type %q", recType)
 	}
 	return e, nil
 }

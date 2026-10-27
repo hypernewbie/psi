@@ -63,6 +63,36 @@ func (s *Store) openSnapshotLocked() (*os.File, error) {
 	}
 	return f, nil
 }
+
+// snapIdentity records the generation a lazy walk started from.
+type snapIdentity struct {
+	path      string
+	knownInfo os.FileInfo
+	knownSize int64
+}
+
+func (s *Store) snapLocked() snapIdentity {
+	return snapIdentity{path: s.file, knownInfo: s.knownInfo, knownSize: s.knownSize}
+}
+
+// unchanged reports whether the session file still matches the generation.
+// An open descriptor pins an inode, not immutable bytes: every lazy payload
+// read rechecks the live path so a mid-walk rewrite can never mix generations.
+func (snap snapIdentity) unchanged() bool {
+	if snap.path == "" || snap.knownInfo == nil {
+		return true
+	}
+	st, err := os.Stat(snap.path)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(st, snap.knownInfo) && st.Size() == snap.knownSize && st.ModTime().Equal(snap.knownInfo.ModTime())
+}
+
+func externalChangeError(path string) error {
+	return fmt.Errorf("session file changed externally during read, refusing mixed generation: %s", path)
+}
+
 func (s *Store) loadEntriesLocked(entries []*Entry) ([]*Entry, error) {
 	var f *os.File
 	defer func() {
@@ -70,6 +100,8 @@ func (s *Store) loadEntriesLocked(entries []*Entry) ([]*Entry, error) {
 			f.Close()
 		}
 	}()
+	snap := s.snapLocked()
+	hook := s.LoadHook
 	out := make([]*Entry, 0, len(entries))
 	for _, e := range entries {
 		if meta, ok := s.records[e.ID()]; ok {
@@ -80,6 +112,12 @@ func (s *Store) loadEntriesLocked(entries []*Entry) ([]*Entry, error) {
 					return nil, err
 				}
 			}
+			if !snap.unchanged() {
+				return nil, externalChangeError(s.file)
+			}
+			if hook != nil {
+				hook(meta)
+			}
 			loaded, err := loadRecord(f, meta)
 			if err != nil {
 				return nil, err
@@ -88,6 +126,9 @@ func (s *Store) loadEntriesLocked(entries []*Entry) ([]*Entry, error) {
 		} else {
 			out = append(out, e)
 		}
+	}
+	if f != nil && !snap.unchanged() {
+		return nil, externalChangeError(s.file)
 	}
 	return out, nil
 }
@@ -131,13 +172,29 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 	for k, v := range s.records {
 		records[k] = v
 	}
+	snap := snapIdentity{path: s.file, knownInfo: s.knownInfo, knownSize: s.knownSize}
+	hook := s.LoadHook
+	filePath := s.file
 	s.mu.Unlock()
 	if f != nil {
 		defer f.Close()
 	}
 	load := func(e *Entry) (*Entry, error) {
 		if m, ok := records[e.ID()]; ok {
-			return loadRecord(f, m)
+			if !snap.unchanged() {
+				return nil, externalChangeError(filePath)
+			}
+			if hook != nil {
+				hook(m)
+			}
+			loaded, err := loadRecord(f, m)
+			if err != nil {
+				return nil, err
+			}
+			if !snap.unchanged() {
+				return nil, externalChangeError(filePath)
+			}
+			return loaded, nil
 		}
 		return e, nil
 	}
@@ -190,6 +247,9 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 				return false, nil
 			}
 		}
+	}
+	if f != nil && !snap.unchanged() {
+		return false, externalChangeError(filePath)
 	}
 	return true, nil
 }
