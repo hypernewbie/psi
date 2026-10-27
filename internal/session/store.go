@@ -346,6 +346,21 @@ func (s *Store) AppendContextEdit(targetID string, replacement json.RawMessage) 
 	return id, s.appendLocked(e, e.ContextEdit)
 }
 
+// AppendProvenance records psi-owned input provenance (P2-043).
+// It uses type "custom" (state-only, no model context) with customType "psi.input".
+// Pi's sessionEntryToContextMessages ignores "custom" entries, so model context is unchanged.
+func (s *Store) AppendProvenance(targetID, invocation, source string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := newEntryID(s.byID)
+	parent := parentPtr(s.leafID, len(s.entries))
+	ts := nowISO()
+	det, _ := json.Marshal(map[string]string{"targetId": targetID, "invocation": invocation, "source": source})
+	e := &Entry{Kind: "custom", Base: entryBase{Type: "custom", ID: id, ParentID: parent, Timestamp: ts},
+		Custom: &CustomEntry{Type: "custom", ID: id, ParentID: parent, Timestamp: ts, CustomType: "psi.input", Data: det}}
+	return id, s.appendLocked(e, e.Custom)
+}
+
 // Branch moves the leaf pointer (new branch without modifying history).
 func (s *Store) Branch(branchFromID string) error {
 	s.mu.Lock()

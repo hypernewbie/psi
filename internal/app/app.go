@@ -169,6 +169,9 @@ type runtime struct {
 	cfg              agent.Config
 	prov             provider.Provider
 	authErr          error
+	generation       int64
+	state            State
+	selector         *Selector
 }
 
 func (r *runtime) restore() error {
@@ -327,12 +330,17 @@ func workspaceSessions(dir, cwd string) ([]session.SessionInfo, error) {
 	for _, info := range infos {
 		if info.Cwd == cwd {
 			mine = append(mine, info)
-			if len(mine) == 10 {
-				break
-			}
 		}
 	}
 	return mine, nil
+}
+
+// discoverAll returns every matching workspace session with bounded metadata only.
+// Transcript bodies are never loaded for listing (P2-039).
+func discoverAll(dir, cwd string) ([]session.SessionInfo, error) { return workspaceSessions(dir, cwd) }
+
+func agentMessageUser(text string) session.AgentMessage {
+	return session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: text}}
 }
 
 func firstLine(s string) string {
@@ -376,7 +384,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 	defer signal.Stop(signals)
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
-	var choosing []session.SessionInfo
+	r.generation++
+	r.state = StateReplaying
+	// Startup activation: display current view before the next editable prompt (P2-035).
+	// Same projector + replay engine as /resume (P2-036).
+	if act, err := PrepareActivation(r.store); err == nil {
+		replayActivation(print, act, true, "")
+		console.Editor.SetHistory(act.Recall)
+		if act.Offline {
+			r.state = StateOffline
+		} else {
+			r.state = StateIdle
+		}
+	} else {
+		print("error: " + err.Error())
+		r.state = StateIdle
+	}
 	start := func(text, focus string, compact bool) {
 		if r.authErr != nil {
 			print("error: " + r.authErr.Error())
@@ -388,7 +411,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if compact {
 			print("(compacting...)")
 		}
-		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) { events <- e })
+		gen := r.generation
+		seq := int64(0)
+		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
+			seq++
+			e.Generation = gen
+			e.Seq = seq
+			events <- e
+		})
 		go func() {
 			if compact {
 				done <- loop.Compact(ctx, r.cfg, focus)
@@ -417,6 +447,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				return nil
 			}
 		case ev := <-events:
+			// Reject stale events after session replacement (P2-060).
+			if ev.Generation != 0 && ev.Generation != r.generation {
+				continue
+			}
 			switch ev.Type {
 			case event.TextDelta:
 				stream.Delta(ev.Text)
@@ -431,6 +465,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			// otherwise race its final text delta through this select.
 			for len(events) > 0 {
 				ev := <-events
+				if ev.Generation != 0 && ev.Generation != r.generation {
+					continue
+				}
 				switch ev.Type {
 				case event.TextDelta:
 					stream.Delta(ev.Text)
@@ -481,24 +518,59 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !submitted {
 				continue
 			}
-			if choosing != nil {
-				if strings.TrimSpace(text) != "" {
-					n, err := strconv.Atoi(strings.TrimSpace(text))
-					if err != nil || n < 1 || n > len(choosing) {
-						print("error: invalid session number")
+			if r.selector != nil {
+				sel, cancelSel, redraw := r.selector.Resolve(text)
+				if cancelSel {
+					// Cancelled selector preserves active session, draft, recall (P2-040).
+					r.selector = nil
+					r.state = StateIdle
+					console.Draw()
+					continue
+				}
+				if redraw {
+					for _, line := range r.selector.Render() {
+						print(line)
+					}
+					console.Draw()
+					continue
+				}
+				if sel != nil {
+					if sel.ID == r.store.Header().ID {
+						// Same-session is a no-op, not another transcript copy (3.3).
+						print("already on session " + sel.ID)
 					} else {
-						next, err := session.OpenFile(choosing[n-1].Path, r.store.Cwd(), r.store.Persistent())
-						if err == nil {
-							err = r.replace(next)
-						}
+						next, err := session.OpenFile(sel.Path, r.store.Cwd(), r.store.Persistent())
 						if err != nil {
 							print("error: " + err.Error())
+						} else if act, err := PrepareActivation(next); err != nil {
+							print("error: " + err.Error())
+							// Failed candidate leaves old session/draft/recall/provider/lock intact (P2-012).
 						} else {
-							print("resumed " + r.store.Header().ID)
+							oldID := r.store.Header().ID
+							if err := r.replace(next); err != nil {
+								print("error: " + err.Error())
+							} else {
+								print("resumed " + r.store.Header().ID)
+								r.generation++
+								replayActivation(print, act, false, oldID)
+								console.Editor.SetHistory(act.Recall)
+								if act.Offline {
+									r.state = StateOffline
+								} else {
+									r.state = StateIdle
+								}
+							}
 						}
 					}
+					r.selector = nil
+					r.state = StateIdle
+					console.Draw()
+					continue
 				}
-				choosing = nil
+				// Invalid selection: reprompt within same bounded flow (P2-040).
+				for _, line := range r.selector.Render() {
+					print(line)
+				}
 				console.Draw()
 				continue
 			}
@@ -522,17 +594,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if cmd.Name == "resume" {
-					infos, err := workspaceSessions(r.store.Dir(), r.store.Cwd())
+					// Complete inline selector with 20/page + filter (P2-039).
+					// Filter arg: /resume [filter].
+					infos, err := discoverAll(r.store.Dir(), r.store.Cwd())
 					if err != nil {
 						print("error: " + err.Error())
 					} else if len(infos) == 0 {
 						print("no sessions found")
 					} else {
-						choosing = infos
-						for i, info := range infos {
-							print(fmt.Sprintf("%d) %s — %s", i+1, info.ID, firstLine(info.FirstMessage)))
+						r.selector = NewSelector(infos, r.store.Header().ID)
+						if strings.TrimSpace(cmd.Arg) != "" {
+							r.selector.SetFilter(strings.TrimSpace(cmd.Arg))
 						}
-						print("Enter a session number, or an empty line to cancel.")
+						r.state = StateSelecting
+						for _, line := range r.selector.Render() {
+							print(line)
+						}
 					}
 					console.Draw()
 					continue
@@ -573,7 +650,75 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		if err := r.replace(next); err != nil {
 			return false, err
 		}
+		r.generation++
+		// Reset recall and session-local state; keep prior scrollback (P2-048).
+		// New sessions start with empty recall.
 		print("new session " + next.Header().ID)
+	case "history":
+		// /history [N|all]: append last N user spans or full active-branch history (P2-041).
+		// Display-only: no model request, no file change.
+		path, err := r.store.ActivePath()
+		if err != nil {
+			return false, err
+		}
+		arg := strings.TrimSpace(cmd.Arg)
+		if arg == "" || arg == "20" {
+			arg = "20"
+		}
+		if arg == "all" {
+			for _, it := range session.AllHistoryView(path) {
+				switch it.Kind {
+				case session.KindUser:
+					print("You (history)")
+					print(it.Text)
+					print("")
+				case session.KindAssistant:
+					print("Assistant (history)")
+					print(it.Text)
+					print("")
+				case session.KindTool:
+					print(terminal.Sanitize(it.Text))
+				case session.KindCompaction:
+					print("[historical] " + it.Text)
+				}
+			}
+			return false, nil
+		}
+		var n int
+		if _, err := fmt.Sscanf(arg, "%d", &n); err != nil || n <= 0 {
+			return false, fmt.Errorf("use /history [N|all]")
+		}
+		items := session.CurrentView(path)
+		// Last N user spans with their following assistant/tools.
+		var spans [][]session.TranscriptItem
+		var cur []session.TranscriptItem
+		for _, it := range items {
+			if it.Kind == session.KindUser && len(cur) > 0 {
+				spans = append(spans, cur)
+				cur = nil
+			}
+			cur = append(cur, it)
+		}
+		if len(cur) > 0 {
+			spans = append(spans, cur)
+		}
+		if n > len(spans) {
+			n = len(spans)
+		}
+		for _, span := range spans[len(spans)-n:] {
+			for _, it := range span {
+				if it.Kind == session.KindUser {
+					print("You (history)")
+					print(it.Text)
+				} else if it.Kind == session.KindAssistant {
+					print("Assistant (history)")
+					print(it.Text)
+				} else if it.Kind == session.KindTool {
+					print(terminal.Sanitize(it.Text))
+				}
+			}
+			print("")
+		}
 	case "model", "thinking":
 		if strings.TrimSpace(cmd.Arg) == "" {
 			print(fmt.Sprintf("%s/%s thinking %s", r.ov.Provider, r.ov.Model, r.ov.Thinking))
