@@ -41,7 +41,6 @@ func TestFailedContextSendsNoRequest(t *testing.T) {
 		}
 		_ = os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
 	}
-	_ = filepath.Join()
 	if err := loop.Submit(context.Background(), "again", cfg); err == nil {
 		t.Fatal("Submit succeeded on mixed generation")
 	} else if !strings.Contains(err.Error(), "changed externally") {
