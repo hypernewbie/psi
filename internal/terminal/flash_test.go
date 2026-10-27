@@ -31,12 +31,12 @@ func TestFlashingBoundedFrames(t *testing.T) {
 	_ = writesBefore
 	// Assert bounded ops: no screen clear, no scrollback clear, no alt-screen.
 	for _, op := range vt.EraseOps {
-		if op == "ED2" || op == "ED3J" {
+		if strings.HasPrefix(op, "ED") {
 			t.Fatalf("forbidden clear in flash path: %v", op)
 		}
 	}
 	feed := vt.Text()
-	if !strings.Contains(feed, "hello") {
+	if !strings.Contains(feed, "second line") {
 		t.Fatalf("typed text missing: %q", feed[:200])
 	}
 }
@@ -91,7 +91,7 @@ func TestScrollbackBoundary(t *testing.T) {
 	}
 	_ = n
 	for _, op := range vt.EraseOps {
-		if op == "ED2" {
+		if strings.HasPrefix(op, "ED") {
 			t.Fatalf("tail edit erased display: %v", vt.EraseOps)
 		}
 	}

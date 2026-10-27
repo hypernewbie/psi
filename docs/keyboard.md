@@ -4,15 +4,16 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 
 - `Enter` submit outside bracketed paste; pasted newlines are literal, never submit
 - `Ctrl+J` newline (reliable legacy binding)
-- `Left/Right` move by grapheme cluster (uniseg, pi parity)
+- `Left/Right` move by grapheme cluster (uniseg)
 - `Up/Down` move through visual draft rows; at outer row browse session prompt history
 - `Ctrl+P` / `Ctrl+N` browse history directly
 - `Home/End`, `Ctrl+A`/`Ctrl+E` logical line; `Ctrl+Home`/`Ctrl+End` document
-- `Backspace/Delete` one grapheme; `Ctrl+W` previous word (pi word-navigation); `Ctrl+U`/`Ctrl+K` line
+- `Backspace/Delete` one grapheme; `Ctrl+W` previous word; `Ctrl+U`/`Ctrl+K` line
 - `Tab` complete `/command` and `/skill:name` (bounded list on ambiguity, no exec/scan/provider)
 - `Esc` cancels selector/completion, never blocks (50ms prefix timeout)
 - `Ctrl+C` cancels run; idle clears draft first, empty exits; busy is cancellation-only (one quiet notice)
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
+- `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
 - Draft budget 256 KiB UTF-8, never splits grapheme; recalled draft editable, returning past newest restores unfinished draft
 

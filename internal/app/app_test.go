@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,7 @@ func testRuntime(t *testing.T) *runtime {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	s, err := session.New(session.OpenOptions{Cwd: t.TempDir(), SessionDir: t.TempDir(), Persist: true})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +51,12 @@ func testRuntime(t *testing.T) *runtime {
 	if err := r.restore(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { r.store.Unlock(); r.prov.CloseIdle() })
+	t.Cleanup(func() {
+		r.store.Unlock()
+		if r.prov != nil {
+			r.prov.CloseIdle()
+		}
+	})
 	return r
 }
 
@@ -93,7 +100,7 @@ func TestCommandsReplaceSessionAndValidateBeforeMutation(t *testing.T) {
 // Run the real entrypoint in a PTY, with an isolated HOME and a local HTTP
 // provider. This catches wiring bugs that unit tests of unused helpers miss.
 func TestAppProcess(t *testing.T) {
-	if os.Getenv("PSI_APP_TEST_PROCESS") != "1" {
+	if os.Getenv("PSI_APP_TEST_PROCESS") != "1" || flag.Lookup("test.run").Value.String() != "^TestAppProcess$" {
 		return
 	}
 	if err := Run([]string{"--deny-project", "--tools", "read"}, "test"); err != nil {

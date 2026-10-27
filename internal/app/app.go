@@ -2,7 +2,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -124,8 +122,21 @@ func Run(args []string, version string) error {
 	}
 	ov := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	store, err := openSession(o, cwd, agentDir, st, ov)
+	if errors.Is(err, errStartupCancelled) {
+		return nil
+	}
 	if err != nil {
 		return err
+	}
+	if o.SessionPath != "" && filepath.Clean(store.Header().Cwd) != filepath.Clean(cwd) {
+		fmt.Printf("%s [y/N] ", terminal.Sanitize("Session workspace: "+store.Header().Cwd+". Run tools in current workspace "+cwd+"?"))
+		answer, err := readStartupLine(os.Stdin)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(strings.TrimSpace(answer), "y") && !strings.EqualFold(strings.TrimSpace(answer), "yes") {
+			return nil
+		}
 	}
 	if err := store.TryLock(); err != nil {
 		return err
@@ -138,18 +149,7 @@ func Run(args []string, version string) error {
 		}
 	}()
 	if err := r.restore(); err != nil {
-		// Unsupported shared default enters offline, not silent substitution (7.1).
-		// Explicit CLI invalid already returned above before session mutation.
-		if o.Provider == "" && (containsUnsupported(err) || containsNoModel(err)) {
-			r.authErr = err
-			// Minimal offline config: keep requested selection for display, no provider client.
-			// r.ov/cfg may be unset; set safe placeholders from startup overrides.
-			if r.ov.Provider == "" {
-				r.ov = ov
-			}
-		} else {
-			return err
-		}
+		return err
 	}
 	grouped := map[string]int{}
 	for _, d := range diagnostics {
@@ -181,6 +181,7 @@ func Run(args []string, version string) error {
 		return err
 	}
 	defer tty.Restore()
+	r.tty = tty
 	console := terminal.NewConsole(os.Stdin, os.Stdout)
 	defer console.Close()
 	return r.repl(console)
@@ -201,6 +202,7 @@ type runtime struct {
 	generation       int64
 	state            State
 	selector         *Selector
+	tty              *terminal.Term
 }
 
 func (r *runtime) restore() error {
@@ -217,7 +219,18 @@ func (r *runtime) restore() error {
 	if ov.Provider == "" {
 		ov.Provider = "anthropic"
 	}
-	return r.configure(ov)
+	if err := r.configure(ov); err != nil {
+		if r.options.Provider == "" && r.options.Model == "" && r.options.Thinking == "" && (containsUnsupported(err) || containsNoModel(err)) {
+			if r.prov != nil {
+				r.prov.CloseIdle()
+			}
+			r.ov, r.authErr, r.prov, r.reg = ov, err, nil, nil
+			r.cfg = agent.Config{Model: provider.ModelMeta{ID: ov.Model, Provider: ov.Provider}, Thinking: ov.Thinking}
+			return nil // unsupported imported selections still have readable history
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *runtime) configure(ov config.StartupOverrides) error {
@@ -312,7 +325,7 @@ func askProjectConsent(o Options, cwd string) bool {
 		return false
 	}
 	fmt.Printf("%s [y/N] ", terminal.Sanitize("Load protected project resources from "+cwd+"?"))
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, _ := readStartupLine(os.Stdin)
 	return strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
 }
 
@@ -333,19 +346,24 @@ func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.
 		if len(infos) == 0 {
 			return nil, fmt.Errorf("no sessions found in %s", dir)
 		}
-		for i, info := range infos {
-			fmt.Println(terminal.Sanitize(fmt.Sprintf("%d) %s — %s", i+1, info.ID, firstLine(info.FirstMessage))))
+		selector := NewSelector(infos, "")
+		for {
+			for _, line := range selector.Render() {
+				fmt.Println(terminal.Sanitize(line))
+			}
+			fmt.Print("Select session: ")
+			line, err := readStartupLine(os.Stdin)
+			if err != nil {
+				return nil, err
+			}
+			selected, cancelled, _ := selector.Resolve(line)
+			if cancelled {
+				return nil, errStartupCancelled
+			}
+			if selected != nil {
+				return session.OpenFile(selected.Path, cwd, persist)
+			}
 		}
-		fmt.Print("Select session number: ")
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		idx, err := strconv.Atoi(strings.TrimSpace(line))
-		if err != nil || idx < 1 || idx > len(infos) {
-			return nil, fmt.Errorf("invalid session selection")
-		}
-		return session.OpenFile(infos[idx-1].Path, cwd, persist)
 	}
 	return session.New(session.OpenOptions{Cwd: cwd, SessionDir: dir, AgentDir: agentDir, Persist: persist})
 }
@@ -422,7 +440,7 @@ func (r *runtime) replace(next *session.Store) error {
 }
 
 func (r *runtime) repl(console *terminal.Console) error {
-	out := terminal.RawOutput{W: os.Stdout}
+	out := terminal.RawOutput{W: console}
 	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
 	stream := terminal.NewStreamer(out, true)
 	status := terminal.NewStatusWriter(out)
@@ -433,12 +451,69 @@ func (r *runtime) repl(console *terminal.Console) error {
 	defer signal.Stop(signals)
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
+	var outputErr error
+	var suspendPending bool
+	inputs := console.Inputs
+	frameTimer := time.NewTimer(time.Hour)
+	frameTimer.Stop()
+	defer frameTimer.Stop()
+	var frameTick <-chan time.Time
+	refreshRecall := func() {
+		if path, err := r.store.ActivePath(); err == nil {
+			console.Editor.SetHistory(session.PromptRecall(path))
+		}
+	}
+	for _, skill := range r.skills {
+		console.Skills = append(console.Skills, skill.Name)
+	}
+	emitReplay := func(text string) bool {
+		for _, batch := range terminal.Batches(terminal.Sanitize(text)+"\n", 64*1024) {
+		inputScan:
+			for i := 0; i < 64; i++ {
+				select {
+				case input, ok := <-inputs:
+					if !ok || input.Err != nil {
+						exiting = true
+						return false
+					}
+					if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
+						return false
+					}
+				case sig := <-signals:
+					switch sig {
+					case syscall.SIGINT:
+						return false
+					case syscall.SIGTERM, syscall.SIGHUP:
+						exiting = true
+						return false
+					case syscall.SIGTSTP:
+						suspendPending = true
+						return false
+					}
+				default:
+					break inputScan
+				}
+			}
+			fmt.Fprint(out, batch)
+			if console.Err() != nil {
+				return false
+			}
+		}
+		return true
+	}
+	stoppedReplay := func() {
+		if !exiting {
+			print("History display stopped. Use /history all to display stored messages.")
+		}
+	}
 	r.generation++
 	r.state = StateReplaying
 	// Startup activation: display current view before the next editable prompt (P2-035).
 	// Same projector + replay engine as /resume (P2-036).
 	if act, err := PrepareActivation(r.store); err == nil {
-		replayActivation(print, act, true, "")
+		if !replayActivationChecked(emitReplay, act, true, "") {
+			stoppedReplay()
+		}
 		console.Editor.SetHistory(act.Recall)
 		if act.Offline {
 			r.state = StateOffline
@@ -449,7 +524,36 @@ func (r *runtime) repl(console *terminal.Console) error {
 		print("error: " + err.Error())
 		r.state = StateIdle
 	}
-	start := func(text, focus string, compact bool) {
+	assistantOpen := false
+	applyEvent := func(ev event.Event) {
+		if ev.Generation != 0 && ev.Generation != r.generation {
+			return
+		}
+		switch ev.Type {
+		case event.TextDelta:
+			if !assistantOpen {
+				print("Assistant")
+				assistantOpen = true
+			}
+			r.state = StateStreaming
+			stream.Delta(ev.Text)
+		case event.ToolStart:
+			stream.Close()
+			assistantOpen = false
+			r.state = StateRunningTool
+			console.Status(terminal.FormatStatus(ev.ToolName, terminal.ToolRunning))
+			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
+		case event.ToolEnd:
+			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
+		}
+	}
+	start := func(text, focus, invocation, source string, compact bool) {
+		if err := r.store.WriteError(); err != nil {
+			r.state = StateStorageBlocked
+			print("storage blocked: " + err.Error() + " (open a checked copy or /new)")
+			console.Draw()
+			return
+		}
 		if r.authErr != nil {
 			print("error: " + r.authErr.Error())
 			console.Draw()
@@ -457,49 +561,85 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
+		r.state = StateWaiting
+		console.ResetBusyNotice()
+		console.Status("Working. Ctrl+C cancels. Input disabled.")
 		if compact {
-			print("(compacting...)")
+			r.state = StateCompacting
+			console.Status("Compacting. Ctrl+C cancels.")
 		}
-		gen := r.generation
-		seq := int64(0)
+		assistantOpen = false
+		gen, seq := r.generation, int64(0)
+		cfg := r.cfg
 		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
 			seq++
-			e.Generation = gen
-			e.Seq = seq
+			e.Generation, e.Seq, e.SessionID = gen, seq, r.store.Header().ID
 			events <- e
 		})
 		go func() {
 			if compact {
-				done <- loop.Compact(ctx, r.cfg, focus)
+				done <- loop.Compact(ctx, cfg, focus)
+			} else if invocation != "" {
+				done <- loop.SubmitWithProvenance(ctx, text, invocation, source, cfg)
 			} else {
-				done <- loop.Submit(ctx, text, r.cfg)
+				done <- loop.Submit(ctx, text, cfg)
 			}
 		}()
 	}
-	startProvenance := func(text, invocation, source string, compact bool) {
-		if r.authErr != nil {
-			print("error: " + r.authErr.Error())
-			console.Draw()
-			return
+	suspend := func() error {
+		if r.tty == nil {
+			return fmt.Errorf("terminal lifecycle unavailable")
 		}
-		ctx, stop := context.WithCancel(context.Background())
-		cancel, busy, compacting = stop, true, compact
-		gen := r.generation
-		seq := int64(0)
-		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
-			seq++
-			e.Generation = gen
-			e.Seq = seq
-			events <- e
-		})
-		go func() {
-			done <- loop.SubmitWithProvenance(ctx, text, invocation, source, r.cfg)
-		}()
+		console.Pause()
+		r.tty.Restore()
+		// SIGSTOP cannot race a changed SIGTSTP disposition or be ignored by
+		// an orphaned process group. SIGCONT resumes exactly after this call.
+		continued := make(chan os.Signal, 1)
+		signal.Notify(continued, syscall.SIGCONT)
+		defer signal.Stop(continued)
+		if err := syscall.Kill(os.Getpid(), syscall.SIGSTOP); err != nil {
+			return err
+		}
+		// A process-directed stop can reach another Go runtime thread first.
+		// Do not reacquire raw mode merely because kill returned.
+		<-continued
+		if err := r.tty.Reacquire(); err != nil {
+			return err
+		}
+		console.Resume()
+		inputs = console.Inputs
+		console.Draw()
+		return console.Err()
 	}
 	console.Draw()
-	inputs := console.Inputs
 	for {
+		if exiting && !busy {
+			return console.Err()
+		}
+		if suspendPending && !busy {
+			suspendPending = false
+			if err := suspend(); err != nil {
+				return err
+			}
+		}
+		if err := console.Err(); err != nil {
+			if !busy {
+				return err
+			}
+			outputErr, exiting = err, true
+			cancel()
+		}
+		if frameTick == nil && (stream.Pending() || console.NeedsDraw()) {
+			frameTimer.Reset(time.Second / 30)
+			frameTick = frameTimer.C
+		}
 		select {
+		case <-frameTick:
+			frameTick = nil
+			stream.Flush()
+			if !busy {
+				console.Flush()
+			}
 		case sig := <-signals:
 			if sig == syscall.SIGWINCH {
 				if !busy {
@@ -508,20 +648,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if sig == syscall.SIGTSTP {
-				// Suspend only after owned work reaches a safe settled state (P2-034, P2-061).
-				// Restore terminal before control returns to shell; reacquire tail only on SIGCONT.
-				// Do not replay provider/tool actions on resume.
 				if busy {
+					suspendPending = true
 					cancel()
-					// Wait for settlement in done path; suspend after.
+				} else if err := suspend(); err != nil {
+					return err
 				}
-				console.Close()
-				// tty restore is deferred; explicitly restore here for suspend.
-				// Re-raise SIGTSTP to the default handler after resetting.
-				signal.Stop(signals)
-				// Note: actual suspend requires SIG_DFL; test harness asserts no replay, not real stop.
-				signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGWINCH, syscall.SIGTSTP, syscall.SIGCONT, syscall.SIGHUP)
-				console.Draw()
 				continue
 			}
 			if sig == syscall.SIGCONT {
@@ -540,36 +672,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				return nil
 			}
 		case ev := <-events:
-			// Reject stale events after session replacement (P2-060).
-			if ev.Generation != 0 && ev.Generation != r.generation {
-				continue
-			}
-			switch ev.Type {
-			case event.TextDelta:
-				stream.Delta(ev.Text)
-			case event.ToolStart:
-				stream.Close()
-				status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
-			case event.ToolEnd:
-				status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
-			}
+			applyEvent(ev)
 		case err := <-done:
 			// Drain events before drawing the next prompt. A completed run can
 			// otherwise race its final text delta through this select.
 			for len(events) > 0 {
-				ev := <-events
-				if ev.Generation != 0 && ev.Generation != r.generation {
-					continue
-				}
-				switch ev.Type {
-				case event.TextDelta:
-					stream.Delta(ev.Text)
-				case event.ToolStart:
-					stream.Close()
-					status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
-				case event.ToolEnd:
-					status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
-				}
+				applyEvent(<-events)
 			}
 			cancel()
 			busy = false
@@ -583,9 +691,21 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			compacting = false
 			if exiting {
-				return nil
+				return outputErr
 			}
-			console.Draw()
+			refreshRecall()
+			r.state = StateIdle
+			if r.store.WriteError() != nil {
+				r.state = StateStorageBlocked
+			}
+			if suspendPending {
+				suspendPending = false
+				if err := suspend(); err != nil {
+					return err
+				}
+			} else {
+				console.Draw()
+			}
 		case input, ok := <-inputs:
 			if !ok {
 				inputs = nil
@@ -595,6 +715,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				return nil
+			}
+			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
+				if busy {
+					suspendPending = true
+					cancel()
+				} else if err := suspend(); err != nil {
+					return err
+				}
+				continue
+			}
+			if !busy && r.selector != nil && len(input.Key) == 1 && input.Key[0] == 27 {
+				r.selector, r.state = nil, StateIdle
+				console.Editor.Clear()
+				refreshRecall()
+				console.Draw()
+				continue
 			}
 			text, submitted, quit, abort := console.Handle(input, busy)
 			if abort && busy {
@@ -611,6 +747,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !submitted {
 				continue
 			}
+			// Only durable user submissions belong to recall, never commands or selector answers.
+			refreshRecall()
 			if r.selector != nil {
 				sel, cancelSel, redraw := r.selector.Resolve(text)
 				if cancelSel {
@@ -645,7 +783,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 							} else {
 								print("resumed " + r.store.Header().ID)
 								r.generation++
-								replayActivation(print, act, false, oldID)
+								if !replayActivationChecked(emitReplay, act, false, oldID) {
+									stoppedReplay()
+								}
 								console.Editor.SetHistory(act.Recall)
 								if act.Offline {
 									r.state = StateOffline
@@ -684,12 +824,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 						if strings.TrimSpace(cmd.Arg) != "" {
 							invocation += " " + cmd.Arg
 						}
-						startProvenance(expanded, invocation, "skill", false)
+						start(expanded, "", invocation, "skill", false)
 					}
 					continue
 				}
+				if cmd.Name == "history" {
+					path, err := r.store.ActivePath()
+					if err != nil {
+						print("error: " + err.Error())
+					} else {
+						items, err := historyItems(path, cmd.Arg)
+						if err != nil {
+							print("error: " + err.Error())
+						} else if !renderTimelineChecked(emitReplay, items) {
+							stoppedReplay()
+						}
+					}
+					console.Draw()
+					continue
+				}
 				if cmd.Name == "compact" {
-					start("", cmd.Arg, true)
+					start("", cmd.Arg, "", "", true)
 					continue
 				}
 				if cmd.Name == "resume" {
@@ -714,6 +869,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				quit, err := r.command(cmd, out)
+				refreshRecall()
 				if err != nil {
 					print("error: " + err.Error())
 				}
@@ -723,7 +879,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Draw()
 				continue
 			}
-			start(text, "", false)
+			start(text, "", "", "", false)
 		}
 	}
 }
@@ -760,64 +916,11 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		arg := strings.TrimSpace(cmd.Arg)
-		if arg == "" || arg == "20" {
-			arg = "20"
+		items, err := historyItems(path, cmd.Arg)
+		if err != nil {
+			return false, err
 		}
-		if arg == "all" {
-			for _, it := range session.AllHistoryView(path) {
-				switch it.Kind {
-				case session.KindUser:
-					print("You (history)")
-					print(it.Text)
-					print("")
-				case session.KindAssistant:
-					print("Assistant (history)")
-					print(it.Text)
-					print("")
-				case session.KindTool:
-					print(terminal.Sanitize(it.Text))
-				case session.KindCompaction:
-					print("[historical] " + it.Text)
-				}
-			}
-			return false, nil
-		}
-		var n int
-		if _, err := fmt.Sscanf(arg, "%d", &n); err != nil || n <= 0 {
-			return false, fmt.Errorf("use /history [N|all]")
-		}
-		items := session.CurrentView(path)
-		// Last N user spans with their following assistant/tools.
-		var spans [][]session.TranscriptItem
-		var cur []session.TranscriptItem
-		for _, it := range items {
-			if it.Kind == session.KindUser && len(cur) > 0 {
-				spans = append(spans, cur)
-				cur = nil
-			}
-			cur = append(cur, it)
-		}
-		if len(cur) > 0 {
-			spans = append(spans, cur)
-		}
-		if n > len(spans) {
-			n = len(spans)
-		}
-		for _, span := range spans[len(spans)-n:] {
-			for _, it := range span {
-				if it.Kind == session.KindUser {
-					print("You (history)")
-					print(it.Text)
-				} else if it.Kind == session.KindAssistant {
-					print("Assistant (history)")
-					print(it.Text)
-				} else if it.Kind == session.KindTool {
-					print(terminal.Sanitize(it.Text))
-				}
-			}
-			print("")
-		}
+		renderTimeline(print, items)
 	case "model":
 		if strings.TrimSpace(cmd.Arg) == "" {
 			print(modelList(r))

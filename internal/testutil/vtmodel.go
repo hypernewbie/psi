@@ -1,220 +1,211 @@
 package testutil
 
-// VTModel is a minimal xterm-compatible screen model for assertions.
-// It tracks cells, scrollback, cursor position, modes, and erase operations.
-// It is a test model, not a terminal emulator: it supports the subset psi
-// emits (SGR stripped by sanitizer, CSI cursor/erase, CRLF, scrollback).
+import (
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/rivo/uniseg"
+)
+
+// VTModel interprets the cursor/erase subset emitted by psi. It is not evidence
+// for the complete terminal matrix. In particular, it must overwrite cells and
+// apply erases: merely recording these operations hides destructive redraws.
 type VTModel struct {
 	Width, Height int
-	Rows          [][]rune // visible rows
-	Widths        [][]int  // cell widths per rune (1 or 2)
+	Rows          [][]rune
 	CursorRow     int
-	CursorCol     int // in cells
+	CursorCol     int
 	Scrollback    []string
 	EraseOps      []string
 	WriteCalls    int
 	ByteCount     int
 	FrameCount    int
-	Modes         map[string]bool // e.g. "2004h" bracketed paste
+	Modes         map[string]bool
 	CursorVisible bool
+	pending       []byte
+	wrap          bool
 }
 
 func NewVTModel(w, h int) *VTModel {
-	if w < 2 {
-		w = 80
-	}
-	if h < 2 {
-		h = 24
-	}
-	m := &VTModel{Width: w, Height: h, CursorVisible: true, Modes: map[string]bool{}}
+	m := &VTModel{Width: max(1, w), Height: max(1, h), CursorVisible: true, Modes: map[string]bool{}}
 	m.Clear()
 	return m
 }
 
 func (m *VTModel) Clear() {
 	m.Rows = make([][]rune, m.Height)
-	m.Widths = make([][]int, m.Height)
 	for i := range m.Rows {
-		m.Rows[i] = []rune{}
-		m.Widths[i] = []int{}
+		m.Rows[i] = make([]rune, m.Width)
 	}
-	m.CursorRow, m.CursorCol = 0, 0
+	m.CursorRow, m.CursorCol, m.wrap = 0, 0, false
 }
 
-// rowWidth returns used cells in a row.
-func (m *VTModel) rowWidth(r int) int {
-	w := 0
-	for _, cw := range m.Widths[r] {
-		w += cw
+func rowText(row []rune) string {
+	var b strings.Builder
+	for _, r := range row {
+		if r == 0 {
+			b.WriteByte(' ')
+		} else {
+			b.WriteRune(r)
+		}
 	}
-	return w
-}
-
-// PutText appends printable text at the cursor (no ANSI; caller sanitizes).
-func (m *VTModel) PutText(s string) {
-	for _, r := range s {
-		if r == '\n' {
-			m.newline()
-			continue
-		}
-		if r == '\r' {
-			m.CursorCol = 0
-			continue
-		}
-		w := 1
-		if rw := runeCellWidth(r); rw == 2 {
-			w = 2
-		}
-		if m.CursorCol+w > m.Width {
-			m.newline()
-		}
-		m.Rows[m.CursorRow] = append(m.Rows[m.CursorRow], r)
-		m.Widths[m.CursorRow] = append(m.Widths[m.CursorRow], w)
-		m.CursorCol += w
-	}
+	return strings.TrimRight(b.String(), " ")
 }
 
 func (m *VTModel) newline() {
+	m.wrap = false
 	m.CursorRow++
-	m.CursorCol = 0
 	if m.CursorRow >= m.Height {
-		// Scroll: top row enters scrollback.
-		m.Scrollback = append(m.Scrollback, string(m.Rows[0]))
+		m.Scrollback = append(m.Scrollback, rowText(m.Rows[0]))
 		copy(m.Rows, m.Rows[1:])
-		copy(m.Widths, m.Widths[1:])
-		m.Rows[m.Height-1] = []rune{}
-		m.Widths[m.Height-1] = []int{}
+		m.Rows[m.Height-1] = make([]rune, m.Width)
 		m.CursorRow = m.Height - 1
 	}
 }
 
-// EraseDisplay records an erase op; ED 2/J clears scrollback (forbidden in normal path).
-func (m *VTModel) Erase(op string) {
-	m.EraseOps = append(m.EraseOps, op)
+func (m *VTModel) PutText(s string) {
+	for _, r := range s {
+		switch r {
+		case '\r':
+			m.CursorCol, m.wrap = 0, false
+			continue
+		case '\n':
+			m.newline()
+			continue
+		case '\t':
+			m.CursorCol = min(m.Width-1, (m.CursorCol/8+1)*8)
+			continue
+		}
+		width := uniseg.StringWidth(string(r))
+		if width == 0 || r < 32 {
+			continue
+		}
+		width = min(width, m.Width)
+		if m.wrap || m.CursorCol+width > m.Width {
+			m.CursorCol = 0
+			m.newline()
+		}
+		m.Rows[m.CursorRow][m.CursorCol] = r
+		for i := 1; i < width; i++ {
+			m.Rows[m.CursorRow][m.CursorCol+i] = 0
+		}
+		m.CursorCol += width
+		if m.CursorCol == m.Width {
+			m.CursorCol--
+			m.wrap = true
+		}
+	}
 }
 
-// Text returns visible text joined by newlines (for substring-free assertions use Cells).
 func (m *VTModel) Text() string {
 	rows := make([]string, len(m.Rows))
 	for i, r := range m.Rows {
-		rows[i] = string(r)
+		rows[i] = rowText(r)
 	}
-	s := ""
-	for i, r := range rows {
-		if i > 0 {
-			s += "\n"
-		}
-		s += r
-	}
-	return s
+	return strings.Join(rows, "\n")
 }
 
-// Feed parses a byte stream with a small CSI subset and records ops.
 func (m *VTModel) Feed(b []byte) {
 	m.WriteCalls++
 	m.ByteCount += len(b)
-	i := 0
-	for i < len(b) {
-		if b[i] == 0x1b && i+1 < len(b) && b[i+1] == '[' {
-			j := i + 2
-			for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
+	m.pending = append(m.pending, b...)
+	for len(m.pending) > 0 {
+		p := m.pending
+		if p[0] == 27 {
+			if len(p) < 2 {
+				return
+			}
+			if p[1] != '[' {
+				m.pending = p[2:]
+				continue
+			}
+			j := 2
+			for j < len(p) && (p[j] < 0x40 || p[j] > 0x7e) {
 				j++
 			}
-			if j >= len(b) {
-				break
+			if j == len(p) {
+				return
 			}
-			final := b[j]
-			params := string(b[i+2 : j])
-			switch final {
-			case 'A':
-				m.CursorRow -= atoi(params, 1)
-				if m.CursorRow < 0 {
-					m.CursorRow = 0
-				}
-			case 'B':
-				m.CursorRow += atoi(params, 1)
-				if m.CursorRow >= m.Height {
-					m.CursorRow = m.Height - 1
-				}
-			case 'C':
-				m.CursorCol += atoi(params, 1)
-			case 'D':
-				m.CursorCol -= atoi(params, 1)
-				if m.CursorCol < 0 {
-					m.CursorCol = 0
-				}
-			case 'H', 'f':
-				m.CursorRow, m.CursorCol = 0, 0
-			case 'J':
-				m.Erase("ED" + params)
-			case 'K':
-				m.Erase("EL" + params)
-			case 'h', 'l':
-				m.Modes[params] = final == 'h'
-			}
-			i = j + 1
+			m.csi(string(p[2:j]), p[j])
+			m.pending = p[j+1:]
 			continue
 		}
-		// printable run
-		j := i
-		for j < len(b) && b[j] != 0x1b {
-			j++
+		if !utf8.FullRune(p) {
+			return
 		}
-		m.PutText(string(b[i:j]))
-		i = j
+		r, n := utf8.DecodeRune(p)
+		m.PutText(string(r))
+		m.pending = p[n:]
 	}
 }
 
-func atoi(s string, def int) int {
-	n := 0
-	neg := false
-	for _, c := range s {
-		if c == '-' {
-			neg = true
-			continue
+func (m *VTModel) csi(params string, final byte) {
+	parts := strings.Split(params, ";")
+	param := func(i, fallback int) int {
+		if i >= len(parts) {
+			return fallback
 		}
-		if c < '0' || c > '9' {
-			continue
+		n, err := strconv.Atoi(parts[i])
+		if err != nil || n == 0 {
+			return fallback
 		}
-		n = n*10 + int(c-'0')
+		return n
 	}
-	if neg {
-		n = -n
+	n := param(0, 1)
+	m.wrap = false
+	switch final {
+	case 'A':
+		m.CursorRow = max(0, m.CursorRow-n)
+	case 'B':
+		m.CursorRow = min(m.Height-1, m.CursorRow+n)
+	case 'C':
+		m.CursorCol = min(m.Width-1, m.CursorCol+n)
+	case 'D':
+		m.CursorCol = max(0, m.CursorCol-n)
+	case 'H', 'f':
+		m.CursorRow = min(m.Height-1, param(0, 1)-1)
+		m.CursorCol = min(m.Width-1, param(1, 1)-1)
+	case 'K':
+		m.EraseOps = append(m.EraseOps, "EL"+params)
+		mode := param(0, 0)
+		start, end := m.CursorCol, m.Width
+		if mode == 1 {
+			start, end = 0, m.CursorCol+1
+		} else if mode == 2 {
+			start = 0
+		}
+		clear(m.Rows[m.CursorRow][start:end])
+	case 'J':
+		m.EraseOps = append(m.EraseOps, "ED"+params)
+		mode := param(0, 0)
+		if mode == 3 {
+			m.Scrollback = nil
+			return
+		}
+		for r := range m.Rows {
+			start, end := 0, m.Width
+			if mode == 0 {
+				if r < m.CursorRow {
+					continue
+				}
+				if r == m.CursorRow {
+					start = m.CursorCol
+				}
+			} else if mode == 1 {
+				if r > m.CursorRow {
+					continue
+				}
+				if r == m.CursorRow {
+					end = m.CursorCol + 1
+				}
+			}
+			clear(m.Rows[r][start:end])
+		}
+	case 'h', 'l':
+		m.Modes[params] = final == 'h'
+		if params == "?25" {
+			m.CursorVisible = final == 'h'
+		}
 	}
-	if n == 0 {
-		return def
-	}
-	return n
-}
-
-func runeCellWidth(r rune) int {
-	if r < 0x1100 {
-		return 1
-	}
-	// Conservative wide check for the model (mirrors go-runewidth for tests).
-	if r >= 0x1100 && r <= 0x115F {
-		return 2
-	}
-	if r >= 0x2E80 && r <= 0x303E {
-		return 2
-	}
-	if r >= 0x3041 && r <= 0x33FF {
-		return 2
-	}
-	if r >= 0x3400 && r <= 0x4DBF {
-		return 2
-	}
-	if r >= 0x4E00 && r <= 0x9FFF {
-		return 2
-	}
-	if r >= 0xAC00 && r <= 0xD7A3 {
-		return 2
-	}
-	if r >= 0xFF00 && r <= 0xFF60 {
-		return 2
-	}
-	if r >= 0x1F300 && r <= 0x1FAFF {
-		return 2
-	}
-	return 1
 }

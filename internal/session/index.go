@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,18 +37,11 @@ func BuildIndex(path string) (*RecordIndex, error) {
 }
 
 func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
-	var idx *RecordIndex = &RecordIndex{Path: path}
+	idx := &RecordIndex{Path: path}
 	var offset int64
-	br, ok := r.(interface {
-		ReadBytes(byte) ([]byte, error)
-	})
-	var reader *bufio.Reader
-	if !ok {
-		reader = bufio.NewReaderSize(r, 64*1024)
-		br = reader
-	}
+	br := bufio.NewReaderSize(r, 64*1024)
 	for {
-		line, err := br.ReadBytes('\n')
+		line, err := readRecord(br)
 		if err != nil && len(line) == 0 {
 			if err == io.EOF {
 				break
@@ -64,7 +58,7 @@ func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
 				trimmed = trimmed[:len(trimmed)-1]
 			}
 		}
-		if len(trimmed) == 0 {
+		if len(bytes.TrimSpace(trimmed)) == 0 {
 			offset += length
 			if err == io.EOF {
 				break
@@ -81,8 +75,7 @@ func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
 			ParentID *string `json:"parentId"`
 		}
 		if err := json.Unmarshal(trimmed, &probe); err != nil {
-			// Malformed interior: record meta with empty ID still tracks offset for diagnostics.
-			idx.Records = append(idx.Records, RecordMeta{Offset: offset, Length: length})
+			return nil, fmt.Errorf("invalid record at offset %d: %w", offset, err)
 		} else {
 			pid := ""
 			if probe.ParentID != nil {
@@ -133,6 +126,9 @@ func (idx *RecordIndex) ActivePathIDs(leafID string) map[string]bool {
 
 // LoadEntry decodes one record body on demand.
 func (idx *RecordIndex) LoadEntry(meta RecordMeta) (*Entry, error) {
+	if meta.Offset < 0 || meta.Length <= 0 || meta.Length > MaxRecordBytes+2 {
+		return nil, fmt.Errorf("invalid indexed record bounds")
+	}
 	f, err := os.Open(idx.Path)
 	if err != nil {
 		return nil, err

@@ -80,6 +80,7 @@ func (e *Editor) Clear() {
 	e.buf = nil
 	e.pos = 0
 	e.histIdx = -1
+	e.draft, e.draftPos, e.prefCol = "", 0, -1
 }
 
 // SetHistory replaces recall history (session-scoped, up to 200, oldest first).
@@ -130,7 +131,8 @@ func (e *Editor) Insert(s string) bool {
 	boff = snapByte(cur, boff)
 	newText := cur[:boff] + s + cur[boff:]
 	e.buf = []rune(newText)
-	e.pos = byteToRune(e.buf, boff+len(s))
+	e.pos = byteToRune(e.buf, snapByte(newText, boff+len(s)))
+	e.prefCol = -1
 	if e.histIdx != -1 {
 		// Editing while browsing keeps browsing state until submit/navigation;
 		// pi exits history browsing on edit. Match pi: exit browsing.
@@ -233,14 +235,14 @@ func (e *Editor) logicalLineBounds() (start, end int) {
 
 func (e *Editor) Home() {
 	s, _ := e.logicalLineBounds()
-	e.pos = s
+	e.pos, e.prefCol = s, -1
 }
 func (e *Editor) End() {
 	_, en := e.logicalLineBounds()
-	e.pos = en
+	e.pos, e.prefCol = en, -1
 }
-func (e *Editor) DocStart() { e.pos = 0 }
-func (e *Editor) DocEnd()   { e.pos = len(e.buf) }
+func (e *Editor) DocStart() { e.pos, e.prefCol = 0, -1 }
+func (e *Editor) DocEnd()   { e.pos, e.prefCol = len(e.buf), -1 }
 
 // MoveUp moves through visual draft rows; returns false when already on first row.
 // It preserves the preferred visual column (pi sticky column).
@@ -510,8 +512,17 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 		case 23: // Ctrl+W
 			e.DeleteWordBackward()
 			return "", false
-		case 3, 4, 127, 8:
-			// Handled by outer Console (clear/exit/delete) to preserve lifecycle parity.
+		case 127, 8:
+			e.Backspace()
+			return "", false
+		case 16:
+			e.PrevHistory()
+			return "", false
+		case 14:
+			e.NextHistory()
+			return "", false
+		case 3, 4:
+			// Clear/exit are handled by Console.
 			return "", false
 		default:
 			if key[0] == 27 || key[0] < 0x20 {

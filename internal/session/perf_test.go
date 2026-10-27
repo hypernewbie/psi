@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// P2-093: performance gates — 10k metadata scan, indexed large session.
-// Reference machine: Linux/WSL2 local storage. Thresholds are gates; benchmark params published.
-func TestPerfMetadataScan(t *testing.T) {
+// Smoke fixtures only: 200 small files and an approximately 2 MiB index.
+// These do not establish PLAN2's 10,000-file or 512 MiB live-activation gates.
+func TestMetadataScanSmoke(t *testing.T) {
 	dir := t.TempDir()
 	ws := filepath.Join(dir, "ws")
 	os.MkdirAll(filepath.Join(dir, "sess"), 0o755)
-	// 10k session metadata entries (synthetic).
-	for i := 0; i < 200; i++ { // 200 files is enough for gate; 10k covered by index unit (fast).
+	// Small synthetic metadata scan.
+	for i := 0; i < 200; i++ {
 		path := filepath.Join(dir, "sess", fmt.Sprintf("s-%04d.jsonl", i))
 		data := fmt.Sprintf("{\"type\":\"session\",\"version\":3,\"id\":\"id-%04d\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"cwd\":%q}\n{\"type\":\"message\",\"id\":\"u\",\"parentId\":null,\"timestamp\":\"2026-01-01T00:00:01.000Z\",\"message\":{\"role\":\"user\",\"content\":\"hi %d\",\"timestamp\":1}}\n", i, ws, i)
 		os.WriteFile(path, []byte(data), 0o644)
@@ -37,7 +37,7 @@ func TestPerfMetadataScan(t *testing.T) {
 	}
 }
 
-func TestPerfIndexedActivation(t *testing.T) {
+func TestRecordIndexSmoke(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "large.jsonl")
 	f, _ := os.Create(path)
@@ -58,7 +58,7 @@ func TestPerfIndexedActivation(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("index %v exceeds 3s", elapsed)
 	}
-	// Activation via index (active path without payload retention).
+	// This exercises the standalone index, not Store.OpenFile or app activation.
 	active := idx.ActivePathIDs("")
 	if len(active) == 0 {
 		t.Fatal("empty active path")

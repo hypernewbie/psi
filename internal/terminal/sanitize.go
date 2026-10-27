@@ -7,11 +7,20 @@ import (
 
 // Sanitizer retains escape-sequence state across provider deltas. In particular,
 // an OSC split across multiple chunks must not leak its payload into the UI.
-type Sanitizer struct{ state byte }
+type Sanitizer struct {
+	state       byte
+	pendingUTF8 string
+}
 
 func (s *Sanitizer) Feed(text string) string {
+	text = s.pendingUTF8 + text
+	s.pendingUTF8 = ""
 	var out strings.Builder
 	for len(text) > 0 {
+		if !utf8.FullRuneInString(text) {
+			s.pendingUTF8 = text
+			break
+		}
 		r, size := utf8.DecodeRuneInString(text)
 		text = text[size:]
 		switch s.state {

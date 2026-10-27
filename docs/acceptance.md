@@ -1,173 +1,147 @@
-# Acceptance ledger (PLAN2)
+# PLAN2 acceptance ledger
 
-Pinned reference: `temp/pi-mono` rev `d5b3de22d0e24a3e9c38a9410d3329b099717283`, session v3.
-All rows are mandatory. Evidence links to tracked synthetic fixtures/tests.
+## Review status
 
-## Gates
+**PLAN2 is not release-complete.** The earlier blanket pass claims lacked sufficient evidence.
+This review starts from `e3db458` and corrects runtime faults and regression tests.
+Passing Go tests does not establish completion of all 100 tasks or 32 acceptance cases.
 
-| Gate | Result | Tasks | Evidence |
+The compatibility reference is Pi revision `d5b3de22d0e24a3e9c38a9410d3329b099717283`, session v3.
+The pinned Pi reader comparison requires a built reference module.
+That comparison did not run during this review.
+
+## Release gates
+
+“Partial” means that tests cover some requirements, but the complete gate lacks evidence.
+“Blocked” identifies a known missing requirement or unavailable reference evidence.
+No row below declares release acceptance.
+
+| Gate | Tasks | Status | Evidence and remaining requirements |
 |---|---|---|---|
-| G01 | pass | 001–006 | ledger, flash repro (bounded frames), resume repro (3-turn), VT model, scheduler, canaries |
-| G02 | pass | 007–014 | states, ordered events (generation+seq), one Writer, timeline items, activation txn, cancel path, settlement barrier |
-| G03 | pass | 015–024 | uniseg graphemes, shared layout, visual Up/Down+sticky, Ctrl+P/N, Tab complete, Escape timeout, paste txn, 256KiB, recall 200, viewport resize, lifecycle |
-| G04 | pass | 025–034 | atomic frames, changed-row, scrollback append-only, 30fps/64KiB, suffix-only reconcile, compact states, resize fallback, sanitization (ANSI/OSC/DCS/C1/split), suspend/resume |
-| G05 | pass | 035–044 | startup replay, in-process replay+divider+no-op, settled tool states, compaction/edit display, 20/page selector, cancel preserves, /history N/all, lazy batches, provenance psi.input, workspace edges |
-| G06 | pass | 045–053 | command table drives help+parser, model list+provider/model syntax, thinking levels, new/quit, session (provider/api/model/continuation, no $0.00), history, skill provenance, CLI validation before mutation, offline shared default, grouped diagnostics, resource precedence, portable skills |
-| G07 | pass | 054–061 | user+provenance ordering, settlement barrier, aborted partial (no executable call), tool-batch persist, unresolved block, storage failure stops+unsaved, generation filter, guards, suspend/resume, stress cancel/activate |
-| G08 | pass | 062–068 | v3 audit (preserve unknown, large int, null/empty), active path/branches, ReplaySystem order+redefinition, compaction/edits projection, index offsets+on-demand, append/ownership (prefix, truncation, replacement, lock), Pi→psi→Pi + reference projector |
-| G09 | pass | 069–076 | bundled catalog+overrides, request construction (roles/tool grouping, signatures, namespaces), thinking/budget/effort+image guard, SSE splits/usage-only/EOF, error/retry (no invisible replay), Codex refresh (preserve, lock, 0600+atomic, no fallback), accounting (no $0.00), offline journeys + liveprovider tag |
-| G10 | pass | 077–084 | read/write/edit/bash parity (legacy, BOM/CRLF, symlinks, images, truncation, shell prefix/cancel/descendants, private temp, no dump), bounds (50KiB, 32MiB, 256KiB), precedence via app, skill discovery/invoke/restart/resume, disposable task+resume |
-| G11 | pass | 085–091 | estimate (system+tools+images), safe boundaries (calls+results), bounded summary, compatible persistence+checkpoint, UX (start/settled, no redraw), ≤1 recovery (no repeat), long-session restart (model/thinking, hidden tools, cancel, display/recall/context/prefix) |
-| G12 | pass | 092–100 | check.sh (fmt/vet/test/race/build), perf (10k metadata <2s, index <3s), terminal matrix (NO_COLOR, fallback, resize, scrollback), stress, privacy canaries+artifact scan, docs parity, root binary (11M, go1.26.4, ignored), PTY journey, ledger |
+| G01 | 001–006 | Partial | Screen-model operations, actual output writes, PTY regressions, and canary detection have tests. The complete acceptance harness remains unproven. |
+| G02 | 007–014 | Partial | The application uses shared console ownership and drains settled events. The full transition and activation matrix lacks end-to-end evidence. |
+| G03 | 015–024 | Partial | Tests cover Backspace, graphemes, source boundaries, UTF-8, paste rejection, recall, and Escape timing. The complete keyboard and latency matrix remains open. |
+| G04 | 025–034 | Partial | Tests cover changed rows, cursor movement, short writes, stream coalescing, and terminal restoration. Human terminal checks and sustained timing measurements remain open. |
+| G05 | 035–044 | Partial | Actual-app PTY tests cover startup history, `/history all`, and `/new` recall reset. Every activation path and replay-interruption case remains necessary. |
+| G06 | 045–053 | Partial | Existing command and configuration tests pass. Full model, offline, consent, and skill journeys lack complete visible-output evidence. |
+| G07 | 054–061 | Partial | Tests cover authoritative text, durable partials, unstarted calls, and persistent storage blocking. The complete append/sync/close failure matrix remains open. |
+| G08 | 062–068 | Blocked | Synthetic session tests pass. The live store does not use the record index. Actual pinned Pi interchange remains unproven. |
+| G09 | 069–076 | Partial | Synthetic provider and OAuth tests pass. This review made no live provider calls. Full catalog and protocol acceptance remains open. |
+| G10 | 077–084 | Partial | Tool tests, a failing-then-fixed disposable fixture, and an actual-binary coding smoke pass. Complete parity and resource journeys remain open. |
+| G11 | 085–091 | Partial | Tests cover one bounded context-limit recovery and prohibit recovery after partial output. Full compaction and pinned-reader acceptance remains open. |
+| G12 | 092–100 | Blocked | Routine checks cover formatting, vet, tests, race detection, and build. Large-session, latency, platform, and complete delivered-binary acceptance remain open. |
 
-## Acceptance cases (A01–A32)
+## Review regression evidence
 
-Each case requires visible-output + durable-state checks. Request-body only is insufficient.
+These tests exercise specific behavior, not an entire release gate.
+All provider requests in these tests use synthetic responses or loopback servers.
 
-| ID | Journey | Owner task | Evidence |
-|---|---|---|---|
-| A01 | multiline prompt | P2-024,029 | terminal PTY + screen-model |
-| A02 | 256 KiB paste | P2-019,020 | bounded frames, no submit |
-| A03 | combining/CJK/emoji/flags | P2-015,016 | grapheme goldens |
-| A04 | tiny-delta stream | P2-028,030 | ordered text, ≤30fps |
-| A05 | resize idle/stream/select/replay | P2-023,032 | no full replay |
-| A06 | tool-heavy | P2-031,037 | compact outcomes |
-| A07 | startup resume 3-turn | P2-035 | current-view before prompt |
-| A08 | every startup resume form | P2-035,044 | equivalent context/timeline/recall |
-| A09 | A→B→A | P2-036,060 | dividers, generation filter |
-| A10 | reselect/cancel | P2-040 | no duplicate, no loss |
-| A11 | beyond 100 candidates | P2-039 | 20/page |
-| A12 | branched resume | P2-038 | selected branch only |
-| A13 | compaction+edits resume | P2-038 | summary, retained, annotations |
-| A14 | /history all | P2-041 | display-only, no mutation |
-| A15 | completed/interrupted tools | P2-037,058 | truthful states, no rerun |
-| A16 | reasoning+image records | P2-069,071 | placeholders, hidden reasoning |
-| A17 | custom display true/false | P2-043 | respect display, preserve context |
-| A18 | skill invoke+resume | P2-043,083 | invocation display, expansion |
-| A19 | model/thinking change+restart | P2-046,047 | session-local, protocol agrees |
-| A20 | missing/unsupported creds | P2-050 | offline, no substitution |
-| A21 | Codex refresh | P2-074 | one refresh, private persist |
-| A22 | cancel after refresh | P2-074 | rotation durable |
-| A23 | cancel provider/tool/compact | P2-057,059 | settled, truthful |
-| A24 | append/sync fail | P2-059 | explicit unsaved, no new work |
-| A25 | malformed/changed/locked | P2-067 | bytes intact, prior activation |
-| A26 | context-limit recovery | P2-090 | ≤1 retry, no repeated tools |
-| A27 | Pi→psi→Pi | P2-068 | equivalent context, prefix |
-| A28 | large indexed session | P2-066 | <160MiB, <3s activation |
-| A29 | close/signal/suspend/resume | P2-034,061 | attrs, modes, cleanup |
-| A30 | no Node/ref/network | P2-092 | copied binary journey |
-| A31 | canaries | P2-006,096 | no leak |
-| A32 | final root binary | P2-098,099 | same journeys as test entry |
+| Files | Behavior covered |
+|---|---|
+| `internal/terminal/review_test.go` | Real cell overwrites and erases, nonduplicated submission, bounded tail updates, target cursor columns, Backspace, paste rejection, decoder limits, grapheme widths, short writes, stream coalescing, split UTF-8, and tool outcomes. |
+| `internal/app/review_test.go` | Actual-app PTY history display, Backspace in requests, one submitted draft, display-only history, `/new` recall reset, suspend/resume, restored attributes, readable unsupported selections, and replay cancellation. |
+| `internal/agent/review_test.go` | Missing final suffixes, canonical content, contradictory finals, durable interrupted text, and settled unstarted calls without side effects. |
+| `internal/agent/recovery_test.go` | A real loop/provider recovery path, one recovery limit, and refusal to retry visible partial output. |
+| `internal/agent/coding_task_test.go` | A behavior test fails before the edit and passes through the shell tool afterward. Reopening does not repeat tools. |
+| `internal/session/review_test.go` | Whole-view call/result linkage, explicit outcomes, provenance without context changes, bounded index reads, malformed records, sticky storage failures, and hidden image payloads. |
+| `internal/testutil/process_test.go` | Direct shell-tool tests cannot inherit parent credentials or `BASH_ENV`. Temporary directories are removed. |
+| `internal/testutil/isolate_test.go` | The artifact scanner rejects an actual synthetic canary leak and accepts safe content. |
 
-## Task evidence (P2-001–P2-100)
+The suspend regression also ran 40 consecutive times after the SIGCONT barrier fix.
+A process-directed SIGSTOP can return on one Go thread before another thread stops.
+The application now waits for SIGCONT before it restores raw mode.
 
-- P2-001: this file.
-- P2-002: `internal/terminal/flash_test.go` (frame count, byte count, control ops).
-- P2-003: `internal/app/resume_test.go` (3-turn, every entry point).
-- P2-004: `internal/testutil/vtmodel.go` + `internal/terminal/screen_test.go`.
-- P2-005: `internal/terminal/sched.go` + fake clock, counters.
-- P2-006: `internal/testutil/isolate.go` + canary tests.
-- P2-007: internal/app/state.go (explicit states/transitions).
-- P2-008: internal/event/event.go (generation+seq+outcome) + app filter.
-- P2-009: internal/terminal/frame.go single Writer.
-- P2-010: internal/session/timeline.go TranscriptItem.
-- P2-011: timeline CurrentView/AllHistoryView.
-- P2-012: internal/app/activation.go transaction.
-- P2-013: cancel path (busy-only, idempotent, stress_test.go).
-- P2-014: settlement barrier (persistence before RunEnd + drain before Draw).
-- P2-015: uniseg graphemes + width.go (pi utils.ts).
-- P2-016: layout.go shared + goldens.
-- P2-017: key-action table (visual Up/Down, Ctrl+P/N, word, line, doc).
-- P2-018: input.go Decoder (50ms, 256B, splits, CRLF, drain, replies).
-- P2-019: paste txn (single Insert+Draw, no submit/cancel).
-- P2-020: 256 KiB budget, grapheme-prefix, whole-edit reject (A02).
-- P2-021: PromptRecall 200 + SetHistory on activation.
-- P2-022: Complete() + Tab (bounded list, no exec).
-- P2-023: viewport resize-safe (1-col, very short).
-- P2-024: lifecycle (clear/submit/cancel/EOF/exit, stale recall cleared, blank local).
-- P2-025: atomic frames (WriteBounded, no separate clear).
-- P2-026: changed-row + cursor-only + zero-byte unchanged.
-- P2-027: scrollback append-only (no ED2/3J).
-- P2-028: 30fps coalesce + 64 KiB + backpressure + fake clock.
-- P2-029: commitAccepted once (scrollback + session, no duplicate).
-- P2-030: reconcile streamed vs authoritative (suffix-only, contradiction error).
-- P2-031: compact tool states (throttled, no dumps) + 100-call.
-- P2-032: fallback only (no synchronized), tail-only resize.
-- P2-033: sanitize ANSI/OSC/DCS/C1/bidi/split (sanitize_test.go).
-- P2-034: term restore + SIGTSTP/CONT/HUP + PTY (pty_test.go, lifecycle_test.go).
-- P2-035: startup replay before prompt (resume_test.go A07).
-- P2-036: in-process replay + divider + no-op + generation (acceptance_test.go A09).
-- P2-037: tool/interruption replay truthful (timeline + settlement).
-- P2-038: compaction/edit/branch display + projection tests (A12/A13).
-- P2-039: selector 20/page + filter + stable IDs (A11).
-- P2-040: selector cancel/invalid preserves + reprompt (A10).
-- P2-041: /history N/all display-only (A14).
-- P2-042: bounded batches + cancellable replay.
-- P2-043: psi.input custom provenance + recall prefers invocation (A17/A18).
-- P2-044: explicit cross-workspace/in-memory/empty/metadata/offline paths.
-- P2-045: commands_test.go table drives help+parser.
-- P2-046: /model list + syntax + validate-then-record.
-- P2-047: /thinking levels + session-local.
-- P2-048: /new (keep scrollback, reset recall) + /quit (settle+restore).
-- P2-049: /session (provider/api/model/continuation, no $0.00, no secrets).
-- P2-050: precedence_test.go (new vs resumed, offline, CLI usage error).
-- P2-051: resources_test.go declined stays out.
-- P2-052: skills discover/invoke portable journey.
-- P2-053: grouped diagnostics + quiet preserves blocking + next action.
-- P2-054: Submit/SubmitWithProvenance ordering.
-- P2-055: settlement_test.go (terminal/stored/next agree, unsaved explicit).
-- P2-056: aborted partial (no executable call).
-- P2-057: runBatch persist each + stop unstarted + distinct outcomes.
-- P2-058: CheckContinuable + Unresolved block (no auto rerun).
-- P2-059: storage failure stops + unsaved + stress.
-- P2-060: generation filter (no cross-session write/display).
-- P2-061: guards + EOF/signal/suspend + stress no leaks.
-- P2-062: audit_test.go v3 shapes.
-- P2-063: projection branch/state (siblings excluded, recall branch-only).
-- P2-064: ReplaySystem order + checkpoint + stale tools excluded.
-- P2-065: compaction/edits projection (retain-none, checkpoints, no file mutate).
-- P2-066: index.go offsets/on-demand + perf_test.go.
-- P2-067: append/ownership (prefix, truncation, replacement, lock, perms).
-- P2-068: interchange_test.go Pi↔psi + reference projector.
-- P2-069: catalog_test.go bundled + overrides.
-- P2-070: buildRequest roles/grouping/signatures/namespaces.
-- P2-071: thinking/budget/effort + image guard.
-- P2-072: SSE splits/usage/EOF + authoritative before exec.
-- P2-073: error/retry (no invisible replay).
-- P2-074: codex_auth_test.go refresh (preserve/lock/0600/atomic, no fallback).
-- P2-075: accounting separate + no $0.00 + /session agrees.
-- P2-076: offline PTY journeys + liveprovider tag (explicit approval).
-- P2-077: read parity (bounds/offsets/images).
-- P2-078: write (mkdir/perms/symlinks, truthful).
-- P2-079: edit (legacy/BOM/CRLF/Unicode, no partial).
-- P2-080: bash (prefix/cancel/descendants/private temp).
-- P2-081: bounds_test.go (50KiB/32MiB/256KiB, UTF-8, ownership).
-- P2-082: resources_test.go precedence via app.
-- P2-083: skill-to-tool journey (read + explicit + restart).
-- P2-084: coding_task_test.go disposable + resume.
-- P2-085: Estimator (system/tools/images, estimate vs usage).
-- P2-086: Boundary (calls+results, zero/long, kept IDs).
-- P2-087: bounded summary (budget, no reasoning, failure preserves).
-- P2-088: Compact compatible + checkpoint + pi comparison.
-- P2-089: compact UX (static, settled, no redraw).
-- P2-090: Recovery ≤1 + no repeat (recovery_test.go).
-- P2-091: long-session restart (recovery_test.go).
-- P2-092: scripts/check.sh (fmt/vet/test/race/build) + A30.
-- P2-093: perf_test.go thresholds + generator params.
-- P2-094: matrix_test.go + pty_test.go (NO_COLOR, fallback, resize, scrollback).
-- P2-095: stress_test.go (cancel/activation, failures, no leaks).
-- P2-096: privacy_test.go (synthetic, allowlisted, no imports, no secrets).
-- P2-097: docs/ (quickstart/config/keyboard/recovery/sessions/limitations match binary).
-- P2-098: root psi (go build, ignored, platform/Go/rev recorded).
-- P2-099: plain ./psi --help/--version + isolated PTY journey.
-- P2-100: this ledger (no PLAN3, permanent boundaries).
+## Acceptance cases
 
-Synthetic only. No real credentials, paths, file contents, or prompts.
-Regression subprocesses use temp HOME/workspace/agent/session dirs and an allowlisted env.
+The cases below remain mandatory.
+A related unit test does not replace the required visible-output and durable-state evidence.
 
-## Artifact (P2-098,099)
+| Cases | Requirements | Review status |
+|---|---|---|
+| A01–A03 | Multiline editing, 256 KiB paste, Unicode clusters | Partial regression coverage |
+| A04–A06 | Tiny-delta streaming, resize states, tool-heavy runs | Partial regression coverage, sustained timing open |
+| A07–A08 | Startup resume and every startup selection form | Actual-app startup history covered, full selection matrix open |
+| A09–A11 | A→B→A activation, cancellation, more than 100 candidates | Full actual-app journeys open |
+| A12–A13 | Selected branches, compaction, context edits | Synthetic projection coverage, full visible journeys open |
+| A14–A15 | Display-only history and truthful interrupted tools | Actual-app history and outcome regressions, full interruption matrix open |
+| A16–A18 | Reasoning/images, custom display, skill provenance | Synthetic coverage, full provider-to-restart journeys open |
+| A19–A20 | Model/thinking restart and unavailable credentials | Synthetic coverage, full visible journeys open |
+| A21–A22 | Codex refresh and cancellation after rotation | Synthetic OAuth coverage, complete acceptance open |
+| A23–A25 | Cancellation, storage failures, malformed or changed sessions | Regression coverage, complete fault matrix open |
+| A26 | One context-limit recovery without repeated tools | Loop/provider regressions, full protocol journey open |
+| A27 | Actual Pi→psi→Pi continuation | Blocked on pinned-reader evidence |
+| A28 | Indexed 512 MiB session activation | Blocked by the live-store design |
+| A29 | Exit, signals, suspension, and restoration | Actual-app Ctrl+Z/SIGCONT coverage, full signal matrix open |
+| A30 | Copied binary without Node, reference checkout, or network | Complete standalone journey open |
+| A31 | Private-data canaries | Positive and negative regression coverage, complete artifact audit still required |
+| A32 | Final root binary with the same acceptance journeys | Complete journey matrix open |
 
-- Binary: `psi` at repo root (git-ignored), built via `go build -o psi ./cmd/psi`.
-- Platform: Linux/WSL2, Go 1.26.4, source rev `ref: refs/heads/main` (see `git log`).
-- Checksum: see `sha256sum psi` at release time (not committed).
-- Exercise: `./psi --help/--version` (non-terminal) + PTY journey (`--no-session`, startup heading, divider, prompt, `/quit`, modes restored) via isolated HOME/agent/work.
+## Performance limits and missing evidence
+
+The live reader retains full payloads and rejects files larger than 256 MiB.
+The standalone `RecordIndex` helper does not remove this limit.
+The 512 MiB acceptance input therefore exceeds the current live-store limit.
+Bounded terminal batches do not make session loading lazy.
+
+`TestMetadataScanSmoke` uses 200 files, not 10,000 files.
+`TestRecordIndexSmoke` uses approximately 2 MiB and does not call application activation.
+Neither smoke test establishes a PLAN2 performance gate.
+
+Required measurements remain:
+
+- Ten idle seconds without animation redraws or animation wakeups.
+- 10,000 tiny deltas per second with ordered text and at most 30 scheduled frames per second.
+- Editor response p95 at most 50 ms and cancellation dispatch p95 at most 100 ms.
+- Shell-descendant cleanup within 2 seconds on the reference workload.
+- A 256 KiB paste visible within 200 ms after its end marker.
+- A usable first page from 10,000 metadata entries within 2 seconds on local storage.
+- A 512 MiB compacted session active within 3 seconds, excluding deliberate terminal output.
+- Peak RSS less than 160 MiB for the specified indexed workload.
+- Cancellable replay with bounded output batches and bounded memory.
+
+These are incomplete PLAN2 requirements, not permanent product exclusions.
+
+## Reproduction
+
+Run routine checks:
+
+```sh
+./scripts/check.sh
+```
+
+Run repeated application regressions:
+
+```sh
+go test ./internal/app -run '^TestActual' -count=10
+```
+
+Run the same PTY regressions against the rebuilt root executable:
+
+```sh
+go test ./internal/app -run '^TestActual' -count=1 -args -psi-test-binary="$PWD/psi"
+```
+
+Run the bounded session-decoder fuzz check:
+
+```sh
+go test ./internal/session -run '^$' -fuzz '^FuzzDecodeEntries$' -fuzztime=3s -parallel=2
+```
+
+Live tests require the `liveprovider` build tag and explicit operator approval.
+An inherited environment flag alone cannot compile live provider tests.
+No live test forms part of routine acceptance evidence.
+
+## Local review results
+
+- `./scripts/check.sh` passed, including race detection.
+- Actual-app PTY regressions passed ten consecutive helper runs and three consecutive runs against the rebuilt executable.
+- The 3-second decoder fuzz run passed with two workers and 93,498 executions.
+- A static Linux/amd64 root executable built with Go 1.26.4.
+- An offline actual-binary coding smoke passed through `read`, `edit`, and `bash`.
+- That smoke also covered Backspace, resume/history, unchanged session prefixes, hidden tool payloads, and restored terminal attributes.
+- Resume and history issued no additional provider requests or tool calls.
+- Vci was unavailable because its client configuration was absent. All reported checks ran locally.
+
+The root `psi` executable is ignored by Git.
+Its build and smoke check establish a delivered artifact, not the missing release gates.
+The final handoff records the commit and build result separately.

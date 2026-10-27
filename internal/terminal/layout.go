@@ -6,188 +6,110 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-// Layout ports the shared wrap/cursor function (P2-016, pi utils.ts/tui editor).
-// It calculates soft wraps, logical lines, visual rows, and cursor cells together.
-// Tabs display at an eight-cell stop without replacing stored tabs.
+// Layout shares source boundaries, soft wraps and cursor cells with navigation.
 type Layout struct {
-	Rows       []string // visual rows (display only, tabs expanded, sanitized by caller)
-	RowRunes   [][2]int // rune index range [start,end) in source buf for each visual row
+	Rows       []string
+	RowRunes   [][2]int
 	CursorRow  int
-	CursorCol  int // in cells (including 2-cell prompt prefix)
+	CursorCol  int
 	TotalRows  int
-	PromptCols int // width of "> " prefix (2)
+	PromptCols int
+	limit      int
 }
 
 func LayoutDraft(buf []rune, pos int, width int) Layout {
+	width = max(1, width)
+	limit := max(1, width-1)
+	prefix, continuation := "> ", "  "
 	if width < 4 {
-		width = 80
+		prefix, continuation = "", ""
 	}
-	if pos < 0 {
-		pos = 0
-	}
-	if pos > len(buf) {
-		pos = len(buf)
-	}
-	limit := width - 1 // leave final column unused (avoid delayed-wrap)
-	src := string(buf)
-	// Byte offset of cursor.
-	bytePos := 0
-	for i := 0; i < pos && i < len(buf); i++ {
-		bytePos += len(string(buf[i]))
-	}
-	// Split source into grapheme segments with byte ranges.
-	type seg struct {
-		text       string
-		start, end int // byte offsets
-		newline    bool
-		tab        bool
-		width      int
-	}
-	var segs []seg
-	gr := uniseg.NewGraphemes(src)
-	for gr.Next() {
-		start, end := gr.Positions()
-		t := src[start:end]
-		if t == "\n" {
-			segs = append(segs, seg{text: t, start: start, end: end, newline: true})
-			continue
-		}
-		if t == "\t" {
-			segs = append(segs, seg{text: t, start: start, end: end, tab: true})
-			continue
-		}
-		segs = append(segs, seg{text: t, start: start, end: end, width: GraphemeWidth(t)})
-	}
-	// Build visual rows.
+	promptCols := len(prefix)
+	pos = max(0, min(pos, len(buf)))
 	var rows []string
-	var rowRunes [][2]int
-	var cur strings.Builder
-	cur.WriteString("> ")
-	curCells := 2
-	rowStartRune := 0
-	runeIdx := 0 // rune index of next seg start
-	cursorRow, cursorCol := 0, 2
-	// Map byte offset -> rune index for row starts and cursor.
-	byteToRune := func(boff int) int {
-		n, ri := 0, 0
-		for ri < len(buf) {
-			l := len(string(buf[ri]))
-			if n+l > boff {
-				break
-			}
-			n += l
-			ri++
-		}
-		return ri
-	}
+	var ranges [][2]int
+	var line strings.Builder
+	line.WriteString(prefix)
+	cells, sourcePos, rowStart := promptCols, 0, 0
+	cursorRow, cursorCol := 0, promptCols
 	flush := func() {
-		rows = append(rows, cur.String())
-		// rowRunes end is current runeIdx (start of next row).
-		rowRunes = append(rowRunes, [2]int{rowStartRune, runeIdx})
-		cur.Reset()
-		cur.WriteString("  ")
-		curCells = 2
-		rowStartRune = runeIdx
+		rows = append(rows, line.String())
+		ranges = append(ranges, [2]int{rowStart, sourcePos})
+		line.Reset()
+		line.WriteString(continuation)
+		cells = promptCols
+		rowStart = sourcePos
 	}
-	for _, sg := range segs {
-		// Cursor before this seg?
-		if sg.start == bytePos {
-			cursorRow = len(rows)
-			cursorCol = curCells
-		}
-		// seg rune length.
-		segRunes := len([]rune(sg.text))
-		if sg.newline {
+	gr := uniseg.NewGraphemes(string(buf))
+	for gr.Next() {
+		text := gr.Str()
+		n := len([]rune(text))
+		if text == "\n" {
+			if sourcePos == pos {
+				cursorRow, cursorCol = len(rows), cells
+			}
 			flush()
-			runeIdx += segRunes // consume \n (1 rune)
+			sourcePos += n
+			rowStart = sourcePos // the next row must not include the newline
 			continue
 		}
-		if sg.tab {
-			next := ((curCells + 8) / 8) * 8
-			if curCells > 2 && next > limit {
-				flush()
-				next = 8
-			}
-			// If cursor inside tab, snap to tab start (tabs are atomic for cursor).
-			for curCells < next {
-				cur.WriteByte(' ')
-				curCells++
-			}
-			runeIdx += segRunes
-			continue
+		gw := GraphemeWidth(text)
+		if text == "\t" {
+			gw = 8 - cells%8
 		}
-		if curCells > 2 && curCells+sg.width > limit {
+		if cells > promptCols && cells+gw > limit {
 			flush()
+			if text == "\t" {
+				gw = 8 - cells%8
+			}
 		}
-		cur.WriteString(sg.text)
-		curCells += sg.width
-		runeIdx += segRunes
+		// Capture the cursor after deciding which row owns this source boundary.
+		if sourcePos == pos {
+			cursorRow, cursorCol = len(rows), cells
+		}
+		if text == "\t" {
+			gw = min(gw, limit-cells)
+			line.WriteString(strings.Repeat(" ", max(0, gw)))
+		} else if gw > limit-promptCols {
+			// A wide cluster cannot fit a one-cell terminal. Preserve its source
+			// and use a one-cell placeholder only in the viewport.
+			text, gw = "?", 1
+			line.WriteString(text)
+		} else {
+			line.WriteString(text)
+		}
+		cells += gw
+		sourcePos += n
 	}
-	if bytePos == len(src) {
-		cursorRow = len(rows)
-		cursorCol = curCells
+	if pos == len(buf) {
+		cursorRow, cursorCol = len(rows), cells
 	}
-	rows = append(rows, cur.String())
-	rowRunes = append(rowRunes, [2]int{rowStartRune, len(buf)})
-	_ = byteToRune
-	return Layout{Rows: rows, RowRunes: rowRunes, CursorRow: cursorRow, CursorCol: cursorCol, TotalRows: len(rows), PromptCols: 2}
+	rows = append(rows, line.String())
+	ranges = append(ranges, [2]int{rowStart, len(buf)})
+	return Layout{Rows: rows, RowRunes: ranges, CursorRow: cursorRow, CursorCol: min(cursorCol, width-1), TotalRows: len(rows), PromptCols: promptCols, limit: limit}
 }
 
-// VisualRunePos maps (row, col cells) to a rune index (grapheme-safe).
 func (l Layout) VisualRunePos(buf []rune, row, col int) int {
-	if row < 0 {
-		row = 0
-	}
-	if row >= len(l.Rows) {
-		row = len(l.Rows) - 1
-	}
-	if row < 0 || row >= len(l.RowRunes) {
+	row = max(0, min(row, len(l.RowRunes)-1))
+	if len(l.RowRunes) == 0 {
 		return len(buf)
 	}
 	start, end := l.RowRunes[row][0], l.RowRunes[row][1]
-	// Walk graphemes from start, accumulating cells (prefix 2).
-	cells := 2
-	src := string(buf)
-	// Convert rune range to byte range.
-	boff := 0
-	for i := 0; i < start && i < len(buf); i++ {
-		boff += len(string(buf[i]))
-	}
-	endBoff := boff
-	for i := start; i < end && i < len(buf); i++ {
-		endBoff += len(string(buf[i]))
-	}
-	sub := ""
-	if boff <= len(src) && endBoff <= len(src) && boff <= endBoff {
-		sub = src[boff:endBoff]
-	}
-	// Remove newlines (row terminators) from measurement.
-	sub = strings.ReplaceAll(sub, "\n", "")
-	gr := uniseg.NewGraphemes(sub)
-	consumed := 0
-	ri := start
+	cells, pos := l.PromptCols, start
+	gr := uniseg.NewGraphemes(string(buf[start:end]))
 	for gr.Next() {
-		seg := string(gr.Str())
-		if seg == "\t" {
-			next := ((cells + 8) / 8) * 8
-			if cells >= col {
-				break
-			}
-			cells = next
-			consumed += len(seg)
-			ri += len([]rune(seg))
-			continue
+		text := gr.Str()
+		gw := GraphemeWidth(text)
+		if text == "\t" {
+			gw = min(8-cells%8, l.limit-cells)
+		} else if gw > l.limit-l.PromptCols {
+			gw = 1
 		}
-		gw := GraphemeWidth(seg)
 		if cells+gw > col {
 			break
 		}
 		cells += gw
-		consumed += len(seg)
-		ri += len([]rune(seg))
+		pos += len([]rune(text))
 	}
-	if ri > end {
-		ri = end
-	}
-	return ri
+	return pos
 }

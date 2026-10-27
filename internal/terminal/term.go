@@ -14,9 +14,10 @@ import (
 // to the shell and reacquires only the active tail afterwards (P2-034).
 // No automatic provider/tool replay occurs on resume.
 type Term struct {
-	fd    int
-	state *term.State
-	once  sync.Once
+	fd     int
+	state  *term.State
+	mu     sync.Mutex
+	active bool
 }
 
 func Acquire() (*Term, bool, error) {
@@ -28,15 +29,32 @@ func Acquire() (*Term, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	return &Term{fd: fd, state: st}, true, nil
+	return &Term{fd: fd, state: st, active: true}, true, nil
 }
 
 func (t *Term) Restore() {
-	if t != nil {
-		t.once.Do(func() {
-			if t.state != nil {
-				_ = term.Restore(t.fd, t.state)
-			}
-		})
+	if t == nil {
+		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active && t.state != nil {
+		if term.Restore(t.fd, t.state) == nil {
+			t.active = false
+		}
+	}
+}
+
+// Reacquire does not replace the original cooked state saved by Acquire.
+func (t *Term) Reacquire() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active {
+		return nil
+	}
+	if _, err := term.MakeRaw(t.fd); err != nil {
+		return err
+	}
+	t.active = true
+	return nil
 }

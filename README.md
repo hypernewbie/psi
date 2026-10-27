@@ -2,7 +2,8 @@
 
 Minimal Go implementation of the useful core of Pi.
 See `COMPATIBILITY.md` for the pinned baseline and supported boundaries.
-See `temp/PLAN.md` (ignored, not shipped) for the full phase plan during development.
+See [the acceptance ledger](docs/acceptance.md) for regression evidence and incomplete release requirements.
+The implementation does not yet meet all PLAN2 acceptance gates.
 
 ## Quickstart (Linux / WSL2)
 
@@ -41,8 +42,9 @@ on first use per run (`--allow-project` / `--deny-project` or interactive prompt
 ./scripts/check.sh
 ```
 
-Runs `gofmt`, `go vet`, `go test ./...`, and `go test -race ./...`.
-Live provider tests are opt-in: `PSI_LIVE_PROVIDER=1 go test -run Live ./...`.
+Checks formatting, runs `go vet`, tests, race detection, and builds all packages.
+Live tests require explicit operator approval and the `liveprovider` build tag:
+`PSI_LIVE_PROVIDER=1 go test -tags liveprovider ./internal/provider -run Live`.
 The normal suite uses local HTTP servers and real PTYs to exercise both providers.
 Regression fixtures are synthetic. Test subprocesses have a temporary HOME and an
 allowlisted environment; they do not inherit your credentials or Pi configuration.
@@ -54,7 +56,8 @@ PSI_PI_SESSION_MODULE=/path/to/pi/dist/core/session-manager.js \
   go test ./internal/session -run TestReferencePiProjection -count=1
 ```
 
-Node and Pi are needed only for this optional reference test, not for psi.
+Node and Pi are needed only for this reference test, not for psi.
+The test is optional for routine development but required as release compatibility evidence.
 
 ## Layout
 

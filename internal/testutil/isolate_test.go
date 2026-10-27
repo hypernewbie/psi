@@ -23,10 +23,13 @@ func TestIsolationCanaries(t *testing.T) {
 	p := filepath.Join(home, "artifact.txt")
 	os.WriteFile(p, []byte("hello canary-parent-secret-0000"), 0o644)
 	AssertNoArtifactLeak(t, []string{filepath.Join(home, "missing.txt")}) // missing ok
-	// This would fail if called with the leaking file; assert detection works via helper returning error path:
-	// (We don't call Fail here; we verify the file contains the canary.)
-	b, _ := os.ReadFile(p)
-	if string(b) == "" {
-		t.Fatal("fixture missing")
+	if err := artifactLeak(p); err == nil {
+		t.Fatal("artifact scanner accepted an actual canary leak")
+	}
+	if err := os.WriteFile(p, []byte("safe synthetic artifact"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := artifactLeak(p); err != nil {
+		t.Fatal("artifact scanner rejected safe content")
 	}
 }

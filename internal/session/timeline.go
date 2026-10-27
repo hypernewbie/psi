@@ -1,8 +1,3 @@
-// Package session timeline implements the display projector (P2-011).
-// Reference: temp/pi-mono/packages/coding-agent/src/core/session-manager.ts
-// (buildContextEntries, sessionEntryToContextMessages, buildSessionProjection)
-// and messages.ts (convertToLlm, bashExecutionToText).
-// Display has two explicit views; model context rules are unchanged and live in projection.go.
 package session
 
 import (
@@ -11,7 +6,6 @@ import (
 	"strings"
 )
 
-// TranscriptKind is the visible role for terminal display.
 type TranscriptKind string
 
 const (
@@ -20,157 +14,191 @@ const (
 	KindTool            TranscriptKind = "tool"
 	KindCompaction      TranscriptKind = "compaction"
 	KindBranchSummary   TranscriptKind = "branch_summary"
-	KindSystemMarker    TranscriptKind = "system_marker" // model/thinking change, context-edit note
+	KindSystemMarker    TranscriptKind = "system_marker"
 	KindHistoryBoundary TranscriptKind = "history_boundary"
 	KindNotice          TranscriptKind = "notice"
 )
 
-// TranscriptItem is a safe, human-visible item with source provenance.
-// It never holds tool args/bodies, credentials, or raw system prompts.
+// TranscriptItem contains visible content and provenance, never hidden tool data.
 type TranscriptItem struct {
 	Kind       TranscriptKind
-	Text       string // plain source, already sanitized by renderer
-	SourceID   string // entry ID
+	Text       string
+	SourceID   string
 	BlockIDs   []string
-	Historical bool   // true in all-history view for pre-compaction content
-	Note       string // boundary/continuation note (e.g. "interrupted", "historical")
+	Historical bool
+	Note       string
 }
 
-// CurrentView returns Pi compaction-aware active entries with visible text.
-// It shows every visible item (no last-ten sampling), one labeled compaction summary,
-// retained conversation, and markers. System bodies stay hidden.
 func CurrentView(path []*Entry) []TranscriptItem {
-	ctx := BuildContextEntries(path)
-	var out []TranscriptItem
-	seenCompaction := false
-	for _, e := range ctx {
-		switch e.Kind {
-		case "message":
-			m := e.Message.Message
-			switch {
-			case m.System != nil:
-				// Do not print body (4.4). Checkpoint internals hidden.
-				continue
-			case m.User != nil:
-				out = append(out, TranscriptItem{Kind: KindUser, Text: timelineUserText(m.User.Content, m.User.Raw), SourceID: e.ID()})
-			case m.Assistant != nil:
-				txt := assistantText(e)
-				if txt != "" {
-					out = append(out, TranscriptItem{Kind: KindAssistant, Text: txt, SourceID: e.ID()})
-				}
-				// Tool calls joined by full logical ID (4.4): one final compact state per call.
-				for _, tc := range assistantToolCalls(e) {
-					state, note := toolDisplayState(ctx, tc.ID)
-					out = append(out, TranscriptItem{Kind: KindTool, Text: tc.Name + ": " + state, SourceID: e.ID(), BlockIDs: []string{tc.ID}, Note: note})
-				}
-			case m.ToolResult != nil:
-				// Tool results join to their call; standalone (no retained call) gets historical boundary note.
-				tr := m.ToolResult
-				if !hasCall(ctx, tr.ToolCallID) {
-					out = append(out, TranscriptItem{Kind: KindTool, Text: toolNameForResult(ctx, tr.ToolCallID) + ": done (historical)", SourceID: e.ID(), BlockIDs: []string{tr.ToolCallID}, Note: "historical result without retained call"})
-				}
-				// Otherwise hidden here (already shown with call).
-			case m.BashExecution != nil:
-				b := m.BashExecution
-				out = append(out, TranscriptItem{Kind: KindTool, Text: "bash: " + bashOutcome(b), SourceID: e.ID()})
-			}
-		case "compaction":
-			if seenCompaction {
-				continue // older compaction: no duplicate summaries in current view
-			}
-			seenCompaction = true
-			out = append(out, TranscriptItem{Kind: KindCompaction, Text: "Context compacted: " + e.Compaction.Summary, SourceID: e.ID()})
-		case "branch_summary":
-			out = append(out, TranscriptItem{Kind: KindBranchSummary, Text: "Branch: " + e.BranchSummary.Summary, SourceID: e.ID()})
-		case "custom_message":
-			cm := e.CustomMessage
-			if !cm.Display {
-				continue
-			}
-			out = append(out, TranscriptItem{Kind: KindAssistant, Text: fmt.Sprintf("[%s] %s", cm.CustomType, customText(cm.Content)), SourceID: e.ID()})
-		case "model_change":
-			mc := e.ModelChange
-			out = append(out, TranscriptItem{Kind: KindSystemMarker, Text: fmt.Sprintf("model: %s/%s", mc.Provider, mc.ModelID), SourceID: e.ID()})
-		case "thinking_level_change":
-			out = append(out, TranscriptItem{Kind: KindSystemMarker, Text: "thinking: " + e.ThinkingLevelChange.ThinkingLevel, SourceID: e.ID()})
-		case "context_edit":
-			// Preserve original visible conversation; mark changed context without fabricating a turn.
-			out = append(out, TranscriptItem{Kind: KindSystemMarker, Text: "Context edited (model context updated, transcript preserved).", SourceID: e.ID()})
-		}
-	}
-	return out
+	return timeline(BuildContextEntries(path), path, false)
 }
 
-// AllHistoryView returns original human-visible messages on the active branch,
-// including before compaction, labeled historical. No model request, no file change.
 func AllHistoryView(path []*Entry) []TranscriptItem {
-	var out []TranscriptItem
-	out = append(out, TranscriptItem{Kind: KindHistoryBoundary, Text: "Historical messages (display only, not model input):"})
-	compactionSeen := false
-	for _, e := range path {
-		if e.Kind == "compaction" {
-			compactionSeen = true
-			out = append(out, TranscriptItem{Kind: KindCompaction, Text: "Historical compaction: " + e.Compaction.Summary, SourceID: e.ID(), Historical: true})
-			continue
-		}
-		items := CurrentView([]*Entry{e})
-		for _, it := range items {
-			// In all-history, pre-compaction content is historical.
-			if !compactionSeen {
-				// Before any compaction, still historical when invoked via /history all? Mark all as historical for clarity.
-			}
-			it.Historical = true
-			out = append(out, it)
-		}
-	}
-	return out
+	out := []TranscriptItem{{Kind: KindHistoryBoundary, Text: "Historical messages (display only, not model input)"}}
+	return append(out, timeline(path, path, true)...)
 }
 
-// PromptRecall returns up to 200 selected-branch user submissions (P2-021).
-// It prefers original invocation provenance (psi.input custom entries) and excludes
-// selector responses, tool results, and generated summaries. No plaintext history file.
-func PromptRecall(path []*Entry) []string {
-	var out []string
-	// Map psi.input provenance: target entry -> visible invocation.
-	provenance := map[string]string{}
-	for _, e := range path {
-		if e.Kind == "custom" && e.Custom != nil && e.Custom.CustomType == "psi.input" {
-			var det struct {
-				TargetID   string `json:"targetId"`
-				Invocation string `json:"invocation"`
-			}
-			if err := jsonUnmarshal(e.Custom.Data, &det); err == nil && det.TargetID != "" && det.Invocation != "" {
-				provenance[det.TargetID] = det.Invocation
-			}
-		}
-		// Back-compat: older custom_message provenance (if any).
-		if e.Kind == "custom_message" && e.CustomMessage.CustomType == "psi.input" {
-			var det struct {
-				TargetID   string `json:"targetId"`
-				Invocation string `json:"invocation"`
-			}
-			if err := jsonUnmarshal(e.CustomMessage.Details, &det); err == nil && det.TargetID != "" && det.Invocation != "" {
-				provenance[det.TargetID] = det.Invocation
-			}
-		}
-	}
-	for _, e := range path {
+type displayTool struct {
+	name, state, note string
+	call              bool
+}
+
+// Join once across the whole selected view. A per-entry projection loses the
+// result linkage and wrongly labels every completed historical call interrupted.
+func displayTools(entries []*Entry) map[string]*displayTool {
+	out := map[string]*displayTool{}
+	for _, e := range entries {
 		if e.Kind != "message" {
 			continue
 		}
 		m := e.Message.Message
-		if m.User == nil {
+		if m.Assistant != nil {
+			for _, b := range m.Assistant.Content {
+				if b.Call == nil {
+					continue
+				}
+				t := out[b.Call.ID]
+				if t == nil {
+					t = &displayTool{state: "interrupted", note: "outcome unknown"}
+					out[b.Call.ID] = t
+				}
+				t.name, t.call = b.Call.Name, true
+			}
+		}
+		if tr := m.ToolResult; tr != nil {
+			t := out[tr.ToolCallID]
+			if t == nil {
+				t = &displayTool{}
+				out[tr.ToolCallID] = t
+			}
+			if t.name == "" {
+				t.name = tr.ToolName
+			}
+			t.state, t.note = "done", ""
+			if tr.IsError {
+				t.state = "failed"
+			}
+			var details struct {
+				Outcome string `json:"psiOutcome"`
+			}
+			if json.Unmarshal(tr.Details, &details) == nil && tr.IsError {
+				switch details.Outcome {
+				case "cancelled":
+					t.state = "cancelled"
+				case "not_started":
+					t.state = "not started"
+				}
+			}
+		}
+	}
+	return out
+}
+
+func inputProvenance(path []*Entry) map[string]string {
+	out := map[string]string{}
+	for _, e := range path {
+		var data json.RawMessage
+		if e.Custom != nil && e.Custom.CustomType == "psi.input" {
+			data = e.Custom.Data
+		}
+		if e.CustomMessage != nil && e.CustomMessage.CustomType == "psi.input" {
+			data = e.CustomMessage.Details
+		}
+		if len(data) == 0 {
 			continue
 		}
-		text := timelineUserText(m.User.Content, m.User.Raw)
+		var p struct {
+			TargetID   string `json:"targetId"`
+			Invocation string `json:"invocation"`
+		}
+		if json.Unmarshal(data, &p) == nil && p.TargetID != "" && p.Invocation != "" {
+			out[p.TargetID] = p.Invocation
+		}
+	}
+	return out
+}
+
+func timeline(entries, path []*Entry, historical bool) []TranscriptItem {
+	tools, inputs := displayTools(entries), inputProvenance(path)
+	var out []TranscriptItem
+	add := func(e *Entry, kind TranscriptKind, text string) {
+		out = append(out, TranscriptItem{Kind: kind, Text: text, SourceID: e.ID(), Historical: historical})
+	}
+	for _, e := range entries {
+		switch e.Kind {
+		case "message":
+			m := e.Message.Message
+			switch {
+			case m.User != nil:
+				text := timelineUserText(m.User.Content, nil)
+				if invocation, ok := inputs[e.ID()]; ok {
+					text = invocation
+				}
+				add(e, KindUser, text)
+			case m.Assistant != nil:
+				var text strings.Builder
+				flush := func() {
+					if text.Len() > 0 {
+						add(e, KindAssistant, text.String())
+						text.Reset()
+					}
+				}
+				for _, b := range m.Assistant.Content {
+					if b.Text != nil {
+						text.WriteString(b.Text.Text)
+					}
+					if b.Call != nil {
+						flush()
+						t := tools[b.Call.ID]
+						out = append(out, TranscriptItem{Kind: KindTool, Text: t.name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{b.Call.ID}, Note: t.note, Historical: historical})
+					}
+				}
+				flush()
+			case m.ToolResult != nil:
+				t := tools[m.ToolResult.ToolCallID]
+				if !t.call {
+					name := t.name
+					if name == "" {
+						name = "tool"
+					}
+					out = append(out, TranscriptItem{Kind: KindTool, Text: name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{m.ToolResult.ToolCallID}, Note: "historical result without retained call", Historical: historical})
+				}
+			case m.BashExecution != nil:
+				add(e, KindTool, "bash: "+bashOutcome(m.BashExecution))
+			}
+		case "compaction":
+			add(e, KindCompaction, e.Compaction.Summary)
+		case "branch_summary":
+			add(e, KindBranchSummary, "Branch: "+e.BranchSummary.Summary)
+		case "custom_message":
+			if e.CustomMessage.Display {
+				add(e, KindAssistant, "["+e.CustomMessage.CustomType+"] "+timelineUserText(e.CustomMessage.Content, nil))
+			}
+		case "model_change":
+			add(e, KindSystemMarker, fmt.Sprintf("model: %s/%s", e.ModelChange.Provider, e.ModelChange.ModelID))
+		case "thinking_level_change":
+			add(e, KindSystemMarker, "thinking: "+e.ThinkingLevelChange.ThinkingLevel)
+		case "context_edit":
+			add(e, KindSystemMarker, "Context edited (model context updated, transcript preserved).")
+		}
+	}
+	return out
+}
+
+func PromptRecall(path []*Entry) []string {
+	inputs := inputProvenance(path)
+	var out []string
+	for _, e := range path {
+		if e.Kind != "message" || e.Message.Message.User == nil {
+			continue
+		}
+		text := timelineUserText(e.Message.Message.User.Content, nil)
+		if invocation, ok := inputs[e.ID()]; ok {
+			text = invocation
+		}
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		// Prefer original invocation when provenance exists (skill submissions).
-		if inv, ok := provenance[e.ID()]; ok {
-			text = inv
-		}
-		// Exclude generated summaries (compaction/branch text never appears as user message here).
 		out = append(out, text)
 	}
 	if len(out) > 200 {
@@ -180,133 +208,31 @@ func PromptRecall(path []*Entry) []string {
 }
 
 func timelineUserText(content any, raw []byte) string {
-	switch c := content.(type) {
-	case string:
-		return c
-	case []UserContentBlock:
-		var parts []string
-		for _, b := range c {
-			if b.Text != nil {
-				parts = append(parts, b.Text.Text)
-			} else if b.Image != nil {
-				parts = append(parts, "[image]")
-			}
-		}
-		return strings.Join(parts, "\n")
-	case []any:
-		var parts []string
-		for _, b := range c {
-			if m, ok := b.(map[string]any); ok {
-				if t, ok := m["text"].(string); ok {
-					parts = append(parts, t)
-				} else if m["type"] == "image" {
-					parts = append(parts, "[image]")
-				}
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-	return ""
-}
-
-func assistantText(e *Entry) string {
-	m := e.Message.Message
-	if m.Assistant == nil {
-		return ""
+	blocks, err := UserBlocks(content)
+	if err != nil {
+		return "[unsupported content]"
 	}
 	var parts []string
-	for _, b := range m.Assistant.Content {
-		if b.Type == "text" && b.Text != nil {
+	for _, b := range blocks {
+		if b.Text != nil {
 			parts = append(parts, b.Text.Text)
 		}
+		if b.Image != nil {
+			parts = append(parts, "[image]")
+		}
 	}
-	return strings.Join(parts, "")
-}
-
-func customText(content any) string {
-	if s, ok := content.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", content)
+	return strings.Join(parts, "\n")
 }
 
 func bashOutcome(b *BashExecutionMessage) string {
 	if b.Cancelled {
 		return "cancelled"
 	}
-	if b.ExitCode != nil && *b.ExitCode != 0 {
+	if b.ExitCode == nil {
+		return "outcome unknown"
+	}
+	if *b.ExitCode != 0 {
 		return fmt.Sprintf("exit %d", *b.ExitCode)
 	}
 	return "done"
-}
-
-func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
-
-func assistantToolCalls(e *Entry) []ToolCall {
-	if e.Kind != "message" || e.Message.Message.Assistant == nil {
-		return nil
-	}
-	var out []ToolCall
-	for _, b := range e.Message.Message.Assistant.Content {
-		if b.Type == "toolCall" && b.Call != nil {
-			out = append(out, *b.Call)
-		}
-	}
-	return out
-}
-
-func toolDisplayState(ctx []*Entry, callID string) (string, string) {
-	// Join call and result by full logical call ID (4.4). Settled states only in replay.
-	for _, e := range ctx {
-		if e.Kind != "message" {
-			continue
-		}
-		m := e.Message.Message
-		if m.ToolResult != nil && m.ToolResult.ToolCallID == callID {
-			// Check for error/cancel markers in result content.
-			txt := ""
-			for _, b := range m.ToolResult.Content {
-				if b.Text != nil {
-					txt += b.Text.Text
-				}
-			}
-			lower := strings.ToLower(txt)
-			if strings.Contains(lower, "cancel") {
-				return "cancelled", ""
-			}
-			if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "exit 1") {
-				return "failed", ""
-			}
-			return "done", ""
-		}
-	}
-	// No result: unresolved -> interrupted/outcome unknown, never done.
-	if unresolvedHasCall(ctx, callID) {
-		return "interrupted", "outcome unknown"
-	}
-	return "interrupted", "outcome unknown"
-}
-
-func unresolvedHasCall(ctx []*Entry, callID string) bool {
-	for _, e := range ctx {
-		for _, tc := range assistantToolCalls(e) {
-			if tc.ID == callID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func hasCall(ctx []*Entry, callID string) bool { return unresolvedHasCall(ctx, callID) }
-
-func toolNameForResult(ctx []*Entry, callID string) string {
-	for _, e := range ctx {
-		for _, tc := range assistantToolCalls(e) {
-			if tc.ID == callID {
-				return tc.Name
-			}
-		}
-	}
-	return "tool"
 }

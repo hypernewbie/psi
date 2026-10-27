@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"psi/internal/session"
@@ -37,7 +38,7 @@ func (s *Selector) apply() {
 		}
 	}
 	// Stable order: preserve discovery order (recency). Page bounds.
-	if s.Page < 0 {
+	if s.Page < 0 || len(s.Filtered) == 0 {
 		s.Page = 0
 	}
 	if s.Page*s.PageSize >= len(s.Filtered) && len(s.Filtered) > 0 {
@@ -111,8 +112,8 @@ func (s *Selector) Resolve(line string) (selected *session.SessionInfo, cancel b
 		s.SetFilter(strings.TrimPrefix(t, "/"))
 		return nil, false, true
 	}
-	var n int
-	if _, err := fmt.Sscanf(t, "%d", &n); err == nil && n >= 1 && n <= len(s.Filtered) {
+	n, err := strconv.Atoi(t)
+	if err == nil && n >= 1 && n <= len(s.Filtered) {
 		it := s.Filtered[n-1]
 		return &it, false, false
 	}

@@ -49,7 +49,7 @@ func TestForbiddenAbsent(t *testing.T) {
 	// Throttle: identical updates emit once.
 	sw2 := NewStatusWriter(&sb)
 	_ = sw2
-	if strings.Count(out, "read: running") != 1 {
+	if strings.Count(out, "read: done") != 1 || strings.Contains(out, "running") {
 		t.Errorf("throttle: %q", out)
 	}
 }

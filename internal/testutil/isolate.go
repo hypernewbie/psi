@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,6 @@ func IsolatedEnv(t *testing.T) (home, work, agent, sessions string) {
 		}
 	}
 	t.Setenv("HOME", home)
-	t.Setenv("PSI_CODING_AGENT_DIR", agent)
 	// Strip parent secrets/proxy/live flags from child env allowlist.
 	for _, k := range []string{
 		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "PSI_LIVE_PROVIDER",
@@ -33,6 +33,8 @@ func IsolatedEnv(t *testing.T) (home, work, agent, sessions string) {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
+	t.Setenv("PI_CODING_AGENT_DIR", agent)
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", sessions)
 	// Invented canaries: prove children do not inherit them.
 	t.Setenv("PSI_TEST_CANARY_PARENT_SECRET", "canary-parent-secret-0000")
 	t.Setenv("PSI_TEST_CANARY_PI_PATH", filepath.Join(home, "CANARY-PI-PATH"))
@@ -42,7 +44,7 @@ func IsolatedEnv(t *testing.T) (home, work, agent, sessions string) {
 // ChildEnv returns the allowlisted env for a regression subprocess.
 // Only PATH, HOME, and explicit synthetic vars pass through.
 func ChildEnv(home string, extra map[string]string) []string {
-	env := []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+	env := []string{"HOME=" + home, "PATH=/usr/local/bin:/usr/bin:/bin"}
 	for k, v := range extra {
 		env = append(env, k+"="+v)
 	}
@@ -51,25 +53,27 @@ func ChildEnv(home string, extra map[string]string) []string {
 
 // AssertNoArtifactLeak fails if tracked artifacts contain private data markers.
 // It never prints matched secret values.
+func artifactLeak(path string) error {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cannot inspect artifact")
+	}
+	for _, marker := range []string{"sk-ant-", "sk-proj-", "github_pat_", "xoxb-", "/home/", "/Users/", "canary-parent-secret-0000", "CANARY-PI-PATH"} {
+		if strings.Contains(string(b), marker) {
+			return fmt.Errorf("forbidden private-data marker")
+		}
+	}
+	return nil
+}
+
 func AssertNoArtifactLeak(t *testing.T, artifacts []string) {
 	t.Helper()
 	for _, p := range artifacts {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		s := string(b)
-		for _, marker := range []string{
-			"sk-ant-", "sk-proj-", "github_pat_", "xoxb-",
-			"/home/", "/Users/",
-		} {
-			if strings.Contains(s, marker) {
-				t.Errorf("artifact %s contains forbidden marker class", p)
-			}
-		}
-		// Canary parent values must never appear in artifacts.
-		if strings.Contains(s, "canary-parent-secret-0000") || strings.Contains(s, "CANARY-PI-PATH") {
-			t.Errorf("artifact %s leaks parent canary", p)
+		if err := artifactLeak(p); err != nil {
+			t.Errorf("artifact %s: %v", p, err)
 		}
 	}
 }

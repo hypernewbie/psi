@@ -130,7 +130,11 @@ func assertReferenceProjection(t *testing.T, module, path string, s *Store) {
 		t.Fatal(err)
 	}
 	script := `const m = await import(process.argv[1]); const entries = m.loadEntriesFromFile(process.argv[2]); const p = m.buildSessionProjection(entries.filter(e => e.type !== "session")); console.log(JSON.stringify(p.messages));`
-	out, err := exec.Command("node", "--input-type=module", "-e", script, module, path).CombinedOutput()
+	cmd := exec.Command("node", "--input-type=module", "-e", script, module, path)
+	home := t.TempDir()
+	cmd.Dir = home
+	cmd.Env = []string{"HOME=" + home, "PATH=/usr/local/bin:/usr/bin:/bin", "PI_CODING_AGENT_DIR=" + filepath.Join(home, "agent"), "PI_CODING_AGENT_SESSION_DIR=" + filepath.Join(home, "sessions")}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("real Pi reader: %v: %s", err, out)
 	}

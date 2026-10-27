@@ -32,13 +32,14 @@ type Decoded struct {
 }
 
 type Decoder struct {
-	pending   []byte
-	pendingAt time.Time
-	inPaste   bool
-	pasteBuf  []byte
-	pasteOver bool // oversized paste: draining through end marker
-	pasteSize int  // bytes accepted before over-limit
-	now       func() time.Time
+	pending       []byte
+	pendingAt     time.Time
+	inPaste       bool
+	pasteBuf      []byte
+	pasteOver     bool // oversized paste: draining through end marker
+	pasteSize     int  // bytes accepted before over-limit
+	discardEscape bool
+	now           func() time.Time
 }
 
 func NewDecoder() *Decoder { return &Decoder{now: time.Now} }
@@ -52,7 +53,10 @@ func (d *Decoder) Feed(data []byte) []Decoded {
 		out = append(out, d.feedByte(b)...)
 	}
 	// Timeout check for incomplete escape.
-	if len(d.pending) > 0 && d.now().Sub(d.pendingAt) >= escapeTimeout {
+	if d.discardEscape && d.now().Sub(d.pendingAt) >= escapeTimeout {
+		d.discardEscape = false
+	}
+	if len(d.pending) > 0 && d.pending[0] == 27 && d.now().Sub(d.pendingAt) >= escapeTimeout {
 		// Emit pending as individual bytes (lone Escape first).
 		if len(d.pending) == 1 && d.pending[0] == 27 {
 			out = append(out, Decoded{Key: []byte{27}, Timeout: true})
@@ -86,9 +90,6 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 			var f strings.Builder
 			for _, r := range s {
 				if r == '\n' || r == '\t' || (r >= 0x20 && (r < 0x7F || r > 0x9F)) || r > 0x9F {
-					if r == utf8.RuneError {
-						continue
-					}
 					f.WriteRune(r)
 				}
 			}
@@ -99,7 +100,6 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 			// Deliver as one bounded transaction (chunked if large, but single logical unit).
 			const chunk = 64 * 1024
 			var out []Decoded
-			out = append(out, Decoded{Paste: true, PasteStart: true})
 			for i := 0; i < len(norm); i += chunk {
 				end := i + chunk
 				if end > len(norm) {
@@ -120,8 +120,18 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 		}
 		return nil
 	}
-	// Check paste markers.
+	if d.discardEscape {
+		d.pendingAt = d.now()
+		if b >= 0x40 && b <= 0x7e {
+			d.discardEscape = false
+		}
+		return nil
+	}
+	// Check paste markers. Escape timeout is idle time, not total sequence age.
 	d.pending = append(d.pending, b)
+	if d.pending[0] == 27 {
+		d.pendingAt = d.now()
+	}
 	if bytes.HasSuffix(d.pending, []byte("\x1b[200~")) {
 		// Strip marker, enter paste.
 		d.pending = d.pending[:len(d.pending)-6]
@@ -137,8 +147,9 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 	}
 	// Bound pending escape.
 	if len(d.pending) > maxPendingEscape {
-		out := d.emitPending()
-		return out
+		d.pending = nil
+		d.discardEscape = true
+		return nil
 	}
 	// Try to emit complete units.
 	return d.emitReady()

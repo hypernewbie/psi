@@ -1,52 +1,69 @@
-# Limitations (matches binary, permanent boundaries)
+# Limitations
 
-No extensions, JS runtime, npm packages, MCP, codemode, tool search, subagents,
-public SDK, RPC, JSON event mode, print mode, fullscreen, widgets, Pi TUI API,
-session tree/branch/fork/clone UI, HTML export, sharing, bug uploads, hosted
-services, update checks, self-update, catalog refresh, telemetry, browser
-automation, cloud credential discovery, extra providers, cache warming,
-background jobs, virtual models, routing, classifier/image/audio/video models,
-clipboard, image paste (reads only), external editor, prompt templates, sandbox,
-per-tool approval, permission-policy language, automatic Git ops, or visual Pi clone.
+## Permanent product boundaries
 
-Tools run with the current OS user permissions. Project consent and workspace
-paths do not provide isolation.
+psi is an inline terminal agent, not a visual Pi clone.
+It has no fullscreen mode, widgets, panels, session-tree interface, or Pi TUI API.
+It has no extension runtime, MCP, codemode, tool search, subagents, public SDK, RPC, or JSON event mode.
+Print mode, HTML export, sharing, bug uploads, hosted services, telemetry, and automatic updates are excluded.
 
-Authentication: Anthropic API keys + existing ChatGPT Codex OAuth with refresh
-(Pi-compatible directory lock, preserves unknown fields, 0600 + atomic replace).
-No login UI, no Anthropic OAuth, no `!command` execution. One checked refresh
-before streaming; no invisible replay after partial streaming; no paid-key fallback.
+psi supports Anthropic Messages and Codex Responses only.
+Additional providers, cloud credential discovery, routing, virtual models, and automatic catalog refresh are excluded.
+Background provider jobs, cache warming, classifier models, and image/audio/video generation are excluded.
+Clipboard access, image paste, external editors, prompt templates, and browser automation are excluded.
+The `read` tool can read supported image files.
 
-Providers: Anthropic Messages + Codex Responses, correct auth + request protocols.
-Reasoning via budgets/effort maps; image capability checked before durable work;
-unsupported fields rejected before billable calls; backend output-cap limits explained;
-unknown prices never $0.00.
+Tools run with the current OS user permissions.
+Project consent and workspace paths do not provide a sandbox.
+Per-tool approval, a permission-policy language, and automatic Git operations are excluded.
+The shell tool intentionally inherits the psi process environment.
+Regression shell processes instead use an isolated environment.
 
-Sessions: Pi JSONL v3, prefix-preserved, truncation guard, advisory lock + generation
-filter, 32 MiB records, 256 MiB files. Branches project to active path; siblings out.
-Compactions rebuild through same projector (retain-none supported). Context edits
-latest-wins, never mutate file bytes. `psi.input` provenance (`type: custom`) is
-state-only, pi-ignored for context.
+## Authentication
 
-Terminal: main screen only, native scrollback, append-only transcript, one writer,
-atomic frames, changed-row updates, 30fps coalesce, 64 KiB writes, grapheme editor
-(uniseg + runewidth, pi utils.ts parity), 256 KiB prompts, 256 KiB pastes, no
-redraw storms, sanitized output (ANSI/OSC/DCS/C1/bidi/split), NO_COLOR layout-preserving,
-resize-safe viewport (1-column + very short safe), suspend/resume without replay.
+Anthropic uses API keys.
+Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock.
+Refresh preserves unrelated fields and uses atomic persistence with restrictive permissions.
 
-History: current view (compaction-aware, full visible text) + all-history
-(`/history all`, display-only, no mutation). Prompt recall 200 session-scoped,
-provenance-preferred, no plaintext file. Tool states compact (`read: done`),
-interrupted/outcome-unknown never `done`, no args/bodies/diffs.
+psi has no login interface and does not support Anthropic OAuth or `!command` execution.
+Codex login remains Pi `/login openai-codex`.
+psi does not substitute a billed OpenAI API key for Codex OAuth.
+Partial streams do not permit an invisible request replay.
 
-Compaction: estimated (not usage), safe boundaries (calls+results together),
-bounded summaries, compatible entries + checkpoints, threshold at settled boundaries,
-≤1 context-limit retry, no repeated tools, no scrollback rewrite.
+## Current implementation limits
 
-Cancellation/interruption: complete only after owned work settles; durable
-aborted/error forms for partial text; no fabricated success; persistence failure
-stops work with explicit unsaved notice; stale generations rejected.
+Sessions use Pi JSONL v3 with a 32 MiB record limit and a 256 MiB file limit.
+The live store retains full payloads.
+The record-index helper is not part of live activation.
+The claimed 512 MiB activation, less than 160 MiB RSS, and 3-second activation gates are not complete.
 
-Resources: bounded metadata (20/page, no transcript load for listing), indexed
-large sessions (offsets, on-demand decode, <160 MiB, <3s activation), private temp
-files, allowlisted subprocess env, synthetic fixtures/canaries only.
+Branches, compactions, and context edits have synthetic projection tests.
+The current review does not establish actual pinned Pi→psi→Pi continuation.
+`psi.input` provenance uses state-only custom entries.
+Pinned-reader evidence for this metadata remains necessary.
+
+The editor uses `uniseg` for grapheme segmentation and width, with an explicit keycap-width correction.
+Prompts and bracketed pastes have a 256 KiB UTF-8 budget.
+The terminal writer changes only its owned tail and uses writes of at most 64 KiB.
+Stream output coalesces at scheduled frames and flushes at semantic boundaries.
+
+Regression tests cover startup history, `/history all`, Backspace, nonduplicated submission, and `/new` recall reset.
+Actual-app PTY tests cover Ctrl+Z/SIGCONT and terminal-attribute restoration.
+These tests do not establish every terminal profile, latency target, or human flicker check.
+Linux, WSL2, and SSH acceptance still require the complete platform matrix.
+
+History hides reasoning, tool arguments, tool results, diffs, and image payloads.
+Tool outcomes use explicit result flags and cancellation metadata, not guesses from output text.
+Unresolved calls remain interrupted rather than successful.
+
+The agent reconciles authoritative final text and saves visible interrupted text.
+It rejects contradictory finals and does not execute their tools.
+Cancellation records known unstarted calls without executing them.
+A storage failure blocks further writes until the operator opens another checked session or creates a new session.
+
+Context-limit recovery permits at most one compaction and retry before visible partial output.
+Synthetic loop/provider tests cover that path.
+Full compaction, provider, storage-fault, and actual-binary journeys remain incomplete acceptance requirements.
+
+The complete status and required measurements are in [the acceptance ledger](acceptance.md).
+These incomplete requirements are not new permanent exclusions or a deferred PLAN3.

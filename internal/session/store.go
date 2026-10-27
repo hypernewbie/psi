@@ -31,6 +31,7 @@ type Store struct {
 	lock      *sessionLock
 	knownSize int64
 	knownInfo os.FileInfo
+	writeErr  error
 }
 
 // OpenOptions controls Store creation.
@@ -89,6 +90,9 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	before, err := os.Stat(path)
 	if err != nil {
 		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("session must be a regular file: %s", path)
 	}
 	header, entries, _, err := ReadFileEntries(path)
 	if err != nil {
@@ -191,6 +195,13 @@ func (s *Store) Cwd() string { return s.cwd }
 
 // Persistent reports the storage policy, including ephemeral copies of real files.
 func (s *Store) Persistent() bool { return s.persist }
+
+// WriteError is sticky for this activation. Reopen only after checking the file.
+func (s *Store) WriteError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeErr
+}
 
 // ActivePath returns the chronological path from root to leaf.
 func (s *Store) ActivePath() ([]*Entry, error) {
@@ -380,7 +391,15 @@ func (s *Store) GetEntry(id string) *Entry {
 }
 
 // appendLocked validates, persists, and advances the leaf. Caller holds mu.
-func (s *Store) appendLocked(e *Entry, payload any) error {
+func (s *Store) appendLocked(e *Entry, payload any) (err error) {
+	if s.writeErr != nil {
+		return fmt.Errorf("storage blocked: %w", s.writeErr)
+	}
+	defer func() {
+		if err != nil && s.persist {
+			s.writeErr = err
+		}
+	}()
 	if s.persist && s.file != "" && s.flushed {
 		st, err := os.Stat(s.file)
 		if err != nil {
@@ -607,7 +626,11 @@ func InspectSession(path string) (*SessionInfo, error) {
 						blocks, _ := UserBlocks(content)
 						for _, b := range blocks {
 							if b.Text != nil {
-								info.FirstMessage = b.Text.Text
+								preview := []rune(b.Text.Text)
+								if len(preview) > 200 {
+									preview = preview[:200]
+								}
+								info.FirstMessage = string(preview)
 								break
 							}
 						}

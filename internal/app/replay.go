@@ -4,63 +4,83 @@ import (
 	"fmt"
 
 	"psi/internal/session"
-	"psi/internal/terminal"
 )
 
-// renderTimeline appends the current-view transcript to native scrollback (P2-035,036,037,038).
-// It uses one display projector for startup, --continue, --session, --resume, /resume, /history.
-// Replay never calls provider/tools, never mutates the session, and shows settled states.
 func renderTimeline(print func(string), items []session.TranscriptItem) {
-	// Blank line between logical messages, not between fragments (3.1).
-	for _, it := range items {
-		switch it.Kind {
-		case session.KindUser:
-			print("You")
-			print(it.Text)
-			print("")
-		case session.KindAssistant:
-			print("Assistant")
-			print(it.Text)
-			print("")
-		case session.KindTool:
-			// Compact final state only (no args/bodies/diffs).
-			note := ""
-			if it.Note != "" {
-				note = " (" + it.Note + ")"
-			}
-			print(terminal.Sanitize(it.Text + note))
-		case session.KindCompaction:
-			print("Context compacted: " + it.Text)
-			print("")
-		case session.KindBranchSummary:
-			print(it.Text)
-			print("")
-		case session.KindSystemMarker:
-			print("[" + it.Text + "]")
-		case session.KindHistoryBoundary:
-			print("--- " + it.Text + " ---")
-		case session.KindNotice:
-			print(it.Text)
-		}
-	}
+	renderTimelineChecked(func(s string) bool { print(s); return true }, items)
 }
 
-// replayActivation displays divider + identity + current view before the next prompt (P2-035).
-// Switching sessions appends a divider; previous sessions stay in scrollback.
-// Resuming the active session is a no-op (no duplicate transcript).
+// The checked path lets the actual event loop stop between bounded output
+// batches. Merely splitting a string into batches does not make replay cancellable.
+func renderTimelineChecked(emit func(string) bool, items []session.TranscriptItem) bool {
+	for _, it := range items {
+		var lines []string
+		switch it.Kind {
+		case session.KindUser:
+			lines = []string{"You", it.Text, ""}
+		case session.KindAssistant:
+			lines = []string{"Assistant", it.Text, ""}
+		case session.KindTool:
+			text := it.Text
+			if it.Note != "" {
+				text += " (" + it.Note + ")"
+			}
+			lines = []string{text}
+		case session.KindCompaction:
+			label := "Context compacted: "
+			if it.Historical {
+				label = "Historical compaction: "
+			}
+			lines = []string{label + it.Text, ""}
+		case session.KindBranchSummary:
+			lines = []string{it.Text, ""}
+		case session.KindSystemMarker:
+			lines = []string{"[" + it.Text + "]"}
+		case session.KindHistoryBoundary:
+			lines = []string{"--- " + it.Text + " ---"}
+		case session.KindNotice:
+			lines = []string{it.Text}
+		}
+		for _, line := range lines {
+			if !emit(line) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func replayActivation(print func(string), act *Activation, isNew bool, activeID string) {
+	replayActivationChecked(func(s string) bool { print(s); return true }, act, isNew, activeID)
+}
+
+func replayActivationChecked(emit func(string) bool, act *Activation, isNew bool, activeID string) bool {
 	if act.Store.Header().ID == activeID && !isNew {
-		return // no-op, no duplicate
+		return true
 	}
-	print("--- session " + act.Store.Header().ID + " ---")
+	if !emit("--- session " + act.Store.Header().ID + " ---") {
+		return false
+	}
 	if act.Offline && act.OfflineErr != nil {
-		print("offline: " + act.OfflineErr.Error() + " (history readable, continuation blocked)")
+		if !emit("offline: " + act.OfflineErr.Error() + " (history readable, continuation blocked)") {
+			return false
+		}
 	}
-	renderTimeline(print, act.Timeline)
-	// Concise notice pointing to /history all when older messages exist.
-	// If current view omitted pre-compaction content, all-history has more.
-	all := session.AllHistoryView(act.Path)
-	if len(all) > len(act.Timeline)+2 {
-		print(fmt.Sprintf("(%d historical messages omitted; /history all to view)", len(all)-len(act.Timeline)))
+	if !renderTimelineChecked(emit, act.Timeline) {
+		return false
 	}
+	visible := map[string]bool{}
+	for _, it := range act.Timeline {
+		visible[it.SourceID] = true
+	}
+	omitted := 0
+	for _, e := range act.Path {
+		if e.Kind == "message" && !visible[e.ID()] && (e.Message.Message.User != nil || e.Message.Message.Assistant != nil) {
+			omitted++
+		}
+	}
+	if omitted > 0 {
+		return emit(fmt.Sprintf("(%d earlier messages summarized. Use /history all to view.)", omitted))
+	}
+	return true
 }

@@ -1,66 +1,55 @@
 package terminal
 
 import (
+	"bytes"
+	"fmt"
 	"strings"
 	"testing"
-
-	"psi/internal/testutil"
 )
 
-// A02: 256 KiB paste — no submit, no control exec, bounded frames, preserved text.
 func TestAcceptance256KiBPaste(t *testing.T) {
-	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}, writer: NewWriter(&strings.Builder{}), decoder: NewDecoder()}
-	paste := strings.Repeat("x", 200*1024) + "\n" + strings.Repeat("y", 50*1024) + "\nmultiline 🎉\n"
-	if len(paste) > 256*1024 {
-		paste = paste[:256*1024-10]
-	}
+	c, _, _ := reviewConsole()
+	tail := "\nmultiline 🎉\n"
+	paste := strings.Repeat("x", pasteBudget-len(tail)) + tail
 	c.Handle(Input{Paste: true, PasteStart: true}, false)
-	// Chunked delivery (64 KiB units).
 	for i := 0; i < len(paste); i += 64 * 1024 {
-		end := i + 64*1024
-		if end > len(paste) {
-			end = len(paste)
-		}
-		c.Handle(Input{Key: []byte(paste[i:end]), Paste: true}, false)
+		c.Handle(Input{Key: []byte(paste[i:min(len(paste), i+64*1024)]), Paste: true}, false)
 	}
 	_, submitted, quit, _ := c.Handle(Input{Paste: true, PasteEnd: true}, false)
-	if submitted || quit {
-		t.Fatal("A02: paste submitted")
+	if submitted || quit || c.Editor.Text() != paste {
+		t.Fatal("paste submitted, truncated, or changed")
 	}
-	if !strings.Contains(c.Editor.Text(), "multiline") {
-		t.Fatal("A02: paste text lost")
+	writes, _, _, _ := c.writer.Stats()
+	if writes != 1 {
+		t.Fatalf("paste caused %d redraw writes", writes)
 	}
 }
 
-// A04: 10k tiny deltas — ordered, ≤30fps, no transcript erase.
 func TestAcceptanceTinyDeltas(t *testing.T) {
-	vt := testutil.NewVTModel(80, 24)
-	w := NewWriter(vtFeed{vt})
-	_ = NewScheduler()
-	// Ordered text via streamer.
-	var sb strings.Builder
-	st := NewStreamer(&sb, true)
+	out := &countWriter{}
+	st := NewStreamer(out, true)
 	for i := 0; i < 10000; i++ {
 		st.Delta("a")
 	}
 	st.Close()
-	if sb.String() != strings.Repeat("a", 10000)+"\n" {
-		t.Fatalf("A04: order/loss, got %d", len(sb.String()))
+	if out.data.String() != strings.Repeat("a", 10000)+"\n" {
+		t.Fatal("stream text lost or duplicated")
 	}
-	_ = w
-	_ = vt
+	if out.writes > 2 {
+		t.Fatalf("uncoalesced stream: %d writes", out.writes)
+	}
 }
 
-// A06: 100-call tool-heavy — compact outcomes, no duplicates, no dumps.
 func TestAcceptanceToolHeavy(t *testing.T) {
-	vt := testutil.NewVTModel(80, 24)
-	w := NewWriter(vtFeed{vt})
-	_ = w
-	sw := NewStatusWriter(&strings.Builder{})
+	var out bytes.Buffer
+	s := NewStatusWriter(&out)
 	for i := 0; i < 100; i++ {
-		id := strings.Repeat("c", 3) + string(rune('0'+i%10))
-		sw.Update("read", id, ToolRunning)
-		sw.Update("read", id, ToolDone)
+		id := fmt.Sprintf("call-%d", i)
+		s.Update("read", id, ToolRunning)
+		s.Update("read", id, ToolDone)
+		s.Update("read", id, ToolDone)
 	}
-	// No args/bodies/diffs in status output (compact only).
+	if out.String() != strings.Repeat("read: done\n", 100) {
+		t.Fatal("tool status duplicated or details leaked")
+	}
 }

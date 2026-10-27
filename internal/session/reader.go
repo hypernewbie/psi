@@ -39,7 +39,7 @@ func readRecord(br *bufio.Reader) ([]byte, error) {
 	var record []byte
 	for {
 		part, err := br.ReadSlice('\n')
-		if len(record)+len(part) > MaxRecordBytes+1 {
+		if len(record)+len(part) > MaxRecordBytes+2 {
 			return nil, fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)
 		}
 		record = append(record, part...)

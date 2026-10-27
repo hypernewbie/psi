@@ -3,11 +3,11 @@ package terminal
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
@@ -34,8 +34,11 @@ type Console struct {
 	Editor *Editor
 	Inputs <-chan Input
 
-	stop context.CancelFunc
-	done chan struct{}
+	stop   context.CancelFunc
+	done   chan struct{}
+	closed bool
+	err    error
+	hidden bool
 
 	writer  *Writer
 	decoder *Decoder
@@ -49,33 +52,81 @@ type Console struct {
 	lastW, lastH int
 	visibleTail  []string
 	busyNoticed  bool
+	dirty        bool
+	lastDraw     time.Time
 	// Completion sources (no exec/scan/provider).
 	Commands []string
 	Skills   []string
 }
 
 func NewConsole(in *os.File, out io.Writer) *Console {
-	ctx, cancel := context.WithCancel(context.Background())
-	inputs := make(chan Input, 64)
-	c := &Console{
-		In: in, Out: out, Editor: NewEditor(), Inputs: inputs,
-		stop: cancel, done: make(chan struct{}),
-		writer: NewWriter(out), decoder: NewDecoder(),
-	}
-	fmt.Fprint(out, "\x1b[?2004h")
-	go func() { defer close(c.done); defer close(inputs); readInputs(ctx, in, inputs, c.decoder) }()
+	c := &Console{In: in, Out: out, Editor: NewEditor(), writer: NewWriter(out)}
+	c.Resume()
 	return c
 }
 
-func (c *Console) Close() {
+// Pause releases input ownership before the terminal returns to the shell.
+func (c *Console) Pause() {
+	if c.stop == nil {
+		return
+	}
 	c.stop()
 	<-c.done
-	// Commit any visible tail to scrollback with a newline, then disable paste.
-	if len(c.visibleTail) > 0 {
-		fmt.Fprint(c.Out, "\r\n")
-	}
-	fmt.Fprint(c.Out, "\x1b[?2004l")
+	c.stop = nil
+	_ = c.emit(Frame{ShowCursor: c.hidden})
+	c.hidden = false
+	c.visibleTail = nil
+	// Cleanup bypasses the sticky frame error. A recovered output descriptor
+	// still needs cursor and paste restoration even when tail state is unknown.
+	c.mode("\x1b[?25h\x1b[?2004l")
 }
+
+func (c *Console) Resume() {
+	if c.closed || c.stop != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	inputs, done := make(chan Input, 64), make(chan struct{})
+	decoder := NewDecoder()
+	c.stop, c.done, c.Inputs, c.decoder = cancel, done, inputs, decoder
+	c.pasteActive = false
+	c.pasteBuf.Reset()
+	c.mode("\x1b[?2004h")
+	go func() { defer close(done); defer close(inputs); readInputs(ctx, c.In, inputs, decoder) }()
+}
+
+func (c *Console) Close() {
+	if c.closed {
+		return
+	}
+	c.Pause()
+	c.closed = true
+}
+
+func (c *Console) mode(s string) {
+	if err := WriteBounded(c.Out, []byte(s)); c.err == nil {
+		c.err = err
+	}
+}
+
+func (c *Console) emit(f Frame) error {
+	if c.err == nil {
+		c.err = c.writer.Emit(f)
+	}
+	return c.err
+}
+
+// Write routes transcript, command, and status output through the same owner as
+// the editor. RawOutput performs newline conversion before this boundary.
+func (c *Console) Write(p []byte) (int, error) {
+	if err := c.emit(Frame{Append: string(p)}); err != nil {
+		return 0, err
+	}
+	c.visibleTail = nil
+	return len(p), nil
+}
+
+func (c *Console) Err() error { return c.err }
 
 func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder) {
 	send := func(input Input) bool {
@@ -166,10 +217,12 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		}
 		if input.PasteEnd {
 			c.pasteActive = false
-			if input.Rejected || c.pasteBuf.Len() > editorBudget {
-				// Reject as whole edit, preserve previous draft, one notice.
+			if input.Rejected || c.pasteBuf.Len()+len(c.Editor.Text()) > editorBudget {
 				c.pasteBuf.Reset()
-				c.drawIfChanged(true)
+				if !busy {
+					_, _ = c.Write([]byte("Paste exceeds 256 KiB. Draft unchanged.\r\n"))
+					c.Draw()
+				}
 				return "", false, false, false
 			}
 			content := c.pasteBuf.String()
@@ -193,7 +246,6 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		if len(input.Key) == 1 && input.Key[0] == 3 {
 			return "", false, false, true
 		}
-		// Pasted content never cancels/submits (handled above).
 		return "", false, false, false
 	}
 	if len(input.Key) == 1 {
@@ -217,9 +269,6 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.pasteBuf.Reset()
 			return "", false, false, false
 		case '\r': // Enter submits outside paste.
-			prev := c.Editor.Text()
-			_ = prev
-			c.Editor.End()
 			c.commitAccepted()
 			return c.Editor.Submit(), true, false, false
 		}
@@ -288,7 +337,8 @@ func (c *Console) complete() {
 	if showList {
 		// Bounded ambiguity list only on explicit Tab; draft/cursor stable.
 		// Printed as a notice row, not an overlay (UX-lite).
-		_ = c.writer.Emit(Frame{Append: "Candidates: " + strings.Join(bounded(cands, 10), " ") + "\r\n"})
+		_, _ = c.Write([]byte("Candidates: " + strings.Join(bounded(cands, 10), " ") + "\r\n"))
+		c.Draw()
 	}
 }
 
@@ -306,7 +356,10 @@ func (c *Console) drawIfChanged(force bool) {
 	if !force && draft == c.lastDraft && pos == c.lastCursor && w == c.lastW && h == c.lastH {
 		return
 	}
-	c.lastDraft, c.lastCursor, c.lastW, c.lastH = draft, pos, w, h
+	if !force && time.Since(c.lastDraw) < time.Second/maxFPS {
+		c.dirty = true
+		return
+	}
 	c.Draw()
 }
 
@@ -326,25 +379,42 @@ func (c *Console) commitAccepted() {
 		b.WriteString(Sanitize(ln))
 	}
 	b.WriteString("\n")
-	_ = WriteBounded(c.Out, []byte(strings.ReplaceAll(b.String(), "\n", "\r\n")))
-	// Reset tail ownership: next Draw starts fresh.
-	c.visibleTail = nil
-	c.writer.prevTail = nil
+	_, _ = c.Write([]byte(strings.ReplaceAll(b.String(), "\n", "\r\n")))
 	c.lastDraft = ""
+	c.dirty = false
 }
 
 func (c *Console) size() (int, int) {
 	width, height, err := term.GetSize(int(c.In.Fd()))
-	if err != nil || width < 4 {
+	if err != nil || width <= 0 {
 		width = 80
 	}
-	if height < 4 {
+	if err != nil || height <= 0 {
 		height = 24
 	}
 	return width, height
 }
 
+func (c *Console) NeedsDraw() bool { return c.dirty }
+
+func (c *Console) Flush() {
+	if c.dirty {
+		c.Draw()
+	}
+}
+
+// Status is an owned transient row, replaced by the eventual settled output.
+func (c *Console) Status(text string) {
+	w, _ := c.size()
+	rows := []string{TruncateToWidth(Sanitize(text), max(1, w-1))}
+	_ = c.emit(Frame{Tail: rows, HideCursor: true})
+	c.hidden = true
+	c.visibleTail = rows
+}
+
 func (c *Console) Draw() {
+	c.dirty = false
+	c.lastDraw = time.Now()
 	width, height := c.size()
 	// Build viewport from shared layout (P2-016): same function as tests.
 	layout := LayoutDraft(c.Editor.buf, c.Editor.pos, width)
@@ -364,8 +434,9 @@ func (c *Console) Draw() {
 	visible := rows[start:end]
 	cursorRow -= start
 	// Emit one atomic frame (P2-025): no separate clear, changed-row only, no ED.
-	f := Frame{Tail: visible, CursorRow: cursorRow, CursorCol: layout.CursorCol}
-	_ = c.writer.Emit(f)
+	f := Frame{Tail: visible, CursorRow: cursorRow, CursorCol: layout.CursorCol, ShowCursor: c.hidden}
+	_ = c.emit(f)
+	c.hidden = false
 	c.visibleTail = visible
 	c.lastDraft, c.lastCursor = c.Editor.Text(), c.Editor.Pos()
 	c.lastW, c.lastH = width, height
@@ -384,7 +455,10 @@ func (c *Console) ResetBusyNotice() { c.busyNoticed = false }
 type RawOutput struct{ W io.Writer }
 
 func (w RawOutput) Write(p []byte) (int, error) {
-	converted := bytes.ReplaceAll(p, []byte("\n"), []byte("\r\n"))
-	_, err := w.W.Write(converted)
-	return len(p), err
+	converted := bytes.ReplaceAll(p, []byte("\r\n"), []byte("\n"))
+	converted = bytes.ReplaceAll(converted, []byte("\n"), []byte("\r\n"))
+	if err := WriteBounded(w.W, converted); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }

@@ -4,18 +4,13 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strings"
 )
 
-// Frame is the single terminal-output owner (P2-009, P2-025).
-// All post-acquisition output passes through one owner: editor, streamer,
-// status, command, and error output. Provider/tool code must never write
-// directly to stdout/stderr after acquisition.
-// A frame contains: ordered scrollback append + bounded active-tail changes +
-// required cursor position/visibility. Built in memory, written with one
-// complete write (short-write safe). Never exposes clear separately from replacement.
-
+// Frame appends committed text and replaces only the bounded, owned tail.
+// Content is sanitized before composition. Cursor coordinates are tail-relative.
 type Frame struct {
-	Append        string // committed scrollback (append-only, already sanitized)
+	Append        string
 	Tail          []string
 	CursorRow     int
 	CursorCol     int
@@ -24,93 +19,105 @@ type Frame struct {
 	ShowCursor    bool
 }
 
-// Writer owns terminal bytes and modes.
+// Writer is owned by the application event loop. No other writer may move its cursor.
 type Writer struct {
 	Out                          io.Writer
 	prevTail                     []string
 	prevCursorRow, prevCursorCol int
-	writes                       int
-	frames                       int
-	bytes                        int
+	writes, frames, bytes        int
 	unchanged                    int
-	sanitizer                    Sanitizer
 }
 
 func NewWriter(out io.Writer) *Writer { return &Writer{Out: out} }
 
-// Counters for instrumentation (P2-005): writes, frames, unchanged, bytes.
 func (w *Writer) Stats() (writes, frames, bytes, unchanged int) {
 	return w.writes, w.frames, w.bytes, w.unchanged
 }
 
-// Emit builds and writes one frame. It returns false when visible state is unchanged.
 func (w *Writer) Emit(f Frame) error {
 	w.frames++
-	// Fast path: unchanged tail + no append + same cursor => zero bytes (P2-026).
 	if f.Append == "" && equalRows(w.prevTail, f.Tail) && f.CursorRow == w.prevCursorRow && f.CursorCol == w.prevCursorCol && !f.HideCursor && !f.ShowCursor {
 		w.unchanged++
 		return nil
 	}
 	var b bytes.Buffer
-	if f.Append != "" {
-		// Committed transcript is append-only; never erase (P2-027).
-		b.WriteString(f.Append)
-		if len(f.Append) == 0 || f.Append[len(f.Append)-1] != '\n' {
-			// Append callers include newlines; do not force.
+	row, col := w.prevCursorRow, w.prevCursorCol
+	move := func(r, c int) {
+		if r < row {
+			fmt.Fprintf(&b, "\x1b[%dA", row-r)
+		} else if r > row {
+			fmt.Fprintf(&b, "\x1b[%dB", r-row)
 		}
+		if c != col || r != row {
+			b.WriteByte('\r')
+			if c > 0 {
+				fmt.Fprintf(&b, "\x1b[%dC", c)
+			}
+		}
+		row, col = r, c
 	}
-	// Tail update: only changed rows + stale suffixes on owned rows (P2-026).
-	// We own rows after the scrollback append point. For simplicity, redraw tail
-	// when changed, but never use unbounded ED as default editor update.
-	tailChanged := !equalRows(w.prevTail, f.Tail)
-	if tailChanged {
-		if len(w.prevTail) > 0 {
-			// Move to tail start: carriage return + up by previous tail height-1.
-			b.WriteString("\r")
-			if len(w.prevTail) > 1 {
-				fmt.Fprintf(&b, "\x1b[%dA", len(w.prevTail)-1)
+	old := w.prevTail
+	if f.Append != "" {
+		if len(old) > 0 {
+			// Remove only the old viewport, never rows preceding its anchor.
+			// Replace row zero before erasing its stale suffix to avoid a blank frame.
+			for i := len(old) - 1; i > 0; i-- {
+				move(i, 0)
+				b.WriteString("\x1b[K")
 			}
-			b.WriteString("\x1b[J")
-		}
-		for i, row := range f.Tail {
-			if i > 0 {
-				b.WriteString("\r\n")
+			move(0, 0)
+			if i := strings.IndexByte(f.Append, '\n'); i >= 0 {
+				b.WriteString(strings.TrimSuffix(f.Append[:i], "\r"))
+				b.WriteString("\x1b[K\r\n")
+				b.WriteString(f.Append[i+1:])
+			} else {
+				b.WriteString(f.Append)
+				b.WriteString("\x1b[K")
 			}
-			b.WriteString(row)
+		} else {
+			b.WriteString(f.Append)
 		}
-		// Clear stale suffixes on owned rows only (EL per row, not ED).
-		if len(f.Tail) < len(w.prevTail) {
+		old = nil
+		row, col = 0, 0
+	}
+	for i := 0; i < max(len(old), len(f.Tail)); i++ {
+		if i < len(old) && i < len(f.Tail) && old[i] == f.Tail[i] {
+			continue
+		}
+		if i >= len(old) && i > 0 {
+			// CSI down clamps at the screen edge. CRLF allocates a new row
+			// and lets the terminal scroll naturally instead.
+			move(i-1, 0)
+			b.WriteString("\r\n")
+			row, col = i, 0
+		} else {
+			move(i, 0)
+		}
+		if i < len(f.Tail) {
+			b.WriteString(f.Tail[i])
+			col = CellWidth(f.Tail[i])
+		}
+		if i < len(old) {
 			b.WriteString("\x1b[K")
 		}
 	}
-	// Cursor: cursor-only movement writes cursor movement only (P2-026).
-	if !tailChanged && (f.CursorRow != w.prevCursorRow || f.CursorCol != w.prevCursorCol) {
-		dr := f.CursorRow - w.prevCursorRow
-		dc := f.CursorCol - w.prevCursorCol
-		if dr < 0 {
-			fmt.Fprintf(&b, "\x1b[%dA", -dr)
-		} else if dr > 0 {
-			fmt.Fprintf(&b, "\x1b[%dB", dr)
-		}
-		if dc != 0 {
-			b.WriteString("\r")
-			if dc > 0 {
-				fmt.Fprintf(&b, "\x1b[%dC", dc)
+	if len(f.Tail) > 0 {
+		// Always use the target column, not a signed column delta.
+		if !equalRows(old, f.Tail) {
+			// Keep the initial prompt positioning explicit as well.
+			if row != f.CursorRow {
+				move(f.CursorRow, 0)
 			}
-		}
-	} else if tailChanged {
-		// Position cursor within new tail.
-		// Tail rows are already written; move up from last row.
-		if len(f.Tail) > 0 {
-			lastRow := len(f.Tail) - 1
-			if lastRow > f.CursorRow {
-				fmt.Fprintf(&b, "\x1b[%dA", lastRow-f.CursorRow)
-			}
-			b.WriteString("\r")
+			b.WriteByte('\r')
 			if f.CursorCol > 0 {
 				fmt.Fprintf(&b, "\x1b[%dC", f.CursorCol)
 			}
+			row, col = f.CursorRow, f.CursorCol
+		} else {
+			move(f.CursorRow, f.CursorCol)
 		}
+	} else if f.Append == "" && len(old) > 0 {
+		move(0, 0)
 	}
 	if f.HideCursor {
 		b.WriteString("\x1b[?25l")
@@ -122,11 +129,7 @@ func (w *Writer) Emit(f Frame) error {
 		w.unchanged++
 		return nil
 	}
-	// One complete write with short-write handling (P2-009, P2-025).
-	data := b.Bytes()
-	// Sanitize check: trusted renderer bytes (CSI cursor/erase) are allowed;
-	// content bytes were sanitized before frame composition (P2-033).
-	if err := WriteBounded(w.Out, data); err != nil {
+	if err := WriteBounded(w.Out, b.Bytes()); err != nil {
 		return err
 	}
 	w.writes++

@@ -4,12 +4,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"psi/internal/event"
 	"psi/internal/provider"
@@ -204,6 +206,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 	}
 	l.sink(event.Event{Type: event.RunStart})
 	defer l.sink(event.Event{Type: event.RunEnd})
+	recovery := &Recovery{}
 	for turn := 0; turn < maxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -234,43 +237,62 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 		var streamed strings.Builder
 		resp, err := l.prov.Send(ctx, req, func(s string) {
 			streamed.WriteString(s)
-			l.sink(event.Event{Type: event.TextDelta, Text: s, Outcome: event.OutcomeTransient})
+			l.emitText(s, event.OutcomeTransient)
 		})
 		if err != nil {
-			if ctx.Err() != nil {
-				// P2-056, P2-058: persist supported aborted form for visible partial text when possible.
-				// Never label partial args as executable; mark unstarted as unstarted via no tool execution.
-				if streamed.Len() > 0 {
-					partial := session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
-						Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: streamed.String()}}},
-						API: cfg.Model.API, Provider: cfg.Model.ProviderID(), Model: cfg.Model.ID,
-						StopReason: "aborted", Timestamp: time.Now().UnixMilli()}}
-					if _, aerr := l.store.AppendMessage(partial); aerr != nil {
-						return fmt.Errorf("storage failure, stopping: %w (unsaved partial text %d bytes)", aerr, streamed.Len())
-					}
+			var pe *provider.ProviderError
+			if ctx.Err() == nil && streamed.Len() == 0 && cfg.AutoCompact && errors.As(err, &pe) && pe.Kind == provider.ErrContextLimit && recovery.CanRetry() {
+				recovery.NoteAttempt()
+				if cerr := l.compact(ctx, cfg, ""); cerr != nil {
+					return fmt.Errorf("context-limit recovery: %w", cerr)
 				}
+				continue // retry the projected request, never the completed tool batch
+			}
+			stop := "error"
+			if ctx.Err() != nil {
+				stop = "aborted"
+			}
+			if aerr := l.savePartial(streamed.String(), stop, cfg); aerr != nil {
+				return aerr
+			}
+			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return fmt.Errorf("provider: %w", err)
 		}
 		if resp == nil {
+			if err := l.savePartial(streamed.String(), "error", cfg); err != nil {
+				return err
+			}
 			return fmt.Errorf("provider returned no completed message")
 		}
-		// Reconcile final authoritative text with streamed prefix (P2-030).
-		// If final extends prefix, terminal already shows prefix; caller appends suffix via events?
-		// Our sink already emitted deltas; store persists complete message once.
-		// If final contradicts prefix, report protocol failure rather than rewriting scrollback.
-		if streamed.Len() > 0 && resp.Text != "" && !strings.HasPrefix(resp.Text, streamed.String()) && !strings.HasPrefix(streamed.String(), resp.Text) {
-			// Contradiction: neither is a prefix of the other. Persist authoritative, report failure.
-			if _, err := l.store.AppendMessage(toSessionAssistant(resp, cfg)); err != nil {
-				return fmt.Errorf("storage failure, stopping: %w", err)
+		// Content is authoritative when supplied; Text and ToolCalls are convenience caches.
+		if len(resp.Content) > 0 {
+			var text strings.Builder
+			resp.ToolCalls = nil
+			for _, block := range resp.Content {
+				if block.Type == "text" {
+					text.WriteString(block.Text)
+				}
+				if block.Type == "toolCall" {
+					resp.ToolCalls = append(resp.ToolCalls, block)
+				}
 			}
-			return fmt.Errorf("protocol failure: streamed text contradicts final message (persisted authoritative)")
+			resp.Text = text.String()
+		}
+		if !strings.HasPrefix(resp.Text, streamed.String()) {
+			if err := l.savePartial(streamed.String(), "error", cfg); err != nil {
+				return err
+			}
+			return fmt.Errorf("protocol failure: final text contradicts streamed text; partial response saved, tools not executed")
 		}
 		if _, err := l.store.AppendMessage(toSessionAssistant(resp, cfg)); err != nil {
 			return fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
 		}
-		// Settlement barrier: persistence precedes RunEnd (deferred) and next prompt (P2-014).
+		if suffix := resp.Text[streamed.Len():]; suffix != "" {
+			l.emitText(suffix, event.OutcomeDurable)
+		}
+		// Settlement barrier: persistence precedes RunEnd and the next prompt.
 		if resp.StopReason == "error" || resp.StopReason == "aborted" {
 			return fmt.Errorf("provider stopped: %s", resp.StopReason)
 		}
@@ -287,6 +309,34 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 		}
 	}
 	return fmt.Errorf("run guard: exceeded %d turns (possible endless tool cycle)", maxTurns)
+}
+
+// The app's 64-item event queue retains at most 512 KiB of text payload.
+func (l *Loop) emitText(text, outcome string) {
+	for len(text) > 0 {
+		n := min(len(text), 8*1024)
+		if n < len(text) {
+			for n > 0 && !utf8.RuneStart(text[n]) {
+				n--
+			}
+			if n == 0 {
+				n = min(len(text), 8*1024)
+			}
+		}
+		l.sink(event.Event{Type: event.TextDelta, Text: strings.Clone(text[:n]), Outcome: outcome})
+		text = text[n:]
+	}
+}
+
+func (l *Loop) savePartial(text, stop string, cfg Config) error {
+	if text == "" {
+		return nil
+	}
+	partial := toSessionAssistant(&provider.Response{Text: text, StopReason: stop}, cfg)
+	if _, err := l.store.AppendMessage(partial); err != nil {
+		return fmt.Errorf("storage failure, stopping: %w (unsaved partial text %d bytes)", err, len(text))
+	}
+	return nil
 }
 
 func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, cfg Config) (provider.Request, error) {
@@ -426,8 +476,19 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 	for _, d := range definitions {
 		enabled[d.Name] = true
 	}
-	for _, tc := range calls {
+	for i, tc := range calls {
 		if err := ctx.Err(); err != nil {
+			for _, pending := range calls[i:] {
+				msg := session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{
+					Role: "toolResult", ToolCallID: pending.ID, ToolName: pending.Name, IsError: true,
+					Content: []session.UserContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "Tool was not started because the run was cancelled."}}},
+					Details: json.RawMessage(`{"psiOutcome":"not_started"}`), Timestamp: time.Now().UnixMilli(),
+				}}
+				if _, aerr := l.store.AppendMessage(msg); aerr != nil {
+					return fmt.Errorf("storage failure, stopping: %w", aerr)
+				}
+				l.sink(event.Event{Type: event.ToolEnd, ToolName: pending.Name, ToolCallID: pending.ID, State: "not started"})
+			}
 			return err
 		}
 		l.sink(event.Event{Type: event.ToolStart, ToolName: tc.Name, ToolCallID: tc.ID, State: "running"})
@@ -439,7 +500,7 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 		if res.IsError {
 			state = "failed"
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil && res.IsError {
 			state = "cancelled"
 		}
 		var content []session.UserContentBlock
@@ -453,6 +514,17 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 		details, err := json.Marshal(res.Details)
 		if err != nil {
 			return err
+		}
+		if state == "cancelled" {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(details, &fields); err != nil {
+				fields = map[string]json.RawMessage{"toolDetails": details}
+			}
+			if fields == nil {
+				fields = map[string]json.RawMessage{}
+			}
+			fields["psiOutcome"] = json.RawMessage(`"cancelled"`)
+			details, _ = json.Marshal(fields)
 		}
 		msg := session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{Role: "toolResult", ToolCallID: tc.ID, ToolName: tc.Name, Content: content, Details: details, IsError: res.IsError, Timestamp: time.Now().UnixMilli()}}
 		if _, err := l.store.AppendMessage(msg); err != nil {
