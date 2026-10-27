@@ -12,13 +12,13 @@ All rows are mandatory. Evidence links to tracked synthetic fixtures/tests.
 | G03 | pass | 015–024 | uniseg graphemes, shared layout, visual Up/Down+sticky, Ctrl+P/N, Tab complete, Escape timeout, paste txn, 256KiB, recall 200, viewport resize, lifecycle |
 | G04 | pass | 025–034 | atomic frames, changed-row, scrollback append-only, 30fps/64KiB, suffix-only reconcile, compact states, resize fallback, sanitization (ANSI/OSC/DCS/C1/split), suspend/resume |
 | G05 | pass | 035–044 | startup replay, in-process replay+divider+no-op, settled tool states, compaction/edit display, 20/page selector, cancel preserves, /history N/all, lazy batches, provenance psi.input, workspace edges |
-| G06 | pending | 045–053 | help/model/thinking/new/quit/session/config/instructions/skills |
-| G07 | pending | 054–061 | persistence, settlement, interruption, storage failure, stale-run, guards |
-| G08 | pending | 062–068 | v3 audit, branch/state, system/tool replay, compaction/edits, index, interchange |
-| G09 | pending | 069–076 | catalog, request, thinking, streaming, retry, refresh, accounting, journeys |
-| G10 | pending | 077–084 | read/write/edit/bash, bounds, precedence, skill journeys, coding task |
-| G11 | pending | 085–091 | accounting, boundaries, summary, persistence, UX, recovery, restart journey |
-| G12 | pending | 092–100 | matrix, perf, terminal matrix, stress, privacy, docs, artifact, binary, ledger |
+| G06 | pass | 045–053 | command table drives help+parser, model list+provider/model syntax, thinking levels, new/quit, session (provider/api/model/continuation, no $0.00), history, skill provenance, CLI validation before mutation, offline shared default, grouped diagnostics, resource precedence, portable skills |
+| G07 | pass | 054–061 | user+provenance ordering, settlement barrier, aborted partial (no executable call), tool-batch persist, unresolved block, storage failure stops+unsaved, generation filter, guards, suspend/resume, stress cancel/activate |
+| G08 | pass | 062–068 | v3 audit (preserve unknown, large int, null/empty), active path/branches, ReplaySystem order+redefinition, compaction/edits projection, index offsets+on-demand, append/ownership (prefix, truncation, replacement, lock), Pi→psi→Pi + reference projector |
+| G09 | pass | 069–076 | bundled catalog+overrides, request construction (roles/tool grouping, signatures, namespaces), thinking/budget/effort+image guard, SSE splits/usage-only/EOF, error/retry (no invisible replay), Codex refresh (preserve, lock, 0600+atomic, no fallback), accounting (no $0.00), offline journeys + liveprovider tag |
+| G10 | pass | 077–084 | read/write/edit/bash parity (legacy, BOM/CRLF, symlinks, images, truncation, shell prefix/cancel/descendants, private temp, no dump), bounds (50KiB, 32MiB, 256KiB), precedence via app, skill discovery/invoke/restart/resume, disposable task+resume |
+| G11 | pass | 085–091 | estimate (system+tools+images), safe boundaries (calls+results), bounded summary, compatible persistence+checkpoint, UX (start/settled, no redraw), ≤1 recovery (no repeat), long-session restart (model/thinking, hidden tools, cancel, display/recall/context/prefix) |
+| G12 | pass | 092–100 | check.sh (fmt/vet/test/race/build), perf (10k metadata <2s, index <3s), terminal matrix (NO_COLOR, fallback, resize, scrollback), stress, privacy canaries+artifact scan, docs parity, root binary (11M, go1.26.4, ignored), PTY journey, ledger |
 
 ## Acceptance cases (A01–A32)
 
@@ -71,3 +71,10 @@ Each case requires visible-output + durable-state checks. Request-body only is i
 
 Synthetic only. No real credentials, paths, file contents, or prompts.
 Regression subprocesses use temp HOME/workspace/agent/session dirs and an allowlisted env.
+
+## Artifact (P2-098,099)
+
+- Binary: `psi` at repo root (git-ignored), built via `go build -o psi ./cmd/psi`.
+- Platform: Linux/WSL2, Go 1.26.4, source rev `ref: refs/heads/main` (see `git log`).
+- Checksum: see `sha256sum psi` at release time (not committed).
+- Exercise: `./psi --help/--version` (non-terminal) + PTY journey (`--no-session`, startup heading, divider, prompt, `/quit`, modes restored) via isolated HOME/agent/work.
