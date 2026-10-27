@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -32,6 +33,11 @@ func (t *BashTool) shell() string {
 func (t *BashTool) Execute(inv Invocation) Result {
 	return t.ExecuteCtx(context.Background(), inv)
 }
+
+// idleDrainGrace is the Pi-compatible post-exit grace: every stdout/stderr
+// chunk resets it (child-process.ts waitForChildProcess). A quiet inherited
+// pipe releases at the deadline with the leader exit status preserved.
+const idleDrainGrace = 100 * time.Millisecond
 
 func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	cmdStr, _ := argString(inv.Arguments, "command")
@@ -68,29 +74,93 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 		}
 	}()
 	capture := &tailCapture{file: f, cancel: stop}
+	capture.touch()
 	if t.ShellPrefix != "" {
 		cmdStr = t.ShellPrefix + "\n" + cmdStr
 	}
-	cmd := exec.CommandContext(runCtx, t.shell(), "-c", cmdStr)
+	// Own the stdio pipes so leader exit, pipe completion, and idle drain
+	// stay distinct (F07). Go's WaitDelay uses one fixed deadline from exit;
+	// Pi re-arms a 100ms idle timer on every chunk instead.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return errResult(fmt.Sprintf("bash: cannot capture output: %v", err))
+	}
+	cmd := exec.Command(t.shell(), "-c", cmdStr)
 	cmd.Dir = t.Cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		// The group ID is the original PID even if the group leader has exited.
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-			return err
-		}
-		return nil
+	cmd.Stdout, cmd.Stderr = pw, pw
+	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
+		return errResult(fmt.Sprintf("bash: %v", err))
 	}
-	// Descendants must not keep Wait blocked indefinitely through inherited pipes.
-	cmd.WaitDelay = 250 * time.Millisecond
-	cmd.Stdout, cmd.Stderr = capture, capture
-	runErr := cmd.Run()
-	if runErr != nil && cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	// Parent copies only; the child ends stay open across descendants.
+	_ = pw.Close()
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		defer pr.Close()
+		buf := make([]byte, 32*1024)
+		for {
+			n, rerr := pr.Read(buf)
+			if n > 0 {
+				if _, werr := capture.Write(buf[:n]); werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	// Leader exit never implies pipe completion: descendants may still hold
+	// the inherited write ends. Wait for the leader, then drain.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	var runErr error
+	var leaderExited bool
+	var timedOut bool
+	killGroup := func() {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
 	}
+	drain := func() {
+		for {
+			select {
+			case <-copyDone:
+				return
+			case <-runCtx.Done():
+				return
+			default:
+			}
+			if leaderExited && time.Since(capture.lastWrite()) > idleDrainGrace {
+				// Quiet pipe: release with the leader status preserved.
+				killGroup()
+				return
+			}
+			select {
+			case <-copyDone:
+				return
+			case <-runCtx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	select {
+	case runErr = <-waitDone:
+		leaderExited = true
+		drain()
+	case <-runCtx.Done():
+		killGroup()
+		runErr = <-waitDone
+		leaderExited = true
+		drain()
+	}
+	timedOut = runCtx.Err() == context.DeadlineExceeded
+	<-copyDone
+	_ = pr.Close()
 	closeErr := f.Close()
 	if capture.err != nil {
 		return errResult(fmt.Sprintf("bash: output capture failed: %v", capture.err))
@@ -116,7 +186,7 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	if ctx.Err() != nil {
 		return Result{Content: []Block{{Type: "text", Text: "Command cancelled\n" + output}}, IsError: true, Details: details}
 	}
-	if runCtx.Err() == context.DeadlineExceeded {
+	if timedOut {
 		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("Command timed out after %v\n%s", timeout, output)}}, IsError: true, Details: details}
 	}
 	if runErr != nil {
@@ -139,11 +209,19 @@ type tailCapture struct {
 	total  int64
 	err    error
 	cancel context.CancelFunc
+	last   atomic.Int64 // nanos of the most recent chunk (idle drain clock)
 }
+
+// lastWrite reports the most recent output instant.
+
+func (c *tailCapture) touch() { c.last.Store(time.Now().UnixNano()) }
+
+func (c *tailCapture) lastWrite() time.Time { return time.Unix(0, c.last.Load()) }
 
 func (c *tailCapture) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.touch()
 	if c.total+int64(len(p)) > 256*1024*1024 {
 		c.err = fmt.Errorf("command output exceeds 256 MiB")
 		c.cancel()
