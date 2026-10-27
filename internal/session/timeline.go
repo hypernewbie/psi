@@ -134,6 +134,16 @@ func PromptRecall(path []*Entry) []string {
 	// Map psi.input provenance: target entry -> visible invocation.
 	provenance := map[string]string{}
 	for _, e := range path {
+		if e.Kind == "custom" && e.Custom != nil && e.Custom.CustomType == "psi.input" {
+			var det struct {
+				TargetID   string `json:"targetId"`
+				Invocation string `json:"invocation"`
+			}
+			if err := jsonUnmarshal(e.Custom.Data, &det); err == nil && det.TargetID != "" && det.Invocation != "" {
+				provenance[det.TargetID] = det.Invocation
+			}
+		}
+		// Back-compat: older custom_message provenance (if any).
 		if e.Kind == "custom_message" && e.CustomMessage.CustomType == "psi.input" {
 			var det struct {
 				TargetID   string `json:"targetId"`

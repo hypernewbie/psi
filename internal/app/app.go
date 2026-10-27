@@ -427,6 +427,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		}()
 	}
+	startProvenance := func(text, invocation, source string, compact bool) {
+		if r.authErr != nil {
+			print("error: " + r.authErr.Error())
+			console.Draw()
+			return
+		}
+		ctx, stop := context.WithCancel(context.Background())
+		cancel, busy, compacting = stop, true, compact
+		gen := r.generation
+		seq := int64(0)
+		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
+			seq++
+			e.Generation = gen
+			e.Seq = seq
+			events <- e
+		})
+		go func() {
+			done <- loop.SubmitWithProvenance(ctx, text, invocation, source, r.cfg)
+		}()
+	}
 	console.Draw()
 	inputs := console.Inputs
 	for {
@@ -604,12 +624,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if cmd, ok := terminal.ParseCommand(text); ok {
 				if strings.HasPrefix(cmd.Name, "skill:") {
-					expanded, err := skills.Invoke(r.skills, strings.TrimPrefix(cmd.Name, "skill:"), cmd.Arg)
+					name := strings.TrimPrefix(cmd.Name, "skill:")
+					expanded, err := skills.Invoke(r.skills, name, cmd.Arg)
 					if err != nil {
 						print("error: " + err.Error())
 						console.Draw()
 					} else {
-						start(expanded, "", false)
+						// P2-043, P2-054: expanded input + visible invocation provenance, one user entry.
+						invocation := "/skill:" + name
+						if strings.TrimSpace(cmd.Arg) != "" {
+							invocation += " " + cmd.Arg
+						}
+						startProvenance(expanded, invocation, "skill", false)
 					}
 					continue
 				}

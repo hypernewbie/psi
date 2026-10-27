@@ -95,8 +95,59 @@ func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
 	if err := l.syncConfiguration(proj, cfg); err != nil {
 		return err
 	}
-	if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
+	uid, err := l.store.AppendMessage(userMsg(text))
+	if err != nil {
 		return fmt.Errorf("storage failure, stopping: %w", err)
+	}
+	_ = uid
+	return l.run(ctx, cfg)
+}
+
+// SubmitWithProvenance stores the expanded user input plus visible invocation provenance (P2-043, P2-054).
+// Ordering: user message, then psi.input custom entry (target -> invocation), then provider request.
+// Provenance is state-only (type "custom"), so model context is unchanged (pi ignores "custom").
+func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, source string, cfg Config) error {
+	if err := l.begin(); err != nil {
+		return err
+	}
+	defer l.end()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("empty submission rejected")
+	}
+	proj, err := l.store.Projection()
+	if err != nil {
+		return err
+	}
+	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+		return err
+	}
+	if missing := session.UnresolvedToolCalls(session.ConvertToLLM(proj.Flat)); len(missing) > 0 {
+		return fmt.Errorf("unresolved tool calls from interrupted session (%d); start a new session or recover a copy before continuing", len(missing))
+	}
+	if cfg.Thinking == "" {
+		cfg.Thinking = "off"
+	}
+	request, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.BuildRequest(request); err != nil {
+		return err
+	}
+	if err := l.syncConfiguration(proj, cfg); err != nil {
+		return err
+	}
+	uid, err := l.store.AppendMessage(userMsg(text))
+	if err != nil {
+		return fmt.Errorf("storage failure, stopping: %w", err)
+	}
+	if invocation != "" {
+		if _, err := l.store.AppendProvenance(uid, invocation, source); err != nil {
+			return fmt.Errorf("storage failure, stopping: %w", err)
+		}
 	}
 	return l.run(ctx, cfg)
 }
@@ -178,9 +229,26 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		resp, err := l.prov.Send(ctx, req, func(s string) { l.sink(event.Event{Type: event.TextDelta, Text: s}) })
+		// Completion barrier (P2-014, P2-055): track streamed prefix for reconciliation.
+		// Transient deltas vs durable completion are distinct; final is authoritative.
+		var streamed strings.Builder
+		resp, err := l.prov.Send(ctx, req, func(s string) {
+			streamed.WriteString(s)
+			l.sink(event.Event{Type: event.TextDelta, Text: s, Outcome: event.OutcomeTransient})
+		})
 		if err != nil {
 			if ctx.Err() != nil {
+				// P2-056, P2-058: persist supported aborted form for visible partial text when possible.
+				// Never label partial args as executable; mark unstarted as unstarted via no tool execution.
+				if streamed.Len() > 0 {
+					partial := session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+						Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: streamed.String()}}},
+						API: cfg.Model.API, Provider: cfg.Model.ProviderID(), Model: cfg.Model.ID,
+						StopReason: "aborted", Timestamp: time.Now().UnixMilli()}}
+					if _, aerr := l.store.AppendMessage(partial); aerr != nil {
+						return fmt.Errorf("storage failure, stopping: %w (unsaved partial text %d bytes)", aerr, streamed.Len())
+					}
+				}
 				return ctx.Err()
 			}
 			return fmt.Errorf("provider: %w", err)
@@ -188,9 +256,21 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 		if resp == nil {
 			return fmt.Errorf("provider returned no completed message")
 		}
-		if _, err := l.store.AppendMessage(toSessionAssistant(resp, cfg)); err != nil {
-			return fmt.Errorf("storage failure, stopping: %w", err)
+		// Reconcile final authoritative text with streamed prefix (P2-030).
+		// If final extends prefix, terminal already shows prefix; caller appends suffix via events?
+		// Our sink already emitted deltas; store persists complete message once.
+		// If final contradicts prefix, report protocol failure rather than rewriting scrollback.
+		if streamed.Len() > 0 && resp.Text != "" && !strings.HasPrefix(resp.Text, streamed.String()) && !strings.HasPrefix(streamed.String(), resp.Text) {
+			// Contradiction: neither is a prefix of the other. Persist authoritative, report failure.
+			if _, err := l.store.AppendMessage(toSessionAssistant(resp, cfg)); err != nil {
+				return fmt.Errorf("storage failure, stopping: %w", err)
+			}
+			return fmt.Errorf("protocol failure: streamed text contradicts final message (persisted authoritative)")
 		}
+		if _, err := l.store.AppendMessage(toSessionAssistant(resp, cfg)); err != nil {
+			return fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
+		}
+		// Settlement barrier: persistence precedes RunEnd (deferred) and next prompt (P2-014).
 		if resp.StopReason == "error" || resp.StopReason == "aborted" {
 			return fmt.Errorf("provider stopped: %s", resp.StopReason)
 		}
