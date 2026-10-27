@@ -25,6 +25,8 @@ type Editor struct {
 	draftPos       int
 	prefCol        int // sticky visual column, -1 when inactive
 	rejectedInsert bool
+	// rejectedRecall signals a skipped oversized recall entry (F11).
+	rejectedRecall bool
 }
 
 func NewEditor() *Editor { return &Editor{histIdx: -1, prefCol: -1} }
@@ -85,14 +87,32 @@ func (e *Editor) Clear() {
 }
 
 // SetHistory replaces recall history (session-scoped, up to 200, oldest first).
+// Every entry passes the same whole-draft admission as insertion (F11):
+// oversized entries are skipped, never silently cut, with a bounded notice.
 func (e *Editor) SetHistory(h []string) {
 	if len(h) > maxHistory {
 		h = h[len(h)-maxHistory:]
 	}
-	e.history = append([]string(nil), h...)
+	kept := make([]string, 0, len(h))
+	for _, s := range h {
+		n := normalizeRecall(s)
+		if len(n) > editorBudget {
+			e.rejectedRecall = true
+			continue
+		}
+		kept = append(kept, n)
+	}
+	e.history = kept
 	e.histIdx = -1
 	e.draft, e.draftPos = "", 0
 	e.prefCol = -1
+}
+
+// normalizeRecall applies insertion normalization to recalled drafts so the
+// budget check matches what Insert would enforce.
+func normalizeRecall(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
 }
 
 // History returns a copy of recall history.
@@ -339,63 +359,62 @@ func (e *Editor) DeleteToLineEnd() {
 }
 
 // wordBackward ports pi findWordBackward (simplified, uniseg words).
+// It segments the prefix once and walks grapheme boundaries: the previous
+// repeated full-prefix scans were quadratic in word length (F09).
 func wordBackward(s string, off int) int {
 	if off <= 0 {
 		return 0
 	}
 	prefix := s[:off]
+	// Single segmentation pass collecting grapheme start offsets.
+	gr := uniseg.NewGraphemes(prefix)
+	starts := []int{0}
+	graphemes := []string{}
+	for gr.Next() {
+		start, _ := gr.Positions()
+		graphemes = append(graphemes, string(gr.Str()))
+		starts = append(starts, start+len(gr.Str()))
+	}
+	if len(graphemes) == 0 {
+		return 0
+	}
 	// Walk back: skip trailing whitespace, then one word/punct run.
-	i := len(prefix)
-	// skip whitespace
+	i := len(graphemes)
 	for i > 0 {
-		// last grapheme
-		g := lastGrapheme(prefix[:i])
+		g := graphemes[i-1]
 		if strings.TrimSpace(g) != "" {
 			break
 		}
-		i -= len(g)
+		i--
 	}
 	if i <= 0 {
 		return 0
 	}
-	// Determine class of last unit.
-	last := lastGrapheme(prefix[:i])
+	last := graphemes[i-1]
+	lastEnd := starts[i]
 	isWord := _isWordLike(last)
 	for i > 0 {
-		g := lastGrapheme(prefix[:i])
+		g := graphemes[i-1]
 		if strings.TrimSpace(g) == "" {
 			break
 		}
 		if _isWordLike(g) != isWord {
 			break
 		}
-		// ASCII punctuation boundary inside word-like (pi PUNCTUATION handling): stop at punctuation.
-		if isWord && isPunct(g) && i != len(prefix)-len(last) {
-			// keep punctuation groups together: continue while punct
+		if isWord && isPunct(g) && starts[i] != lastEnd-len(last) {
 			if !isPunct(last) {
 				break
 			}
 		}
-		i -= len(g)
+		i--
 		if !isWord {
-			// consume whole punct run
 			continue
 		}
-		// consume whole word run: continue while word-like non-punct
 		if isPunct(g) {
 			break
 		}
 	}
-	return i
-}
-
-func lastGrapheme(s string) string {
-	var last string
-	gr := uniseg.NewGraphemes(s)
-	for gr.Next() {
-		last = string(gr.Str())
-	}
-	return last
+	return starts[i]
 }
 
 func _isWordLike(s string) bool {
@@ -429,6 +448,20 @@ func (e *Editor) PrevHistory() {
 	} else if e.histIdx > 0 {
 		e.histIdx--
 	}
+	// Skip oversized entries without installing them (F11).
+	for e.histIdx >= 0 && len(e.history[e.histIdx]) > editorBudget {
+		e.rejectedRecall = true
+		if e.histIdx == 0 {
+			e.histIdx = -1
+			e.buf = []rune(e.draft)
+			e.pos = e.draftPos
+			return
+		}
+		e.histIdx--
+	}
+	if e.histIdx == -1 {
+		return
+	}
 	e.buf = []rune(e.history[e.histIdx])
 	e.pos = len(e.buf)
 }
@@ -446,6 +479,20 @@ func (e *Editor) NextHistory() {
 		}
 	} else {
 		e.histIdx++
+		// Skip oversized entries without installing them (F11).
+		for e.histIdx < len(e.history) && len(e.history[e.histIdx]) > editorBudget {
+			e.rejectedRecall = true
+			e.histIdx++
+		}
+		if e.histIdx >= len(e.history) {
+			e.histIdx = -1
+			e.buf = []rune(e.draft)
+			e.pos = e.draftPos
+			if e.pos > len(e.buf) {
+				e.pos = len(e.buf)
+			}
+			return
+		}
 		e.buf = []rune(e.history[e.histIdx])
 		e.pos = len(e.buf)
 	}

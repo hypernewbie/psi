@@ -107,3 +107,27 @@ var ForbiddenSequences = []string{
 	"\x1b[?1000h", "\x1b[?1002h", "\x1b[?1006h",
 	"\x1b]1337;", "\x1b]136976;", "\x1b[?2026h",
 }
+
+// SanitizeStatusRow collapses untrusted single-row labels (F10): tool names
+// arrive from provider-supplied calls before enablement checks, so a newline
+// bearing name must never become extra physical rows. Transcript
+// sanitization is untouched: this applies only at the status boundary.
+// Tabs, CR, and LF fold to spaces; remaining C0/C1 and bidi controls drop;
+// ANSI/OSC/DCS/C1 sequences never pass through.
+func SanitizeStatusRow(s string) string {
+	s = Sanitize(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\n', '\r', '\t':
+			b.WriteByte(' ')
+		default:
+			if r < 0x20 || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) {
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}

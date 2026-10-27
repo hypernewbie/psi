@@ -290,6 +290,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.drawIfChanged(false)
 		} else {
 			c.Editor.PrevHistory()
+			c.recallLimit()
 			c.drawIfChanged(false)
 		}
 		return "", false, false, false
@@ -298,15 +299,18 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.drawIfChanged(false)
 		} else {
 			c.Editor.NextHistory()
+			c.recallLimit()
 			c.drawIfChanged(false)
 		}
 		return "", false, false, false
 	} else if len(input.Key) == 1 && input.Key[0] == 16 { // Ctrl+P
 		c.Editor.PrevHistory()
+		c.recallLimit()
 		c.drawIfChanged(false)
 		return "", false, false, false
 	} else if len(input.Key) == 1 && input.Key[0] == 14 { // Ctrl+N
 		c.Editor.NextHistory()
+		c.recallLimit()
 		c.drawIfChanged(false)
 		return "", false, false, false
 	}
@@ -355,6 +359,15 @@ func (c *Console) complete() {
 		_, _ = c.Write([]byte("Candidates: " + strings.Join(bounded(cands, 10), " ") + "\r\n"))
 		c.Draw()
 	}
+}
+
+// recallLimit surfaces a skipped oversized recall entry once (F11).
+func (c *Console) recallLimit() {
+	if !c.Editor.rejectedRecall {
+		return
+	}
+	c.Editor.rejectedRecall = false
+	c.inputLimit()
 }
 
 func (c *Console) inputLimit() {
@@ -430,7 +443,7 @@ func (c *Console) Flush() {
 // Status is an owned transient row, replaced by the eventual settled output.
 func (c *Console) Status(text string) {
 	w, _ := c.size()
-	rows := []string{TruncateToWidth(Sanitize(text), max(1, w-1))}
+	rows := []string{TruncateToWidth(SanitizeStatusRow(text), max(1, w-1))}
 	_ = c.emit(Frame{Tail: rows, HideCursor: true})
 	c.hidden = true
 	c.visibleTail = rows
