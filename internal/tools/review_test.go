@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -55,6 +56,33 @@ func TestReviewDrainGraceStartsAtLeaderExit(t *testing.T) {
 	}})
 	if res.IsError || !strings.Contains(res.Content[0].Text, "after-exit") {
 		t.Fatalf("quiet leader consumed descendant drain grace: %+v", res)
+	}
+}
+
+func TestReviewEscapedQuietPipeCannotHoldReader(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid unavailable for inherited-pipe fixture")
+	}
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan Result, 1)
+	go func() {
+		done <- NewRegistry(dir).DispatchCtx(ctx, Invocation{Name: Bash, Arguments: map[string]any{
+			"command": "setsid bash -c 'echo $$ > escaped.pid; sleep 30' &",
+		}})
+	}()
+	pid := reviewWaitPID(t, filepath.Join(dir, "escaped.pid"))
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	select {
+	case res := <-done:
+		if res.IsError {
+			t.Fatalf("quiet inherited pipe changed the leader status: %+v", res)
+		}
+	case <-time.After(time.Second):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		<-done
+		t.Fatal("pipe reader waited for an escaped descendant after idle drain")
 	}
 }
 

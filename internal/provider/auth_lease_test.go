@@ -266,13 +266,23 @@ func TestF02HeartbeatKeepsLeaseFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	time.Sleep(300 * time.Millisecond)
-	st, err := os.Stat(lock)
+	before, err := os.Stat(lock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if time.Since(st.ModTime()) > time.Minute {
-		t.Fatalf("heartbeat did not refresh mtime: %v", st.ModTime())
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		st, err := os.Stat(lock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.ModTime().After(before.ModTime()) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("heartbeat never advanced the lease timestamp")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if !valid() {
 		t.Fatal("held lease reports invalid")
