@@ -49,8 +49,8 @@ Additional storage rules:
 
 | Area | Supported | Boundary |
 |---|---|---|
-| `defaultProvider`, `defaultModel` | locally configured, `anthropic` only in M3 | reject other families with actionable error |
-| `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` mapped for Anthropic | explicit mapping, no silent substitution |
+| `defaultProvider`, `defaultModel` | `anthropic` and `openai-codex` | reject unsupported families without changing defaults |
+| `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic token budgets; Codex effort and `thinkingLevelMap` |
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | `read,bash,edit,write` with replacement and `+`/`-` | four tools only |
 | `skills` | `skills`, `enableSkillCommands` selector + path subset | instructions only, no install/run at discovery |
@@ -58,8 +58,8 @@ Additional storage rules:
 | `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |
 | `network` | idle timeout + bounded retries | one HTTP transport |
 | instructions | `AGENTS.override.md`, `AGENTS.md`, fallbacks, `SYSTEM.md`, `APPEND_SYSTEM.md` | documented discovery + consent |
-| `models.json` | endpoint + model metadata for Anthropic | no catalog refresh |
-| auth | existing `auth.json` API-key entries + env refs | no credential-command execution |
+| `models.json` | endpoints, model metadata and overrides for supported providers | small bundled catalog; no catalog refresh |
+| auth | Anthropic API keys; existing Codex OAuth login and refresh | no login UI or credential-command execution |
 | startup | `quietStartup` | no dynamic renderer |
 | terminal | always inline | ignore fullscreen/rich preferences |
 
@@ -68,9 +68,17 @@ Unknown harmless UI prefs need no per-key warning.
 
 ## Provider
 
-- First and only release provider: **Anthropic Messages API** (`https://api.anthropic.com/v1/messages`, SSE).
-- Auth: existing `auth.json` API-key entry, then a configured model credential, then `ANTHROPIC_API_KEY`. Subscription OAuth refresh is not implemented. An existing OAuth entry refuses API-key fallback.
-- Translates normalized Pi context → Anthropic protocol; preserves reasoning signatures and replay metadata; stops on unsupported content instead of dropping it.
+- **Anthropic Messages API** (`https://api.anthropic.com/v1/messages`, SSE).
+  Auth: existing `auth.json` API-key entry, then a configured model credential,
+  then `ANTHROPIC_API_KEY`. Anthropic subscription OAuth is not implemented;
+  an existing OAuth entry refuses API-key fallback.
+- **ChatGPT Codex Responses** (`https://chatgpt.com/backend-api/codex/responses`, SSE).
+  Uses the existing `auth.json` `openai-codex` OAuth entry. Refresh preserves other
+  credentials and unknown fields under a Pi-compatible directory lock. No fallback
+  to `OPENAI_API_KEY`. Login remains a Pi operation.
+- Translates normalized Pi context to each protocol. Preserves Anthropic thinking
+  signatures and Codex encrypted reasoning, text IDs/phases, and tool item/call
+  IDs. Session records retain the selected provider/API, not hardcoded Anthropic.
 - Bounded retries, server `retry-after` honored within cap; no retry of completed tool side effects; partial streams are not invisible retries.
 - Usage: report provider usage + catalog estimate separately; never present unknown price as `$0.00`.
 
@@ -110,7 +118,9 @@ never loads or reruns the extension.
 ## Fixture and source rules
 
 - Only synthetic or operator-approved sanitized sessions in tests; fixtures can be inline or under `internal/**/testdata/`.
-- No credentials, private paths, private file contents, or private prompts.
+- No real credentials, private paths, private file contents, or private prompts.
+- Regression subprocesses use temporary homes and an allowlisted environment;
+  they do not inherit operator secrets, Pi paths, or live-test opt-in flags.
 - Preserve upstream license notices for copied/adapted source or fixtures.
 - Never mutate `temp/pi-mono/`; never require ignored files at build/runtime.
 
@@ -118,7 +128,10 @@ never loads or reruns the extension.
 
 The offline suite includes a real app subprocess in a PTY against a local HTTP
 server. It covers prompt/configuration wiring, stored credentials, skill
-submission, session replacement, and cancellation. The optional
+submission, session replacement, and cancellation. A synthetic Codex OAuth
+workflow checks a complete model/tool/model round trip and encrypted replay.
+OAuth refresh, rotation, cancellation, and concurrent access use dummy tokens
+and local HTTP servers. The optional
 `PSI_PI_SESSION_MODULE` test compares a Go-continued synthetic session against
 an actual Pi context projector. A JSON-shape test alone is not evidence of
 complete Pi interchange.

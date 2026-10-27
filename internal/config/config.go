@@ -543,16 +543,17 @@ func RedactCredential(s string) string {
 
 // ModelMeta follows Pi's provider.models[] shape, not a private top-level catalog.
 type ModelMeta struct {
-	ID            string            `json:"id"`
-	API           string            `json:"api"`
-	BaseURL       string            `json:"baseUrl"`
-	ContextWindow int               `json:"contextWindow"`
-	MaxTokens     int               `json:"maxTokens"`
-	Reasoning     bool              `json:"reasoning"`
-	Input         []string          `json:"input"`
-	Headers       map[string]string `json:"headers"`
-	InputImage    bool              `json:"-"`
-	APIKey        string            `json:"-"`
+	ID               string             `json:"id"`
+	API              string             `json:"api"`
+	BaseURL          string             `json:"baseUrl"`
+	ContextWindow    int                `json:"contextWindow"`
+	MaxTokens        int                `json:"maxTokens"`
+	Reasoning        bool               `json:"reasoning"`
+	Input            []string           `json:"input"`
+	Headers          map[string]string  `json:"headers"`
+	InputImage       bool               `json:"-"`
+	APIKey           string             `json:"-"`
+	ThinkingLevelMap map[string]*string `json:"thinkingLevelMap"`
 }
 
 type ModelsFile struct {
@@ -584,16 +585,24 @@ func LoadModels(path string) (*ModelsFile, error) {
 }
 
 // SelectModel resolves only the active provider. Unrelated Pi provider entries
-// can remain in the shared file without preventing Anthropic use.
+// can remain in the shared file without preventing supported providers' use.
 func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
-	if provider != "anthropic" {
-		return ModelMeta{}, fmt.Errorf("unsupported provider %q: only anthropic is available", provider)
+	var m ModelMeta
+	var known bool
+	switch provider {
+	case "anthropic":
+		if id == "" {
+			id = "claude-sonnet-4-5"
+		}
+		m = ModelMeta{ID: id, API: "anthropic-messages", ContextWindow: 200000, MaxTokens: 16384, Reasoning: true, InputImage: true}
+		known = id == "claude-sonnet-4-5" || id == "claude-haiku-4-5" || id == "claude-opus-4-1" || id == "claude-sonnet-4-0" || id == "claude-opus-4-0"
+	case "openai-codex":
+		m, known = codexModel(id)
+		id = m.ID
+	default:
+		return ModelMeta{}, fmt.Errorf("unsupported provider %q: available providers are anthropic and openai-codex", provider)
 	}
-	if id == "" {
-		id = "claude-sonnet-4-5"
-	}
-	m := ModelMeta{ID: id, API: "anthropic-messages", ContextWindow: 200000, MaxTokens: 16384, Reasoning: true, InputImage: true}
-	known := id == "claude-sonnet-4-5" || id == "claude-haiku-4-5" || id == "claude-opus-4-1" || id == "claude-sonnet-4-0" || id == "claude-opus-4-0"
+	expectedAPI := m.API
 	p := mf.Providers[provider]
 	for _, configured := range p.Models {
 		if configured.ID == id {
@@ -604,7 +613,7 @@ func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
 		}
 	}
 	if !known {
-		return ModelMeta{}, fmt.Errorf("model %q needs explicit metadata in models.json providers.anthropic.models", id)
+		return ModelMeta{}, fmt.Errorf("model %q needs explicit metadata in models.json providers.%s.models", id, provider)
 	}
 	if override, ok := p.ModelOverrides[id]; ok {
 		if err := json.Unmarshal(override, &m); err != nil {
@@ -618,10 +627,10 @@ func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
 		m.API = p.API
 	}
 	if m.API == "" {
-		m.API = "anthropic-messages"
+		m.API = expectedAPI
 	}
-	if p.API != "" && p.API != "anthropic-messages" || m.API != "anthropic-messages" {
-		return ModelMeta{}, fmt.Errorf("unsupported API: only anthropic-messages is available")
+	if p.API != "" && p.API != expectedAPI || m.API != expectedAPI {
+		return ModelMeta{}, fmt.Errorf("provider %q requires API %q", provider, expectedAPI)
 	}
 	if m.ContextWindow <= 0 {
 		m.ContextWindow = 128000

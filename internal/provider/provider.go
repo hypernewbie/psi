@@ -1,8 +1,4 @@
-// Package provider implements one provider path completely (Phase 6).
-//
-// First and only release provider: Anthropic Messages API over HTTP+SSE.
-// Reference: temp/pi-mono/packages/ai/src/api/anthropic-messages.ts and
-// packages/ai/src/providers/anthropic.ts at pinned revision d5b3de2.
+// Package provider implements the Anthropic Messages and ChatGPT Codex SSE paths.
 package provider
 
 import (
@@ -38,12 +34,14 @@ func ThinkingBudget(level string) (int, error) {
 
 // Metadata for the selected model (from models.json subset).
 type ModelMeta struct {
-	ID            string
-	API           string // must be anthropic-messages when set
-	ContextWindow int
-	MaxTokens     int
-	Reasoning     bool
-	InputImage    bool
+	ID               string
+	API              string // anthropic-messages or openai-codex-responses
+	Provider         string
+	ContextWindow    int
+	MaxTokens        int
+	Reasoning        bool
+	InputImage       bool
+	ThinkingLevelMap map[string]*string
 }
 
 // Request is the normalized provider request (Pi context + active tools).
@@ -59,16 +57,19 @@ type Request struct {
 // Message is a normalized Pi message (system/user/assistant/toolResult only;
 // ConvertToLLM output).
 type Message struct {
-	Role       string
-	Content    []Block
-	ToolCallID string
-	ToolName   string
-	IsError    bool
+	Role                 string
+	Content              []Block
+	ToolCallID           string
+	ToolName             string
+	IsError              bool
+	Provider, API, Model string // source of opaque assistant replay metadata
 }
 
 type Block struct {
-	Type string // text|image|toolCall|thinking
-	Text string
+	Type          string // text|image|toolCall|thinking
+	Text          string
+	TextSignature string
+	Namespace     string
 	// Image.
 	Data     string
 	MimeType string
@@ -109,6 +110,29 @@ type Usage struct {
 	CacheRead   int64
 	CacheWrite  int64
 	TotalTokens int64
+}
+
+// ProviderID returns the session provider name, including for callers that
+// predate explicit provider metadata.
+func (m ModelMeta) ProviderID() string {
+	if m.Provider != "" {
+		return m.Provider
+	}
+	if m.API == "openai-codex-responses" {
+		return "openai-codex"
+	}
+	return "anthropic"
+}
+
+func BuildRequest(req Request) (map[string]any, error) {
+	switch req.Model.API {
+	case "", "anthropic-messages":
+		return BuildAnthropicRequest(req)
+	case "openai-codex-responses":
+		return BuildCodexRequest(req)
+	default:
+		return nil, fmt.Errorf("unsupported provider API %q", req.Model.API)
+	}
 }
 
 // Provider streams text deltas and returns one completed message.

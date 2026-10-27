@@ -19,7 +19,12 @@ go build -o psi ./cmd/psi
 ./psi --resume
 ```
 
-Authentication (Anthropic Messages, API key):
+Psi reads your provider/model defaults and credentials from Pi's agent directory.
+For `openai-codex`, it uses your existing ChatGPT OAuth login and refreshes it when
+needed. Log in through Pi (`/login openai-codex`) first; psi has no login UI.
+It does not fall back to a separately billed OpenAI API key.
+
+Anthropic Messages also supports API keys:
 
 ```sh
 export ANTHROPIC_API_KEY="..."
@@ -38,7 +43,9 @@ on first use per run (`--allow-project` / `--deny-project` or interactive prompt
 
 Runs `gofmt`, `go vet`, `go test ./...`, and `go test -race ./...`.
 Live provider tests are opt-in: `PSI_LIVE_PROVIDER=1 go test -run Live ./...`.
-The normal suite uses a local HTTP server and a real PTY to exercise the app.
+The normal suite uses local HTTP servers and real PTYs to exercise both providers.
+Regression fixtures are synthetic. Test subprocesses have a temporary HOME and an
+allowlisted environment; they do not inherit your credentials or Pi configuration.
 
 An optional differential test uses a real Pi session reader:
 
@@ -56,7 +63,7 @@ cmd/psi/          entrypoint
 internal/session/ Pi v3 JSONL storage, indexing, projection
 internal/config/  settings, models.json, auth, instructions
 internal/skills/  skill discovery and invocation
-internal/provider/ Anthropic Messages adapter + fake for tests
+internal/provider/ Anthropic and ChatGPT Codex adapters + fake for tests
 internal/tools/   read, write, edit, bash
 internal/agent/   run-at-a-time model/tool loop
 internal/terminal/ inline terminal, prompt, status, cleanup
@@ -69,5 +76,5 @@ internal/testutil/ fake provider, temp HOME, fixtures
 - Interactive inline terminal only (main screen, native scrollback).
 - Four tools: `read`, `write`, `edit`, `bash`.
 - Pi-compatible v3 sessions (read/write/append/projection).
-- One provider: Anthropic Messages API.
+- Providers: Anthropic Messages and ChatGPT Codex Responses over HTTP/SSE.
 - No extensions, MCP, subagents, RPC, themes, or update checks.

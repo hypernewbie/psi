@@ -69,11 +69,15 @@ func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*R
 	if err != nil {
 		return nil, err
 	}
+	return sendWithRetry(ctx, c.MaxRetry, func() (*Response, error) { return c.doOnce(ctx, raw, onText, req) })
+}
+
+func sendWithRetry(ctx context.Context, maxRetry int, send func() (*Response, error)) (*Response, error) {
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		resp, err := c.doOnce(ctx, raw, onText, req)
+		resp, err := send()
 		if err == nil {
 			return resp, nil
 		}
@@ -81,7 +85,7 @@ func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*R
 			return nil, ctx.Err()
 		}
 		var pe *ProviderError
-		if !errors.As(err, &pe) || (pe.Kind != ErrRateLimit && pe.Kind != ErrTransport) || attempt >= c.MaxRetry {
+		if !errors.As(err, &pe) || (pe.Kind != ErrRateLimit && pe.Kind != ErrTransport) || attempt >= maxRetry {
 			return nil, err
 		}
 		delay := pe.RetryAfter

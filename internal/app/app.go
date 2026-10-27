@@ -42,7 +42,7 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.Continue, "continue", false, "continue most recent session")
 	fs.BoolVar(&o.Resume, "resume", false, "resume with selection")
 	fs.StringVar(&o.SessionPath, "session", "", "open explicit session path")
-	fs.StringVar(&o.Provider, "provider", "", "provider (anthropic)")
+	fs.StringVar(&o.Provider, "provider", "", "provider (anthropic, openai-codex)")
 	fs.StringVar(&o.Model, "model", "", "model ID")
 	fs.StringVar(&o.Thinking, "thinking", "", "thinking level")
 	fs.StringVar(&o.SessionDir, "session-dir", "", "session directory")
@@ -197,30 +197,49 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	if ov.Thinking == "" {
 		ov.Thinking = "off"
 	}
-	pm := provider.ModelMeta{ID: meta.ID, API: meta.API, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage}
+	pm := provider.ModelMeta{ID: meta.ID, API: meta.API, Provider: ov.Provider, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap}
 	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt,
 		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveTokens, KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
-	if _, err := provider.BuildAnthropicRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
+	if _, err := provider.BuildRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
 		return err
 	}
-	env := envMap()
-	if meta.APIKey != "" {
-		key, err := config.ResolveCredential(meta.APIKey)
-		if err != nil {
-			return err
-		}
-		env["ANTHROPIC_API_KEY"] = key
-	}
-	key, _, authErr := provider.SelectAPIKey(env, filepath.Join(r.agentDir, "auth.json"))
-	client := provider.NewClient(meta.BaseURL, key, r.settings.MaxRetries, time.Duration(max(r.settings.HTTPIdleTimeoutMs, 0))*time.Millisecond)
-	client.Headers = map[string]string{}
+	headers := map[string]string{}
 	for name, value := range meta.Headers {
 		resolved, err := config.ResolveCredential(value)
 		if err != nil {
-			client.CloseIdle()
 			return fmt.Errorf("provider header %s: %w", name, err)
 		}
-		client.Headers[name] = resolved
+		headers[name] = resolved
+	}
+	authPath := filepath.Join(r.agentDir, "auth.json")
+	idle := time.Duration(max(r.settings.HTTPIdleTimeoutMs, 0)) * time.Millisecond
+	var client provider.Provider
+	var authErr error
+	switch meta.API {
+	case "openai-codex-responses":
+		if meta.APIKey != "" {
+			return fmt.Errorf("openai-codex uses the OAuth login in auth.json, not models.json API keys")
+		}
+		codex := provider.NewCodexClient(meta.BaseURL, authPath, r.settings.MaxRetries, idle)
+		codex.Headers, codex.SessionID = headers, r.store.Header().ID
+		authErr = codex.Auth.Check()
+		client = codex
+	case "anthropic-messages":
+		env := envMap()
+		if meta.APIKey != "" {
+			key, err := config.ResolveCredential(meta.APIKey)
+			if err != nil {
+				return err
+			}
+			env["ANTHROPIC_API_KEY"] = key
+		}
+		key, _, err := provider.SelectAPIKey(env, authPath)
+		authErr = err
+		anthropic := provider.NewClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
+		anthropic.Headers = headers
+		client = anthropic
+	default:
+		return fmt.Errorf("unsupported provider API %q", meta.API)
 	}
 	if r.prov != nil {
 		r.prov.CloseIdle()

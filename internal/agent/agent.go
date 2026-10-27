@@ -89,7 +89,7 @@ func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if _, err := provider.BuildAnthropicRequest(request); err != nil {
+	if _, err := provider.BuildRequest(request); err != nil {
 		return err
 	}
 	if err := l.syncConfiguration(proj, cfg); err != nil {
@@ -133,8 +133,8 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 			return err
 		}
 	}
-	if proj.State.Provider != "anthropic" || proj.State.ModelID != cfg.Model.ID {
-		if _, err := l.store.AppendModelChange("anthropic", cfg.Model.ID); err != nil {
+	if proj.State.Provider != cfg.Model.ProviderID() || proj.State.ModelID != cfg.Model.ID {
+		if _, err := l.store.AppendModelChange(cfg.Model.ProviderID(), cfg.Model.ID); err != nil {
 			return err
 		}
 	}
@@ -226,7 +226,11 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 			for _, b := range m.Assistant.Content {
 				switch b.Type {
 				case "text":
-					blocks = append(blocks, provider.Block{Type: "text", Text: b.Text.Text})
+					sig := ""
+					if b.Text.TextSignature != nil {
+						sig = *b.Text.TextSignature
+					}
+					blocks = append(blocks, provider.Block{Type: "text", Text: b.Text.Text, TextSignature: sig})
 				case "thinking":
 					sig := ""
 					if b.Thinking.ThinkingSignature != nil {
@@ -234,12 +238,16 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 					}
 					blocks = append(blocks, provider.Block{Type: "thinking", Thinking: b.Thinking.Thinking, ThinkingSignature: sig, Redacted: b.Thinking.Redacted != nil && *b.Thinking.Redacted})
 				case "toolCall":
-					blocks = append(blocks, provider.Block{Type: "toolCall", ID: b.Call.ID, Name: b.Call.Name, Arguments: b.Call.Arguments})
+					namespace := ""
+					if b.Call.Namespace != nil {
+						namespace = *b.Call.Namespace
+					}
+					blocks = append(blocks, provider.Block{Type: "toolCall", ID: b.Call.ID, Name: b.Call.Name, Arguments: b.Call.Arguments, Namespace: namespace})
 				default:
 					return provider.Request{}, fmt.Errorf("unsupported assistant block %q", b.Type)
 				}
 			}
-			msgs = append(msgs, provider.Message{Role: "assistant", Content: blocks})
+			msgs = append(msgs, provider.Message{Role: "assistant", Content: blocks, Provider: m.Assistant.Provider, API: m.Assistant.API, Model: m.Assistant.Model})
 		case "toolResult":
 			msgs = append(msgs, provider.Message{Role: "toolResult", ToolCallID: m.ToolResult.ToolCallID, ToolName: m.ToolResult.ToolName, IsError: m.ToolResult.IsError, Content: userBlocks(m.ToolResult.Content)})
 		default:
@@ -280,7 +288,12 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 	for _, b := range content {
 		switch b.Type {
 		case "text":
-			blocks = append(blocks, session.ContentBlock{Type: "text", Text: &session.TextContent{Type: "text", Text: b.Text}})
+			var signature *string
+			if b.TextSignature != "" {
+				sig := b.TextSignature
+				signature = &sig
+			}
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: &session.TextContent{Type: "text", Text: b.Text, TextSignature: signature}})
 		case "thinking":
 			var redacted *bool
 			if b.Redacted {
@@ -294,7 +307,12 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 			if args == nil {
 				args = map[string]any{}
 			}
-			blocks = append(blocks, session.ContentBlock{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: b.ID, Name: b.Name, Arguments: args}})
+			var namespace *string
+			if b.Namespace != "" {
+				ns := b.Namespace
+				namespace = &ns
+			}
+			blocks = append(blocks, session.ContentBlock{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: b.ID, Name: b.Name, Arguments: args, Namespace: namespace}})
 		}
 	}
 	stop := resp.StopReason
@@ -304,7 +322,11 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 			stop = "toolUse"
 		}
 	}
-	a := &session.AssistantMessage{Role: "assistant", Content: blocks, API: "anthropic-messages", Provider: "anthropic", Model: cfg.Model.ID,
+	api := cfg.Model.API
+	if api == "" {
+		api = "anthropic-messages"
+	}
+	a := &session.AssistantMessage{Role: "assistant", Content: blocks, API: api, Provider: cfg.Model.ProviderID(), Model: cfg.Model.ID,
 		Usage: session.Usage{Input: float64(resp.Usage.Input), Output: float64(resp.Usage.Output), CacheRead: float64(resp.Usage.CacheRead), CacheWrite: float64(resp.Usage.CacheWrite), TotalTokens: float64(resp.Usage.TotalTokens)}, StopReason: stop, Timestamp: time.Now().UnixMilli()}
 	if resp.ResponseID != "" {
 		id := resp.ResponseID

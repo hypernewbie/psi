@@ -103,6 +103,27 @@ func TestAppProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+// Use an allowlist instead of os.Environ: test subprocesses must not inherit
+// developer credentials, Pi directories, proxies, or live-test opt-in flags.
+func appTestEnv(home, agentDir string) []string {
+	return []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + home, "PI_CODING_AGENT_DIR=" + agentDir,
+		"PI_CODING_AGENT_SESSION_DIR=", "TERM=xterm", "LANG=C.UTF-8", "PSI_APP_TEST_PROCESS=1"}
+}
+
+func TestAppSubprocessEnvironmentIsIsolated(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "synthetic-parent-secret")
+	t.Setenv("ANTHROPIC_API_KEY", "synthetic-parent-secret")
+	t.Setenv("PI_CODING_AGENT_DIR", "/synthetic-parent-pi-directory")
+	t.Setenv("PSI_LIVE_PROVIDER", "1")
+	t.Setenv("HTTPS_PROXY", "http://synthetic-parent-proxy.invalid")
+	env := strings.Join(appTestEnv("/synthetic-home", "/synthetic-agent"), "\n")
+	for _, forbidden := range []string{"synthetic-parent", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "PSI_LIVE_PROVIDER", "HTTPS_PROXY"} {
+		if strings.Contains(env, forbidden) {
+			t.Fatal("test subprocess inherited a forbidden environment value")
+		}
+	}
+}
+
 func writeAppFile(t *testing.T, path, text string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -149,7 +170,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	writeAppFile(t, filepath.Join(agentDir, "skills", "doer", "SKILL.md"), "---\nname: doer\ndescription: >\n  Do important work.\n---\nSKILL_BODY\n")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAppProcess$")
 	cmd.Dir = ws
-	cmd.Env = append(os.Environ(), "PSI_APP_TEST_PROCESS=1", "HOME="+home, "PI_CODING_AGENT_DIR="+agentDir, "ANTHROPIC_API_KEY=", "PI_CODING_AGENT_SESSION_DIR=", "TERM=xterm")
+	cmd.Env = appTestEnv(home, agentDir)
 	master, err := pty.Start(cmd)
 	if err != nil {
 		t.Fatal(err)

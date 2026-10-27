@@ -14,9 +14,14 @@ paths do not provide isolation.
 
 Additional boundaries:
 
-- Authentication supports Anthropic API keys, not subscription OAuth refresh.
-- Reasoning uses budget-based Anthropic thinking. Adaptive-only model protocols
-  are not implemented. Unknown model IDs require explicit local metadata.
+- Authentication supports Anthropic API keys and existing ChatGPT Codex OAuth
+  logins with refresh. There is no login UI or Anthropic subscription OAuth.
+  Refresh of symlinked `auth.json` files must be done through Pi.
+- Anthropic reasoning uses token budgets, not adaptive-only model protocols.
+  Codex uses effort names and a small bundled model catalog. Unknown model IDs
+  require explicit local metadata.
+- Codex uses HTTP/SSE with full stateless replay, not websocket continuation.
+  Its backend does not accept a client-specified output-token cap.
 - Compaction uses an actual model-generated summary and safe user-message
   boundaries. A single oversized user span can fail without a safe boundary.
   Context estimates are approximate. There is no automatic overflow retry.
