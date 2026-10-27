@@ -43,11 +43,12 @@ Recall retains at most 200 prompts within a 4 MiB text budget.
 Persistent continuation resolves symlinks to one canonical writer-lock path.
 Hard-linked sessions permit read-only history but require a separate copy for persistent continuation.
 
-The unmodified pinned Pi reader and writer passed both continuation directions for both provider metadata forms.
+The unmodified pinned Pi reader and writer passed both continuation directions for both provider metadata forms (rerun after the PLAN3 storage/parser changes).
 The fixtures cover branches, context edits, compaction, signed reasoning, images, and state-only `psi.input` provenance.
 The acceptance ledger separates these results from unfinished user journeys.
 
 The editor uses `uniseg` for grapheme segmentation and width, with an explicit keycap-width correction.
+Word navigation treats a non-ASCII run as one word; Pi's ICU dictionary segments CJK ideograph runs further (18/19 differential parity, divergence pinned in `wordnav_test.go`). Usage alias-case keys are outside the F05 boundary: both readers fold them identically, while Pi ignores them. These are documented permanent port simplifications, not deferred work.
 Prompts and bracketed pastes have a 256 KiB UTF-8 budget.
 The terminal writer changes only its owned tail and uses writes of at most 64 KiB.
 Stream output coalesces at scheduled frames and flushes at semantic boundaries.

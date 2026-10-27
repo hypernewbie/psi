@@ -1328,14 +1328,18 @@ func (s *hscan) scanCost(c *UsageCost) error {
 		return fmt.Errorf("invalid cost")
 	}
 	s.i++
+	needPair := false
 	for {
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == '}' {
-			s.i++
-			return nil
-		}
 		if s.i >= len(s.b) {
 			return fmt.Errorf("unterminated cost")
+		}
+		if s.b[s.i] == '}' {
+			s.i++
+			if needPair {
+				return fmt.Errorf("trailing comma")
+			}
+			return nil
 		}
 		key, ok := s.scanKey()
 		if !ok {
@@ -1396,9 +1400,17 @@ func (s *hscan) scanCost(c *UsageCost) error {
 			}
 		}
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == ',' {
+		if s.i >= len(s.b) {
+			return fmt.Errorf("unterminated cost")
+		}
+		needPair = false
+		if s.b[s.i] == ',' {
 			s.i++
+			needPair = true
 			continue
+		}
+		if s.b[s.i] != '}' {
+			return fmt.Errorf("invalid cost")
 		}
 	}
 }
@@ -1415,15 +1427,20 @@ func (s *hscan) scanTarget() string {
 	}
 	s.i++
 	out := ""
+	needPair := false
 	for {
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == '}' {
-			s.i++
-			return out
-		}
 		if s.i >= len(s.b) {
 			s.err = fmt.Errorf("unterminated details")
 			return ""
+		}
+		if s.b[s.i] == '}' {
+			s.i++
+			if needPair {
+				s.err = fmt.Errorf("trailing comma")
+				return ""
+			}
+			return out
 		}
 		key, ok := s.scanKey()
 		if !ok {
@@ -1444,10 +1461,23 @@ func (s *hscan) scanTarget() string {
 		} else {
 			s.skipValue()
 		}
+		if s.err != nil {
+			return ""
+		}
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == ',' {
+		if s.i >= len(s.b) {
+			s.err = fmt.Errorf("unterminated details")
+			return ""
+		}
+		needPair = false
+		if s.b[s.i] == ',' {
 			s.i++
+			needPair = true
 			continue
+		}
+		if s.b[s.i] != '}' {
+			s.err = fmt.Errorf("invalid details")
+			return ""
 		}
 	}
 }
@@ -1462,14 +1492,18 @@ func (s *hscan) scanSystem() error {
 		return fmt.Errorf("invalid systemMessage")
 	}
 	s.i++
+	needPair := false
 	for {
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == '}' {
-			s.i++
-			return nil
-		}
 		if s.i >= len(s.b) {
 			return fmt.Errorf("unterminated systemMessage")
+		}
+		if s.b[s.i] == '}' {
+			s.i++
+			if needPair {
+				return fmt.Errorf("trailing comma")
+			}
+			return nil
 		}
 		key, ok := s.scanKey()
 		if !ok {
@@ -1493,41 +1527,8 @@ func (s *hscan) scanSystem() error {
 				return fmt.Errorf("invalid %q", key)
 			}
 		case "sections":
-			s.skipWS()
-			if s.i < len(s.b) && s.b[s.i] == 'n' && hasPrefix(s.b[s.i:], "null") {
-				s.i += 4
-				break
-			}
-			if s.i >= len(s.b) || s.b[s.i] != '{' {
-				return fmt.Errorf("invalid sections")
-			}
-			s.i++
-			for {
-				s.skipWS()
-				if s.i < len(s.b) && s.b[s.i] == '}' {
-					s.i++
-					break
-				}
-				if s.i >= len(s.b) {
-					return fmt.Errorf("unterminated sections")
-				}
-				if _, ok := s.scanKey(); !ok {
-					return s.err
-				}
-				if !s.expect(':') {
-					return s.err
-				}
-				s.skipWS()
-				if s.i < len(s.b) && s.b[s.i] == 'n' && hasPrefix(s.b[s.i:], "null") {
-					s.i += 4
-				} else {
-					if s.i >= len(s.b) || s.b[s.i] != '"' {
-						return fmt.Errorf("invalid section")
-					}
-					if _, ok := s.getString(); !ok {
-						return s.err
-					}
-				}
+			if err := s.scanSections(); err != nil {
+				return err
 			}
 		case "toolsAdded", "toolsRemoved":
 			if err := s.scanToolList(key == "toolsAdded"); err != nil {
@@ -1543,9 +1544,17 @@ func (s *hscan) scanSystem() error {
 			return s.err
 		}
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == ',' {
+		if s.i >= len(s.b) {
+			return fmt.Errorf("unterminated systemMessage")
+		}
+		needPair = false
+		if s.b[s.i] == ',' {
 			s.i++
+			needPair = true
 			continue
+		}
+		if s.b[s.i] != '}' {
+			return fmt.Errorf("invalid systemMessage")
 		}
 	}
 }
@@ -1560,24 +1569,35 @@ func (s *hscan) scanToolList(withDesc bool) error {
 		return fmt.Errorf("invalid tool list")
 	}
 	s.i++
+	needElement := false
 	for {
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == ']' {
+		if s.i >= len(s.b) {
+			return fmt.Errorf("unterminated tool list")
+		}
+		if s.b[s.i] == ']' {
 			s.i++
+			if needElement {
+				return fmt.Errorf("trailing comma")
+			}
 			return nil
 		}
-		if s.i >= len(s.b) || s.b[s.i] != '{' {
+		if s.b[s.i] != '{' {
 			return fmt.Errorf("invalid tool list")
 		}
 		s.i++
+		needPair := false
 		for {
 			s.skipWS()
-			if s.i < len(s.b) && s.b[s.i] == '}' {
-				s.i++
-				break
-			}
 			if s.i >= len(s.b) {
 				return fmt.Errorf("unterminated tool")
+			}
+			if s.b[s.i] == '}' {
+				s.i++
+				if needPair {
+					return fmt.Errorf("trailing comma")
+				}
+				break
 			}
 			name, ok := s.scanKey()
 			if !ok {
@@ -1619,15 +1639,31 @@ func (s *hscan) scanToolList(withDesc bool) error {
 				}
 			}
 			s.skipWS()
-			if s.i < len(s.b) && s.b[s.i] == ',' {
+			if s.i >= len(s.b) {
+				return fmt.Errorf("unterminated tool")
+			}
+			needPair = false
+			if s.b[s.i] == ',' {
 				s.i++
+				needPair = true
 				continue
+			}
+			if s.b[s.i] != '}' {
+				return fmt.Errorf("invalid tool")
 			}
 		}
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == ',' {
+		if s.i >= len(s.b) {
+			return fmt.Errorf("unterminated tool list")
+		}
+		needElement = false
+		if s.b[s.i] == ',' {
 			s.i++
+			needElement = true
 			continue
+		}
+		if s.b[s.i] != ']' {
+			return fmt.Errorf("invalid tool list")
 		}
 	}
 }
@@ -1642,14 +1678,18 @@ func (s *hscan) scanSections() error {
 		return fmt.Errorf("invalid sections")
 	}
 	s.i++
+	needPair := false
 	for {
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == '}' {
-			s.i++
-			return nil
-		}
 		if s.i >= len(s.b) {
 			return fmt.Errorf("unterminated sections")
+		}
+		if s.b[s.i] == '}' {
+			s.i++
+			if needPair {
+				return fmt.Errorf("trailing comma")
+			}
+			return nil
 		}
 		if _, ok := s.scanKey(); !ok {
 			return s.err
@@ -1669,9 +1709,17 @@ func (s *hscan) scanSections() error {
 			}
 		}
 		s.skipWS()
-		if s.i < len(s.b) && s.b[s.i] == ',' {
+		if s.i >= len(s.b) {
+			return fmt.Errorf("unterminated sections")
+		}
+		needPair = false
+		if s.b[s.i] == ',' {
 			s.i++
+			needPair = true
 			continue
+		}
+		if s.b[s.i] != '}' {
+			return fmt.Errorf("invalid sections")
 		}
 	}
 }
