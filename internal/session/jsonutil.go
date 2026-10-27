@@ -70,7 +70,7 @@ var messageKeys = map[string]bool{
 	"exitCode": true, "details": true, "command": true, "output": true, "truncated": true,
 	"fullOutputPath": true, "excludeFromContext": true, "customType": true, "display": true,
 	"summary": true, "fromId": true, "tokensBefore": true, "timestamp": true, "durationMs": true,
-	"deferred": true, "errorMessage": true, "rawStopReason": true, "endTurn": true,
+	"deferred": true, "stopReason": true, "errorMessage": true, "rawStopReason": true, "endTurn": true,
 	"sections": true, "toolsAdded": true, "toolsRemoved": true,
 }
 
@@ -88,7 +88,7 @@ var usageKeys = map[string]bool{
 
 var costKeys = map[string]bool{
 	"input": true, "output": true, "cacheRead": true, "cacheWrite": true,
-	"totalFromProvider": true,
+	"total": true, "totalFromProvider": true,
 }
 
 var objectKeys = map[string]bool{"targetId": true, "psiOutcome": true}

@@ -2,7 +2,7 @@ package session
 
 import (
 	"bytes"
-	"strings"
+	"reflect"
 	"testing"
 )
 
@@ -65,6 +65,14 @@ func FuzzExactKeysDifferential(f *testing.F) {
 		`{"type":"message","id":"a","id":"b","message":{"role":"user","content":"hi"}}`,
 		`{"type":"message","id":"t1","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","ID":"evil","name":"read","arguments":{}}]}}`,
 		`{"type":"message","id":"x","unknownField":{"a":[1,2]},"nothing":null,"message":{"role":"user","content":"hi"}}`,
+		`{"type":"session","version":3,"Version":99,"id":"h","ID":"alias","cwd":"/synthetic"}`,
+		`{"type":"message","id":"r","message":{"role":"toolResult","content":[{"type":"image","data":"eA==","mimeType":"image/png"}]}}`,
+		`{"type":"message","id":"a","message":{"role":"assistant","role":null,"content":null}}`,
+		`{"type":"message","id":"a","message":{"role":"assistant","usage":{"input":777,"input":null,"cost":{"total":2.5}}}}`,
+		`{"type":"custom","id":"p","customType":"psi.input","data":{"targetId":"user"},"details":{"targetId":"wrong"}}`,
+		`{"type":"compaction","id":"c","firstKeptEntryId":"u","summary":"synthetic","usage":{"input":3}}`,
+		`{"type":"message","id":"s","message":{"role":"system","sections":{"a":"x"},"toolsAdded":[{"name":"read","parameters":{}}]}}`,
+		`{"type":"message","id":"b","message":{"role":"bashExecution","cancelled":true,"exitCode":3}}`,
 	}
 	for _, s := range seeds {
 		f.Add([]byte(s))
@@ -73,92 +81,26 @@ func FuzzExactKeysDifferential(f *testing.F) {
 		if len(data) > 64*1024 {
 			return
 		}
-		// Line-aligned differential: each JSONL record through eager
-		// (UnmarshalEntry) and indexed (BuildIndexFrom metadata) paths.
-		// Blank lines are skipped by both; trailing partial lines count.
-		text := strings.ReplaceAll(string(data), "\r\n", "\n")
-		lines := strings.Split(text, "\n")
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
+		// Compare one complete record, including headers, acceptance, and
+		// every metadata field used by activation/accounting/display. The
+		// former identity-only comparison missed role and usage divergences.
+		full, eagerErr := UnmarshalFileEntry(data)
+		thin, header, indexErr := metadataRecord(data)
+		if (eagerErr == nil) != (indexErr == nil) {
+			t.Fatalf("schema disagreement: eager=%v metadata=%v", eagerErr, indexErr)
 		}
-		// want/wantErr align with ALL lines (blanks included) so indices
-		// match the indexed reader's 1-based ParseError lines.
-		var want []string
-		var wantErr []bool
-		for _, ln := range lines {
-			if strings.TrimSpace(ln) == "" {
-				wantErr = append(wantErr, false)
-				want = append(want, "\x00blank\x00")
-				continue
-			}
-			e, err := UnmarshalEntry([]byte(ln))
-			if err != nil {
-				wantErr = append(wantErr, true)
-				want = append(want, "")
-				continue
-			}
-			wantErr = append(wantErr, false)
-			pid := ""
-			if e.ParentID() != nil {
-				pid = *e.ParentID()
-			}
-			want = append(want, e.Kind+"\x00"+e.ID()+"\x00"+pid)
+		if eagerErr != nil {
+			return
 		}
-		idx, indexErr := BuildIndexFrom(bytes.NewReader(data), "fuzz.jsonl")
-		if indexErr != nil {
-			// The indexed path reports the first bad line; every prior
-			// record must have agreed, and the failing line must be one
-			// the eager path also rejects.
-			if perr, ok := indexErr.(*ParseError); ok {
-				for i := 0; i < perr.Line-1 && i < len(want); i++ {
-					if wantErr[i] {
-						t.Fatalf("line %d: eager rejected but indexed passed it", i+1)
-					}
-				}
-				// Find the failing line among non-blank lines.
-				nonBlank := 0
-				for _, ln := range lines {
-					if strings.TrimSpace(ln) == "" {
-						continue
-					}
-					nonBlank++
-					if nonBlank == perr.Line {
-						if _, err := UnmarshalEntry([]byte(ln)); err == nil {
-							t.Fatalf("line %d: indexed rejects, eager accepts: %.80q", perr.Line, ln)
-						}
-						return
-					}
-				}
-				return
+		if full.IsHeader {
+			if thin != nil || !reflect.DeepEqual(full.Header, header) {
+				t.Fatalf("header disagreement: eager=%+v metadata=%+v", full.Header, header)
 			}
-			t.Fatalf("non-parse index error: %v", indexErr)
+			return
 		}
-		var got []string
-		for _, m := range idx.Records {
-			if m.Type == "session" {
-				continue
-			}
-			got = append(got, m.Type+"\x00"+m.ID+"\x00"+m.ParentID)
-		}
-		var wantNonErr []string
-		for i, w := range want {
-			if wantErr[i] {
-				continue
-			}
-			if w == "\x00blank\x00" {
-				continue
-			}
-			wantNonErr = append(wantNonErr, w)
-		}
-		if len(got) != len(wantNonErr) {
-			// Eager-rejected lines are skipped by agreement above; any
-			// count gap here is a real divergence.
-			t.Fatalf("record count: eager %d vs indexed %d on %.120q", len(wantNonErr), len(got), text)
-		}
-		for i := range got {
-			if got[i] != wantNonErr[i] {
-				t.Fatalf("record %d identity: %q vs %q", i, wantNonErr[i], got[i])
-			}
+		want, got := reviewMetadataState(full.Entry), reviewMetadataState(thin)
+		if header != nil || !reflect.DeepEqual(want, got) {
+			t.Fatalf("metadata disagreement: eager=%#v metadata=%#v", want, got)
 		}
 	})
 }

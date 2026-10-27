@@ -124,6 +124,7 @@ func (b ContentBlock) MarshalJSON() ([]byte, error) {
 
 func (b *ContentBlock) UnmarshalJSON(data []byte) error {
 	b.Raw = append(b.Raw[:0], data...)
+	data = defoldSimple(data, blockKeys)
 	obj, err := exactObject(data)
 	if err != nil {
 		return err
@@ -182,6 +183,7 @@ func (b UserContentBlock) MarshalJSON() ([]byte, error) {
 
 func (b *UserContentBlock) UnmarshalJSON(data []byte) error {
 	b.Raw = append(b.Raw[:0], data...)
+	data = defoldSimple(data, blockKeys)
 	obj, err := exactObject(data)
 	if err != nil {
 		return err
@@ -401,6 +403,7 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	m.Role = role
 	raw := append(json.RawMessage(nil), data...)
 	m.Raw = raw
+	data = defoldMessage(data)
 	switch role {
 	case "system":
 		var s SystemMessage

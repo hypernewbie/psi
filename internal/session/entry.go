@@ -21,7 +21,7 @@ func UnmarshalFileEntry(data []byte) (*FileEntry, error) {
 	recType, _ := exactString(obj, "type")
 	if recType == "session" {
 		var h SessionHeader
-		if err := json.Unmarshal(data, &h); err != nil {
+		if err := json.Unmarshal(defoldRecord(obj), &h); err != nil {
 			return nil, err
 		}
 		if h.ID == "" {
