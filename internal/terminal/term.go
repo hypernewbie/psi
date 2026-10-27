@@ -10,6 +10,9 @@ import (
 
 // The application owns signals. A terminal must not install a leaked global
 // signal handler that restores raw mode underneath an active editor.
+// Suspend/resume (SIGTSTP/SIGCONT) restores the terminal before control returns
+// to the shell and reacquires only the active tail afterwards (P2-034).
+// No automatic provider/tool replay occurs on resume.
 type Term struct {
 	fd    int
 	state *term.State

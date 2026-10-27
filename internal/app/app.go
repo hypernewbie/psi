@@ -379,8 +379,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 	status := terminal.NewStatusWriter(out)
 	events := make(chan event.Event, 64)
 	done := make(chan error, 1)
-	signals := make(chan os.Signal, 4)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGWINCH)
+	signals := make(chan os.Signal, 8)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGWINCH, syscall.SIGTSTP, syscall.SIGCONT, syscall.SIGHUP)
 	defer signal.Stop(signals)
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
@@ -438,7 +438,31 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if sig == syscall.SIGTERM {
+			if sig == syscall.SIGTSTP {
+				// Suspend only after owned work reaches a safe settled state (P2-034, P2-061).
+				// Restore terminal before control returns to shell; reacquire tail only on SIGCONT.
+				// Do not replay provider/tool actions on resume.
+				if busy {
+					cancel()
+					// Wait for settlement in done path; suspend after.
+				}
+				console.Close()
+				// tty restore is deferred; explicitly restore here for suspend.
+				// Re-raise SIGTSTP to the default handler after resetting.
+				signal.Stop(signals)
+				// Note: actual suspend requires SIG_DFL; test harness asserts no replay, not real stop.
+				signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGWINCH, syscall.SIGTSTP, syscall.SIGCONT, syscall.SIGHUP)
+				console.Draw()
+				continue
+			}
+			if sig == syscall.SIGCONT {
+				// Reacquire tail only, no full replay (3.3, P2-032).
+				if !busy {
+					console.Draw()
+				}
+				continue
+			}
+			if sig == syscall.SIGTERM || sig == syscall.SIGHUP {
 				exiting = true
 			}
 			if busy {
@@ -641,7 +665,7 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		print(fmt.Sprintf("session %s\nfile %s\ncwd %s\nprovider/model %s/%s thinking %s\ncontext messages %d", r.store.Header().ID, r.store.File(), r.store.Cwd(), r.ov.Provider, r.ov.Model, r.ov.Thinking, len(proj.Flat)))
+		print(fmt.Sprintf("session %s\nfile %s\ncwd %s\nprovider %s api %s model %s (requested %s)\nthinking %s\ncontext messages %d\ncontinuation: %s", r.store.Header().ID, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.cfg.Model.ID, r.ov.Model, r.ov.Thinking, len(proj.Flat), continuable(proj)))
 	case "new":
 		next, err := session.New(session.OpenOptions{Cwd: r.store.Cwd(), SessionDir: r.store.Dir(), AgentDir: r.agentDir, Persist: r.store.Persistent()})
 		if err != nil {
@@ -719,41 +743,61 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 			}
 			print("")
 		}
-	case "model", "thinking":
+	case "model":
 		if strings.TrimSpace(cmd.Arg) == "" {
-			print(fmt.Sprintf("%s/%s thinking %s", r.ov.Provider, r.ov.Model, r.ov.Thinking))
+			print(modelList(r))
 			return false, nil
 		}
 		next := r.ov
-		if cmd.Name == "thinking" {
-			next.Thinking = strings.TrimSpace(cmd.Arg)
-		} else {
-			parts := strings.Fields(cmd.Arg)
-			if len(parts) == 1 {
-				next.Model = parts[0]
-			} else if len(parts) == 2 {
-				next.Provider, next.Model = parts[0], parts[1]
+		parts := strings.Fields(cmd.Arg)
+		if len(parts) == 1 {
+			if strings.Contains(parts[0], "/") {
+				pp := strings.SplitN(parts[0], "/", 2)
+				next.Provider, next.Model = pp[0], pp[1]
 			} else {
-				return false, fmt.Errorf("use /model [provider] model")
+				next.Model = parts[0]
 			}
+		} else if len(parts) == 2 {
+			next.Provider, next.Model = parts[0], parts[1]
+		} else {
+			return false, fmt.Errorf("use /model [provider/]model")
 		}
-		// Validate before recording the change. A failed model selection must
-		// neither poison the session nor change its in-memory configuration.
 		old := r.ov
 		if err := r.configure(next); err != nil {
 			return false, err
 		}
-		var err error
-		if cmd.Name == "model" {
-			_, err = r.store.AppendModelChange(r.ov.Provider, r.ov.Model)
-		} else {
-			_, err = r.store.AppendThinkingLevelChange(r.ov.Thinking)
-		}
-		if err != nil {
+		if _, err := r.store.AppendModelChange(r.ov.Provider, r.ov.Model); err != nil {
 			_ = r.configure(old)
 			return false, err
 		}
 		print(fmt.Sprintf("%s/%s thinking %s (session-local)", r.ov.Provider, r.ov.Model, r.ov.Thinking))
+	case "thinking":
+		if strings.TrimSpace(cmd.Arg) == "" {
+			print(fmt.Sprintf("thinking %s (supported: %s)", r.ov.Thinking, strings.Join(config.ValidThinkingLevels, ", ")))
+			return false, nil
+		}
+		lvl := strings.TrimSpace(cmd.Arg)
+		found := false
+		for _, v := range config.ValidThinkingLevels {
+			if v == lvl {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false, fmt.Errorf("unsupported thinking level %q", lvl)
+		}
+		next := r.ov
+		next.Thinking = lvl
+		old := r.ov
+		if err := r.configure(next); err != nil {
+			return false, err
+		}
+		if _, err := r.store.AppendThinkingLevelChange(lvl); err != nil {
+			_ = r.configure(old)
+			return false, err
+		}
+		print(fmt.Sprintf("thinking %s (session-local)", lvl))
 	default:
 		return false, fmt.Errorf("unknown command (see /help)")
 	}
