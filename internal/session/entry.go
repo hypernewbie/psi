@@ -54,7 +54,7 @@ func UnmarshalEntry(data []byte) (*Entry, error) {
 		return nil, fmt.Errorf("entry missing id")
 	}
 	var parentID *string
-	if ps, ok := exactString(obj, "parentId"); ok {
+	if ps, ok := exactString(obj, "parentId"); ok && ps != "" {
 		parentID = &ps
 	}
 	var timestamp string

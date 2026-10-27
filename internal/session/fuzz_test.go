@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -72,38 +73,92 @@ func FuzzExactKeysDifferential(f *testing.F) {
 		if len(data) > 64*1024 {
 			return
 		}
-		line := bytes.TrimSpace(data)
-		if len(line) == 0 || line[0] != '{' {
-			return
+		// Line-aligned differential: each JSONL record through eager
+		// (UnmarshalEntry) and indexed (BuildIndexFrom metadata) paths.
+		// Blank lines are skipped by both; trailing partial lines count.
+		text := strings.ReplaceAll(string(data), "\r\n", "\n")
+		lines := strings.Split(text, "\n")
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
 		}
-		eager, eagerErr := UnmarshalEntry(line)
-		// Indexed reader path: metadata identity from the same bytes.
-		// (Disk payload loading is covered with real files in exact_test.go.)
-		idx, indexErr := BuildIndexFrom(bytes.NewReader(append(append([]byte(nil), line...), '\n')), "fuzz.jsonl")
-		var meta *RecordMeta
-		if indexErr == nil {
-			for _, m := range idx.Records {
-				if m.Type == "session" {
-					continue
-				}
-				cp := m
-				meta = &cp
-				break
+		// want/wantErr align with ALL lines (blanks included) so indices
+		// match the indexed reader's 1-based ParseError lines.
+		var want []string
+		var wantErr []bool
+		for _, ln := range lines {
+			if strings.TrimSpace(ln) == "" {
+				wantErr = append(wantErr, false)
+				want = append(want, "\x00blank\x00")
+				continue
 			}
+			e, err := UnmarshalEntry([]byte(ln))
+			if err != nil {
+				wantErr = append(wantErr, true)
+				want = append(want, "")
+				continue
+			}
+			wantErr = append(wantErr, false)
+			pid := ""
+			if e.ParentID() != nil {
+				pid = *e.ParentID()
+			}
+			want = append(want, e.Kind+"\x00"+e.ID()+"\x00"+pid)
 		}
-		// Agreement: both reject, or both accept with identical identity.
-		if (eagerErr == nil) != (indexErr == nil && meta != nil) {
-			t.Fatalf("eager/indexed disagree: %v vs %v on %.80q", eagerErr, indexErr, line)
+		idx, indexErr := BuildIndexFrom(bytes.NewReader(data), "fuzz.jsonl")
+		if indexErr != nil {
+			// The indexed path reports the first bad line; every prior
+			// record must have agreed, and the failing line must be one
+			// the eager path also rejects.
+			if perr, ok := indexErr.(*ParseError); ok {
+				for i := 0; i < perr.Line-1 && i < len(want); i++ {
+					if wantErr[i] {
+						t.Fatalf("line %d: eager rejected but indexed passed it", i+1)
+					}
+				}
+				// Find the failing line among non-blank lines.
+				nonBlank := 0
+				for _, ln := range lines {
+					if strings.TrimSpace(ln) == "" {
+						continue
+					}
+					nonBlank++
+					if nonBlank == perr.Line {
+						if _, err := UnmarshalEntry([]byte(ln)); err == nil {
+							t.Fatalf("line %d: indexed rejects, eager accepts: %.80q", perr.Line, ln)
+						}
+						return
+					}
+				}
+				return
+			}
+			t.Fatalf("non-parse index error: %v", indexErr)
 		}
-		if eagerErr != nil {
-			return
+		var got []string
+		for _, m := range idx.Records {
+			if m.Type == "session" {
+				continue
+			}
+			got = append(got, m.Type+"\x00"+m.ID+"\x00"+m.ParentID)
 		}
-		if eager.ID() != meta.ID || eager.Kind != meta.Type {
-			t.Fatalf("identity mismatch: %s/%s vs %+v", eager.ID(), eager.Kind, meta)
+		var wantNonErr []string
+		for i, w := range want {
+			if wantErr[i] {
+				continue
+			}
+			if w == "\x00blank\x00" {
+				continue
+			}
+			wantNonErr = append(wantNonErr, w)
 		}
-		lp, mp := eager.ParentID(), meta.ParentID
-		if (lp == nil) != (mp == "") || (lp != nil && *lp != mp) {
-			t.Fatalf("parent mismatch: %v vs %q", lp, mp)
+		if len(got) != len(wantNonErr) {
+			// Eager-rejected lines are skipped by agreement above; any
+			// count gap here is a real divergence.
+			t.Fatalf("record count: eager %d vs indexed %d on %.120q", len(wantNonErr), len(got), text)
+		}
+		for i := range got {
+			if got[i] != wantNonErr[i] {
+				t.Fatalf("record %d identity: %q vs %q", i, wantNonErr[i], got[i])
+			}
 		}
 	})
 }

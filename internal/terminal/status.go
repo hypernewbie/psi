@@ -16,7 +16,7 @@ const (
 )
 
 func FormatStatus(name string, st ToolState) string {
-	return fmt.Sprintf("%s: %s", name, string(st))
+	return fmt.Sprintf("%s: %s", SanitizeStatusRow(name), string(st))
 }
 
 // StatusWriter commits one settled line. A running state belongs to the owned
