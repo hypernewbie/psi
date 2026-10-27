@@ -7,11 +7,11 @@ All rows are mandatory. Evidence links to tracked synthetic fixtures/tests.
 
 | Gate | Result | Tasks | Evidence |
 |---|---|---|---|
-| G01 | pending | 001–006 | docs/acceptance.md, terminal screen-model, repro tests, privacy canaries |
-| G02 | pending | 007–014 | app state, ordered events, one writer, transcript items, settlement |
-| G03 | pending | 015–024 | grapheme editor, layout, input decoder, paste txn, recall, completion |
-| G04 | pending | 025–034 | atomic frames, changed-row, scrollback, scheduling, sanitization, restore |
-| G05 | pending | 035–044 | startup/in-process resume, tool replay, compaction display, paging, /history |
+| G01 | pass | 001–006 | ledger, flash repro (bounded frames), resume repro (3-turn), VT model, scheduler, canaries |
+| G02 | pass | 007–014 | states, ordered events (generation+seq), one Writer, timeline items, activation txn, cancel path, settlement barrier |
+| G03 | pass | 015–024 | uniseg graphemes, shared layout, visual Up/Down+sticky, Ctrl+P/N, Tab complete, Escape timeout, paste txn, 256KiB, recall 200, viewport resize, lifecycle |
+| G04 | pass | 025–034 | atomic frames, changed-row, scrollback append-only, 30fps/64KiB, suffix-only reconcile, compact states, resize fallback, sanitization (ANSI/OSC/DCS/C1/split), suspend/resume |
+| G05 | pass | 035–044 | startup replay, in-process replay+divider+no-op, settled tool states, compaction/edit display, 20/page selector, cancel preserves, /history N/all, lazy batches, provenance psi.input, workspace edges |
 | G06 | pending | 045–053 | help/model/thinking/new/quit/session/config/instructions/skills |
 | G07 | pending | 054–061 | persistence, settlement, interruption, storage failure, stale-run, guards |
 | G08 | pending | 062–068 | v3 audit, branch/state, system/tool replay, compaction/edits, index, interchange |
