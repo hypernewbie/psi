@@ -1,3 +1,5 @@
+//go:build liveprovider
+
 package provider
 
 import (

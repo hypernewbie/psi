@@ -119,6 +119,9 @@ func Run(args []string, version string) error {
 	}
 	sk, diagnostics := skills.Discover(cwd, agentDir, st.Skills, consent)
 	prompt := config.AssemblePrompt(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools)
+	if o.Provider != "" && o.Provider != "anthropic" && o.Provider != "openai-codex" {
+		return fmt.Errorf("unsupported provider %q (available: anthropic, openai-codex)", o.Provider)
+	}
 	ov := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	store, err := openSession(o, cwd, agentDir, st, ov)
 	if err != nil {
@@ -135,17 +138,43 @@ func Run(args []string, version string) error {
 		}
 	}()
 	if err := r.restore(); err != nil {
-		return err
+		// Unsupported shared default enters offline, not silent substitution (7.1).
+		// Explicit CLI invalid already returned above before session mutation.
+		if o.Provider == "" && (containsUnsupported(err) || containsNoModel(err)) {
+			r.authErr = err
+			// Minimal offline config: keep requested selection for display, no provider client.
+			// r.ov/cfg may be unset; set safe placeholders from startup overrides.
+			if r.ov.Provider == "" {
+				r.ov = ov
+			}
+		} else {
+			return err
+		}
+	}
+	grouped := map[string]int{}
+	for _, d := range diagnostics {
+		grouped[d.Message]++
 	}
 	if !st.QuietStartup {
 		fmt.Println(terminal.Sanitize(terminal.StartupLine(r.ov.Provider, r.ov.Model, cwd, store.Header().ID, len(sk))))
-		for _, d := range diagnostics {
-			fmt.Println(terminal.Sanitize("note: skill " + d.Path + ": " + d.Message))
+		for msg, n := range grouped {
+			if n > 1 {
+				fmt.Println(terminal.Sanitize(fmt.Sprintf("note: %s (x%d, see /session)", msg, n)))
+			} else {
+				for _, d := range diagnostics {
+					if d.Message == msg {
+						fmt.Println(terminal.Sanitize("note: skill " + d.Path + ": " + d.Message))
+						break
+					}
+				}
+			}
 		}
 		if r.authErr != nil {
-			fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error() + " (offline commands still work)"))
+			fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error() + " (offline commands still work; /model to select, /session for status)"))
 		}
 		fmt.Println("Enter submits · Ctrl+J newline · Ctrl+C cancel · /help · /quit")
+	} else if r.authErr != nil {
+		fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error()))
 	}
 	tty, _, err := terminal.Acquire()
 	if err != nil {
@@ -341,6 +370,26 @@ func discoverAll(dir, cwd string) ([]session.SessionInfo, error) { return worksp
 
 func agentMessageUser(text string) session.AgentMessage {
 	return session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: text}}
+}
+
+func containsUnsupported(err error) bool {
+	return err != nil && containsStr(err.Error(), "unsupported provider")
+}
+
+func containsNoModel(err error) bool {
+	return err != nil && containsStr(err.Error(), "needs explicit metadata")
+}
+
+func containsStr(hay, needle string) bool {
+	if len(hay) < len(needle) {
+		return false
+	}
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		if hay[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func firstLine(s string) string {
