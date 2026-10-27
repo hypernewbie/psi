@@ -252,6 +252,9 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 			if ctx.Err() != nil {
 				stop = "aborted"
 			}
+			if perr := l.persistStreamUsage(cfg, err); perr != nil {
+				return perr
+			}
 			if aerr := l.savePartial(streamed.String(), stop, cfg); aerr != nil {
 				return aerr
 			}
@@ -335,6 +338,21 @@ func (l *Loop) savePartial(text, stop string, cfg Config) error {
 	partial := toSessionAssistant(&provider.Response{Text: text, StopReason: stop}, cfg)
 	if _, err := l.store.AppendMessage(partial); err != nil {
 		return fmt.Errorf("storage failure, stopping: %w (unsaved partial text %d bytes)", err, len(text))
+	}
+	return nil
+}
+
+// persistStreamUsage records provider-reported counts from a failed stream
+// exactly once (F12). Zero usage means unknown and is never persisted, so
+// known usage stays distinct from unknown final usage.
+func (l *Loop) persistStreamUsage(cfg Config, err error) error {
+	var se *provider.StreamInterrupt
+	if !errors.As(err, &se) || !se.KnownUsage() {
+		return nil
+	}
+	u := sessionUsage(se.Partial.Usage)
+	if _, aerr := l.store.AppendUsage("stream-interrupt", cfg.Model.API, cfg.Model.ID, u, "partial stream usage; final counts unknown"); aerr != nil {
+		return fmt.Errorf("storage failure, stopping: %w", aerr)
 	}
 	return nil
 }

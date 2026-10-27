@@ -89,7 +89,13 @@ func sendWithRetry(ctx context.Context, maxRetry int, send func() (*Response, er
 			return resp, nil
 		}
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return resp, ctx.Err()
+		}
+		// A stream that already produced partial output is never invisibly
+		// replayed; the partial metadata travels with the error instead.
+		var se *StreamInterrupt
+		if errors.As(err, &se) {
+			return se.Partial, se
 		}
 		var pe *ProviderError
 		if !errors.As(err, &pe) || (pe.Kind != ErrRateLimit && pe.Kind != ErrTransport) || attempt >= maxRetry {
@@ -137,7 +143,11 @@ func (c *Client) doOnce(ctx context.Context, raw []byte, onText func(string), re
 	if err != nil {
 		// Once HTTP streaming starts, never invisibly replay an incomplete turn.
 		// Deliberately do not wrap a retryable ProviderError here.
-		return nil, fmt.Errorf("provider stream interrupted (not retried): %s", c.redact(err.Error()))
+		serr := fmt.Errorf("provider stream interrupted (not retried): %s", c.redact(err.Error()))
+		if result != nil {
+			return result, &StreamInterrupt{Partial: result, Err: serr}
+		}
+		return nil, serr
 	}
 	return result, nil
 }
@@ -248,9 +258,9 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 	br := bufio.NewReader(sr)
 	resp := &Response{Model: req.Model.ID, ThinkingLevel: req.Thinking}
 	type pendingBlock struct {
-		block Block
-		args  strings.Builder
-		open  bool
+		block                     Block
+		text, thinking, sig, args strings.Builder
+		open                      bool
 	}
 	blocks := map[int]*pendingBlock{}
 	toolIDs := map[string]bool{}
@@ -320,15 +330,20 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 				return fmt.Errorf("invalid content block start")
 			}
 			b := p.ContentBlock
-			pb := &pendingBlock{open: true, block: Block{Type: b.Type, Text: b.Text, Thinking: b.Thinking, ThinkingSignature: b.Signature, ID: b.ID, Name: b.Name, Arguments: b.Input}}
+			pb := &pendingBlock{open: true, block: Block{Type: b.Type, ID: b.ID, Name: b.Name, Arguments: b.Input}}
+			// Seed amortized buffers with any start-event payload (F08).
 			switch b.Type {
 			case "text":
+				pb.text.WriteString(b.Text)
 				if b.Text != "" && onText != nil {
 					onText(b.Text)
 				}
 			case "thinking":
+				pb.thinking.WriteString(b.Thinking)
+				pb.sig.WriteString(b.Signature)
 			case "redacted_thinking":
-				pb.block.Type, pb.block.Redacted, pb.block.ThinkingSignature = "thinking", true, b.Data
+				pb.block.Type, pb.block.Redacted, pb.thinking, pb.sig = "thinking", true, strings.Builder{}, strings.Builder{}
+				pb.sig.WriteString(b.Data)
 			case "tool_use":
 				if toolIDs[b.ID] {
 					return fmt.Errorf("duplicate tool call ID")
@@ -353,7 +368,7 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 				if pb.block.Type != "text" {
 					return fmt.Errorf("text delta in non-text block")
 				}
-				pb.block.Text += p.Delta.Text
+				pb.text.WriteString(p.Delta.Text)
 				if onText != nil {
 					onText(p.Delta.Text)
 				}
@@ -361,12 +376,12 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 				if pb.block.Type != "thinking" {
 					return fmt.Errorf("thinking delta in non-thinking block")
 				}
-				pb.block.Thinking += p.Delta.Thinking
+				pb.thinking.WriteString(p.Delta.Thinking)
 			case "signature_delta":
 				if pb.block.Type != "thinking" {
 					return fmt.Errorf("signature delta in non-thinking block")
 				}
-				pb.block.ThinkingSignature += p.Delta.Signature
+				pb.sig.WriteString(p.Delta.Signature)
 			case "input_json_delta":
 				if pb.block.Type != "toolCall" {
 					return fmt.Errorf("input delta in non-tool block")
@@ -415,7 +430,7 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 		part, err := br.ReadSlice('\n')
 		total += len(part)
 		if total > maxStreamBytes {
-			return nil, fmt.Errorf("provider stream exceeds 32 MiB")
+			return resp, fmt.Errorf("provider stream exceeds 32 MiB")
 		}
 		// ReadSlice fragments can split a line. Accumulate only within this bound.
 		line := append([]byte(nil), part...)
@@ -423,7 +438,7 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 			part, err = br.ReadSlice('\n')
 			total += len(part)
 			if total > maxStreamBytes {
-				return nil, fmt.Errorf("provider stream exceeds 32 MiB")
+				return resp, fmt.Errorf("provider stream exceeds 32 MiB")
 			}
 			line = append(line, part...)
 		}
@@ -431,7 +446,7 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 		switch {
 		case t == "":
 			if e := emit(); e != nil {
-				return nil, e
+				return resp, e
 			}
 		case strings.HasPrefix(t, "event:"):
 			eventName = strings.TrimSpace(t[6:])
@@ -440,34 +455,39 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 		}
 		if err != nil {
 			if err != io.EOF {
-				return nil, err
+				return resp, err
 			}
 			if len(data) > 0 {
 				if e := emit(); e != nil {
-					return nil, e
+					return resp, e
 				}
 			}
 			break
 		}
 	}
 	if !started || !stopped || resp.StopReason == "" {
-		return nil, fmt.Errorf("incomplete provider response: missing message_start, stop reason, or message_stop")
+		return resp, fmt.Errorf("incomplete provider response: missing message_start, stop reason, or message_stop")
 	}
+	var respText, respThinking strings.Builder
 	for _, idx := range order {
 		pb := blocks[idx]
 		if pb.open {
-			return nil, fmt.Errorf("incomplete content block %d", idx)
+			return resp, fmt.Errorf("incomplete content block %d", idx)
 		}
-		resp.Content = append(resp.Content, pb.block)
 		switch pb.block.Type {
 		case "text":
-			resp.Text += pb.block.Text
+			pb.block.Text = pb.text.String()
+			respText.WriteString(pb.block.Text)
 		case "thinking":
-			resp.Thinking += pb.block.Thinking
+			pb.block.Thinking = pb.thinking.String()
+			pb.block.ThinkingSignature = pb.sig.String()
+			respThinking.WriteString(pb.block.Thinking)
 		case "toolCall":
 			resp.ToolCalls = append(resp.ToolCalls, pb.block)
 		}
+		resp.Content = append(resp.Content, pb.block)
 	}
+	resp.Text, resp.Thinking = respText.String(), respThinking.String()
 	return resp, nil
 }
 

@@ -204,9 +204,17 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 	if result.Model == "" {
 		result.Model = req.Model.ID
 	}
+	// Known usage attaches at the terminal event, before output assembly, so
+	// a later assembly failure still carries provider-reported counts (F12).
+	usage := terminal.Usage
+	result.Usage = Usage{Input: max(0, usage.Input-usage.InputDetails.Cached-usage.InputDetails.Written), Output: usage.Output,
+		CacheRead: usage.InputDetails.Cached, CacheWrite: usage.InputDetails.Written, TotalTokens: usage.Total, Reasoning: usage.OutputDetails.Reasoning}
+	if result.Usage.TotalTokens == 0 {
+		result.Usage.TotalTokens = result.Usage.Input + result.Usage.Output + result.Usage.CacheRead + result.Usage.CacheWrite
+	}
 	if terminal.Status == "incomplete" {
 		if terminal.Incomplete.Reason != "max_output_tokens" {
-			return nil, fmt.Errorf("Codex response was incomplete")
+			return result, fmt.Errorf("Codex response was incomplete")
 		}
 		result.StopReason = "length"
 	}
@@ -215,7 +223,7 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 	for _, raw := range terminal.Output {
 		var item codexItem
 		if json.Unmarshal(raw, &item) != nil {
-			return nil, fmt.Errorf("invalid Codex terminal output")
+			return result, fmt.Errorf("invalid Codex terminal output")
 		}
 		finalItems[item.ID] = raw
 	}
@@ -223,16 +231,17 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 	for i := range slots {
 		indices = append(indices, i)
 	}
+	var respText, respThinking strings.Builder
 	sort.Ints(indices)
 	seenIDs, seenCalls := map[string]bool{}, map[string]bool{}
 	for _, i := range indices {
 		slot := slots[i]
 		if !slot.done {
-			return nil, fmt.Errorf("Codex response contains an unfinished output item")
+			return result, fmt.Errorf("Codex response contains an unfinished output item")
 		}
 		item := slot.item
 		if seenIDs[item.ID] {
-			return nil, fmt.Errorf("duplicate Codex output item ID")
+			return result, fmt.Errorf("duplicate Codex output item ID")
 		}
 		seenIDs[item.ID] = true
 		var block Block
@@ -253,7 +262,7 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 				thinking = slot.thinking.String()
 			}
 			block = Block{Type: "thinking", Thinking: thinking, ThinkingSignature: string(slot.raw)}
-			result.Thinking += thinking
+			respThinking.WriteString(thinking)
 		case "message":
 			var text strings.Builder
 			for _, c := range item.Content {
@@ -263,12 +272,12 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 				case "refusal":
 					text.WriteString(c.Refusal)
 				default:
-					return nil, fmt.Errorf("unsupported Codex message content")
+					return result, fmt.Errorf("unsupported Codex message content")
 				}
 			}
 			content := text.String()
 			if slot.text.Len() > 0 && slot.text.String() != content {
-				return nil, fmt.Errorf("Codex completed text differs from its deltas")
+				return result, fmt.Errorf("Codex completed text differs from its deltas")
 			}
 			if slot.text.Len() == 0 && content != "" && onText != nil {
 				onText(content)
@@ -279,10 +288,10 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 			}
 			encoded, _ := json.Marshal(sig)
 			block = Block{Type: "text", Text: content, TextSignature: string(encoded)}
-			result.Text += content
+			respText.WriteString(content)
 		case "function_call":
 			if item.CallID == "" || item.Name == "" || strings.Contains(item.CallID, "|") || strings.Contains(item.ID, "|") || seenCalls[item.CallID] {
-				return nil, fmt.Errorf("invalid or duplicate completed Codex tool call")
+				return result, fmt.Errorf("invalid or duplicate completed Codex tool call")
 			}
 			seenCalls[item.CallID] = true
 			args := item.Arguments
@@ -290,13 +299,13 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 				args = slot.args.String()
 			}
 			if !json.Valid([]byte(args)) {
-				return nil, fmt.Errorf("invalid completed Codex tool arguments")
+				return result, fmt.Errorf("invalid completed Codex tool arguments")
 			}
 			var arguments map[string]any
 			decoder := json.NewDecoder(strings.NewReader(args))
 			decoder.UseNumber()
 			if decoder.Decode(&arguments) != nil || arguments == nil {
-				return nil, fmt.Errorf("Codex tool arguments must be an object")
+				return result, fmt.Errorf("Codex tool arguments must be an object")
 			}
 			block = Block{Type: "toolCall", ID: item.CallID + "|" + item.ID, Name: item.Name, Arguments: arguments, Namespace: item.Namespace}
 			result.ToolCalls = append(result.ToolCalls, block)
@@ -304,16 +313,11 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 		result.Content = append(result.Content, block)
 	}
 	if len(result.Content) == 0 {
-		return nil, fmt.Errorf("Codex response contained no supported output")
+		return result, fmt.Errorf("Codex response contained no supported output")
 	}
 	if len(result.ToolCalls) > 0 && result.StopReason == "stop" {
 		result.StopReason = "toolUse"
 	}
-	usage := terminal.Usage
-	result.Usage = Usage{Input: max(0, usage.Input-usage.InputDetails.Cached-usage.InputDetails.Written), Output: usage.Output,
-		CacheRead: usage.InputDetails.Cached, CacheWrite: usage.InputDetails.Written, TotalTokens: usage.Total, Reasoning: usage.OutputDetails.Reasoning}
-	if result.Usage.TotalTokens == 0 {
-		result.Usage.TotalTokens = result.Usage.Input + result.Usage.Output + result.Usage.CacheRead + result.Usage.CacheWrite
-	}
+	result.Text, result.Thinking = respText.String(), respThinking.String()
 	return result, nil
 }

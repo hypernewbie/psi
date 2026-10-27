@@ -79,6 +79,11 @@ func (l *Loop) compact(ctx context.Context, cfg Config, focus string) error {
 		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Focus: " + focus + "\n\n<conversation>\n" + transcript + "\n</conversation>"}}}},
 	}, nil)
 	if err != nil {
+		// Compaction calls persist known partial usage but never mutate
+		// context on failure (F12).
+		if perr := l.persistStreamUsage(cfg, err); perr != nil {
+			return perr
+		}
 		return fmt.Errorf("summary failed; original context is unchanged: %w", err)
 	}
 	if resp == nil || strings.TrimSpace(resp.Text) == "" || len(resp.ToolCalls) > 0 || (resp.StopReason != "stop" && resp.StopReason != "") {

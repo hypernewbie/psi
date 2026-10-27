@@ -88,7 +88,11 @@ func (c *CodexClient) sendCodex(ctx context.Context, raw []byte, token, account 
 	result, err := parseCodexSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
 	if err != nil {
 		message := c.redact(strings.ReplaceAll(err.Error(), token, "[redacted]"))
-		return nil, fmt.Errorf("Codex stream interrupted (not retried): %s", message)
+		serr := fmt.Errorf("Codex stream interrupted (not retried): %s", message)
+		if result != nil {
+			return result, &StreamInterrupt{Partial: result, Err: serr}
+		}
+		return nil, serr
 	}
 	return result, nil
 }

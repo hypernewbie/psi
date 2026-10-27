@@ -117,6 +117,28 @@ type Usage struct {
 	TotalTokens  int64
 }
 
+// StreamInterrupt carries known partial response metadata when a stream
+// fails after the backend supplied usage or other response fields (F12).
+// It never promotes unfinished tool calls: partial Content holds only
+// completed blocks, and known usage stays distinct from unknown final usage.
+type StreamInterrupt struct {
+	Partial *Response
+	Err     error
+}
+
+func (e *StreamInterrupt) Error() string { return e.Err.Error() }
+func (e *StreamInterrupt) Unwrap() error { return e.Err }
+
+// KnownUsage reports whether the partial response carries provider-reported
+// counts worth persisting exactly once. Zero usage means unknown, never free.
+func (e *StreamInterrupt) KnownUsage() bool {
+	if e == nil || e.Partial == nil {
+		return false
+	}
+	u := e.Partial.Usage
+	return u.Input != 0 || u.Output != 0 || u.CacheRead != 0 || u.CacheWrite != 0 || u.TotalTokens != 0
+}
+
 // ProviderID returns the session provider name, including for callers that
 // predate explicit provider metadata.
 func (m ModelMeta) ProviderID() string {
