@@ -178,7 +178,7 @@ func TestCodexCancellationDoesNotDiscardReturnedRotatedTokens(t *testing.T) {
 	if _, _, err := a.Get(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatal("cancelled caller was not stopped")
 	}
-	_, entry, err := a.load()
+	_, entry, err := a.loadLocked()
 	if err != nil || entry.Refresh != "dummy-rotated-refresh" || entry.Access != "dummy-rotated-access" {
 		t.Fatal("cancellation discarded a successfully returned rotated credential")
 	}

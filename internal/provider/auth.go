@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"psi/internal/config"
 )
@@ -21,7 +23,7 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 		}
 		authPath = filepath.Join(agentDir, "auth.json")
 	}
-	data, readErr := os.ReadFile(authPath)
+	data, readErr := readAuthShared(authPath)
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return "", "", fmt.Errorf("cannot read auth.json: %w", readErr)
 	}
@@ -61,4 +63,18 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 		return key, "ANTHROPIC_API_KEY", nil
 	}
 	return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)
+}
+
+// readAuthShared reads auth.json through the shared lease so a reader never
+// inspects a partial writer document (F01). Missing files still fall back to
+// environment credentials upstream. The wait is bounded for startup use.
+func readAuthShared(authPath string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	unlock, _, err := acquireAuthLock(ctx, authPath+".lock", 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return os.ReadFile(authPath)
 }

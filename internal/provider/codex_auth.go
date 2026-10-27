@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -27,6 +29,13 @@ type CodexAuth struct {
 	HTTP     *http.Client
 	TokenURL string // tests can use a local server; never read from model config
 	mu       sync.Mutex
+	// fs seams for deterministic fault schedules (nil = os defaults).
+	Chmod  func(string, os.FileMode) error
+	Rename func(string, string) error
+	// StaleAfter bounds lease waits; non-positive means the Pi async policy (30s).
+	StaleAfter time.Duration
+	// HeartbeatInterval paces lease mtime updates; non-positive means 2s.
+	HeartbeatInterval time.Duration
 }
 
 type codexCredential struct {
@@ -37,7 +46,9 @@ type codexCredential struct {
 	AccountID string `json:"accountId"`
 }
 
-func (a *CodexAuth) load() (map[string]json.RawMessage, codexCredential, error) {
+// loadLocked reads and parses auth.json. The caller must own the shared lease
+// (or accept a torn read during startup diagnostics); prefer loadShared.
+func (a *CodexAuth) loadLocked() (map[string]json.RawMessage, codexCredential, error) {
 	f, err := os.Open(a.Path)
 	if err != nil {
 		return nil, codexCredential{}, fmt.Errorf("cannot read Codex login; run /login openai-codex in Pi")
@@ -77,10 +88,24 @@ func codexAccount(entry codexCredential) (string, error) {
 	return "", fmt.Errorf("Codex login is missing its ChatGPT account ID; log in again through Pi")
 }
 
+// loadShared reads auth.json through the shared lease so a reader never inspects
+// a partial writer document. Startup stays local-only with a bounded wait.
+// A missing file still falls back to environment-based credentials upstream.
+func (a *CodexAuth) loadShared(ctx context.Context) (map[string]json.RawMessage, codexCredential, error) {
+	unlock, _, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval)
+	if err != nil {
+		return nil, codexCredential{}, err
+	}
+	defer unlock()
+	return a.loadLocked()
+}
+
 // Check is local-only. Expired credentials with a refresh token are usable;
 // the refresh happens on submission so startup does not make network requests.
 func (a *CodexAuth) Check() error {
-	_, entry, err := a.load()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, entry, err := a.loadShared(ctx)
 	if err != nil {
 		return err
 	}
@@ -100,7 +125,7 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	_, entry, err := a.load()
+	_, entry, err := a.loadShared(ctx)
 	if err != nil {
 		return "", "", err
 	}
@@ -114,12 +139,12 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if st, err := os.Lstat(a.Path); err != nil || st.Mode()&os.ModeSymlink != 0 {
 		return "", "", fmt.Errorf("cannot safely refresh a symlinked auth.json; refresh the login in Pi")
 	}
-	unlock, valid, err := acquireAuthLock(ctx, a.Path+".lock")
+	unlock, valid, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval)
 	if err != nil {
 		return "", "", err
 	}
 	defer unlock()
-	_, entry, err = a.load()
+	_, entry, err = a.loadLocked()
 	if err != nil {
 		return "", "", err
 	}
@@ -188,7 +213,7 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if !valid() {
 		return "", "", fmt.Errorf("auth.json lock changed during OAuth refresh; refusing overwrite")
 	}
-	all, current, err := a.load()
+	all, current, err := a.loadLocked()
 	if err != nil {
 		return "", "", err
 	}
@@ -207,11 +232,27 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("cannot encode refreshed credentials")
 	}
+	// Preserve existing permission bits: rename would otherwise replace them
+	// with the temporary file mode (Pi writes in place). New files stay 0600.
+	var keepMode os.FileMode
+	if st, err := os.Stat(a.Path); err == nil && !st.Mode().IsDir() {
+		keepMode = st.Mode().Perm()
+	}
 	f, err := os.CreateTemp(filepath.Dir(a.Path), ".psi-auth-*")
 	if err != nil {
 		return "", "", fmt.Errorf("cannot persist refreshed credentials")
 	}
 	defer os.Remove(f.Name())
+	if keepMode != 0 {
+		chmod := a.Chmod
+		if chmod == nil {
+			chmod = os.Chmod
+		}
+		if err := chmod(f.Name(), keepMode); err != nil {
+			f.Close()
+			return "", "", fmt.Errorf("cannot preserve auth.json permissions")
+		}
+	}
 	if _, err = f.Write(append(encoded, '\n')); err == nil {
 		err = f.Sync()
 	}
@@ -219,7 +260,11 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if err != nil || closeErr != nil || !valid() {
 		return "", "", fmt.Errorf("cannot safely persist refreshed credentials")
 	}
-	if err := os.Rename(f.Name(), a.Path); err != nil {
+	rename := a.Rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	if err := rename(f.Name(), a.Path); err != nil {
 		return "", "", fmt.Errorf("cannot replace refreshed auth.json")
 	}
 	if err := ctx.Err(); err != nil {
@@ -228,7 +273,17 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	return updated.Access, account, nil
 }
 
-func acquireAuthLock(ctx context.Context, path string) (func(), func() bool, error) {
+// acquireAuthLock implements the shared Pi-compatible lease: atomic mkdir,
+// heartbeat ownership, and bounded stale recovery. staleAfter <= 0 selects the
+// Pi async policy (30 seconds). A fresh lease is never stolen and a replaced
+// lease is never deleted by a former owner.
+func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat time.Duration) (func(), func() bool, error) {
+	if staleAfter <= 0 {
+		staleAfter = 30 * time.Second
+	}
+	if heartbeat <= 0 {
+		heartbeat = 2 * time.Second
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	for {
@@ -245,6 +300,19 @@ func acquireAuthLock(ctx context.Context, path string) (func(), func() bool, err
 		if !os.IsExist(err) {
 			return nil, nil, fmt.Errorf("cannot lock auth.json")
 		}
+		// Another holder may own the lease. Reclaim only a provably stale,
+		// unchanged lease; never steal a fresh or replaced one.
+		before, statErr := os.Stat(path)
+		if statErr == nil {
+			if time.Since(before.ModTime()) > staleAfter {
+				// Re-check identity before removal so a fresh replacement
+				// created between stat and remove is never deleted.
+				if after, err := os.Stat(path); err == nil && os.SameFile(before, after) &&
+					time.Since(after.ModTime()) > staleAfter {
+					_ = os.Remove(path)
+				}
+			}
+		}
 		timer := time.NewTimer(50 * time.Millisecond)
 		select {
 		case <-waitCtx.Done():
@@ -257,15 +325,30 @@ func acquireAuthLock(ctx context.Context, path string) (func(), func() bool, err
 		os.Remove(path)
 		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")
 	}
+	// Owner token: SameFile alone cannot distinguish a replaced directory
+	// that reuses an inode number. The token survives only in our lease.
+	token := make([]byte, 16)
+	if _, err := rand.Read(token); err != nil {
+		os.Remove(path)
+		return nil, nil, fmt.Errorf("cannot seed auth.json lock")
+	}
+	if err := os.WriteFile(filepath.Join(path, "owner"), token, 0o600); err != nil {
+		os.Remove(path)
+		return nil, nil, fmt.Errorf("cannot own auth.json lock")
+	}
 	var compromised atomic.Bool
 	valid := func() bool {
 		st, err := os.Stat(path)
-		return !compromised.Load() && err == nil && os.SameFile(owner, st)
+		if compromised.Load() || err != nil || !os.SameFile(owner, st) {
+			return false
+		}
+		cur, err := os.ReadFile(filepath.Join(path, "owner"))
+		return err == nil && bytes.Equal(cur, token)
 	}
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
 		for {
 			select {
@@ -283,7 +366,8 @@ func acquireAuthLock(ctx context.Context, path string) (func(), func() bool, err
 		close(stop)
 		<-done
 		if valid() {
-			os.Remove(path)
+			_ = os.Remove(filepath.Join(path, "owner"))
+			_ = os.Remove(path)
 		}
 	}
 	return unlock, valid, nil
