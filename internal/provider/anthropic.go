@@ -88,14 +88,17 @@ func sendWithRetry(ctx context.Context, maxRetry int, send func() (*Response, er
 		if err == nil {
 			return resp, nil
 		}
-		if ctx.Err() != nil {
-			return resp, ctx.Err()
-		}
-		// A stream that already produced partial output is never invisibly
-		// replayed; the partial metadata travels with the error instead.
+		// Retain the typed partial result even when cancellation caused the
+		// interruption. Returning only ctx.Err would discard durable usage.
 		var se *StreamInterrupt
 		if errors.As(err, &se) {
+			if ctx.Err() != nil {
+				return se.Partial, &StreamInterrupt{Partial: se.Partial, Err: errors.Join(ctx.Err(), se.Err)}
+			}
 			return se.Partial, se
+		}
+		if ctx.Err() != nil {
+			return resp, ctx.Err()
 		}
 		var pe *ProviderError
 		if !errors.As(err, &pe) || (pe.Kind != ErrRateLimit && pe.Kind != ErrTransport) || attempt >= maxRetry {

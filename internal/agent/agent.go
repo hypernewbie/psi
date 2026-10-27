@@ -351,7 +351,7 @@ func (l *Loop) persistStreamUsage(cfg Config, err error) error {
 		return nil
 	}
 	u := sessionUsage(se.Partial.Usage)
-	if _, aerr := l.store.AppendUsage("stream-interrupt", cfg.Model.API, cfg.Model.ID, u, "partial stream usage; final counts unknown"); aerr != nil {
+	if _, aerr := l.store.AppendUsage("stream-interrupt", cfg.Model.ProviderID(), cfg.Model.ID, u, "partial stream usage; final counts unknown"); aerr != nil {
 		return fmt.Errorf("storage failure, stopping: %w", aerr)
 	}
 	return nil

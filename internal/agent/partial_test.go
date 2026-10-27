@@ -84,10 +84,15 @@ func TestF12AgentPersistsPartialUsageExactlyOnce(t *testing.T) {
 	if outputs != 0 {
 		t.Fatal("output invented on failed stream")
 	}
-	// Visible partial text saved with the aborted stop marker.
-	timeline, err := loop.store.Timeline(false, 0, func(session.TranscriptItem) bool { return true })
-	_ = timeline
-	_ = err
+	// Visible partial text must reach display-only replay after failure.
+	var visible strings.Builder
+	complete, err := loop.store.Timeline(false, 0, func(item session.TranscriptItem) bool {
+		visible.WriteString(item.Text)
+		return true
+	})
+	if err != nil || !complete || !strings.Contains(visible.String(), "visible") {
+		t.Fatalf("partial text did not survive replay: complete=%v err=%v", complete, err)
+	}
 	// Accounting survives reopen: same durable records.
 	store2, err := session.OpenFile(loop.store.File(), loop.store.Cwd(), true)
 	if err != nil {
@@ -106,10 +111,4 @@ func TestF12AgentPersistsPartialUsageExactlyOnce(t *testing.T) {
 	if !found {
 		t.Fatal("usage lost after reopen")
 	}
-	// No tool executed from the partial stream.
-	if _, statErr := statNoToolSideEffects(loop.store.Cwd()); statErr != nil {
-		t.Fatal(statErr)
-	}
 }
-
-func statNoToolSideEffects(cwd string) (bool, error) { return true, nil }

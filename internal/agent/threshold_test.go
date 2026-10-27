@@ -22,9 +22,10 @@ func TestF14ThresholdBoundaries(t *testing.T) {
 		{199001, 1000, true},             // ordinary above
 		{1000, window, true},             // reserve at window
 		{1000, window + 1, true},         // reserve above window
-		{0, window + 1, false},           // empty context never compacts
+		{0, window, false},               // exact threshold at zero
+		{0, window + 1, true},            // Pi's threshold is negative
 		{1000, math.MaxInt, true},        // former wrap: must be true
-		{0, math.MaxInt, false},          // empty stays false
+		{0, math.MaxInt, true},           // negative threshold, no wrap
 		{math.MaxInt, 0, true},           // huge estimate
 		{math.MaxInt, math.MaxInt, true}, // no wrap on either side
 	} {
@@ -72,8 +73,9 @@ func TestF14Monotonicity(t *testing.T) {
 // TestF14WrapClassAudit records the related-arithmetic review (P3-045):
 // bash timeouts validate finite seconds within Duration range; retry backoff
 // is attempt-capped; OAuth expiry validates before Duration conversion;
-// estimator sums are bounded by the 32MiB record limit. Only the threshold
-// addition could wrap, and it no longer adds.
+// individual record sizes are bounded, but that does not bound aggregate
+// estimator sums. This test covers the threshold rather than claiming a
+// complete arithmetic proof for the whole application.
 func TestF14WrapClassAudit(t *testing.T) {
 	if got := ShouldCompact(1000, 200000, math.MaxInt, true); !got {
 		t.Fatal("MaxInt reserve must trigger, not wrap to false")

@@ -37,24 +37,21 @@ func TestF06WriteCancelAfterMkdir(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry(dir)
 	release := make(chan struct{})
-	reg.Write.AfterMkdir = func() { <-release }
+	entered := make(chan struct{})
+	reg.Write.AfterMkdir = func() { close(entered); <-release }
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Result, 1)
 	go func() {
 		done <- reg.DispatchCtx(ctx, Invocation{ID: "w1", Name: "write",
 			Arguments: map[string]any{"path": "sub/a.txt", "content": "x"}})
 	}()
-	// Wait until the call is parked between mkdir and write.
-	deadline := make(chan struct{})
-	go func() {
-		defer close(deadline)
-		for {
-			if _, err := os.Stat(filepath.Join(dir, "sub")); err == nil {
-				return
-			}
-		}
-	}()
-	<-deadline
+	// Wait for the actual checkpoint, not a filesystem poll or busy loop.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("write did not reach the mkdir checkpoint")
+	}
 	cancel()
 	close(release)
 	res := <-done
@@ -70,10 +67,10 @@ func TestF06WriteCancelDuringInjectedWrite(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry(dir)
 	started := make(chan struct{})
-	var once sync.Once
+	release := make(chan struct{})
 	reg.Write.WriteFile = func(path string, data []byte, perm os.FileMode) error {
-		once.Do(func() { close(started) })
-		// In-flight operation runs to completion; the next step waits for it.
+		close(started)
+		<-release
 		return os.WriteFile(path, data, perm)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,6 +81,12 @@ func TestF06WriteCancelDuringInjectedWrite(t *testing.T) {
 	}()
 	<-started
 	cancel()
+	select {
+	case <-done:
+		t.Fatal("cancelled call returned before the in-flight write settled")
+	default:
+	}
+	close(release)
 	res := <-done
 	// The injected write settled synchronously; the post-write checkpoint
 	// converts success into a truthful cancelled result.

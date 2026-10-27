@@ -2,11 +2,28 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestReviewCancelledRetryKeepsPartialUsage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	partial := &Response{Usage: Usage{Input: 777}}
+	calls := 0
+	resp, err := sendWithRetry(ctx, 3, func() (*Response, error) {
+		calls++
+		cancel()
+		return partial, &StreamInterrupt{Partial: partial, Err: errors.New("synthetic stream interruption")}
+	})
+	var interrupted *StreamInterrupt
+	if !errors.As(err, &interrupted) || !interrupted.KnownUsage() || !errors.Is(err, context.Canceled) || resp != partial || calls != 1 {
+		t.Fatalf("cancel discarded known usage: response=%+v error=%v calls=%d", resp, err, calls)
+	}
+}
 
 func TestReviewAbandonedPsiLeaseIsRecoverable(t *testing.T) {
 	lock := filepath.Join(t.TempDir(), "auth.json.lock")

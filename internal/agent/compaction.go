@@ -211,16 +211,13 @@ func Compact(ctx context.Context, store *session.Store, summary string, firstKep
 // ShouldCompact reports threshold at settled request boundaries.
 // Overflow-safe (F14): it compares estimated > contextWindow - reserve
 // instead of adding, matching Pi's threshold without signed wrapping.
-// Reserve above the window means any non-empty context compacts.
+// A reserve above the window exceeds the threshold even for empty context.
 func ShouldCompact(estimated, contextWindow, reserve int, enabled bool) bool {
 	if !enabled || contextWindow <= 0 {
 		return false
 	}
 	if reserve < 0 {
 		reserve = 0
-	}
-	if reserve >= contextWindow {
-		return estimated > 0
 	}
 	return estimated > contextWindow-reserve
 }

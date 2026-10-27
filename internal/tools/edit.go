@@ -57,6 +57,9 @@ func (t *EditTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("edit: cancelled while waiting, before read: %v", err))
+	}
 	path, _ := argString(inv.Arguments, "path")
 	if path == "" {
 		return errResult("edit: path is required")
@@ -126,6 +129,9 @@ func (t *EditTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	out = restoreEnding(out, ending)
 	if bom {
 		out = "\xef\xbb\xbf" + out
+	}
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("edit: cancelled after transform, before write (no file change by this call): %v", err))
 	}
 	if err := t.doWrite(abs, []byte(out)); err != nil {
 		return errResult(fmt.Sprintf("edit: failed to write: %v", err))
