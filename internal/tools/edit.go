@@ -52,11 +52,9 @@ func (t *EditTool) Execute(inv Invocation) Result {
 		if idx < 0 {
 			return errResult(fmt.Sprintf("edit: oldText not found (edit %d)", i))
 		}
-		if strings.Index(norm[idx+len(nOld):], nOld) >= 0 {
-			// Count occurrences: must be unique.
-			if strings.Count(norm, nOld) > 1 {
-				return errResult(fmt.Sprintf("edit: oldText matches multiple locations (edit %d); make it unique", i))
-			}
+		if strings.Contains(norm[idx+1:], nOld) {
+			// Overlapping occurrences count as ambiguous matches too (aaa/aa).
+			return errResult(fmt.Sprintf("edit: oldText matches multiple locations (edit %d); make it unique", i))
 		}
 		matches = append(matches, matchPos{start: idx, end: idx + len(nOld), edit: e})
 	}
@@ -124,31 +122,15 @@ func normalizeEdits(args map[string]any) ([]editItem, error) {
 		for _, e := range v {
 			list = append(list, e)
 		}
+	case nil:
+		// A legacy top-level replacement can form the entire list.
 	default:
-		// Legacy top-level oldText/newText.
-		oldT, hasOld := args["oldText"].(string)
-		newT, hasNew := args["newText"].(string)
-		if hasOld && hasNew {
-			list = append(list, map[string]any{"oldText": oldT, "newText": newT})
-		} else {
-			return nil, fmt.Errorf("edits must contain at least one replacement")
-		}
+		return nil, fmt.Errorf("edits must contain an array of replacements")
 	}
-	// Merge legacy top-level into list when both present (Pi parity).
+	// Pi appends a legacy top-level replacement to a current edits[] list.
 	if oldT, ok := args["oldText"].(string); ok {
-		if newT, ok2 := args["newText"].(string); ok2 {
-			found := false
-			for _, e := range list {
-				if m, ok := e.(map[string]any); ok {
-					if m["oldText"] == oldT && m["newText"] == newT {
-						found = true
-					}
-				}
-			}
-			if !found && len(list) > 0 {
-				// Pi appends legacy to edits; keep parity but require explicit list to hold current edits.
-				_ = found
-			}
+		if newT, ok := args["newText"].(string); ok {
+			list = append(list, map[string]any{"oldText": oldT, "newText": newT})
 		}
 	}
 	if len(list) == 0 {

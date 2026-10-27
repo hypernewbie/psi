@@ -26,7 +26,7 @@ func TestThinkingBudgetMapping(t *testing.T) {
 
 func TestBuildRequestFixtures(t *testing.T) {
 	req := Request{
-		Model:  ModelMeta{ID: "claude-x", API: "anthropic-messages", MaxTokens: 100, Reasoning: true},
+		Model:  ModelMeta{ID: "claude-x", API: "anthropic-messages", MaxTokens: 4096, Reasoning: true},
 		System: "base",
 		Messages: []Message{
 			{Role: "user", Content: []Block{{Type: "text", Text: "hi"}}},

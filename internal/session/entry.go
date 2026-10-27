@@ -54,6 +54,9 @@ func UnmarshalEntry(data []byte) (*Entry, error) {
 	if probe.Type == "session" {
 		return nil, fmt.Errorf("unexpected session header")
 	}
+	if probe.ID == "" {
+		return nil, fmt.Errorf("entry missing id")
+	}
 	raw := append(json.RawMessage(nil), data...)
 	e := &Entry{Kind: probe.Type, Base: entryBase{
 		Type: probe.Type, ID: probe.ID, ParentID: probe.ParentID, Timestamp: probe.Timestamp,

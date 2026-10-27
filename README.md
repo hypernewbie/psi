@@ -38,6 +38,16 @@ on first use per run (`--allow-project` / `--deny-project` or interactive prompt
 
 Runs `gofmt`, `go vet`, `go test ./...`, and `go test -race ./...`.
 Live provider tests are opt-in: `PSI_LIVE_PROVIDER=1 go test -run Live ./...`.
+The normal suite uses a local HTTP server and a real PTY to exercise the app.
+
+An optional differential test uses a real Pi session reader:
+
+```sh
+PSI_PI_SESSION_MODULE=/path/to/pi/dist/core/session-manager.js \
+  go test ./internal/session -run TestReferencePiProjection -count=1
+```
+
+Node and Pi are needed only for this optional reference test, not for psi.
 
 ## Layout
 

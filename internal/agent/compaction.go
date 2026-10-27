@@ -19,12 +19,14 @@ type Estimator struct {
 }
 
 // Estimate returns estimated tokens for the projected context + system + tools.
-// Prefers provider-reported usage when available; otherwise conservative
-// ~4 chars/token with image overhead.
+// Uses a conservative byte estimate and explicit image overhead. This is an
+// estimate, not provider-reported usage or an exact tokenizer.
 func (e Estimator) Estimate(proj *session.Projection, systemLen, toolCount int) (tokens int, conservative bool) {
-	total := systemLen/4 + toolCount*200
-	for _, m := range proj.Flat {
-		total += messageTokens(m)
+	total := systemLen/3 + len(session.ReplaySystem(proj.Flat).Content)/3 + toolCount*250
+	for _, m := range session.ConvertToLLM(proj.Flat) {
+		if m.Role != "system" {
+			total += messageTokens(m)
+		}
 	}
 	return total, true
 }
@@ -68,7 +70,7 @@ func messageTokens(m session.AgentMessage) int {
 					n += len(b.Text.Text)/4 + 5
 				}
 				if b.Image != nil {
-					n += 1500 // conservative image cost
+					n += 6000 // conservative image cost
 				}
 			}
 		}
@@ -101,7 +103,7 @@ func userLen(u *session.UserMessage) int {
 				n += len(b.Text.Text)
 			}
 			if b.Image != nil {
-				n += 6000
+				n += 24000
 			}
 		}
 		return n
@@ -180,16 +182,8 @@ func Compact(ctx context.Context, store *session.Store, summary string, firstKep
 	if err != nil {
 		return "", err
 	}
-	var sys *session.SystemMessage
-	for _, m := range proj.Flat {
-		if m.Role == "system" && m.System != nil {
-			cp := *m.System
-			sys = &cp
-			break
-		}
-	}
-	_ = usage
-	id, err := store.AppendCompaction(summary, firstKeptID, tokensBefore, sys)
+	sys := session.ReplaySystem(proj.Flat).Checkpoint
+	id, err := store.AppendCompactionWithUsage(summary, firstKeptID, tokensBefore, sys, usage)
 	if err != nil {
 		return "", err
 	}

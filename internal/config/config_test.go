@@ -97,8 +97,14 @@ func TestUnsupportedProviderRejected(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "s.json")
 	writeJSON(t, p, `{"defaultProvider":"openai"}`)
-	if _, err := LoadSettings(p, "", true); err == nil || !contains(err.Error(), "anthropic") {
-		t.Errorf("unsupported provider must fail with actionable error, got %v", err)
+	loaded, err := LoadSettings(p, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Validate the selected provider after CLI/session overrides, not while
+	// reading shared defaults that an explicit override can replace.
+	if _, err := (&ModelsFile{}).SelectModel(loaded.Settings.DefaultProvider, "m"); err == nil || !contains(err.Error(), "anthropic") {
+		t.Errorf("active unsupported provider must fail with actionable error, got %v", err)
 	}
 }
 

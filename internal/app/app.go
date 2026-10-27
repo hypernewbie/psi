@@ -1,15 +1,22 @@
-// Package app owns startup, command dispatch, and the active session lifecycle.
+// Package app wires the interactive terminal to the real agent and session lifecycle.
 package app
 
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
-	"sort"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/term"
 
 	"psi/internal/agent"
 	"psi/internal/config"
@@ -21,22 +28,10 @@ import (
 	"psi/internal/tools"
 )
 
-// Options is the parsed CLI boundary (PLAN proposed subset).
 type Options struct {
-	Help        bool
-	Version     bool
-	Continue    bool
-	Resume      bool
-	SessionPath string
-	Provider    string
-	Model       string
-	Thinking    string
-	SessionDir  string
-	Tools       string
-	NoTools     bool
-	NoSession   bool
-	AllowProj   bool
-	DenyProj    bool
+	Help, Version, Continue, Resume                           bool
+	SessionPath, Provider, Model, Thinking, SessionDir, Tools string
+	NoTools, NoSession, AllowProj, DenyProj                   bool
 }
 
 func Parse(args []string) (Options, *flag.FlagSet, error) {
@@ -47,22 +42,36 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.Continue, "continue", false, "continue most recent session")
 	fs.BoolVar(&o.Resume, "resume", false, "resume with selection")
 	fs.StringVar(&o.SessionPath, "session", "", "open explicit session path")
-	fs.StringVar(&o.Provider, "provider", "", "provider")
-	fs.StringVar(&o.Model, "model", "", "model")
+	fs.StringVar(&o.Provider, "provider", "", "provider (anthropic)")
+	fs.StringVar(&o.Model, "model", "", "model ID")
 	fs.StringVar(&o.Thinking, "thinking", "", "thinking level")
 	fs.StringVar(&o.SessionDir, "session-dir", "", "session directory")
-	fs.StringVar(&o.Tools, "tools", "", "tool list (e.g. read,bash)")
+	fs.StringVar(&o.Tools, "tools", "", "tool list (read,bash,edit,write)")
 	fs.BoolVar(&o.NoTools, "no-tools", false, "disable tools")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
-	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow project resources without prompting")
-	fs.BoolVar(&o.DenyProj, "deny-project", false, "deny project resources without prompting")
+	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
+	fs.BoolVar(&o.DenyProj, "deny-project", false, "deny protected project resources")
 	if err := fs.Parse(args); err != nil {
 		return o, fs, err
+	}
+	if fs.NArg() != 0 {
+		return o, fs, fmt.Errorf("unexpected positional arguments; psi is interactive only")
+	}
+	if o.AllowProj && o.DenyProj {
+		return o, fs, fmt.Errorf("--allow-project and --deny-project conflict")
+	}
+	count := 0
+	for _, selected := range []bool{o.Continue, o.Resume, o.SessionPath != ""} {
+		if selected {
+			count++
+		}
+	}
+	if count > 1 {
+		return o, fs, fmt.Errorf("choose only one of --continue, --resume, and --session")
 	}
 	return o, fs, nil
 }
 
-// Run dispatches CLI commands and owns the interactive session.
 func Run(args []string, version string) error {
 	o, fs, err := Parse(args)
 	if err != nil {
@@ -73,83 +82,155 @@ func Run(args []string, version string) error {
 		return nil
 	}
 	if o.Help {
-		fmt.Printf("psi %s — minimal Go coding agent (inline, Pi-compatible sessions)\n", version)
+		fmt.Printf("psi %s — minimal Go coding agent\n", version)
+		fs.SetOutput(os.Stdout)
 		fs.PrintDefaults()
 		return nil
 	}
-	cwd, _ := os.Getwd()
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return fmt.Errorf("noninteractive input: psi needs a terminal (no print/RPC mode)")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 	agentDir := session.AgentDir()
-	home, _ := os.UserHomeDir()
-
-	// Load settings (user + project). Project consent: flags override prompt.
 	consent := askProjectConsent(o, cwd)
-	userPath := filepath.Join(agentDir, "settings.json")
-	projPath := filepath.Join(cwd, ".pi", "settings.json")
-	loaded, err := config.LoadSettings(userPath, projPath, consent)
+	loaded, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json"), consent)
 	if err != nil {
 		return err
 	}
 	st := loaded.Settings
-
-	// Startup overrides: CLI > restored > settings.
-	// Restored state loads after session open; first pass uses settings.
-	ov := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
-	if ov.Provider == "" {
-		ov.Provider = "anthropic"
-	}
-	if !st.QuietStartup {
-		fmt.Printf("psi %s — %s/%s · %s\n", version, ov.Provider, ov.Model, cwd)
-		if ov.Explain != "" {
-			fmt.Printf("(%s)\n", ov.Explain)
+	if o.NoTools {
+		st.DefaultTools = []string{}
+	} else if o.Tools != "" {
+		st.DefaultTools, err = config.ResolveTools(strings.Split(o.Tools, ","), st.DefaultTools)
+		if err != nil {
+			return err
 		}
 	}
-
-	// Models metadata (local only, no catalog refresh).
 	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
 	if err != nil {
 		return err
 	}
-	_ = models
-
-	// Instructions + skills (consent-gated for project).
-	instructions, _ := config.DiscoverInstructions(cwd, home, consent)
-	sk, diags := skills.Discover(cwd, agentDir, st.Skills, consent)
-	if !st.QuietStartup {
-		for _, d := range diags {
-			fmt.Printf("note: skill %s: %s\n", d.Path, d.Message)
-		}
+	instructions, err := config.DiscoverInstructions(cwd, agentDir, consent)
+	if err != nil {
+		return err
 	}
+	sk, diagnostics := skills.Discover(cwd, agentDir, st.Skills, consent)
 	prompt := config.AssemblePrompt(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools)
-
-	// Session lifecycle: new / explicit / continue / resume / ephemeral.
+	ov := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	store, err := openSession(o, cwd, agentDir, st, ov)
 	if err != nil {
 		return err
 	}
-	// Restore model/thinking from the active path (explicit CLI wins).
-	proj, err := store.Projection()
+	if err := store.TryLock(); err != nil {
+		return err
+	}
+	r := &runtime{store: store, options: o, settings: st, models: models, skills: sk, prompt: prompt, agentDir: agentDir}
+	defer func() {
+		r.store.Unlock()
+		if r.prov != nil {
+			r.prov.CloseIdle()
+		}
+	}()
+	if err := r.restore(); err != nil {
+		return err
+	}
+	if !st.QuietStartup {
+		fmt.Println(terminal.Sanitize(terminal.StartupLine(r.ov.Provider, r.ov.Model, cwd, store.Header().ID, len(sk))))
+		for _, d := range diagnostics {
+			fmt.Println(terminal.Sanitize("note: skill " + d.Path + ": " + d.Message))
+		}
+		if r.authErr != nil {
+			fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error() + " (offline commands still work)"))
+		}
+		fmt.Println("Enter submits · Ctrl+J newline · Ctrl+C cancel · /help · /quit")
+	}
+	tty, _, err := terminal.Acquire()
 	if err != nil {
 		return err
 	}
-	restored := proj.State
-	final := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, restored.Provider, restored.ModelID, restored.ThinkingLevel, st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
+	defer tty.Restore()
+	console := terminal.NewConsole(os.Stdin, os.Stdout)
+	defer console.Close()
+	return r.repl(console)
+}
 
-	// Provider credentials (daily-use path; no silent fallback).
-	apiKey, src, err := provider.SelectAPIKey(envMap(), filepath.Join(agentDir, "auth.json"))
+type runtime struct {
+	store            *session.Store
+	reg              *tools.Registry
+	options          Options
+	settings         config.Settings
+	models           *config.ModelsFile
+	skills           []skills.Skill
+	prompt, agentDir string
+	ov               config.StartupOverrides
+	cfg              agent.Config
+	prov             provider.Provider
+	authErr          error
+}
+
+func (r *runtime) restore() error {
+	proj, err := r.store.Projection()
 	if err != nil {
-		// Surface actionable error but keep session usable offline for /session etc.
-		fmt.Printf("warning: %v (offline commands still work)\n", err)
-		_ = src
-		apiKey = ""
+		return err
 	}
-	_ = apiKey
-	_ = prompt
+	thinking := ""
+	if len(r.store.Entries()) > 0 {
+		thinking = proj.State.ThinkingLevel
+	}
+	ov := config.ResolveStartup(r.options.Provider, r.options.Model, r.options.Thinking, r.options.SessionDir, r.options.NoSession,
+		proj.State.Provider, proj.State.ModelID, thinking, r.settings, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
+	if ov.Provider == "" {
+		ov.Provider = "anthropic"
+	}
+	return r.configure(ov)
+}
 
-	// Tools.
-	reg := tools.NewRegistry(cwd)
-
-	// Interactive loop (inline, native scrollback).
-	return repl(store, reg, final, st, sk, version)
+func (r *runtime) configure(ov config.StartupOverrides) error {
+	meta, err := r.models.SelectModel(ov.Provider, ov.Model)
+	if err != nil {
+		return err
+	}
+	ov.Model = meta.ID
+	if ov.Thinking == "" {
+		ov.Thinking = "off"
+	}
+	pm := provider.ModelMeta{ID: meta.ID, API: meta.API, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage}
+	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt,
+		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveTokens, KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
+	if _, err := provider.BuildAnthropicRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
+		return err
+	}
+	env := envMap()
+	if meta.APIKey != "" {
+		key, err := config.ResolveCredential(meta.APIKey)
+		if err != nil {
+			return err
+		}
+		env["ANTHROPIC_API_KEY"] = key
+	}
+	key, _, authErr := provider.SelectAPIKey(env, filepath.Join(r.agentDir, "auth.json"))
+	client := provider.NewClient(meta.BaseURL, key, r.settings.MaxRetries, time.Duration(max(r.settings.HTTPIdleTimeoutMs, 0))*time.Millisecond)
+	client.Headers = map[string]string{}
+	for name, value := range meta.Headers {
+		resolved, err := config.ResolveCredential(value)
+		if err != nil {
+			client.CloseIdle()
+			return fmt.Errorf("provider header %s: %w", name, err)
+		}
+		client.Headers[name] = resolved
+	}
+	if r.prov != nil {
+		r.prov.CloseIdle()
+	}
+	r.ov, r.cfg, r.prov, r.authErr = ov, cfg, client, authErr
+	r.reg = tools.NewRegistry(r.store.Cwd())
+	r.reg.Bash.ShellPath = r.settings.ShellPath
+	r.reg.Bash.ShellPrefix = r.settings.ShellPrefix
+	r.reg.Read.BlockImages = !meta.InputImage
+	return nil
 }
 
 func envMap() map[string]string {
@@ -163,323 +244,354 @@ func envMap() map[string]string {
 }
 
 func askProjectConsent(o Options, cwd string) bool {
-	if o.AllowProj {
-		return true
-	}
 	if o.DenyProj {
 		return false
 	}
-	// Noninteractive: deny (safe default, documented).
-	if !isTTY() {
-		return false
+	if o.AllowProj {
+		return true
 	}
-	// Check if project resources exist.
-	hasProj := false
-	for _, p := range []string{filepath.Join(cwd, ".pi", "settings.json"), filepath.Join(cwd, ".pi", "skills"), filepath.Join(cwd, "AGENTS.md"), filepath.Join(cwd, "AGENTS.override.md")} {
-		if _, err := os.Stat(p); err == nil {
-			hasProj = true
+	hasProject := false
+	for _, p := range []string{".pi/settings.json", ".pi/skills", ".pi/SYSTEM.md", ".pi/APPEND_SYSTEM.md", ".agents/skills"} {
+		if _, err := os.Stat(filepath.Join(cwd, p)); err == nil {
+			hasProject = true
 			break
 		}
 	}
-	if !hasProj {
-		return true
+	if !hasProject {
+		return false
 	}
-	fmt.Printf("Load project resources from %s (.pi/settings.json, skills, AGENTS.md)? [y/N] ", cwd)
-	r := bufio.NewReader(os.Stdin)
-	line, _ := r.ReadString('\n')
-	line = strings.TrimSpace(strings.ToLower(line))
-	return line == "y" || line == "yes"
-}
-
-func isTTY() bool {
-	fi, _ := os.Stdin.Stat()
-	return fi.Mode()&os.ModeCharDevice != 0
+	fmt.Printf("%s [y/N] ", terminal.Sanitize("Load protected project resources from "+cwd+"?"))
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
 }
 
 func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.StartupOverrides) (*session.Store, error) {
-	dir := session.SessionDirOverride(ov.SessionDir, os.Getenv("PI_CODING_AGENT_SESSION_DIR"), st.SessionDir, cwd, agentDir)
+	dir := session.SessionDirOverride(ov.SessionDir, "", "", cwd, agentDir)
 	persist := !ov.NoSession
 	if o.SessionPath != "" {
-		if _, err := os.Stat(o.SessionPath); err != nil {
-			return nil, fmt.Errorf("explicit session path not found (refusing to create a replacement): %s", o.SessionPath)
-		}
 		return session.OpenFile(o.SessionPath, cwd, persist)
 	}
 	if o.Continue {
-		latest, err := session.FindMostRecent(dir, cwd)
-		if err != nil || latest == "" {
-			return nil, fmt.Errorf("no sessions found in %s", dir)
-		}
-		return session.OpenFile(latest, cwd, persist)
+		return session.Continue(cwd, dir, agentDir, persist)
 	}
 	if o.Resume {
-		infos, err := session.Discover(dir)
+		infos, err := workspaceSessions(dir, cwd)
 		if err != nil {
 			return nil, err
 		}
-		// Filter to current workspace for determinism.
-		var mine []session.SessionInfo
-		for _, in := range infos {
-			if in.Cwd == cwd || in.Cwd == "" {
-				mine = append(mine, in)
-			}
-		}
-		if len(mine) == 0 {
+		if len(infos) == 0 {
 			return nil, fmt.Errorf("no sessions found in %s", dir)
 		}
-		sort.Slice(mine, func(i, j int) bool { return mine[i].Modified.After(mine[j].Modified) })
-		fmt.Printf("Sessions:\n")
-		n := len(mine)
-		if n > 10 {
-			n = 10
+		for i, info := range infos {
+			fmt.Println(terminal.Sanitize(fmt.Sprintf("%d) %s — %s", i+1, info.ID, firstLine(info.FirstMessage))))
 		}
-		for i := 0; i < n; i++ {
-			fmt.Printf("  %d) %s — %s (%d messages)\n", i+1, mine[i].ID[:8], firstLine(mine[i].FirstMessage), mine[i].MessageCount)
+		fmt.Print("Select session number: ")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			return nil, err
 		}
-		fmt.Printf("Select [1]: ")
-		r := bufio.NewReader(os.Stdin)
-		line, _ := r.ReadString('\n')
-		line = strings.TrimSpace(line)
-		idx := 0
-		if line != "" {
-			fmt.Sscanf(line, "%d", &idx)
-			idx--
+		idx, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil || idx < 1 || idx > len(infos) {
+			return nil, fmt.Errorf("invalid session selection")
 		}
-		if idx < 0 || idx >= n {
-			idx = 0
-		}
-		return session.OpenFile(mine[idx].Path, cwd, persist)
+		return session.OpenFile(infos[idx-1].Path, cwd, persist)
 	}
-	// New session (flushed on first user/assistant message per Pi).
 	return session.New(session.OpenOptions{Cwd: cwd, SessionDir: dir, AgentDir: agentDir, Persist: persist})
+}
+
+func workspaceSessions(dir, cwd string) ([]session.SessionInfo, error) {
+	infos, err := session.Discover(dir)
+	if err != nil {
+		return nil, err
+	}
+	var mine []session.SessionInfo
+	for _, info := range infos {
+		if info.Cwd == cwd {
+			mine = append(mine, info)
+			if len(mine) == 10 {
+				break
+			}
+		}
+	}
+	return mine, nil
 }
 
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+		s = s[:i]
 	}
-	if len(s) > 60 {
-		return s[:60] + "…"
+	r := []rune(s)
+	if len(r) > 60 {
+		return string(r[:60]) + "…"
 	}
 	return s
 }
 
-// repl is the inline read-eval loop (native scrollback, compact status).
-func repl(store *session.Store, reg *tools.Registry, ov config.StartupOverrides, st config.Settings, sk []skills.Skill, version string) error {
-	fmt.Printf("%s\n", terminal.StartupLine(ov.Provider, ov.Model, store.Cwd(), store.Header().ID, len(sk)))
-	fmt.Printf("Type /help for commands. Enter submits, Ctrl+J newline, Ctrl+C cancels, Ctrl+D exits.\n")
-	ed := terminal.NewEditor()
-	stream := terminal.NewStreamer(os.Stdout, true)
-	status := terminal.NewStatusWriter(os.Stdout)
-	in := bufio.NewReader(os.Stdin)
-	ctx := context.Background()
-	var cancel context.CancelFunc = func() {}
-	busy := false
+func (r *runtime) replace(next *session.Store) error {
+	if next.Persistent() && r.store.Persistent() && next.File() != "" && next.File() == r.store.File() {
+		return nil
+	}
+	if err := next.TryLock(); err != nil {
+		return err
+	}
+	old := r.store
+	r.store = next
+	if err := r.restore(); err != nil {
+		next.Unlock()
+		r.store = old
+		return err
+	}
+	old.Unlock()
+	return nil
+}
+
+func (r *runtime) repl(console *terminal.Console) error {
+	out := terminal.RawOutput{W: os.Stdout}
+	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	stream := terminal.NewStreamer(out, true)
+	status := terminal.NewStatusWriter(out)
+	events := make(chan event.Event, 64)
+	done := make(chan error, 1)
+	signals := make(chan os.Signal, 4)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGWINCH)
+	defer signal.Stop(signals)
+	busy, exiting, compacting := false, false, false
+	var cancel context.CancelFunc
+	var choosing []session.SessionInfo
+	start := func(text, focus string, compact bool) {
+		if r.authErr != nil {
+			print("error: " + r.authErr.Error())
+			console.Draw()
+			return
+		}
+		ctx, stop := context.WithCancel(context.Background())
+		cancel, busy, compacting = stop, true, compact
+		if compact {
+			print("(compacting...)")
+		}
+		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) { events <- e })
+		go func() {
+			if compact {
+				done <- loop.Compact(ctx, r.cfg, focus)
+			} else {
+				done <- loop.Submit(ctx, text, r.cfg)
+			}
+		}()
+	}
+	console.Draw()
+	inputs := console.Inputs
 	for {
-		if !busy {
-			fmt.Printf("> ")
-		}
-		line, err := in.ReadString('\n')
-		if err != nil {
-			stream.Close()
-			return nil // EOF exits cleanly
-		}
-		text := strings.TrimRight(line, "\r\n")
-		// Idle interrupts: handled by outer signal; here map Ctrl+C text? Real
-		// raw-mode handling lives in terminal.Term; line mode keeps it simple.
-		if cmd, isCmd := terminal.ParseCommand(text); isCmd {
-			if ns, err := handleCommand(cmd, store, reg, &ov, st, sk, stream, status); err != nil {
-				if err != nil && err.Error() == "quit" {
-					return nil
+		select {
+		case sig := <-signals:
+			if sig == syscall.SIGWINCH {
+				if !busy {
+					console.Draw()
 				}
-				if err != nil {
-					fmt.Printf("error: %v\n", err)
-				}
-				if ns != nil && ns != store {
-					store = ns
-				}
-			}
-			continue
-		}
-		// Normal submission: disabled while a run is active (cancellation only).
-		if busy {
-			fmt.Printf("(run active: cancellation only)\n")
-			continue
-		}
-		// Expand /skill:name without a provider request on missing.
-		if strings.HasPrefix(strings.TrimSpace(text), "/skill:") {
-			parts := strings.SplitN(strings.TrimSpace(text)[7:], " ", 2)
-			name := parts[0]
-			arg := ""
-			if len(parts) == 2 {
-				arg = parts[1]
-			}
-			expanded, err := skills.Invoke(sk, name, arg)
-			if err != nil {
-				fmt.Printf("error: %v\n", err)
 				continue
 			}
-			text = expanded
-		}
-		busy = true
-		runCtx, c := context.WithCancel(ctx)
-		cancel = c
-		go func() {
-			// Ctrl+C cancels runCtx via signal forwarding (simplified: not wired in line mode).
-			_ = cancel
-		}()
-		fakeOrReal := realOrFakeProvider(store, ov)
-		prov := fakeOrReal
-		loop := agent.New(store, reg, prov, func(ev event.Event) {
+			if sig == syscall.SIGTERM {
+				exiting = true
+			}
+			if busy {
+				cancel()
+			} else {
+				return nil
+			}
+		case ev := <-events:
 			switch ev.Type {
 			case event.TextDelta:
 				stream.Delta(ev.Text)
 			case event.ToolStart:
+				stream.Close()
 				status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
 			case event.ToolEnd:
-				stt := terminal.ToolDone
-				if ev.Err != nil {
-					stt = terminal.ToolFailed
-				} else if ev.State == "failed" {
-					stt = terminal.ToolFailed
-				}
-				status.Update(ev.ToolName, ev.ToolCallID, stt)
+				status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
 			}
-		})
-		cfg := agent.Config{Model: provider.ModelMeta{ID: ov.Model, API: "anthropic-messages", MaxTokens: 16384}, Thinking: ov.Thinking, Tools: toolDefs(st.DefaultTools), System: "psi base prompt"}
-		// Save draft safely: editor preserves draft on cancel (line mode: text already consumed).
-		_ = ed
-		err = loop.Submit(runCtx, text, cfg)
-		stream.Close()
-		busy = false
-		if err != nil {
-			if runCtx.Err() != nil {
-				fmt.Printf("(cancelled)\n")
-				status.Update("", "", terminal.ToolCancelled)
+		case err := <-done:
+			// Drain events before drawing the next prompt. A completed run can
+			// otherwise race its final text delta through this select.
+			for len(events) > 0 {
+				ev := <-events
+				switch ev.Type {
+				case event.TextDelta:
+					stream.Delta(ev.Text)
+				case event.ToolStart:
+					stream.Close()
+					status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
+				case event.ToolEnd:
+					status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
+				}
+			}
+			cancel()
+			busy = false
+			stream.Close()
+			if errors.Is(err, context.Canceled) {
+				print("(cancelled)")
+			} else if err != nil {
+				print("error: " + err.Error())
+			} else if compacting {
+				print("(compacted)")
+			}
+			compacting = false
+			if exiting {
+				return nil
+			}
+			console.Draw()
+		case input, ok := <-inputs:
+			if !ok {
+				inputs = nil
+				if busy {
+					cancel()
+					exiting = true
+					continue
+				}
+				return nil
+			}
+			text, submitted, quit, abort := console.Handle(input, busy)
+			if abort && busy {
+				cancel()
+			}
+			if quit {
+				if busy {
+					exiting = true
+					cancel()
+					continue
+				}
+				return nil
+			}
+			if !submitted {
 				continue
 			}
-			fmt.Printf("error: %v\n", err)
+			if choosing != nil {
+				if strings.TrimSpace(text) != "" {
+					n, err := strconv.Atoi(strings.TrimSpace(text))
+					if err != nil || n < 1 || n > len(choosing) {
+						print("error: invalid session number")
+					} else {
+						next, err := session.OpenFile(choosing[n-1].Path, r.store.Cwd(), r.store.Persistent())
+						if err == nil {
+							err = r.replace(next)
+						}
+						if err != nil {
+							print("error: " + err.Error())
+						} else {
+							print("resumed " + r.store.Header().ID)
+						}
+					}
+				}
+				choosing = nil
+				console.Draw()
+				continue
+			}
+			if strings.TrimSpace(text) == "" {
+				console.Draw()
+				continue
+			}
+			if cmd, ok := terminal.ParseCommand(text); ok {
+				if strings.HasPrefix(cmd.Name, "skill:") {
+					expanded, err := skills.Invoke(r.skills, strings.TrimPrefix(cmd.Name, "skill:"), cmd.Arg)
+					if err != nil {
+						print("error: " + err.Error())
+						console.Draw()
+					} else {
+						start(expanded, "", false)
+					}
+					continue
+				}
+				if cmd.Name == "compact" {
+					start("", cmd.Arg, true)
+					continue
+				}
+				if cmd.Name == "resume" {
+					infos, err := workspaceSessions(r.store.Dir(), r.store.Cwd())
+					if err != nil {
+						print("error: " + err.Error())
+					} else if len(infos) == 0 {
+						print("no sessions found")
+					} else {
+						choosing = infos
+						for i, info := range infos {
+							print(fmt.Sprintf("%d) %s — %s", i+1, info.ID, firstLine(info.FirstMessage)))
+						}
+						print("Enter a session number, or an empty line to cancel.")
+					}
+					console.Draw()
+					continue
+				}
+				quit, err := r.command(cmd, out)
+				if err != nil {
+					print("error: " + err.Error())
+				}
+				if quit {
+					return nil
+				}
+				console.Draw()
+				continue
+			}
+			start(text, "", false)
 		}
-		_ = in
 	}
 }
 
-// handleCommand implements the essential commands (Step 84).
-func handleCommand(cmd *terminal.Command, store *session.Store, reg *tools.Registry, ov *config.StartupOverrides, st config.Settings, sk []skills.Skill, stream *terminal.Streamer, status *terminal.StatusWriter) (*session.Store, error) {
-	switch {
-	case cmd.Name == "help":
-		fmt.Println(terminal.HelpText())
-		return store, nil
-	case cmd.Name == "quit":
-		return nil, fmt.Errorf("quit")
-	case cmd.Name == "session":
-		proj, _ := store.Projection()
-		fmt.Printf("session %s\nfile %s\ncwd %s\nprovider/model %s/%s thinking %s\nmessages %d\n", store.Header().ID, store.File(), store.Cwd(), ov.Provider, ov.Model, ov.Thinking, len(proj.Flat))
-		return store, nil
-	case cmd.Name == "new":
-		// Reject replacement during unsettled runs (caller ensures idle).
-		dir := store.Dir()
-		ns, err := session.New(session.OpenOptions{Cwd: store.Cwd(), SessionDir: dir, AgentDir: session.AgentDir(), Persist: store.File() != ""})
+func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
+	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	switch cmd.Name {
+	case "quit":
+		return true, nil
+	case "help":
+		print(terminal.HelpText())
+	case "session":
+		proj, err := r.store.Projection()
 		if err != nil {
-			return store, err
+			return false, err
 		}
-		fmt.Printf("new session %s\n", ns.Header().ID)
-		return ns, nil
-	case cmd.Name == "resume":
-		infos, err := session.Discover(store.Dir())
+		print(fmt.Sprintf("session %s\nfile %s\ncwd %s\nprovider/model %s/%s thinking %s\ncontext messages %d", r.store.Header().ID, r.store.File(), r.store.Cwd(), r.ov.Provider, r.ov.Model, r.ov.Thinking, len(proj.Flat)))
+	case "new":
+		next, err := session.New(session.OpenOptions{Cwd: r.store.Cwd(), SessionDir: r.store.Dir(), AgentDir: r.agentDir, Persist: r.store.Persistent()})
 		if err != nil {
-			return store, err
+			return false, err
 		}
-		for i, in := range infos {
-			if i >= 10 {
-				break
-			}
-			fmt.Printf("  %d) %s — %s\n", i+1, in.ID, firstLine(in.FirstMessage))
+		if err := r.replace(next); err != nil {
+			return false, err
 		}
-		return store, fmt.Errorf("use --resume for selection in this release (list shown)")
-	case cmd.Name == "model":
-		parts := strings.Fields(cmd.Arg)
-		if len(parts) == 0 {
-			fmt.Printf("model %s/%s\n", ov.Provider, ov.Model)
-			return store, nil
+		print("new session " + next.Header().ID)
+	case "model", "thinking":
+		if strings.TrimSpace(cmd.Arg) == "" {
+			print(fmt.Sprintf("%s/%s thinking %s", r.ov.Provider, r.ov.Model, r.ov.Thinking))
+			return false, nil
 		}
-		// Session-local change: provider model or model only.
-		if len(parts) == 2 {
-			ov.Provider = parts[0]
-			ov.Model = parts[1]
+		next := r.ov
+		if cmd.Name == "thinking" {
+			next.Thinking = strings.TrimSpace(cmd.Arg)
 		} else {
-			ov.Model = parts[0]
-		}
-		if _, err := store.AppendModelChange(ov.Provider, ov.Model); err != nil {
-			return store, err
-		}
-		fmt.Printf("model -> %s/%s (session-local)\n", ov.Provider, ov.Model)
-		return store, nil
-	case cmd.Name == "thinking":
-		lvl := strings.TrimSpace(cmd.Arg)
-		if lvl == "" {
-			fmt.Printf("thinking %s\n", ov.Thinking)
-			return store, nil
-		}
-		if _, err := provider.ThinkingBudget(lvl); err != nil {
-			return store, err
-		}
-		ov.Thinking = lvl
-		if _, err := store.AppendThinkingLevelChange(lvl); err != nil {
-			return store, err
-		}
-		fmt.Printf("thinking -> %s (session-local)\n", lvl)
-		return store, nil
-	case cmd.Name == "compact":
-		// Manual compaction with optional focus instructions.
-		path, err := store.ActivePath()
-		if err != nil {
-			return store, err
-		}
-		keep, err := agent.Boundary(path, 4)
-		if err != nil {
-			return store, err
-		}
-		focus := strings.TrimSpace(cmd.Arg)
-		summary := "Manual compaction" + func() string {
-			if focus != "" {
-				return ": " + focus
+			parts := strings.Fields(cmd.Arg)
+			if len(parts) == 1 {
+				next.Model = parts[0]
+			} else if len(parts) == 2 {
+				next.Provider, next.Model = parts[0], parts[1]
+			} else {
+				return false, fmt.Errorf("use /model [provider] model")
 			}
-			return ""
-		}()
-		if _, err := agent.Compact(context.Background(), store, summary, keep, 0, nil); err != nil {
-			return store, err
 		}
-		fmt.Printf("compacted (kept from %s)\n", keep)
-		return store, nil
-	case strings.HasPrefix(cmd.Name, "skill:"):
-		name := strings.TrimPrefix(cmd.Name, "skill:")
-		expanded, err := skills.Invoke(sk, name, cmd.Arg)
+		// Validate before recording the change. A failed model selection must
+		// neither poison the session nor change its in-memory configuration.
+		old := r.ov
+		if err := r.configure(next); err != nil {
+			return false, err
+		}
+		var err error
+		if cmd.Name == "model" {
+			_, err = r.store.AppendModelChange(r.ov.Provider, r.ov.Model)
+		} else {
+			_, err = r.store.AppendThinkingLevelChange(r.ov.Thinking)
+		}
 		if err != nil {
-			return store, err
+			_ = r.configure(old)
+			return false, err
 		}
-		fmt.Printf("(skill %s expanded, %d chars; submit to run)\n", name, len(expanded))
-		return store, nil
-	case strings.HasPrefix(cmd.Name, "unknown:"):
-		return store, fmt.Errorf("unknown command %q (see /help)", "/"+strings.TrimPrefix(cmd.Name, "unknown:"))
+		print(fmt.Sprintf("%s/%s thinking %s (session-local)", r.ov.Provider, r.ov.Model, r.ov.Thinking))
+	default:
+		return false, fmt.Errorf("unknown command (see /help)")
 	}
-	return store, fmt.Errorf("unknown command")
-}
-
-func toolDefs(names []string) []provider.ToolDef {
-	var out []provider.ToolDef
-	for _, n := range names {
-		out = append(out, provider.ToolDef{Name: n, Description: n, Schema: map[string]any{"type": "object"}})
-	}
-	return out
-}
-
-func realOrFakeProvider(store *session.Store, ov config.StartupOverrides) provider.Provider {
-	// Offline-safe: tests inject fakes directly; the binary selects the real
-	// Anthropic client when ANTHROPIC_API_KEY is set, else a stub that errors
-	// clearly on Send (commands like /session still work offline).
-	if key, _, err := provider.SelectAPIKey(envMap(), ""); err == nil && key != "" {
-		return provider.NewClient("", key, 3, 0)
-	}
-	return &provider.Fake{}
+	return false, nil
 }

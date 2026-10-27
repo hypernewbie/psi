@@ -1,10 +1,12 @@
 package session
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,10 +27,10 @@ type Store struct {
 	dir       string
 	cwd       string
 	persist   bool
-	rawLines  [][]byte // original prefix bytes (without newlines), header first
 	flushed   bool
 	lock      *sessionLock
 	knownSize int64
+	knownInfo os.FileInfo
 }
 
 // OpenOptions controls Store creation.
@@ -84,43 +86,38 @@ func New(opts OpenOptions) (*Store, error) {
 
 // OpenFile opens an explicit session path.
 func OpenFile(path, cwd string, persist bool) (*Store, error) {
-	header, entries, raws, err := ReadFileEntries(path)
+	before, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	header, entries, _, err := ReadFileEntries(path)
 	if err != nil {
 		return nil, err
 	}
 	if header == nil {
-		// Empty file: initialize with a valid header only if zero bytes;
-		// non-empty invalid files must fail without replacement.
-		st, statErr := os.Stat(path)
-		if statErr != nil {
-			return nil, statErr
-		}
-		if st.Size() > 0 {
-			return nil, fmt.Errorf("session file is not a valid psi session: %s", path)
-		}
-		// Zero-byte explicit path: seed header.
-		s, err := New(OpenOptions{Cwd: cwd, Persist: persist})
-		if err != nil {
-			return nil, err
-		}
-		s.file = path
-		if persist {
-			if err := s.rewriteFile(); err != nil {
-				return nil, err
-			}
-			s.flushed = true
-		}
-		return s, nil
+		return nil, fmt.Errorf("session file has no valid header; refusing to initialize an explicit existing file: %s", path)
 	}
 	if err := checkVersion(header, path); err != nil {
 		return nil, err
 	}
-	if incomplete, err := HasIncompleteTail(path); err == nil && incomplete {
+	if incomplete, err := HasIncompleteTail(path); err != nil {
+		return nil, err
+	} else if incomplete {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
-	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, rawLines: raws, flushed: true}
+	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true}
 	s.rebuildIndex()
-	s.knownSize = fileSize(path)
+	s.knownInfo, err = os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(before, s.knownInfo) || before.Size() != s.knownInfo.Size() || !before.ModTime().Equal(s.knownInfo.ModTime()) {
+		return nil, fmt.Errorf("session file changed while reading: %s", path)
+	}
+	s.knownSize = s.knownInfo.Size()
+	if _, err := BuildPath(entries, ""); err != nil {
+		return nil, err
+	}
 	// leaf = last entry (pinned default leaf selection on reopen).
 	if len(entries) > 0 {
 		s.leafID = entries[len(entries)-1].ID()
@@ -191,6 +188,9 @@ func (s *Store) Dir() string { return s.dir }
 
 // Cwd returns the workspace cwd.
 func (s *Store) Cwd() string { return s.cwd }
+
+// Persistent reports the storage policy, including ephemeral copies of real files.
+func (s *Store) Persistent() bool { return s.persist }
 
 // ActivePath returns the chronological path from root to leaf.
 func (s *Store) ActivePath() ([]*Entry, error) {
@@ -266,6 +266,10 @@ func (s *Store) AppendUsage(kind, provider, model string, u Usage, note string) 
 
 // AppendCompaction appends a compaction summary.
 func (s *Store) AppendCompaction(summary, firstKeptID string, tokensBefore float64, system *SystemMessage) (string, error) {
+	return s.AppendCompactionWithUsage(summary, firstKeptID, tokensBefore, system, nil)
+}
+
+func (s *Store) AppendCompactionWithUsage(summary, firstKeptID string, tokensBefore float64, system *SystemMessage, usage *Usage) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := newEntryID(s.byID)
@@ -275,7 +279,7 @@ func (s *Store) AppendCompaction(summary, firstKeptID string, tokensBefore float
 	parent := parentPtr(s.leafID, len(s.entries))
 	ts := nowISO()
 	e := &Entry{Kind: "compaction", Base: entryBase{Type: "compaction", ID: id, ParentID: parent, Timestamp: ts},
-		Compaction: &CompactionEntry{Type: "compaction", ID: id, ParentID: parent, Timestamp: ts, Summary: summary, FirstKeptEntryID: firstKeptID, TokensBefore: tokensBefore, SystemMessage: system}}
+		Compaction: &CompactionEntry{Type: "compaction", ID: id, ParentID: parent, Timestamp: ts, Summary: summary, FirstKeptEntryID: firstKeptID, TokensBefore: tokensBefore, SystemMessage: system, Usage: usage}}
 	return id, s.appendLocked(e, e.Compaction)
 }
 
@@ -362,14 +366,18 @@ func (s *Store) GetEntry(id string) *Entry {
 
 // appendLocked validates, persists, and advances the leaf. Caller holds mu.
 func (s *Store) appendLocked(e *Entry, payload any) error {
-	if s.persist && s.file != "" {
-		if incomplete, err := HasIncompleteTail(s.file); err == nil && incomplete {
-			return fmt.Errorf("session file has truncated final record, refusing to append: %s", s.file)
-		}
-	}
 	if s.persist && s.file != "" && s.flushed {
-		if st, err := os.Stat(s.file); err == nil && st.Size() != s.knownSize {
+		st, err := os.Stat(s.file)
+		if err != nil {
+			return fmt.Errorf("cannot inspect active session: %w", err)
+		}
+		if st.Size() != s.knownSize || (s.knownInfo != nil && (!os.SameFile(st, s.knownInfo) || !st.ModTime().Equal(s.knownInfo.ModTime()))) {
 			return fmt.Errorf("session file changed externally, refusing to append: %s", s.file)
+		}
+		if incomplete, err := HasIncompleteTail(s.file); err != nil {
+			return err
+		} else if incomplete {
+			return fmt.Errorf("session file has truncated final record, refusing to append: %s", s.file)
 		}
 	}
 	// Validate duplicate (should not happen with generated ids).
@@ -385,6 +393,9 @@ func (s *Store) appendLocked(e *Entry, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
+	}
+	if len(data) > MaxRecordBytes {
+		return fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)
 	}
 	e.Raw = data
 	if s.persist && s.file != "" {
@@ -414,15 +425,32 @@ func (s *Store) appendLocked(e *Entry, payload any) error {
 			}
 			// Setup-only entries stay in memory (no file) until first user/assistant message.
 		} else {
-			f, err := os.OpenFile(s.file, os.O_WRONLY|os.O_APPEND, 0o644)
+			f, err := os.OpenFile(s.file, os.O_RDWR|os.O_APPEND, 0o600)
 			if err != nil {
 				return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
 			}
-			if _, err := f.Write(append(data, '\n')); err != nil {
-				f.Close()
-				return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
+			record := append(append([]byte(nil), data...), '\n')
+			if s.knownSize > 0 {
+				var last [1]byte
+				if _, err := f.ReadAt(last[:], s.knownSize-1); err != nil {
+					f.Close()
+					return err
+				}
+				if last[0] != '\n' {
+					record = append([]byte{'\n'}, record...)
+				}
 			}
-			f.Close()
+			_, writeErr := f.Write(record)
+			if writeErr == nil {
+				writeErr = f.Sync()
+			}
+			closeErr := f.Close()
+			if writeErr != nil {
+				return fmt.Errorf("append failed (stopping further model/tool actions): %w", writeErr)
+			}
+			if closeErr != nil {
+				return closeErr
+			}
 		}
 	}
 	s.entries = append(s.entries, e)
@@ -431,31 +459,10 @@ func (s *Store) appendLocked(e *Entry, payload any) error {
 	if s.persist && s.file != "" {
 		if st, err := os.Stat(s.file); err == nil {
 			s.knownSize = st.Size()
+			s.knownInfo = st
 		}
 	}
 	return nil
-}
-
-func (s *Store) rewriteFile() error {
-	if !s.persist || s.file == "" {
-		return nil
-	}
-	tmp := s.file + ".tmp"
-	hdr, err := json.Marshal(s.header)
-	if err != nil {
-		return err
-	}
-	var sb strings.Builder
-	sb.Write(hdr)
-	sb.WriteByte('\n')
-	for _, e := range s.entries {
-		sb.Write(e.Raw)
-		sb.WriteByte('\n')
-	}
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.file)
 }
 
 func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
@@ -463,7 +470,7 @@ func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
 		return nil
 	}
 	// O_EXCL: never clobber an existing session file on first flush.
-	f, err := os.OpenFile(s.file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := os.OpenFile(s.file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("session file already exists, refusing to overwrite: %s: %w", s.file, err)
 	}
@@ -485,6 +492,10 @@ func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
 	if _, err := f.Write(buf); err != nil {
 		f.Close()
 		return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
 	}
 	return f.Close()
 }
@@ -538,39 +549,65 @@ func InspectSession(path string) (*SessionInfo, error) {
 		return nil, err
 	}
 	defer f.Close()
-	header, entries, _, err := DecodeEntries(limitReader(f, 256*1024*1024), path)
-	// Discovery is best-effort but bounded: fall back to streaming header-only
-	// if the transcript is huge. For now DecodeEntries handles up to 256 MiB total.
+	st, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
-	if header == nil {
-		return nil, fmt.Errorf("no header")
+	if !st.Mode().IsRegular() || st.Size() > 256*1024*1024 {
+		return nil, fmt.Errorf("session exceeds discovery bounds")
 	}
-	created, _ := time.Parse(time.RFC3339Nano, header.Timestamp)
-	modified := created
-	if st, err := os.Stat(path); err == nil {
-		modified = st.ModTime()
-	}
-	count := 0
-	first := "(no messages)"
-	for _, e := range entries {
-		if e.Kind != "message" {
-			continue
+	br := bufio.NewReader(f)
+	info := &SessionInfo{Path: path, Modified: st.ModTime(), FirstMessage: "(no messages)"}
+	// Hold only one record at a time; discovery must not load an entire tree.
+	for {
+		line, readErr := readRecord(br)
+		if readErr != nil && readErr != io.EOF {
+			return nil, readErr
 		}
-		count++
-		if first == "(no messages)" && e.Message.Message.User != nil {
-			if t := userText(e.Message.Message.User); t != "" {
-				first = t
+		if len(strings.TrimSpace(string(line))) > 0 {
+			var meta struct {
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				Cwd       string `json:"cwd"`
+				Timestamp string `json:"timestamp"`
+				Message   struct {
+					Role    string          `json:"role"`
+					Content json.RawMessage `json:"content"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal(line, &meta); err != nil {
+				return nil, err
+			}
+			if info.ID == "" {
+				if meta.Type != "session" || meta.ID == "" {
+					return nil, fmt.Errorf("missing session header")
+				}
+				info.ID, info.Cwd = meta.ID, meta.Cwd
+				info.Created, _ = time.Parse(time.RFC3339Nano, meta.Timestamp)
+			} else if meta.Type == "message" {
+				info.MessageCount++
+				if info.FirstMessage == "(no messages)" && meta.Message.Role == "user" {
+					var content any
+					if json.Unmarshal(meta.Message.Content, &content) == nil {
+						blocks, _ := UserBlocks(content)
+						for _, b := range blocks {
+							if b.Text != nil {
+								info.FirstMessage = b.Text.Text
+								break
+							}
+						}
+					}
+				}
 			}
 		}
-		if e.Kind == "message" {
-			if ts, err := time.Parse(time.RFC3339Nano, e.Base.Timestamp); err == nil && ts.After(modified) {
-				modified = ts
-			}
+		if readErr == io.EOF {
+			break
 		}
 	}
-	return &SessionInfo{Path: path, ID: header.ID, Cwd: header.Cwd, Created: created, Modified: modified, MessageCount: count, FirstMessage: first}, nil
+	if info.ID == "" {
+		return nil, fmt.Errorf("missing session header")
+	}
+	return info, nil
 }
 
 func userText(u *UserMessage) string {
@@ -622,10 +659,14 @@ func FindMostRecent(sessionDir, cwd string) (string, error) {
 }
 
 func newSessionID() string {
-	// Pi uses uuidv7; use timestamp + random hex (lexicographically sortable enough for tests).
 	var b [16]byte
 	_, _ = rand.Read(b[:])
-	// v7-ish: set version nibble.
+	ms := uint64(time.Now().UnixMilli())
+	for i := 5; i >= 0; i-- {
+		b[i] = byte(ms)
+		ms >>= 8
+	}
+	// RFC 9562 UUIDv7: 48-bit Unix millisecond time, version, variant, randomness.
 	b[6] = (b[6] & 0x0f) | 0x70
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hex.EncodeToString(b[0:4]), hex.EncodeToString(b[4:6]), hex.EncodeToString(b[6:8]), hex.EncodeToString(b[8:10]), hex.EncodeToString(b[10:16]))
@@ -665,19 +706,14 @@ func mustMarshal(v any) json.RawMessage {
 	return b
 }
 
-func fileSize(path string) int64 {
-	st, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return st.Size()
-}
-
 // TryLock acquires the advisory psi writer lock. Non-blocking: second psi
 // process gets an error instead of waiting.
 func (s *Store) TryLock() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.persist {
+		return nil
+	}
 	if s.lock != nil {
 		return fmt.Errorf("session already locked")
 	}

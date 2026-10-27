@@ -2,54 +2,83 @@ package terminal
 
 import (
 	"os"
-	"strings"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/term"
 )
 
-// PTY acceptance (Step 87, M6): xterm-compatible, paste/Unicode/resize/EOF/
-// cancel/provider-failure shape, no alt-screen/mouse/image/diff, attrs restored.
 func TestPTYAcquireRestore(t *testing.T) {
-	ptmx, pts, err := pty.Open()
+	master, slave, err := pty.Open()
 	if err != nil {
 		t.Skipf("pty unavailable: %v", err)
 	}
-	defer ptmx.Close()
-	defer pts.Close()
-	_ = os.Setenv("TERM", "xterm-256color")
-
-	// Large paste + Unicode + resize simulation through the pty.
-	paste := "hello 🌍 " + repeat("x", 5000) + "\nsecond line with emoji 🎉\n"
-	if _, err := pts.WriteString(paste); err != nil {
-		t.Fatalf("pty write: %v", err)
+	defer master.Close()
+	defer slave.Close()
+	original, err := term.GetState(int(slave.Fd()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Our renderer output for the same input must contain no forbidden sequences.
-	var sb strings.Builder
-	st := NewStreamer(&sb, true)
-	st.PrintUser(paste)
-	st.Delta("assistant text with \x1b[31mcolor\x1b[0m and \x1b]1337;img\x07")
-	st.Close()
-	out := sb.String()
-	for _, f := range ForbiddenSequences {
-		if strings.Contains(out, f) {
-			t.Errorf("forbidden %q in pty output", f)
+	stdin := os.Stdin
+	os.Stdin = slave
+	defer func() { os.Stdin = stdin }()
+	tty, _, err := Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tty.Restore()
+	raw, _ := term.GetState(int(slave.Fd()))
+	if reflect.DeepEqual(raw, original) {
+		t.Fatal("Acquire did not put the terminal in raw mode")
+	}
+	// Drain the actual terminal output so prompt redraws cannot block the PTY.
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		buf := make([]byte, 4096)
+		for {
+			if _, err := master.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	console := NewConsole(slave, slave)
+	console.Draw()
+	if _, err := master.WriteString("hello 🌍\x1b[200~\nsecond line\x1b[201~\r"); err != nil {
+		t.Fatal(err)
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	var submitted string
+	for submitted == "" {
+		select {
+		case input := <-console.Inputs:
+			text, ok, quit, _ := console.Handle(input, false)
+			if quit {
+				t.Fatal("unexpected quit")
+			}
+			if ok {
+				submitted = text
+			}
+		case <-timer.C:
+			t.Fatal("actual terminal input did not submit")
 		}
 	}
-	if HasEscape(out) {
-		t.Errorf("escape survived sanitize in pty output: %q", out[:200])
+	if submitted != "hello 🌍\nsecond line" {
+		t.Fatalf("paste/UTF-8 corrupted: %q", submitted)
 	}
-	// Resize: narrow width keeps cursor bounded (no full redraw).
-	if got := TruncateToWidth("あいうえお", 4); CellWidth(got) > 4 {
-		t.Errorf("narrow resize unbounded: %q", got)
+	console.Close()
+	tty.Restore()
+	after, err := term.GetState(int(slave.Fd()))
+	if err != nil || !reflect.DeepEqual(after, original) {
+		t.Fatalf("terminal attributes not restored: %v", err)
 	}
-	// attrs: pty close must not hang; terminal state restored by defer.
-}
-
-func repeat(s string, n int) string {
-	out := ""
-	for i := 0; i < n; i++ {
-		out += s
+	master.Close()
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("PTY reader did not finish")
 	}
-	return out
 }

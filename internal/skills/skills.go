@@ -6,10 +6,13 @@ package skills
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Skill is a discovered SKILL.md (metadata + path; body loaded on demand).
@@ -38,10 +41,31 @@ func Discover(cwd, agentDir string, configured []string, projectConsent bool) ([
 	seenFiles := map[string]bool{} // canonical path -> seen
 	seenNames := map[string]string{}
 
+	var excluded []string
+	for _, p := range configured {
+		if strings.HasPrefix(p, "-") || strings.HasPrefix(p, "!") {
+			excluded = append(excluded, p[1:])
+		}
+	}
 	add := func(skills []Skill, d []Diagnostic) {
 		diags = append(diags, d...)
 		for _, s := range skills {
 			canon := canonical(s.FilePath)
+			skip := false
+			for _, pattern := range excluded {
+				match, _ := filepath.Match(pattern, s.FilePath)
+				if match || canon == canonical(pattern) || strings.HasPrefix(canon, canonical(pattern)+string(filepath.Separator)) {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+			if len(all) >= 256 {
+				diags = append(diags, Diagnostic{Path: s.FilePath, Message: "skill limit exceeded (256)"})
+				continue
+			}
 			if seenFiles[canon] {
 				continue
 			}
@@ -65,9 +89,15 @@ func Discover(cwd, agentDir string, configured []string, projectConsent bool) ([
 		s, d = loadDir(filepath.Join(cwd, ".agents", "skills"))
 		add(s, d)
 	}
-	// Configured paths from documented base dirs (cwd-relative or absolute).
+	home, _ := os.UserHomeDir()
+	s, d = loadDir(filepath.Join(home, ".agents", "skills"))
+	add(s, d)
+	// Configured paths have already been resolved against their source files.
 	for _, p := range configured {
-		abs := p
+		if strings.HasPrefix(p, "-") || strings.HasPrefix(p, "!") {
+			continue
+		}
+		abs := strings.TrimPrefix(p, "+")
 		if !filepath.IsAbs(abs) {
 			abs = filepath.Join(cwd, abs)
 		}
@@ -122,10 +152,11 @@ func loadDir(dir string) ([]Skill, []Diagnostic) {
 	visited := map[string]bool{}
 	var walk func(cur string, depth int)
 	walk = func(cur string, depth int) {
-		if depth > 8 || visited[cur] {
+		canon := canonical(cur)
+		if depth > 8 || visited[canon] {
 			return
 		}
-		visited[cur] = true
+		visited[canon] = true
 		ents, err := os.ReadDir(cur)
 		if err != nil {
 			return
@@ -184,9 +215,9 @@ func loadDir(dir string) ([]Skill, []Diagnostic) {
 }
 
 func loadFile(path string) (*Skill, []Diagnostic) {
-	b, err := os.ReadFile(path)
+	b, err := readSkill(path)
 	if err != nil {
-		return nil, []Diagnostic{{Path: path, Message: "unreadable skill file"}}
+		return nil, []Diagnostic{{Path: path, Message: "unreadable or oversized skill file"}}
 	}
 	if len(b) > 256*1024 {
 		return nil, []Diagnostic{{Path: path, Message: "skill file too large"}}
@@ -274,11 +305,12 @@ func escapeXML(s string) string {
 func Invoke(skills []Skill, name, args string) (string, error) {
 	for _, s := range skills {
 		if s.Name == name {
-			b, err := os.ReadFile(s.FilePath)
+			b, err := readSkill(s.FilePath)
 			if err != nil {
 				return "", fmt.Errorf("skill %q unreadable: %w", name, err)
 			}
 			_, body := parseFrontmatter(string(b))
+			body = "Skill directory: " + s.BaseDir + "\nResolve relative paths from this directory.\n\n" + body
 			if strings.TrimSpace(args) != "" {
 				return body + "\n\nArguments: " + args, nil
 			}
@@ -288,44 +320,36 @@ func Invoke(skills []Skill, name, args string) (string, error) {
 	return "", fmt.Errorf("skill %q not found", name)
 }
 
-// parseFrontmatter parses --- YAML --- + body (minimal subset: key: value).
+func readSkill(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 256*1024+1))
+	if len(b) > 256*1024 {
+		return nil, fmt.Errorf("skill file exceeds 256 KiB")
+	}
+	return b, err
+}
+
+// Use YAML rather than a line splitter: real skills commonly use folded and
+// literal multiline descriptions, quoted colons, comments, and nested metadata.
 func parseFrontmatter(content string) (map[string]any, string) {
-	norm := strings.ReplaceAll(strings.ReplaceAll(content, "\r\n", "\n"), "\r", "\n")
-	if !strings.HasPrefix(norm, "---") {
+	norm := strings.TrimPrefix(strings.ReplaceAll(content, "\r\n", "\n"), "\ufeff")
+	if !strings.HasPrefix(norm, "---\n") {
 		return map[string]any{}, norm
 	}
-	// Find closing --- on its own line.
-	rest := norm[3:]
-	if strings.HasPrefix(rest, "\n") {
-		rest = rest[1:]
-	}
-	idx := strings.Index(rest, "\n---")
-	if idx < 0 {
-		return map[string]any{}, norm
-	}
-	yamlStr := rest[:idx]
-	body := strings.TrimSpace(rest[idx+4:])
-	fm := map[string]any{}
-	for _, line := range strings.Split(yamlStr, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+	lines := strings.Split(norm, "\n")
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "---" {
 			continue
 		}
-		kv := strings.SplitN(line, ":", 2)
-		if len(kv) != 2 {
-			continue
+		var fm map[string]any
+		if err := yaml.Unmarshal([]byte(strings.Join(lines[1:i], "\n")), &fm); err != nil {
+			return map[string]any{}, norm
 		}
-		k := strings.TrimSpace(kv[0])
-		v := strings.TrimSpace(kv[1])
-		v = strings.Trim(v, `"'`)
-		switch strings.ToLower(v) {
-		case "true":
-			fm[k] = true
-		case "false":
-			fm[k] = false
-		default:
-			fm[k] = v
-		}
+		return fm, strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
 	}
-	return fm, body
+	return map[string]any{}, norm
 }

@@ -20,7 +20,7 @@ func acquireLock(sessionFile string) (*sessionLock, error) {
 		return nil, nil
 	}
 	lockPath := sessionFile + ".lock"
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open lock %s: %w", lockPath, err)
 	}

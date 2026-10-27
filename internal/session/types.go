@@ -50,6 +50,16 @@ type ToolCall struct {
 	ArgumentsError   *string        `json:"argumentsError,omitempty"`
 }
 
+func (t *ToolCall) UnmarshalJSON(data []byte) error {
+	type plain ToolCall
+	var value plain
+	if err := jsonDecoder(data).Decode(&value); err != nil {
+		return err
+	}
+	*t = ToolCall(value)
+	return nil
+}
+
 // ContentBlock is a discriminated union holder for assistant content.
 // We keep raw JSON for blocks psi does not interpret so signatures survive.
 type ContentBlock struct {

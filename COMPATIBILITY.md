@@ -61,7 +61,7 @@ Additional storage rules:
 | `models.json` | endpoint + model metadata for Anthropic | no catalog refresh |
 | auth | existing `auth.json` API-key entries + env refs | no credential-command execution |
 | startup | `quietStartup` | no dynamic renderer |
-| terminal | always inline | ignore fullscreen/rich prefs with one notice |
+| terminal | always inline | ignore fullscreen/rich preferences |
 
 Unsupported package/extension declarations never trigger install or code loading.
 Unknown harmless UI prefs need no per-key warning.
@@ -69,7 +69,7 @@ Unknown harmless UI prefs need no per-key warning.
 ## Provider
 
 - First and only release provider: **Anthropic Messages API** (`https://api.anthropic.com/v1/messages`, SSE).
-- Auth: `ANTHROPIC_API_KEY` env or `~/.pi/agent/auth.json` API-key entry; `auth.json` OAuth refresh only if daily-use requires it (subscription path). No silent fallback across billing paths.
+- Auth: existing `auth.json` API-key entry, then a configured model credential, then `ANTHROPIC_API_KEY`. Subscription OAuth refresh is not implemented. An existing OAuth entry refuses API-key fallback.
 - Translates normalized Pi context → Anthropic protocol; preserves reasoning signatures and replay metadata; stops on unsupported content instead of dropping it.
 - Bounded retries, server `retry-after` honored within cap; no retry of completed tool side effects; partial streams are not invisible retries.
 - Usage: report provider usage + catalog estimate separately; never present unknown price as `$0.00`.
@@ -109,8 +109,21 @@ never loads or reruns the extension.
 
 ## Fixture and source rules
 
-- Only synthetic or operator-approved sanitized sessions in `internal/**/testdata/`.
+- Only synthetic or operator-approved sanitized sessions in tests; fixtures can be inline or under `internal/**/testdata/`.
 - No credentials, private paths, private file contents, or private prompts.
 - Preserve upstream license notices for copied/adapted source or fixtures.
 - Never mutate `temp/pi-mono/`; never require ignored files at build/runtime.
+
+## Test evidence and remaining boundaries
+
+The offline suite includes a real app subprocess in a PTY against a local HTTP
+server. It covers prompt/configuration wiring, stored credentials, skill
+submission, session replacement, and cancellation. The optional
+`PSI_PI_SESSION_MODULE` test compares a Go-continued synthetic session against
+an actual Pi context projector. A JSON-shape test alone is not evidence of
+complete Pi interchange.
+
+See `docs/limitations.md` for explicit size limits, reasoning-protocol limits,
+and compaction boundaries. The pinned source remains the target, not a claim
+of compatibility with every newer Pi feature.
 - Never test against the only copy of a real session.

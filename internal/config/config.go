@@ -49,7 +49,7 @@ type Settings struct {
 	Compaction        CompactionConfig
 	ShellPath         string
 	ShellPrefix       string
-	HTTPIdleTimeoutMs int64 // 0 = default, -1 = disabled
+	HTTPIdleTimeoutMs int64 // milliseconds; 0 or -1 disables the idle timer
 	MaxRetries        int
 	QuietStartup      bool
 	// Diagnostics for skipped unsupported resources.
@@ -58,11 +58,12 @@ type Settings struct {
 
 func defaultSettings() Settings {
 	return Settings{
-		DefaultThinking: "off",
-		DefaultTools:    []string{"read", "bash", "edit", "write"},
-		EnableSkills:    true,
-		Compaction:      CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
-		MaxRetries:      3,
+		DefaultThinking:   "off",
+		DefaultTools:      []string{"read", "bash", "edit", "write"},
+		EnableSkills:      true,
+		Compaction:        CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
+		MaxRetries:        3,
+		HTTPIdleTimeoutMs: 300000,
 	}
 }
 
@@ -85,6 +86,10 @@ type rawSettings struct {
 	HTTPIdleTimeoutMs  any     `json:"httpIdleTimeoutMs"`
 	QuietStartup       any     `json:"quietStartup"`
 	MaxRetries         *int    `json:"maxRetries"`
+	Retry              *struct {
+		Enabled    *bool `json:"enabled"`
+		MaxRetries *int  `json:"maxRetries"`
+	} `json:"retry"`
 }
 
 // LoadResult carries merged settings plus per-file diagnostics.
@@ -119,9 +124,6 @@ func LoadSettings(userPath, projectPath string, projectConsent bool) (LoadResult
 	if merged.DefaultThinking != "" && !validThinking(merged.DefaultThinking) {
 		return LoadResult{}, fmt.Errorf("unsupported defaultThinkingLevel %q", merged.DefaultThinking)
 	}
-	if merged.DefaultProvider != "" && merged.DefaultProvider != "anthropic" {
-		return LoadResult{}, fmt.Errorf("unsupported provider %q: first release supports anthropic only", merged.DefaultProvider)
-	}
 	return LoadResult{Settings: merged, Sources: sources}, nil
 }
 
@@ -135,6 +137,9 @@ func readJSONFile(path string) (map[string]any, error) {
 	}
 	// Strip BOM like Pi.
 	b = stripBOM(b)
+	if !json.Valid(b) {
+		return nil, fmt.Errorf("malformed JSON")
+	}
 	var v map[string]any
 	dec := json.NewDecoder(bytesReader(b))
 	dec.UseNumber()
@@ -174,7 +179,7 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		set("sessionDir", *raw.SessionDir)
 	}
 	if raw.DefaultTools != nil {
-		tools, err := resolveTools(raw.DefaultTools)
+		tools, err := ResolveTools(raw.DefaultTools, out.DefaultTools)
 		if err != nil {
 			return err
 		}
@@ -186,13 +191,20 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		if err != nil {
 			return fmt.Errorf("skills: %w", err)
 		}
-		// Project skills replace user skills when project consent is on and
-		// the project file declares the key (Pi merges selected resource lists;
-		// for skills the explicit project list wins).
-		if strings.HasPrefix(src, "project:") || out.Skills == nil {
-			out.Skills = skills
-		} else {
-			out.Skills = skills
+		// Resolve each source before combining resource lists.
+		base := filepath.Dir(strings.SplitN(src, ":", 2)[1])
+		for _, path := range skills {
+			prefix := ""
+			if strings.HasPrefix(path, "+") || strings.HasPrefix(path, "-") || strings.HasPrefix(path, "!") {
+				prefix, path = path[:1], path[1:]
+			}
+			if strings.HasPrefix(path, "~/") {
+				home, _ := os.UserHomeDir()
+				path = filepath.Join(home, path[2:])
+			} else if !filepath.IsAbs(path) {
+				path = filepath.Join(base, path)
+			}
+			out.Skills = append(out.Skills, prefix+path)
 		}
 		set("skills", strings.Join(skills, ","))
 	}
@@ -231,6 +243,9 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 	if raw.HTTPIdleTimeoutMs != nil {
 		switch v := raw.HTTPIdleTimeoutMs.(type) {
 		case float64:
+			if v < 0 || v > 86400000 || v != float64(int64(v)) {
+				return fmt.Errorf("httpIdleTimeoutMs must be an integer from 0 to 86400000")
+			}
 			out.HTTPIdleTimeoutMs = int64(v)
 		case string:
 			if v == "disabled" {
@@ -255,11 +270,18 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		set("quietStartup", "set")
 	}
 	if raw.MaxRetries != nil {
-		if *raw.MaxRetries < 0 {
-			return fmt.Errorf("maxRetries must be >= 0")
-		}
 		out.MaxRetries = *raw.MaxRetries
-		set("maxRetries", "set")
+	}
+	if raw.Retry != nil {
+		if raw.Retry.MaxRetries != nil {
+			out.MaxRetries = *raw.Retry.MaxRetries
+		}
+		if raw.Retry.Enabled != nil && !*raw.Retry.Enabled {
+			out.MaxRetries = 0
+		}
+	}
+	if out.MaxRetries < 0 || out.MaxRetries > 10 {
+		return fmt.Errorf("retry.maxRetries must be between 0 and 10")
 	}
 	return nil
 }
@@ -267,6 +289,13 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 // resolveTools implements Pi defaultTools semantics: plain names replace the
 // inherited selection; +name/-name add or remove.
 func resolveTools(list []string) ([]string, error) {
+	return ResolveTools(list, []string{"read", "bash", "edit", "write"})
+}
+
+func ResolveTools(list, inherited []string) ([]string, error) {
+	if len(list) == 0 {
+		return []string{}, nil
+	}
 	known := map[string]bool{"read": true, "bash": true, "edit": true, "write": true}
 	hasPlain := false
 	for _, t := range list {
@@ -277,9 +306,13 @@ func resolveTools(list []string) ([]string, error) {
 	}
 	var base []string
 	if hasPlain {
-		base = nil
+		for _, name := range list {
+			if name != "" && name[0] != '+' && name[0] != '-' {
+				base = append(base, name)
+			}
+		}
 	} else {
-		base = []string{"read", "bash", "edit", "write"}
+		base = inherited
 	}
 	set := map[string]bool{}
 	for _, t := range base {
@@ -305,7 +338,7 @@ func resolveTools(list []string) ([]string, error) {
 			if !known[t] {
 				return nil, fmt.Errorf("unknown tool %q", t)
 			}
-			set[t] = true
+			// Plain names formed the base before modifiers were applied.
 		}
 	}
 	var out []string
@@ -408,6 +441,10 @@ func ResolveStartup(cliProvider, cliModel, cliThinking, cliSessionDir string, cl
 // escaping. Rejects command values ("!cmd") unless explicitly enabled (never
 // in the first release): returns an error instead of executing.
 func ResolveCredential(raw string) (string, error) {
+	return ResolveCredentialWithEnv(raw, os.LookupEnv)
+}
+
+func ResolveCredentialWithEnv(raw string, lookupEnv func(string) (string, bool)) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("empty credential")
 	}
@@ -419,6 +456,11 @@ func ResolveCredential(raw string) (string, error) {
 	for i < len(raw) {
 		c := raw[i]
 		if c == '$' {
+			if i+1 < len(raw) && raw[i+1] == '!' {
+				sb.WriteByte('!')
+				i += 2
+				continue
+			}
 			if i+1 < len(raw) && raw[i+1] == '$' {
 				sb.WriteByte('$')
 				i += 2
@@ -463,6 +505,9 @@ func ResolveCredential(raw string) (string, error) {
 		sb.WriteByte(c)
 		i++
 	}
+	if sb.Len() == 0 {
+		return "", fmt.Errorf("resolved credential is empty")
+	}
 	return sb.String(), nil
 }
 
@@ -488,8 +533,6 @@ func isEnvChar(c byte, first bool) bool {
 	return false
 }
 
-func lookupEnv(name string) (string, bool) { return os.LookupEnv(name) }
-
 // RedactCredential redacts secrets in errors (keys, tokens, headers).
 func RedactCredential(s string) string {
 	if len(s) <= 4 {
@@ -498,48 +541,116 @@ func RedactCredential(s string) string {
 	return s[:2] + "****" + s[len(s)-2:]
 }
 
-// ModelMeta is the selected models.json subset for one model.
+// ModelMeta follows Pi's provider.models[] shape, not a private top-level catalog.
 type ModelMeta struct {
-	ID            string
-	API           string
-	BaseURL       string
-	ContextWindow int
-	MaxTokens     int
-	Reasoning     bool
-	InputImage    bool
+	ID            string            `json:"id"`
+	API           string            `json:"api"`
+	BaseURL       string            `json:"baseUrl"`
+	ContextWindow int               `json:"contextWindow"`
+	MaxTokens     int               `json:"maxTokens"`
+	Reasoning     bool              `json:"reasoning"`
+	Input         []string          `json:"input"`
+	Headers       map[string]string `json:"headers"`
+	InputImage    bool              `json:"-"`
+	APIKey        string            `json:"-"`
 }
 
-// ModelsFile is the endpoint/model subset (no catalog refresh).
 type ModelsFile struct {
 	Providers map[string]ProviderMeta `json:"providers"`
-	Models    map[string]ModelMeta    `json:"models"`
 }
 
 type ProviderMeta struct {
-	API     string `json:"api"`
-	BaseURL string `json:"baseUrl"`
+	API            string                     `json:"api"`
+	BaseURL        string                     `json:"baseUrl"`
+	APIKey         string                     `json:"apiKey"`
+	Headers        map[string]string          `json:"headers"`
+	Models         []ModelMeta                `json:"models"`
+	ModelOverrides map[string]json.RawMessage `json:"modelOverrides"`
 }
 
-// LoadModels loads local metadata without network. Rejects unsupported APIs.
 func LoadModels(path string) (*ModelsFile, error) {
 	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return &ModelsFile{}, nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &ModelsFile{}, nil
-		}
 		return nil, err
 	}
-	b = stripBOM(b)
 	var mf ModelsFile
-	if err := json.Unmarshal(b, &mf); err != nil {
-		return nil, fmt.Errorf("%s: malformed models.json: %w", path, err)
-	}
-	for id, m := range mf.Models {
-		if m.API != "" && m.API != "anthropic-messages" {
-			return nil, fmt.Errorf("model %q uses unsupported API %q", id, m.API)
-		}
+	if err := json.Unmarshal(stripBOM(b), &mf); err != nil {
+		return nil, fmt.Errorf("%s: malformed models.json", path)
 	}
 	return &mf, nil
+}
+
+// SelectModel resolves only the active provider. Unrelated Pi provider entries
+// can remain in the shared file without preventing Anthropic use.
+func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
+	if provider != "anthropic" {
+		return ModelMeta{}, fmt.Errorf("unsupported provider %q: only anthropic is available", provider)
+	}
+	if id == "" {
+		id = "claude-sonnet-4-5"
+	}
+	m := ModelMeta{ID: id, API: "anthropic-messages", ContextWindow: 200000, MaxTokens: 16384, Reasoning: true, InputImage: true}
+	known := id == "claude-sonnet-4-5" || id == "claude-haiku-4-5" || id == "claude-opus-4-1" || id == "claude-sonnet-4-0" || id == "claude-opus-4-0"
+	p := mf.Providers[provider]
+	for _, configured := range p.Models {
+		if configured.ID == id {
+			m = configured
+			known = true
+			m.InputImage = containsString(configured.Input, "image")
+			break
+		}
+	}
+	if !known {
+		return ModelMeta{}, fmt.Errorf("model %q needs explicit metadata in models.json providers.anthropic.models", id)
+	}
+	if override, ok := p.ModelOverrides[id]; ok {
+		if err := json.Unmarshal(override, &m); err != nil {
+			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
+		}
+		if m.Input != nil {
+			m.InputImage = containsString(m.Input, "image")
+		}
+	}
+	if m.API == "" {
+		m.API = p.API
+	}
+	if m.API == "" {
+		m.API = "anthropic-messages"
+	}
+	if p.API != "" && p.API != "anthropic-messages" || m.API != "anthropic-messages" {
+		return ModelMeta{}, fmt.Errorf("unsupported API: only anthropic-messages is available")
+	}
+	if m.ContextWindow <= 0 {
+		m.ContextWindow = 128000
+	}
+	if m.MaxTokens <= 0 {
+		m.MaxTokens = 16384
+	}
+	if m.BaseURL == "" {
+		m.BaseURL = p.BaseURL
+	}
+	m.APIKey = p.APIKey
+	headers := make(map[string]string)
+	for k, v := range p.Headers {
+		headers[k] = v
+	}
+	for k, v := range m.Headers {
+		headers[k] = v
+	}
+	m.Headers = headers
+	return m, nil
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Instruction discovery (Phase 4 Step 37).
@@ -555,54 +666,53 @@ type InstructionFile struct {
 }
 
 // DiscoverInstructions returns the deterministic sequence without duplicates.
-func DiscoverInstructions(cwd, home string, projectConsent bool) ([]InstructionFile, error) {
+func DiscoverInstructions(cwd, agentDir string, projectConsent bool) ([]InstructionFile, error) {
 	var out []InstructionFile
 	seen := map[string]bool{}
-	add := func(path, kind string) {
-		if path == "" || seen[path] {
-			return
+	add := func(path, kind string) (bool, error) {
+		if seen[path] {
+			return true, nil
+		}
+		b, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("instruction file %s: %w", path, err)
 		}
 		seen[path] = true
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return
-		}
 		out = append(out, InstructionFile{Path: path, Content: string(stripBOM(b)), Kind: kind})
+		return true, nil
 	}
-	// User scope first (broad), then ancestors up to cwd, then workspace.
-	if home != "" {
-		add(filepath.Join(home, "AGENTS.md"), "fallback")
-	}
-	// Ancestor walk from filesystem root down to cwd for AGENTS.md.
-	ancestors := ancestorDirs(cwd)
-	for _, dir := range ancestors {
-		add(filepath.Join(dir, "AGENTS.md"), "agents")
-	}
-	// Workspace override wins: AGENTS.override.md replaces AGENTS.md at same dir.
-	wsOverride := filepath.Join(cwd, "AGENTS.override.md")
-	if _, err := os.Stat(wsOverride); err == nil {
-		// Drop workspace AGENTS.md if override exists.
-		filtered := out[:0]
-		for _, f := range out {
-			if !(f.Path == filepath.Join(cwd, "AGENTS.md")) {
-				filtered = append(filtered, f)
+	// One winning context file per directory, including each ancestor.
+	for _, dir := range append([]string{agentDir}, ancestorDirs(cwd)...) {
+		if dir == "" {
+			continue
+		}
+		for _, name := range []string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"} {
+			kind := "agents"
+			if name == "AGENTS.override.md" {
+				kind = "agents-override"
+			}
+			found, err := add(filepath.Join(dir, name), kind)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				break
 			}
 		}
-		out = filtered
-		seen[filepath.Join(cwd, "AGENTS.md")] = true
-		add(wsOverride, "agents-override")
 	}
-	// Supported fallbacks at workspace (explicit precedence).
-	for _, name := range []string{"CLAUDE.md", "AGENT.md"} {
-		add(filepath.Join(cwd, name), "fallback")
-	}
-	if projectConsent {
-		// SYSTEM.md replaces the base prompt; APPEND_SYSTEM.md adds.
-		if _, err := os.Stat(filepath.Join(cwd, ".pi", "SYSTEM.md")); err == nil {
-			add(filepath.Join(cwd, ".pi", "SYSTEM.md"), "system")
+	for _, spec := range []struct{ name, kind string }{{"SYSTEM.md", "system"}, {"APPEND_SYSTEM.md", "append-system"}} {
+		path := filepath.Join(agentDir, spec.name)
+		if projectConsent {
+			project := filepath.Join(cwd, ".pi", spec.name)
+			if _, err := os.Stat(project); err == nil {
+				path = project
+			}
 		}
-		if _, err := os.Stat(filepath.Join(cwd, ".pi", "APPEND_SYSTEM.md")); err == nil {
-			add(filepath.Join(cwd, ".pi", "APPEND_SYSTEM.md"), "append-system")
+		if _, err := add(path, spec.kind); err != nil {
+			return nil, err
 		}
 	}
 	return out, nil
@@ -634,25 +744,23 @@ func ancestorDirs(cwd string) []string {
 // four tools + instructions + workspace + skill descriptions. Deterministic.
 func AssemblePrompt(cwd string, instructions []InstructionFile, skillDescs []string, tools []string) string {
 	var sb strings.Builder
-	sb.WriteString("You are psi, a minimal Go coding agent. Use read to examine files instead of cat or sed. Show file paths clearly when working with files.\n")
-	sb.WriteString("Tools: " + strings.Join(tools, ", ") + ". Use read, write, edit, bash only.\n")
+	base := "You are psi, a minimal Go coding agent. Use the declared tools to inspect and change the workspace. Show file paths clearly."
 	for _, ins := range instructions {
 		if ins.Kind == "system" {
-			// SYSTEM.md replaces the base prompt prefix.
-			rebuilt := "Custom system:\n" + ins.Content + "\n"
-			rest := sb.String()
-			sb.Reset()
-			sb.WriteString(rebuilt + rest)
-			continue
+			base = ins.Content
 		}
-		sb.WriteString("\n--- " + ins.Path + " ---\n" + ins.Content + "\n")
 	}
-	if len(skillDescs) > 0 {
-		sb.WriteString("\n<available_skills>\n")
-		for _, d := range skillDescs {
-			sb.WriteString(d + "\n")
+	sb.WriteString(base + "\n")
+	sb.WriteString("Available tools: " + strings.Join(tools, ", ") + ".\n")
+	for _, ins := range instructions {
+		if ins.Kind != "system" {
+			sb.WriteString("\n--- " + ins.Path + " ---\n" + ins.Content + "\n")
 		}
-		sb.WriteString("</available_skills>\n")
+	}
+	for _, d := range skillDescs {
+		if d != "" {
+			sb.WriteString("\n" + d + "\n")
+		}
 	}
 	sb.WriteString("\nWorkspace: " + cwd + "\n")
 	return sb.String()

@@ -15,7 +15,7 @@ func CellWidth(s string) int {
 }
 
 func RuneWidth(r rune) int {
-	if r == 0 {
+	if r == 0 || r == 0x200d {
 		return 0
 	}
 	if r >= 0xFE00 && r <= 0xFE0F {

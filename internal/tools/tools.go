@@ -6,8 +6,9 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // Names in the supported subset.
@@ -54,15 +55,24 @@ func NewRegistry(cwd string) *Registry {
 
 // Dispatch runs calls sequentially in assistant order.
 func (r *Registry) Dispatch(inv Invocation) Result {
+	return r.DispatchCtx(context.Background(), inv)
+}
+
+// DispatchCtx propagates cancellation to shell processes and prevents new
+// filesystem operations from starting after cancellation.
+func (r *Registry) DispatchCtx(ctx context.Context, inv Invocation) Result {
+	if err := ctx.Err(); err != nil {
+		return errResult(err.Error())
+	}
 	switch inv.Name {
 	case Read:
-		return r.Read.Execute(inv)
+		return r.Read.ExecuteCtx(ctx, inv)
 	case Write:
 		return r.Write.Execute(inv)
 	case Edit:
 		return r.Edit.Execute(inv)
 	case Bash:
-		return r.Bash.Execute(inv)
+		return r.Bash.ExecuteCtx(ctx, inv)
 	default:
 		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("unknown tool %q: first release supports read, write, edit, bash only", inv.Name)}}, IsError: true}
 	}
@@ -94,6 +104,9 @@ func argFloat(args map[string]any, key string) (float64, bool) {
 		return float64(n), true
 	case int64:
 		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
 	}
 	return 0, false
 }
@@ -101,5 +114,3 @@ func argFloat(args map[string]any, key string) (float64, bool) {
 func continuationNotice(path string) string {
 	return fmt.Sprintf("Output truncated. Use offset/limit to read the rest of %s.", path)
 }
-
-var _ = strings.Contains

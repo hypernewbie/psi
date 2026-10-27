@@ -91,7 +91,7 @@ func TestParseSSEIncompleteToolRejected(t *testing.T) {
 func TestParseSSEUsageOnlyAndMultiline(t *testing.T) {
 	// Multiline data record split across reads.
 	payload := "{\"message\":{\"id\":\"m9\"}}"
-	chunks := []string{"event: message_start\ndata: " + payload + "\n\n", "event: message_delta\ndata: {\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}\n\n"}
+	chunks := []string{"event: message_start\ndata: " + payload + "\n\n", "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}\n\n", "event: message_stop\ndata: {}\n\n"}
 	resp, err := parseSSE(sseStream(chunks), 5*time.Second, context.Background(), nil, Request{})
 	if err != nil {
 		t.Fatal(err)

@@ -1,67 +1,64 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"psi/internal/config"
 )
 
-// Credential selection (Phase 6 Step 46).
-//
-// Precedence: ANTHROPIC_API_KEY env > auth.json API-key entries.
-// OAuth entries are identified before any network request and fail with an
-// actionable error (no silent fallback across billing paths).
-// Subscription OAuth refresh lives in oauth.go and is required only when the
-// operator selects subscription access (Step 47).
-
+// SelectAPIKey matches Pi's supported precedence: stored Anthropic credential,
+// then the environment. Unsupported subscription credentials never silently
+// fall back to a separately billed API key. No credential commands are run.
 func SelectAPIKey(env map[string]string, authPath string) (key, source string, err error) {
-	if v, ok := env["ANTHROPIC_API_KEY"]; ok && v != "" {
-		return v, "ANTHROPIC_API_KEY", nil
-	}
 	if authPath == "" {
-		home, _ := os.UserHomeDir()
-		authPath = filepath.Join(home, ".pi", "agent", "auth.json")
+		agentDir := env["PI_CODING_AGENT_DIR"]
+		if agentDir == "" {
+			home, _ := os.UserHomeDir()
+			agentDir = filepath.Join(home, ".pi", "agent")
+		}
+		authPath = filepath.Join(agentDir, "auth.json")
 	}
 	data, readErr := os.ReadFile(authPath)
-	if readErr != nil {
-		return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY (auth file missing: %s)", authPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return "", "", fmt.Errorf("cannot read auth.json: %w", readErr)
 	}
-	// Minimal auth.json scan: look for anthropic api_key entries; detect oauth.
-	text := string(data)
-	if strings.Contains(text, `"oauth"`) && strings.Contains(text, "anthropic") {
-		// Distinguish: if an api_key for anthropic exists, prefer it; else fail clearly.
-		if !strings.Contains(text, "api_key") {
-			return "", "", fmt.Errorf("auth.json contains an Anthropic OAuth entry: subscription refresh is required for this path (see docs); no silent API-key fallback")
+	if readErr == nil {
+		var entries map[string]json.RawMessage
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return "", "", fmt.Errorf("auth.json is malformed")
+		}
+		if raw, ok := entries["anthropic"]; ok {
+			var entry struct {
+				Type string `json:"type"`
+				Key  string `json:"key"`
+			}
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return "", "", fmt.Errorf("auth.json Anthropic credential must be an API-key object")
+			}
+			if entry.Type == "oauth" || entry.Type == "oauth_token" {
+				return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no API-key fallback (select API-key access explicitly in auth.json)")
+			}
+			if entry.Type != "" && entry.Type != "api_key" {
+				return "", "", fmt.Errorf("unsupported Anthropic credential type")
+			}
+			if entry.Key == "" {
+				return "", "", fmt.Errorf("auth.json Anthropic API key is empty")
+			}
+			key, err := config.ResolveCredentialWithEnv(entry.Key, func(name string) (string, bool) { v, ok := env[name]; return v, ok })
+			if err != nil {
+				return "", "", fmt.Errorf("Anthropic credential: %w", err)
+			}
+			return key, "auth.json:anthropic", nil
+		}
+		if _, ok := entries["anthropic-oauth"]; ok {
+			return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no silent API-key fallback")
 		}
 	}
-	// Parse generic map and extract anthropic api key.
-	var parsed map[string]any
-	if err := jsonUnmarshal(data, &parsed); err != nil {
-		return "", "", fmt.Errorf("auth.json malformed: %w", err)
-	}
-	for k, v := range parsed {
-		if !strings.Contains(strings.ToLower(k), "anthropic") {
-			continue
-		}
-		if m, ok := v.(map[string]any); ok {
-			if key, ok := m["key"].(string); ok && key != "" {
-				// Credential type check: oauth entries carry type oauth.
-				if t, _ := m["type"].(string); t == "oauth" || t == "oauth_token" {
-					return "", "", fmt.Errorf("auth.json Anthropic entry %q is OAuth: subscription path requires refresh; no silent fallback", k)
-				}
-				return key, "auth.json:" + k, nil
-			}
-			if key, ok := m["api_key"].(string); ok && key != "" {
-				return key, "auth.json:" + k, nil
-			}
-			if key, ok := m["apiKey"].(string); ok && key != "" {
-				return key, "auth.json:" + k, nil
-			}
-		}
-		if s, ok := v.(string); ok && strings.HasPrefix(s, "sk-ant-") {
-			return s, "auth.json:" + k, nil
-		}
+	if key := env["ANTHROPIC_API_KEY"]; key != "" {
+		return key, "ANTHROPIC_API_KEY", nil
 	}
 	return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)
 }

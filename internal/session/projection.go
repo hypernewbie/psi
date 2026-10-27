@@ -101,14 +101,6 @@ func RestoreModelState(path []*Entry) ModelState {
 					st.ModelID = a.Model
 					st.HasModel = true
 				}
-				if a.ThinkingLevel != nil && *a.ThinkingLevel != "" {
-					// Pi records requested thinking level on assistant messages;
-					// path scan keeps explicit change entries authoritative, but
-					// metadata fills gaps for sessions without change entries.
-					if st.ThinkingLevel == "off" {
-						st.ThinkingLevel = *a.ThinkingLevel
-					}
-				}
 			}
 		}
 	}
@@ -453,6 +445,9 @@ func bashExecutionToText(b *BashExecutionMessage) string {
 // unsafe unknown roles or unresolved deferred/background state.
 func CheckContinuable(flat []AgentMessage, entries []*Entry) error {
 	for _, m := range flat {
+		if err := checkContent(m); err != nil {
+			return err
+		}
 		switch m.Role {
 		case "system", "user", "assistant", "toolResult",
 			"bashExecution", "custom", "branchSummary", "compactionSummary":
@@ -505,68 +500,86 @@ func UnresolvedToolCalls(flat []AgentMessage) []ToolCall {
 
 // EffectiveSystem describes replayed prompt + tool state (Step 25).
 type EffectiveSystem struct {
-	Content string
-	Tools   []Tool
+	Content    string
+	Tools      []Tool
+	Checkpoint *SystemMessage
 }
 
 // ReplaySystem folds system messages in order: content appends, sections
 // replace/remove by name, toolsAdded/toolsRemoved change the tool set.
 func ReplaySystem(msgs []AgentMessage) EffectiveSystem {
-	var sb strings.Builder
-	sections := map[string]string{}
-	order := []string{}
+	var content []string
+	sections := map[string]*string{}
+	var order []string
 	tools := map[string]Tool{}
+	var timestamp int64
 	for _, m := range msgs {
 		if m.Role != "system" || m.System == nil {
 			continue
 		}
 		s := m.System
-		switch c := s.Content.(type) {
-		case string:
-			sb.WriteString(c)
-		case []any:
-			for _, b := range c {
-				if mm, ok := b.(map[string]any); ok {
-					if t, ok := mm["text"].(string); ok {
-						sb.WriteString(t)
-					}
+		if timestamp == 0 {
+			timestamp = s.Timestamp
+		}
+		if blocks, err := UserBlocks(s.Content); err == nil {
+			var text []string
+			for _, b := range blocks {
+				if b.Text != nil {
+					text = append(text, b.Text.Text)
 				}
 			}
+			if t := strings.Join(text, "\n"); t != "" {
+				content = append(content, t)
+			}
 		}
-		if s.Sections != nil {
-			for k, v := range s.Sections {
+		for _, k := range sectionOrder(s) {
+			v := s.Sections[k]
+			if v == nil {
+				delete(sections, k)
+				for i, old := range order {
+					if old == k {
+						order = append(order[:i], order[i+1:]...)
+						break
+					}
+				}
+			} else {
 				if _, ok := sections[k]; !ok {
 					order = append(order, k)
 				}
-				if v == nil {
-					delete(sections, k)
-				} else {
-					sections[k] = *v
-				}
+				sections[k] = v
 			}
 		}
-		for _, t := range s.ToolsAdded {
-			tools[t.Name] = t
-		}
+		// Pi removes first, then adds, so a changed declaration can use both.
 		for _, r := range s.ToolsRemoved {
 			if r.Name != nil {
 				delete(tools, *r.Name)
 			}
 		}
-	}
-	for _, k := range order {
-		if v, ok := sections[k]; ok {
-			sb.WriteString(v)
+		for _, t := range s.ToolsAdded {
+			tools[t.Name] = t
 		}
 	}
-	names := make([]string, 0, len(tools))
+	base := strings.Join(content, "\n\n")
+	parts := []string{}
+	if base != "" {
+		parts = append(parts, base)
+	}
+	for _, k := range order {
+		if *sections[k] != "" {
+			parts = append(parts, *sections[k])
+		}
+	}
+	var names []string
 	for n := range tools {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	out := make([]Tool, 0, len(names))
+	var out []Tool
 	for _, n := range names {
 		out = append(out, tools[n])
 	}
-	return EffectiveSystem{Content: sb.String(), Tools: out}
+	checkpoint := &SystemMessage{Role: "system", Content: base, Sections: sections, ToolsAdded: out, Timestamp: timestamp}
+	// Preserve section insertion order in the checkpoint's raw representation.
+	checkpoint.Raw = systemRaw(checkpoint, order)
+	return EffectiveSystem{Content: strings.Join(parts, "\n\n"), Tools: out, Checkpoint: checkpoint}
 }

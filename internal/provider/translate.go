@@ -26,6 +26,9 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	if req.Model.ID == "" {
 		return nil, fmt.Errorf("model is required")
 	}
+	if req.Thinking == "" {
+		req.Thinking = "off"
+	}
 	budget, err := ThinkingBudget(req.Thinking)
 	if err != nil {
 		return nil, err
@@ -40,13 +43,28 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	if maxTokens <= 0 {
 		maxTokens = 16384
 	}
+	if budget >= maxTokens && budget > 0 {
+		return nil, fmt.Errorf("thinking budget %d must be less than max output tokens %d", budget, maxTokens)
+	}
 	var messages []map[string]any
 	for i, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == "image" && !req.Model.InputImage {
+				return nil, fmt.Errorf("model %q is not configured for image input", req.Model.ID)
+			}
+		}
 		conv, err := convertMessage(m)
 		if err != nil {
 			return nil, fmt.Errorf("message %d: %w", i, err)
 		}
-		messages = append(messages, conv)
+		// Anthropic tool results from one batch must share the following user
+		// message. Merge consecutive user blocks, preserving their order.
+		if len(messages) > 0 && conv["role"] == "user" && messages[len(messages)-1]["role"] == "user" {
+			last := messages[len(messages)-1]
+			last["content"] = append(last["content"].([]any), conv["content"].([]any)...)
+		} else {
+			messages = append(messages, conv)
+		}
 	}
 	out := map[string]any{
 		"model":      req.Model.ID,
@@ -102,12 +120,18 @@ func convertMessage(m Message) (map[string]any, error) {
 			case "text":
 				blocks = append(blocks, map[string]any{"type": "text", "text": b.Text})
 			case "thinking":
-				// Preserve reasoning signatures on replay.
-				blk := map[string]any{"type": "thinking", "thinking": b.Thinking}
-				if b.ThinkingSignature != "" {
-					blk["signature"] = b.ThinkingSignature
+				if b.Redacted {
+					if b.ThinkingSignature == "" {
+						return nil, fmt.Errorf("redacted thinking is missing its opaque payload")
+					}
+					blocks = append(blocks, map[string]any{"type": "redacted_thinking", "data": b.ThinkingSignature})
+				} else if b.ThinkingSignature != "" {
+					blocks = append(blocks, map[string]any{"type": "thinking", "thinking": b.Thinking, "signature": b.ThinkingSignature})
+				} else if b.Thinking != "" {
+					// Unsigned historical reasoning cannot be replayed as a signed
+					// Anthropic thinking block. Preserve its text instead.
+					blocks = append(blocks, map[string]any{"type": "text", "text": b.Thinking})
 				}
-				blocks = append(blocks, blk)
 			case "toolCall":
 				args, err := json.Marshal(b.Arguments)
 				if err != nil {
@@ -130,11 +154,15 @@ func convertMessage(m Message) (map[string]any, error) {
 			if b.Type == "text" {
 				inner = append(inner, map[string]any{"type": "text", "text": b.Text})
 			} else {
-				inner = append(inner, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": b.MimeType, "data": b.Data}})
+				converted, err := convertMessage(Message{Role: "user", Content: []Block{b}})
+				if err != nil {
+					return nil, err
+				}
+				inner = append(inner, converted["content"].([]any)...)
 			}
 		}
 		return map[string]any{"role": "user", "content": []any{map[string]any{
-			"type": "tool_result", "tool_use_id": m.ToolCallID, "content": inner,
+			"type": "tool_result", "tool_use_id": m.ToolCallID, "content": inner, "is_error": m.IsError,
 		}}}, nil
 	case "system":
 		return nil, fmt.Errorf("system messages must be folded into the request system field, not messages[]")

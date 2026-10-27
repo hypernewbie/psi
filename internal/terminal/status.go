@@ -39,6 +39,9 @@ func (s *StatusWriter) Update(name, callID string, st ToolState) {
 	if s.last[key] == st {
 		return // throttle repeated identical updates
 	}
+	if len(s.last) >= 1024 {
+		clear(s.last)
+	}
 	s.last[key] = st
 	fmt.Fprintln(s.w, Sanitize(FormatStatus(name, st)))
 }
@@ -48,11 +51,11 @@ func (s *StatusWriter) Update(name, callID string, st ToolState) {
 type Streamer struct {
 	w       io.Writer
 	needsNL bool
-	noColor bool
+	filter  Sanitizer
 }
 
 func NewStreamer(w io.Writer, noColor bool) *Streamer {
-	return &Streamer{w: w, noColor: noColor || true} // color never emitted in M6
+	return &Streamer{w: w} // the inline interface emits no color
 }
 
 func (s *Streamer) PrintUser(text string) {
@@ -61,8 +64,12 @@ func (s *Streamer) PrintUser(text string) {
 }
 
 func (s *Streamer) Delta(t string) {
-	fmt.Fprint(s.w, Sanitize(t))
-	if !strings.HasSuffix(t, "\n") {
+	text := s.filter.Feed(t)
+	fmt.Fprint(s.w, text)
+	if text == "" {
+		return
+	}
+	if !strings.HasSuffix(text, "\n") {
 		s.needsNL = true
 	} else {
 		s.needsNL = false
@@ -70,6 +77,7 @@ func (s *Streamer) Delta(t string) {
 }
 
 func (s *Streamer) Close() {
+	s.filter = Sanitizer{}
 	if s.needsNL {
 		fmt.Fprintln(s.w)
 		s.needsNL = false

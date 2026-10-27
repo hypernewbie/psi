@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
-gofmt -l .
+unformatted=$(gofmt -l cmd internal)
+if [ -n "$unformatted" ]; then
+  printf 'Files need gofmt:\n%s\n' "$unformatted" >&2
+  exit 1
+fi
 go vet ./...
 go test ./...
 go test -race ./...

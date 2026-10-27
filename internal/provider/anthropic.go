@@ -5,20 +5,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// Client implements the Anthropic Messages streaming protocol (Steps 50-54).
 type Client struct {
-	HTTP     *http.Client
-	BaseURL  string
-	APIKey   string
-	MaxRetry int
-	// Idle timeout applied per read; no short total timeout.
+	HTTP        *http.Client
+	BaseURL     string
+	APIKey      string
+	Headers     map[string]string
+	MaxRetry    int
 	IdleTimeout time.Duration
 }
 
@@ -26,15 +29,16 @@ func NewClient(baseURL, apiKey string, maxRetry int, idle time.Duration) *Client
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
-	if idle <= 0 {
-		idle = 90 * time.Second
-	}
-	return &Client{HTTP: &http.Client{}, BaseURL: strings.TrimSuffix(baseURL, "/"), APIKey: apiKey, MaxRetry: maxRetry, IdleTimeout: idle}
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	baseURL = strings.TrimSuffix(baseURL, "/v1")
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return &Client{HTTP: &http.Client{Transport: transport}, BaseURL: baseURL, APIKey: apiKey, MaxRetry: maxRetry, IdleTimeout: idle}
 }
 
 func (c *Client) CloseIdle() { c.HTTP.CloseIdleConnections() }
 
-// Classify errors: auth, rate limit, transport, invalid request, context limit.
 type ErrorKind string
 
 const (
@@ -56,326 +60,403 @@ func (e *ProviderError) Error() string {
 	return fmt.Sprintf("%s (status %d): %s", e.Kind, e.Status, e.Message)
 }
 
-// Send performs one request with bounded retries. onText receives deltas in order.
 func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
 	body, err := BuildAnthropicRequest(req)
 	if err != nil {
 		return nil, err
 	}
-	var lastErr error
-	for attempt := 0; attempt <= c.MaxRetry; attempt++ {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		resp, err := c.doOnce(ctx, raw, onText, req)
+		if err == nil {
+			return resp, nil
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		resp, perr := c.doOnce(ctx, body, onText, req)
-		if perr == nil {
-			return resp, nil
+		var pe *ProviderError
+		if !errors.As(err, &pe) || (pe.Kind != ErrRateLimit && pe.Kind != ErrTransport) || attempt >= c.MaxRetry {
+			return nil, err
 		}
-		pe, ok := perr.(*ProviderError)
-		if !ok {
-			return nil, perr // transport already classified
+		delay := pe.RetryAfter
+		if delay <= 0 {
+			delay = time.Duration(1<<min(attempt, 6)) * 500 * time.Millisecond
 		}
-		lastErr = perr
-		switch pe.Kind {
-		case ErrRateLimit, ErrTransport:
-			delay := pe.RetryAfter
-			if delay <= 0 {
-				delay = time.Duration(1<<attempt) * 500 * time.Millisecond
-			}
-			if delay > 60*time.Second {
-				delay = 60 * time.Second
-			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay):
-			}
-			continue
-		default:
-			return nil, perr // no retry: auth, invalid, context-limit
+		delay = min(delay, 60*time.Second)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
 		}
 	}
-	return nil, lastErr
 }
 
-func (c *Client) doOnce(ctx context.Context, body map[string]any, onText func(string), req Request) (*Response, error) {
-	raw, _ := json.Marshal(body)
+func (c *Client) doOnce(ctx context.Context, raw []byte, onText func(string), req Request) (*Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/messages", bytes.NewReader(raw))
 	if err != nil {
-		return nil, &ProviderError{Kind: ErrTransport, Message: err.Error()}
+		return nil, fmt.Errorf("invalid provider endpoint")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.APIKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	for name, value := range c.Headers {
+		httpReq.Header.Set(name, value)
+	}
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		return nil, &ProviderError{Kind: ErrTransport, Message: err.Error()}
+		return nil, &ProviderError{Kind: ErrTransport, Message: "HTTP request failed"}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
+		// Error bodies also need idle/cancellation handling.
+		r := newStreamReader(ctx, resp.Body, c.IdleTimeout)
+		defer r.close()
+		resp.Body = structReadCloser{Reader: r, Closer: resp.Body}
 		return nil, classifyHTTPError(resp)
 	}
-	return parseSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	result, err := parseSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	if err != nil {
+		// Once HTTP streaming starts, never invisibly replay an incomplete turn.
+		// Deliberately do not wrap a retryable ProviderError here.
+		return nil, fmt.Errorf("provider stream interrupted (not retried): %s", c.redact(err.Error()))
+	}
+	return result, nil
 }
 
-func classifyHTTPError(resp *http.Response) *ProviderError {
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	msg := strings.TrimSpace(string(b))
-	retryAfter := parseRetryAfter(resp.Header.Get("retry-after"))
-	switch {
-	case resp.StatusCode == 401 || resp.StatusCode == 403:
-		return &ProviderError{Kind: ErrAuth, Status: resp.StatusCode, Message: redact(msg)}
-	case resp.StatusCode == 429:
-		return &ProviderError{Kind: ErrRateLimit, Status: resp.StatusCode, Message: msg, RetryAfter: retryAfter}
-	case resp.StatusCode == 400:
-		if strings.Contains(strings.ToLower(msg), "context") || strings.Contains(strings.ToLower(msg), "too long") || strings.Contains(strings.ToLower(msg), "prompt") {
-			return &ProviderError{Kind: ErrContextLimit, Status: resp.StatusCode, Message: msg}
+type structReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+func (c *Client) redact(s string) string {
+	for _, secret := range append([]string{c.APIKey}, headerValues(c.Headers)...) {
+		if secret != "" {
+			s = strings.ReplaceAll(s, secret, "[redacted]")
 		}
-		kind := ErrInvalid
-		if strings.Contains(msg, "credit") || strings.Contains(msg, "billing") {
-			kind = ErrAuth
-		}
-		return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: msg}
-	case resp.StatusCode >= 500:
-		return &ProviderError{Kind: ErrTransport, Status: resp.StatusCode, Message: msg, RetryAfter: retryAfter}
-	default:
-		return &ProviderError{Kind: ErrInvalid, Status: resp.StatusCode, Message: msg}
-	}
-}
-
-func parseRetryAfter(s string) time.Duration {
-	if s == "" {
-		return 0
-	}
-	var secs int
-	if _, err := fmt.Sscanf(s, "%d", &secs); err == nil && secs >= 0 {
-		return time.Duration(secs) * time.Second
-	}
-	return 0
-}
-
-func redact(s string) string {
-	// Never echo full keys.
-	if len(s) > 64 {
-		return s[:64] + "…[redacted]"
 	}
 	return s
 }
 
-// parseSSE handles fragmented reads, multiline records, UTF-8 boundaries,
-// usage-only records, and explicit completion signals.
-func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
-	br := bufio.NewReader(r)
-	resp := &Response{Model: req.Model.ID, ThinkingLevel: req.Thinking, StopReason: "stop"}
-	var textBuf strings.Builder
-	var thinkBuf strings.Builder
-	type pendingTool struct {
-		id, name string
-		jsonBuf  strings.Builder
+func headerValues(headers map[string]string) []string {
+	var values []string
+	for _, v := range headers {
+		values = append(values, v)
 	}
-	pending := map[int]*pendingTool{}
-	var curIndex = -1
-	var sawStop bool
+	return values
+}
 
-	flush := func() {}
-	_ = flush
+func classifyHTTPError(resp *http.Response) *ProviderError {
+	// Do not echo response bodies: gateways can echo request headers or prompts.
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	lower := strings.ToLower(string(b))
+	kind := ErrInvalid
+	switch {
+	case resp.StatusCode == 401 || resp.StatusCode == 403:
+		kind = ErrAuth
+	case resp.StatusCode == 429:
+		kind = ErrRateLimit
+	case resp.StatusCode >= 500:
+		kind = ErrTransport
+	case resp.StatusCode == 400 && (strings.Contains(lower, "prompt is too long") || strings.Contains(lower, "context window") || strings.Contains(lower, "maximum context")):
+		kind = ErrContextLimit
+	}
+	return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode), RetryAfter: parseRetryAfter(resp.Header.Get("retry-after"))}
+}
 
-	readWithIdle := func() (string, error) {
-		type res struct {
-			line []byte
-			err  error
-		}
-		ch := make(chan res, 1)
-		go func() {
-			ln, err := br.ReadBytes('\n')
-			ch <- res{ln, err}
-		}()
-		timer := time.NewTimer(idle)
+func parseRetryAfter(s string) time.Duration {
+	if secs, err := strconv.ParseFloat(s, 64); err == nil && secs >= 0 && secs <= 86400 {
+		return time.Duration(secs * float64(time.Second))
+	}
+	if date, err := http.ParseTime(s); err == nil {
+		return max(time.Until(date), 0)
+	}
+	return 0
+}
+
+// A single synchronous reader owns the stream. Cancellation/idle timeout closes
+// the body instead of leaving a blocked goroutine behind for every line read.
+type streamReader struct {
+	ctx     context.Context
+	r       io.Reader
+	closer  io.Closer
+	idle    time.Duration
+	stop    func() bool
+	timeout atomic.Bool
+}
+
+func newStreamReader(ctx context.Context, r io.Reader, idle time.Duration) *streamReader {
+	s := &streamReader{ctx: ctx, r: r, idle: idle}
+	if closer, ok := r.(io.Closer); ok {
+		s.closer = closer
+		s.stop = context.AfterFunc(ctx, func() { closer.Close() })
+	}
+	return s
+}
+
+func (s *streamReader) close() {
+	if s.stop != nil {
+		s.stop()
+	}
+}
+
+func (s *streamReader) Read(p []byte) (int, error) {
+	if err := s.ctx.Err(); err != nil {
+		return 0, err
+	}
+	var timer *time.Timer
+	if s.idle > 0 && s.closer != nil {
+		timer = time.AfterFunc(s.idle, func() {
+			s.timeout.Store(true)
+			s.closer.Close()
+		})
 		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-timer.C:
-			return "", &ProviderError{Kind: ErrTransport, Message: "idle timeout reading provider stream"}
-		case v := <-ch:
-			if len(v.line) > 0 {
-				return string(v.line), v.err
-			}
-			return "", v.err
-		}
 	}
+	n, err := s.r.Read(p)
+	if s.ctx.Err() != nil {
+		return n, s.ctx.Err()
+	}
+	if s.timeout.Load() {
+		return n, fmt.Errorf("idle timeout reading provider stream")
+	}
+	return n, err
+}
 
-	var event string
-	var dataLines []string
+const maxStreamBytes = 32 * 1024 * 1024
+
+func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
+	sr := newStreamReader(ctx, r, idle)
+	defer sr.close()
+	br := bufio.NewReader(sr)
+	resp := &Response{Model: req.Model.ID, ThinkingLevel: req.Thinking}
+	type pendingBlock struct {
+		block Block
+		args  strings.Builder
+		open  bool
+	}
+	blocks := map[int]*pendingBlock{}
+	toolIDs := map[string]bool{}
+	var order []int
+	started, stopped := false, false
+	var eventName string
+	var data []string
+	total := 0
 	emit := func() error {
-		defer func() {
-			event = ""
-			dataLines = nil
-		}()
-		if event == "" {
+		defer func() { eventName, data = "", nil }()
+		if len(data) == 0 {
 			return nil
 		}
-		data := strings.Join(dataLines, "\n")
-		if data == "" {
-			return nil
+		var p struct {
+			Type    string `json:"type"`
+			Index   int    `json:"index"`
+			Message struct {
+				ID    string         `json:"id"`
+				Model string         `json:"model"`
+				Usage map[string]any `json:"usage"`
+			} `json:"message"`
+			ContentBlock struct {
+				Type      string         `json:"type"`
+				ID        string         `json:"id"`
+				Name      string         `json:"name"`
+				Text      string         `json:"text"`
+				Thinking  string         `json:"thinking"`
+				Signature string         `json:"signature"`
+				Data      string         `json:"data"`
+				Input     map[string]any `json:"input"`
+			} `json:"content_block"`
+			Delta struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
+				PartialJSON string `json:"partial_json"`
+				StopReason  string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage map[string]any `json:"usage"`
 		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			// Multiline SSE records must parse; malformed JSON is an error, not silent.
-			return fmt.Errorf("malformed SSE data for event %q: %w", event, err)
+		encoded := strings.Join(data, "\n")
+		if !json.Valid([]byte(encoded)) {
+			return fmt.Errorf("malformed SSE data for event %q", eventName)
 		}
-		switch event {
+		dec := json.NewDecoder(strings.NewReader(encoded))
+		dec.UseNumber()
+		if err := dec.Decode(&p); err != nil {
+			return fmt.Errorf("malformed SSE data for event %q", eventName)
+		}
+		if eventName == "" {
+			eventName = p.Type
+		}
+		switch eventName {
 		case "message_start":
-			if msg, ok := payload["message"].(map[string]any); ok {
-				if id, ok := msg["id"].(string); ok {
-					resp.ResponseID = id
-				}
-				if m, ok := msg["model"].(string); ok {
-					resp.Model = m
-				}
-				if u, ok := msg["usage"].(map[string]any); ok {
-					resp.Usage = usageFrom(u)
-				}
+			if started {
+				return fmt.Errorf("duplicate message_start")
 			}
+			started = true
+			resp.ResponseID = p.Message.ID
+			if p.Message.Model != "" {
+				resp.Model = p.Message.Model
+			}
+			mergeUsage(&resp.Usage, p.Message.Usage)
 		case "content_block_start":
-			idx := int(num(payload["index"]))
-			blk, _ := payload["content_block"].(map[string]any)
-			typ, _ := blk["type"].(string)
-			switch typ {
-			case "text":
-				curIndex = idx
-				pending[idx] = &pendingTool{}
-			case "thinking":
-				curIndex = idx
-				pending[idx] = &pendingTool{}
-			case "tool_use":
-				id, _ := blk["id"].(string)
-				name, _ := blk["name"].(string)
-				pending[idx] = &pendingTool{id: id, name: name}
-				curIndex = idx
+			if !started || blocks[p.Index] != nil {
+				return fmt.Errorf("invalid content block start")
 			}
+			b := p.ContentBlock
+			pb := &pendingBlock{open: true, block: Block{Type: b.Type, Text: b.Text, Thinking: b.Thinking, ThinkingSignature: b.Signature, ID: b.ID, Name: b.Name, Arguments: b.Input}}
+			switch b.Type {
+			case "text":
+				if b.Text != "" && onText != nil {
+					onText(b.Text)
+				}
+			case "thinking":
+			case "redacted_thinking":
+				pb.block.Type, pb.block.Redacted, pb.block.ThinkingSignature = "thinking", true, b.Data
+			case "tool_use":
+				if toolIDs[b.ID] {
+					return fmt.Errorf("duplicate tool call ID")
+				}
+				toolIDs[b.ID] = true
+				if b.ID == "" || b.Name == "" {
+					return fmt.Errorf("tool call missing ID or name")
+				}
+				pb.block.Type = "toolCall"
+			default:
+				return fmt.Errorf("unsupported streamed content %q", b.Type)
+			}
+			blocks[p.Index] = pb
+			order = append(order, p.Index)
 		case "content_block_delta":
-			idx := int(num(payload["index"]))
-			delta, _ := payload["delta"].(map[string]any)
-			dtyp, _ := delta["type"].(string)
-			switch dtyp {
+			pb := blocks[p.Index]
+			if pb == nil || !pb.open {
+				return fmt.Errorf("delta for inactive content block")
+			}
+			switch p.Delta.Type {
 			case "text_delta":
-				if t, ok := delta["text"].(string); ok {
-					textBuf.WriteString(t)
-					if onText != nil {
-						onText(t)
-					}
+				if pb.block.Type != "text" {
+					return fmt.Errorf("text delta in non-text block")
+				}
+				pb.block.Text += p.Delta.Text
+				if onText != nil {
+					onText(p.Delta.Text)
 				}
 			case "thinking_delta":
-				if t, ok := delta["thinking"].(string); ok {
-					thinkBuf.WriteString(t)
+				if pb.block.Type != "thinking" {
+					return fmt.Errorf("thinking delta in non-thinking block")
 				}
-			case "input_json_delta":
-				if p, ok := delta["partial_json"].(string); ok {
-					pt := pending[idx]
-					if pt == nil {
-						pt = &pendingTool{}
-						pending[idx] = pt
-					}
-					pt.jsonBuf.WriteString(p)
-				}
+				pb.block.Thinking += p.Delta.Thinking
 			case "signature_delta":
-				// Opaque signature fragments are appended to the thinking tool slot.
-				if s, ok := delta["signature"].(string); ok {
-					pt := pending[idx]
-					if pt == nil {
-						pt = &pendingTool{}
-						pending[idx] = pt
-					}
-					pt.jsonBuf.WriteString(s) // reused buffer holds signature for thinking blocks
-					_ = curIndex
+				if pb.block.Type != "thinking" {
+					return fmt.Errorf("signature delta in non-thinking block")
 				}
+				pb.block.ThinkingSignature += p.Delta.Signature
+			case "input_json_delta":
+				if pb.block.Type != "toolCall" {
+					return fmt.Errorf("input delta in non-tool block")
+				}
+				pb.args.WriteString(p.Delta.PartialJSON)
+			default:
+				return fmt.Errorf("unsupported streamed delta %q", p.Delta.Type)
 			}
 		case "content_block_stop":
-			idx := int(num(payload["index"]))
-			if pt, ok := pending[idx]; ok && pt.id != "" {
-				args := map[string]any{}
-				if pt.jsonBuf.Len() > 0 {
-					if err := json.Unmarshal([]byte(pt.jsonBuf.String()), &args); err != nil {
-						return fmt.Errorf("tool-call arguments are not valid JSON after completion: %w", err)
+			pb := blocks[p.Index]
+			if pb == nil || !pb.open {
+				return fmt.Errorf("stop for inactive content block")
+			}
+			pb.open = false
+			if pb.block.Type == "toolCall" {
+				if pb.args.Len() > 0 {
+					if !json.Valid([]byte(pb.args.String())) {
+						return fmt.Errorf("invalid completed tool-call arguments")
+					}
+					dec := json.NewDecoder(strings.NewReader(pb.args.String()))
+					dec.UseNumber()
+					if err := dec.Decode(&pb.block.Arguments); err != nil || pb.block.Arguments == nil {
+						return fmt.Errorf("invalid completed tool-call arguments")
 					}
 				}
-				resp.ToolCalls = append(resp.ToolCalls, Block{Type: "toolCall", ID: pt.id, Name: pt.name, Arguments: args})
-				delete(pending, idx)
+				if pb.block.Arguments == nil {
+					pb.block.Arguments = map[string]any{}
+				}
 			}
 		case "message_delta":
-			if d, ok := payload["delta"].(map[string]any); ok {
-				if sr, ok := d["stop_reason"].(string); ok {
-					resp.StopReason = mapStop(sr, len(resp.ToolCalls) > 0)
-				}
+			if p.Delta.StopReason != "" {
+				resp.StopReason = mapStop(p.Delta.StopReason, false)
 			}
-			if u, ok := payload["usage"].(map[string]any); ok {
-				resp.Usage = usageFrom(u)
-			}
+			mergeUsage(&resp.Usage, p.Usage)
 		case "message_stop":
-			sawStop = true
+			stopped = true
 		case "error":
-			msg := data
-			if e, ok := payload["error"].(map[string]any); ok {
-				if m, ok := e["message"].(string); ok {
-					msg = m
-				}
-				if t, ok := e["type"].(string); ok && strings.Contains(strings.ToLower(t), "overloaded") {
-					return &ProviderError{Kind: ErrTransport, Message: msg}
-				}
-			}
-			return &ProviderError{Kind: ErrInvalid, Message: msg}
+			return fmt.Errorf("provider returned an SSE error")
 		case "ping":
-			// keepalive, ignore
+		default:
+			return fmt.Errorf("unsupported SSE event %q", eventName)
 		}
 		return nil
 	}
-
-	for {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	for !stopped {
+		part, err := br.ReadSlice('\n')
+		total += len(part)
+		if total > maxStreamBytes {
+			return nil, fmt.Errorf("provider stream exceeds 32 MiB")
 		}
-		line, err := readWithIdle()
-		if line != "" {
-			t := strings.TrimRight(line, "\r\n")
-			if t == "" {
-				if err := emit(); err != nil {
-					return nil, err
-				}
-			} else if strings.HasPrefix(t, ":") {
-				// SSE comment keepalive.
-			} else if strings.HasPrefix(t, "event:") {
-				event = strings.TrimSpace(strings.TrimPrefix(t, "event:"))
-			} else if strings.HasPrefix(t, "data:") {
-				dataLines = append(dataLines, strings.TrimPrefix(t, "data:"))
-				// data may arrive without trailing blank line at EOF; handled below.
+		// ReadSlice fragments can split a line. Accumulate only within this bound.
+		line := append([]byte(nil), part...)
+		for err == bufio.ErrBufferFull {
+			part, err = br.ReadSlice('\n')
+			total += len(part)
+			if total > maxStreamBytes {
+				return nil, fmt.Errorf("provider stream exceeds 32 MiB")
 			}
+			line = append(line, part...)
 		}
-		if err == io.EOF {
-			if len(dataLines) > 0 {
+		t := strings.TrimRight(string(line), "\r\n")
+		switch {
+		case t == "":
+			if e := emit(); e != nil {
+				return nil, e
+			}
+		case strings.HasPrefix(t, "event:"):
+			eventName = strings.TrimSpace(t[6:])
+		case strings.HasPrefix(t, "data:"):
+			data = append(data, strings.TrimPrefix(t[5:], " "))
+		}
+		if err != nil {
+			if err != io.EOF {
+				return nil, err
+			}
+			if len(data) > 0 {
 				if e := emit(); e != nil {
 					return nil, e
 				}
 			}
 			break
 		}
-		if err != nil {
-			return nil, &ProviderError{Kind: ErrTransport, Message: err.Error()}
+	}
+	if !started || !stopped || resp.StopReason == "" {
+		return nil, fmt.Errorf("incomplete provider response: missing message_start, stop reason, or message_stop")
+	}
+	for _, idx := range order {
+		pb := blocks[idx]
+		if pb.open {
+			return nil, fmt.Errorf("incomplete content block %d", idx)
+		}
+		resp.Content = append(resp.Content, pb.block)
+		switch pb.block.Type {
+		case "text":
+			resp.Text += pb.block.Text
+		case "thinking":
+			resp.Thinking += pb.block.Thinking
+		case "toolCall":
+			resp.ToolCalls = append(resp.ToolCalls, pb.block)
 		}
 	}
-	resp.Text = textBuf.String()
-	resp.Thinking = thinkBuf.String()
-	if len(resp.ToolCalls) > 0 && resp.StopReason == "stop" {
-		resp.StopReason = "toolUse"
-	}
-	// Incomplete tool calls are ineligible for execution: content_block_stop
-	// is required; any leftover pending tool with an id is a protocol error.
-	for _, pt := range pending {
-		if pt.id != "" {
-			return nil, fmt.Errorf("incomplete tool call %q: missing content_block_stop", pt.id)
-		}
-	}
-	_ = sawStop
 	return resp, nil
 }
 
@@ -394,33 +475,26 @@ func num(v any) float64 {
 	return 0
 }
 
-func usageFrom(u map[string]any) Usage {
-	return Usage{
-		Input:       int64(num(u["input_tokens"])),
-		Output:      int64(num(u["output_tokens"])),
-		CacheRead:   int64(num(u["cache_read_input_tokens"])),
-		CacheWrite:  int64(num(u["cache_creation_input_tokens"])),
-		TotalTokens: int64(num(u["input_tokens"])) + int64(num(u["output_tokens"])),
+func mergeUsage(out *Usage, u map[string]any) {
+	for key, dest := range map[string]*int64{"input_tokens": &out.Input, "output_tokens": &out.Output, "cache_read_input_tokens": &out.CacheRead, "cache_creation_input_tokens": &out.CacheWrite} {
+		if v, ok := u[key]; ok {
+			*dest = int64(num(v))
+		}
 	}
+	out.TotalTokens = out.Input + out.Output + out.CacheRead + out.CacheWrite
 }
+
+func usageFrom(u map[string]any) Usage { var out Usage; mergeUsage(&out, u); return out }
 
 func mapStop(sr string, hasTools bool) string {
 	switch sr {
-	case "end_turn":
-		if hasTools {
-			return "toolUse"
-		}
-		return "stop"
 	case "tool_use":
 		return "toolUse"
 	case "max_tokens":
 		return "length"
-	case "stop_sequence":
+	case "end_turn", "stop_sequence":
 		return "stop"
 	default:
-		if hasTools {
-			return "toolUse"
-		}
-		return "stop"
+		return "error"
 	}
 }

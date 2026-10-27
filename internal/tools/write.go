@@ -25,9 +25,8 @@ func (t *WriteTool) Execute(inv Invocation) Result {
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return errResult(fmt.Sprintf("write: %v", err))
 	}
-	// Cancellation boundary: check context via invocation? Sequential dispatch
-	// checks ctx before each call (agent layer); write itself is atomic enough
-	// for the first release (no partial-write resume).
+	// Dispatch checks cancellation before starting. The synchronous write must
+	// settle before the agent records its result; cancellation cannot undo it.
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 		return errResult(fmt.Sprintf("write: %v", err))
 	}

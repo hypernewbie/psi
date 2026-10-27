@@ -43,6 +43,7 @@ type ModelMeta struct {
 	ContextWindow int
 	MaxTokens     int
 	Reasoning     bool
+	InputImage    bool
 }
 
 // Request is the normalized provider request (Pi context + active tools).
@@ -62,6 +63,7 @@ type Message struct {
 	Content    []Block
 	ToolCallID string
 	ToolName   string
+	IsError    bool
 }
 
 type Block struct {
@@ -77,6 +79,7 @@ type Block struct {
 	// Thinking (opaque replay).
 	Thinking          string
 	ThinkingSignature string
+	Redacted          bool
 }
 
 // ToolDef is one declared tool.
@@ -88,6 +91,8 @@ type ToolDef struct {
 
 // Response is one authoritative completed assistant message.
 type Response struct {
+	// Content retains original block order and opaque thinking signatures.
+	Content       []Block
 	Text          string
 	Thinking      string
 	ToolCalls     []Block

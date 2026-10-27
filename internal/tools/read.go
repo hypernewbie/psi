@@ -1,124 +1,136 @@
 package tools
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// ReadTool implements text reads with offset/limit plus a bounded image subset.
-type ReadTool struct{ Cwd string }
+type ReadTool struct {
+	Cwd         string
+	BlockImages bool
+}
 
 var imageExts = map[string]string{
 	".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
 	".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
 }
 
-func (t *ReadTool) Execute(inv Invocation) Result {
+func (t *ReadTool) Execute(inv Invocation) Result { return t.ExecuteCtx(context.Background(), inv) }
+
+func (t *ReadTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	path, ok := argString(inv.Arguments, "path")
 	if !ok || path == "" {
 		return errResult("read: path is required")
 	}
+	offset, limit := 1, DefaultMaxLines
+	for name, target := range map[string]*int{"offset": &offset, "limit": &limit} {
+		if _, present := inv.Arguments[name]; !present {
+			continue
+		}
+		f, ok := argFloat(inv.Arguments, name)
+		if !ok || !isFinite(f) || f < 1 || f > 1<<53-1 || math.Trunc(f) != f {
+			return errResult("read: offset and limit must be positive safe integers")
+		}
+		*target = int(f)
+	}
 	abs := resolvePath(t.Cwd, path)
-	// offset/limit are 1-indexed lines.
-	var offset, limit int
-	if f, ok := argFloat(inv.Arguments, "offset"); ok {
-		offset = int(f)
-	}
-	if f, ok := argFloat(inv.Arguments, "limit"); ok {
-		limit = int(f)
-	}
-	if offset < 0 || limit < 0 {
-		return errResult("read: offset and limit must be >= 0")
-	}
 	fi, err := os.Stat(abs)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return errResult(fmt.Sprintf("read: file does not exist: %s", path))
-		}
 		return errResult(fmt.Sprintf("read: %v", err))
 	}
-	if fi.IsDir() {
-		return errResult(fmt.Sprintf("read: not a file: %s", path))
+	if !fi.Mode().IsRegular() {
+		return errResult("read: path must be a regular file")
 	}
-	ext := strings.ToLower(filepath.Ext(abs))
-	if mime, isImg := imageExts[ext]; isImg {
+	if mime, ok := imageExts[strings.ToLower(filepath.Ext(abs))]; ok {
+		if t.BlockImages {
+			return errResult("read: the selected model does not support image input")
+		}
+		if mime == "image/bmp" {
+			return errResult("read: BMP images are unsupported by the Anthropic provider; convert to PNG first")
+		}
 		return t.readImage(abs, mime)
 	}
-	return t.readText(abs, path, offset, limit)
-}
-
-func (t *ReadTool) readText(abs, displayPath string, offset, limit int) Result {
-	data, err := os.ReadFile(abs)
+	f, err := os.Open(abs)
 	if err != nil {
 		return errResult(fmt.Sprintf("read: %v", err))
 	}
-	if len(data) == 0 {
+	defer f.Close()
+	br := bufio.NewReader(f)
+	var out strings.Builder
+	lineNumber, kept := 1, 0
+	truncated := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return errResult(err.Error())
+		}
+		part, err := br.ReadSlice('\n')
+		if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+			return errResult(fmt.Sprintf("read: %v", err))
+		}
+		if lineNumber >= offset {
+			if !isText(part) {
+				return errResult("read: file contains binary data")
+			}
+			remaining := DefaultMaxBytes - out.Len()
+			if len(part) > remaining {
+				truncated = true
+				break
+			}
+			out.Write(part)
+		}
+		if err != bufio.ErrBufferFull && len(part) > 0 {
+			if lineNumber >= offset {
+				kept++
+			}
+			lineNumber++
+		}
+		if err == io.EOF {
+			break
+		}
+		if kept >= min(limit, DefaultMaxLines) {
+			_, peekErr := br.Peek(1)
+			truncated = peekErr != io.EOF
+			break
+		}
+	}
+	if out.Len() == 0 && !truncated {
+		if offset > lineNumber {
+			return errResult(fmt.Sprintf("read: offset %d is beyond end of file", offset))
+		}
 		return textResult("(empty file)")
 	}
-	if !isText(data) {
-		return errResult(fmt.Sprintf("read: not a text file: %s", displayPath))
+	text := out.String()
+	if truncated {
+		text += fmt.Sprintf("\n\n[Output truncated. Use offset=%d to continue; use bash for a line larger than 50 KiB.]", offset+kept)
 	}
-	text := string(data)
-	lines := splitLines(text)
-	total := len(lines)
-	start := 0
-	if offset > 0 {
-		start = offset - 1
-		if start > total {
-			start = total
-		}
-	}
-	end := total
-	if limit > 0 {
-		end = start + limit
-		if end > total {
-			end = total
-		}
-	}
-	slice := strings.Join(lines[start:end], "\n")
-	if strings.HasSuffix(text, "\n") && end == total && len(slice) > 0 {
-		slice += "\n"
-	}
-	// Apply Pi byte/line truncation to the slice (bounded output).
-	tr := truncateHead(slice, DefaultMaxLines, DefaultMaxBytes)
-	out := tr.Content
-	if tr.Truncated {
-		out += fmt.Sprintf("\n\n[%s]", continuationNotice(displayPath))
-	}
-	// If sliced (offset/limit), note continuation when more lines remain.
-	if end < total && !tr.Truncated {
-		out += fmt.Sprintf("\n\n[%s]", continuationNotice(displayPath))
-	}
-	return Result{Content: []Block{{Type: "text", Text: out}}, Details: map[string]any{"truncated": tr.Truncated}}
+	return Result{Content: []Block{{Type: "text", Text: text}}, Details: map[string]any{"truncated": truncated}}
 }
 
 func (t *ReadTool) readImage(abs, mime string) Result {
-	// Bounded subset: 10 MiB cap, supported formats only. No terminal display;
-	// image data goes to the model, terminal sees only a note.
-	const maxImageBytes = 10 * 1024 * 1024
-	fi, err := os.Stat(abs)
+	// Base64 expands by 4/3. Keep new image payloads below Anthropic's 5 MiB bound.
+	const maxImageBytes = 3 * 1024 * 1024
+	f, err := os.Open(abs)
 	if err != nil {
 		return errResult(fmt.Sprintf("read: %v", err))
 	}
-	if fi.Size() > maxImageBytes {
-		return errResult(fmt.Sprintf("read: image exceeds 10 MiB limit: %s", abs))
-	}
-	data, err := os.ReadFile(abs)
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
 	if err != nil {
 		return errResult(fmt.Sprintf("read: %v", err))
 	}
-	// Capability: BMP is decoded but many models reject it; keep as compatible
-	// block and let the provider layer refuse with an actionable error.
-	return Result{Content: []Block{
-		{Type: "text", Text: fmt.Sprintf("Read image file [%s]", mime)},
-		{Type: "image", Data: encodeBase64(data), MimeType: mime},
-	}}
+	if len(data) > maxImageBytes {
+		return errResult("read: image exceeds the 3 MiB raw-image limit; resize it first")
+	}
+	return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("Read image file [%s]", mime)}, {Type: "image", Data: encodeBase64(data), MimeType: mime}}}
 }
 
 func isText(data []byte) bool {
-	// NUL byte => binary. Otherwise allow valid UTF-8 (with lenient fallback).
 	for _, b := range data {
 		if b == 0 {
 			return false

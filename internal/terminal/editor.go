@@ -23,10 +23,13 @@ func NewEditor() *Editor { return &Editor{histIdx: -1} }
 
 // Insert text (paste-safe: newlines literal).
 func (e *Editor) Insert(s string) {
-	for _, r := range s {
-		e.buf = append(e.buf[:e.pos], append([]rune{r}, e.buf[e.pos:]...)...)
-		e.pos++
-	}
+	runes := []rune(s)
+	buf := make([]rune, 0, len(e.buf)+len(runes))
+	buf = append(buf, e.buf[:e.pos]...)
+	buf = append(buf, runes...)
+	buf = append(buf, e.buf[e.pos:]...)
+	e.buf = buf
+	e.pos += len(runes)
 	e.histIdx = -1
 }
 
@@ -133,7 +136,7 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 			e.Backspace()
 			return "", false
 		default:
-			if key[0] < 0x20 {
+			if key[0] == 27 || key[0] < 0x20 {
 				return "", false
 			}
 			e.Insert(string(key))
@@ -157,7 +160,7 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 	case "\x1b[3~":
 		e.Delete()
 	default:
-		if utf8.Valid(key) {
+		if utf8.Valid(key) && !strings.HasPrefix(s, "\x1b") {
 			e.Insert(s)
 		}
 	}

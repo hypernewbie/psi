@@ -1,22 +1,22 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
-// BashTool executes shell commands in the workspace with bounded output,
-// timeout, and process-group cancellation.
+// BashTool executes shell commands with bounded memory and process-group cancellation.
 type BashTool struct {
-	Cwd       string
-	ShellPath string
+	Cwd         string
+	ShellPath   string
+	ShellPrefix string
 }
 
 func (t *BashTool) shell() string {
@@ -29,7 +29,6 @@ func (t *BashTool) shell() string {
 	return "bash"
 }
 
-// Execute runs command with optional timeout (seconds). No hidden default.
 func (t *BashTool) Execute(inv Invocation) Result {
 	return t.ExecuteCtx(context.Background(), inv)
 }
@@ -40,99 +39,139 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 		return errResult("bash: command is required")
 	}
 	var timeout time.Duration
-	if f, ok := argFloat(inv.Arguments, "timeout"); ok {
-		if f <= 0 || !isFinite(f) {
-			return errResult("bash: invalid timeout: must be a finite number of seconds")
+	if _, present := inv.Arguments["timeout"]; present {
+		f, ok := argFloat(inv.Arguments, "timeout")
+		if !ok || f <= 0 || !isFinite(f) || f > 2147483.647 {
+			return errResult("bash: timeout must be a finite number of seconds in (0, 2147483.647]")
 		}
-		ms := f * 1000
-		if ms > 2147483647 {
-			return errResult("bash: invalid timeout: maximum is 2147483.647 seconds")
-		}
-		timeout = time.Duration(ms * float64(time.Millisecond))
+		timeout = time.Duration(f * float64(time.Second))
 	}
-	if _, err := os.Stat(t.Cwd); err != nil {
-		return errResult(fmt.Sprintf("bash: working directory does not exist: %s", t.Cwd))
-	}
-	ctx2 := ctx
-	var cancel context.CancelFunc
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
 	if timeout > 0 {
-		ctx2, cancel = context.WithTimeout(ctx, timeout)
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(runCtx, timeout)
 		defer cancel()
 	}
-	shell := t.shell()
-	cmd := exec.CommandContext(ctx2, shell, "-c", cmdStr)
-	cmd.Dir = t.Cwd
-	// New process group so cancellation kills descendants, not just the shell.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	// Full output goes to a private temp file when truncated.
-	err := cmd.Run()
-	output := buf.String()
-	tr := truncateHead(output, DefaultMaxLines, DefaultMaxBytes)
-	modelOut := tr.Content
-	var fullPath string
-	if tr.Truncated {
-		f, terr := os.CreateTemp("", "psi-bash-*")
-		if terr == nil {
-			f.WriteString(output)
-			f.Close()
-			os.Chmod(f.Name(), 0o600)
-			fullPath = f.Name()
-			_ = filepath.Base(fullPath)
-			modelOut += fmt.Sprintf("\n\n[Output truncated. Full output: %s]", fullPath)
-		} else {
-			modelOut += "\n\n[Output truncated]"
-		}
+	if err := runCtx.Err(); err != nil {
+		return errResult("Command cancelled")
 	}
-	if ctx2.Err() == context.DeadlineExceeded {
-		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("Command timed out after %v\n%s", timeout, modelOut)}}, IsError: true, Details: map[string]any{"fullOutputPath": fullPath}}
-	}
-	if ctx.Err() == context.Canceled || (err != nil && ctx2.Err() != nil) {
-		killGroup(cmd)
-		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("Command cancelled\n%s", modelOut)}}, IsError: true}
-	}
+	f, err := os.CreateTemp("", "psi-bash-*") // 0600 from creation, not after the command
 	if err != nil {
-		code := exitCode(err)
-		text := fmt.Sprintf("Ran `%s`\n```\n%s\n```\n\nCommand exited with code %d", cmdStr, modelOut, code)
-		if tr.Truncated {
-			text += fmt.Sprintf("\n\n[Output truncated. Full output: %s]", fullPath)
+		return errResult(fmt.Sprintf("bash: cannot capture output: %v", err))
+	}
+	keepFile := false
+	defer func() {
+		f.Close()
+		if !keepFile {
+			os.Remove(f.Name())
 		}
-		// Non-zero exit is an error result for the model but still a value.
-		return Result{Content: []Block{{Type: "text", Text: text}}, IsError: true, Details: map[string]any{"exitCode": code, "fullOutputPath": fullPath}}
+	}()
+	capture := &tailCapture{file: f, cancel: stop}
+	if t.ShellPrefix != "" {
+		cmdStr = t.ShellPrefix + "\n" + cmdStr
 	}
-	if strings.TrimSpace(modelOut) == "" {
-		return textResult("(no output)")
+	cmd := exec.CommandContext(runCtx, t.shell(), "-c", cmdStr)
+	cmd.Dir = t.Cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		// The group ID is the original PID even if the group leader has exited.
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+			return err
+		}
+		return nil
 	}
-	return Result{Content: []Block{{Type: "text", Text: modelOut}}, Details: map[string]any{"fullOutputPath": fullPath}}
+	// Descendants must not keep Wait blocked indefinitely through inherited pipes.
+	cmd.WaitDelay = 250 * time.Millisecond
+	cmd.Stdout, cmd.Stderr = capture, capture
+	runErr := cmd.Run()
+	if runErr != nil && cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	closeErr := f.Close()
+	if capture.err != nil {
+		return errResult(fmt.Sprintf("bash: output capture failed: %v", capture.err))
+	}
+	if closeErr != nil {
+		return errResult(fmt.Sprintf("bash: output capture failed: %v", closeErr))
+	}
+	output := string(capture.tail)
+	for len(output) > 0 && !utf8.RuneStart(output[0]) {
+		output = output[1:]
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) > DefaultMaxLines {
+		output = strings.Join(lines[len(lines)-DefaultMaxLines:], "\n")
+	}
+	truncated := int64(len(output)) < capture.total
+	details := map[string]any{}
+	if truncated {
+		keepFile = true
+		details["fullOutputPath"] = f.Name()
+		output += fmt.Sprintf("\n\n[Output truncated. Full output: %s]", f.Name())
+	}
+	if ctx.Err() != nil {
+		return Result{Content: []Block{{Type: "text", Text: "Command cancelled\n" + output}}, IsError: true, Details: details}
+	}
+	if runCtx.Err() == context.DeadlineExceeded {
+		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("Command timed out after %v\n%s", timeout, output)}}, IsError: true, Details: details}
+	}
+	if runErr != nil {
+		code := exitCode(runErr)
+		details["exitCode"] = code
+		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("%s\nCommand failed (exit %d): %v", output, code, runErr)}}, IsError: true, Details: details}
+	}
+	if output == "" {
+		output = "(no output)"
+	}
+	return Result{Content: []Block{{Type: "text", Text: output}}, Details: details}
 }
 
-func isFinite(f float64) bool {
-	return f < 1e308 && f > -1e308 && f == f
+// Keep only the last 50 KiB in memory. Spool at most 256 MiB to disk, then
+// cancel the process group instead of exhausting storage.
+type tailCapture struct {
+	mu     sync.Mutex
+	file   *os.File
+	tail   []byte
+	total  int64
+	err    error
+	cancel context.CancelFunc
 }
+
+func (c *tailCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.total+int64(len(p)) > 256*1024*1024 {
+		c.err = fmt.Errorf("command output exceeds 256 MiB")
+		c.cancel()
+		return 0, c.err
+	}
+	n, err := c.file.Write(p)
+	c.total += int64(n)
+	if n >= DefaultMaxBytes {
+		c.tail = append(c.tail[:0], p[n-DefaultMaxBytes:n]...)
+	} else {
+		if excess := len(c.tail) + n - DefaultMaxBytes; excess > 0 {
+			copy(c.tail, c.tail[excess:])
+			c.tail = c.tail[:len(c.tail)-excess]
+		}
+		c.tail = append(c.tail, p[:n]...)
+	}
+	if err != nil {
+		c.err = err
+		c.cancel()
+	}
+	return n, err
+}
+
+func isFinite(f float64) bool { return f < 1e308 && f > -1e308 && f == f }
 
 func exitCode(err error) int {
 	if ee, ok := err.(*exec.ExitError); ok {
-		if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
-			if ws.Signaled() {
-				return 128 + int(ws.Signal())
-			}
-			return ws.ExitStatus()
-		}
-		return 1
+		return ee.ExitCode()
 	}
 	return 1
-}
-
-func killGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err == nil {
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		return
-	}
-	_ = cmd.Process.Kill()
 }
