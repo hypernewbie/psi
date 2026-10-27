@@ -1,8 +1,9 @@
-// Package event defines the small internal event stream (Phase 1 Step 11).
+// Package event defines the ordered internal event stream (P2-008).
+// Reference: temp/pi-mono/packages/coding-agent/src/core/agent-session.ts event flow.
+// Full tool arguments and result bodies never enter terminal events.
 package event
 
-// Type enumerates terminal-consumable events. Full tool results never enter
-// terminal events; the terminal consumes small status updates only.
+// Type enumerates terminal-consumable events.
 type Type string
 
 const (
@@ -15,12 +16,32 @@ const (
 	Error     Type = "error"
 )
 
-// Event is one bounded, observable unit. Payloads are small by construction.
+// Event is one bounded, observable unit with explicit ordering.
+// SessionID + Generation reject stale events after replacement.
+// RunID + AttemptID + Seq order provider/tool actions.
+// ProvisionalID vs CommittedID distinguish transient deltas from durable completion.
 type Event struct {
 	Type       Type
-	Text       string // TextDelta fragment
-	ToolName   string // ToolStart/ToolEnd
+	Text       string
+	ToolName   string
 	ToolCallID string
-	State      string // running|done|failed|cancelled
-	Err        error  // Error/RunEnd failure
+	State      string
+	Err        error
+
+	SessionID     string
+	Generation    int64
+	RunID         string
+	AttemptID     string
+	Seq           int64
+	ProvisionalID string
+	CommittedID   string
+	// Outcome class: transient, durable, interrupted, unsaved.
+	Outcome string
 }
+
+const (
+	OutcomeTransient   = "transient"
+	OutcomeDurable     = "durable"
+	OutcomeInterrupted = "interrupted"
+	OutcomeUnsaved     = "unsaved"
+)

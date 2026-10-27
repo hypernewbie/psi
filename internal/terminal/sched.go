@@ -38,15 +38,20 @@ func (s *Scheduler) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.now = now
+	s.lastEmit = now()
 }
 
 // Push adds a text delta; coalesced to maxFPS unless boundary.
+// The first burst initializes the frame clock so same-tick deltas coalesce.
 func (s *Scheduler) Push(label string, fn func()) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.pending) >= maxQueueItem || s.bytes >= maxQueueByte {
 		s.dropped++
 		return false
+	}
+	if s.lastEmit.IsZero() {
+		s.lastEmit = s.now()
 	}
 	s.pending = append(s.pending, Scheduled{At: s.now(), Flush: fn, Label: label})
 	s.bytes += 1024 // approx accounting; actual bytes counted at write time
