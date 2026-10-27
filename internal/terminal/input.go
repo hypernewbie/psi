@@ -26,6 +26,7 @@ type Decoded struct {
 	Paste      bool   // inside bracketed paste content
 	PasteStart bool
 	PasteEnd   bool
+	Rejected   bool // oversized paste rejected as whole edit
 	Reply      bool // terminal reply (ignored, not consumed as input)
 	Timeout    bool // escape prefix timed out
 }
@@ -76,7 +77,7 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 			if d.pasteOver {
 				d.pasteOver = false
 				d.pasteSize = 0
-				return []Decoded{{Key: nil, Paste: true, PasteEnd: true}} // signals rejection notice
+				return []Decoded{{Paste: true, PasteEnd: true, Rejected: true}} // signals rejection notice
 			}
 			// Normalize CRLF/lone CR to LF, preserve LF.
 			s := strings.ReplaceAll(string(content), "\r\n", "\n")
@@ -93,7 +94,7 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 			}
 			norm := f.String()
 			if len(norm) > pasteBudget {
-				return []Decoded{{Key: nil, Paste: true, PasteEnd: true}}
+				return []Decoded{{Paste: true, PasteEnd: true, Rejected: true}}
 			}
 			// Deliver as one bounded transaction (chunked if large, but single logical unit).
 			const chunk = 64 * 1024

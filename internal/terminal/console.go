@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"syscall"
-	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
@@ -17,41 +16,65 @@ import (
 type Input struct {
 	Key []byte
 	Err error
+	// Paste transaction markers from the bounded decoder.
+	Paste      bool
+	PasteStart bool
+	PasteEnd   bool
+	// Rejected signals an oversized paste rejected as a whole edit.
+	Rejected bool
 }
 
 // Console owns only the active prompt. Completed lines remain native scrollback.
-// All drawing occurs in the application's event-loop goroutine.
+// All drawing occurs in the application's event-loop goroutine through one Writer.
+// Reference: temp/pi-mono/packages/tui/src/tui-main-screen.ts (differential,
+// append-only scrollback, no screen/scrollback clear) and editor-component.ts.
 type Console struct {
-	In        *os.File
-	Out       io.Writer
-	Editor    *Editor
-	Inputs    <-chan Input
-	stop      context.CancelFunc
-	done      chan struct{}
-	paste     bool
-	visible   bool
-	cursorRow int
+	In     *os.File
+	Out    io.Writer
+	Editor *Editor
+	Inputs <-chan Input
+
+	stop context.CancelFunc
+	done chan struct{}
+
+	writer  *Writer
+	decoder *Decoder
+
+	pasteActive bool
+	pasteBuf    strings.Builder
+	pasteNotice bool
+
+	lastDraft    string
+	lastCursor   int
+	lastW, lastH int
+	visibleTail  []string
+	busyNoticed  bool
 }
 
 func NewConsole(in *os.File, out io.Writer) *Console {
 	ctx, cancel := context.WithCancel(context.Background())
 	inputs := make(chan Input, 64)
-	c := &Console{In: in, Out: out, Editor: NewEditor(), Inputs: inputs, stop: cancel, done: make(chan struct{})}
+	c := &Console{
+		In: in, Out: out, Editor: NewEditor(), Inputs: inputs,
+		stop: cancel, done: make(chan struct{}),
+		writer: NewWriter(out), decoder: NewDecoder(),
+	}
 	fmt.Fprint(out, "\x1b[?2004h")
-	go func() { defer close(c.done); defer close(inputs); readInputs(ctx, in, inputs) }()
+	go func() { defer close(c.done); defer close(inputs); readInputs(ctx, in, inputs, c.decoder) }()
 	return c
 }
 
 func (c *Console) Close() {
 	c.stop()
 	<-c.done
-	if c.visible {
+	// Commit any visible tail to scrollback with a newline, then disable paste.
+	if len(c.visibleTail) > 0 {
 		fmt.Fprint(c.Out, "\r\n")
 	}
 	fmt.Fprint(c.Out, "\x1b[?2004l")
 }
 
-func readInputs(ctx context.Context, in *os.File, out chan<- Input) {
+func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder) {
 	send := func(input Input) bool {
 		select {
 		case out <- input:
@@ -60,12 +83,10 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input) {
 			return false
 		}
 	}
-	var pending []byte
-	paste := false
 	buf := make([]byte, 4096)
 	for ctx.Err() == nil {
 		fds := []unix.PollFd{{Fd: int32(in.Fd()), Events: unix.POLLIN}}
-		n, err := unix.Poll(fds, 100)
+		n, err := unix.Poll(fds, 20)
 		if err == syscall.EINTR {
 			continue
 		}
@@ -74,6 +95,15 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input) {
 			return
 		}
 		if n == 0 {
+			// Timeout tick: flush incomplete Escape prefix (50ms rule).
+			for _, d := range dec.Feed(nil) {
+				if d.Reply {
+					continue
+				}
+				if !send(Input{Key: d.Key}) {
+					return
+				}
+			}
 			continue
 		}
 		n, err = in.Read(buf)
@@ -85,123 +115,154 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input) {
 			send(Input{Err: io.EOF})
 			return
 		}
-		pending = append(pending, buf[:n]...)
-		for len(pending) > 0 {
-			if paste {
-				end := bytes.Index(pending, []byte("\x1b[201~"))
-				if end != 0 {
-					n := end
-					if n < 0 {
-						n = len(pending) - 5
-					}
-					for n > 0 && n < len(pending) && !utf8.RuneStart(pending[n]) {
-						n--
-					}
-					if n <= 0 {
-						break
-					}
-					if !send(Input{Key: append([]byte(nil), pending[:n]...)}) {
-						return
-					}
-					pending = pending[n:]
-					continue
-				}
+		for _, d := range dec.Feed(buf[:n]) {
+			if d.Reply {
+				continue
 			}
-			size := 1
-			if pending[0] == 27 {
-				if len(pending) < 2 {
-					break
+			if d.PasteStart {
+				if !send(Input{Paste: true, PasteStart: true}) {
+					return
 				}
-				if pending[1] == '[' || pending[1] == 'O' {
-					size = 2
-					for size < len(pending) && !(pending[size] >= 0x40 && pending[size] <= 0x7e) {
-						size++
-					}
-					if size == len(pending) {
-						if size > 256 {
-							pending = nil
-						}
-						break
-					}
-					size++
-				} else {
-					size = 2
+				continue
+			}
+			if d.PasteEnd {
+				if !send(Input{Paste: true, PasteEnd: true, Rejected: d.Rejected}) {
+					return
 				}
-			} else if pending[0] >= utf8.RuneSelf {
-				if !utf8.FullRune(pending) {
-					break
+				continue
+			}
+			if d.Paste {
+				if !send(Input{Key: d.Key, Paste: true}) {
+					return
 				}
-				_, size = utf8.DecodeRune(pending)
+				continue
 			}
-			key := append([]byte(nil), pending[:size]...)
-			if bytes.Equal(key, []byte("\x1b[200~")) {
-				paste = true
-			}
-			if bytes.Equal(key, []byte("\x1b[201~")) {
-				paste = false
-			}
-			pending = pending[size:]
-			if !send(Input{Key: key}) {
+			if !send(Input{Key: d.Key}) {
 				return
 			}
 		}
 	}
 }
 
-// Handle returns a submitted prompt, quit request, or cancellation request.
+// Handle returns submitted prompt, quit, or cancellation.
+// State first, draw only when visible state changes (P2 flashing fix).
+// Busy input is cancellation-only with one quiet notice per run.
 func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, cancel bool) {
 	if input.Err != nil {
 		return "", false, true, busy
 	}
-	key := input.Key
-	if bytes.Equal(key, []byte("\x1b[200~")) {
-		c.paste = true
-		return
+	// Bracketed paste transaction: buffer separately, single insert+draw on end marker.
+	if input.PasteStart {
+		c.pasteActive = true
+		c.pasteBuf.Reset()
+		return "", false, false, false
 	}
-	if bytes.Equal(key, []byte("\x1b[201~")) {
-		c.paste = false
-		return
+	if c.pasteActive && (input.Paste || input.PasteEnd) {
+		if len(input.Key) > 0 {
+			c.pasteBuf.Write(input.Key)
+		}
+		if input.PasteEnd {
+			c.pasteActive = false
+			if input.Rejected || c.pasteBuf.Len() > editorBudget {
+				// Reject as whole edit, preserve previous draft, one notice.
+				c.pasteBuf.Reset()
+				c.drawIfChanged(true)
+				return "", false, false, false
+			}
+			content := c.pasteBuf.String()
+			c.pasteBuf.Reset()
+			if busy {
+				// Pasted controls never cancel/submit during run.
+				return "", false, false, false
+			}
+			prev := c.Editor.Text()
+			if content != "" {
+				c.Editor.Insert(Sanitize(content))
+			}
+			if c.Editor.Text() != prev {
+				c.drawIfChanged(false)
+			}
+		}
+		return "", false, false, false
 	}
 	if busy {
-		if !c.paste && bytes.Equal(key, []byte{3}) {
-			cancel = true
+		// Cancellation only. Ctrl+C cancels; everything else ignored with one notice.
+		if len(input.Key) == 1 && input.Key[0] == 3 {
+			return "", false, false, true
 		}
-		return
+		return "", false, false, false
 	}
-	if c.paste {
-		t := strings.ReplaceAll(string(key), "\r", "\n")
-		if len(c.Editor.Text())+len(t) <= 256*1024 {
-			c.Editor.Insert(Sanitize(t))
+	if len(input.Key) == 1 {
+		switch input.Key[0] {
+		case 3: // Ctrl+C idle: clear draft first, exit when empty.
+			if c.Editor.Text() == "" {
+				return "", false, true, false
+			}
+			c.Editor.Clear()
+			c.drawIfChanged(false)
+			return "", false, false, false
+		case 4: // Ctrl+D: delete at cursor when nonempty, exit when empty.
+			if c.Editor.Text() == "" {
+				return "", false, true, false
+			}
+			c.Editor.Delete()
+			c.drawIfChanged(false)
+			return "", false, false, false
+		case 27: // lone Escape: cancel selector/completion state, never block.
+			c.pasteActive = false
+			c.pasteBuf.Reset()
+			return "", false, false, false
+		case '\r': // Enter submits outside paste.
+			prev := c.Editor.Text()
+			_ = prev
+			c.Editor.End()
+			c.commitAccepted()
+			return c.Editor.Submit(), true, false, false
 		}
-		c.Draw()
-		return
 	}
-	if bytes.Equal(key, []byte{3}) {
-		if c.Editor.Text() == "" {
-			return "", false, true, false
-		}
-		c.Editor.Clear()
-		c.Draw()
-		return
+	prevDraft, prevPos := c.Editor.Text(), c.Editor.Pos()
+	c.Editor.HandleKey(input.Key, false)
+	if c.Editor.Text() != prevDraft || c.Editor.Pos() != prevPos {
+		c.drawIfChanged(false)
 	}
-	if bytes.Equal(key, []byte{4}) && c.Editor.Text() == "" {
-		return "", false, true, false
-	}
-	if bytes.Equal(key, []byte{'\r'}) {
-		c.Editor.End()
-		c.Draw()
-		fmt.Fprint(c.Out, "\r\n")
-		c.visible, c.cursorRow = false, 0
-		return c.Editor.Submit(), true, false, false
-	}
-	if len(c.Editor.Text()) < 256*1024 {
-		c.Editor.HandleKey(key, false)
-	}
-	c.Draw()
-	return
+	return "", false, false, false
 }
 
-func (c *Console) Draw() {
+// drawIfChanged draws only when visible state changes.
+func (c *Console) drawIfChanged(force bool) {
+	draft, pos := c.Editor.Text(), c.Editor.Pos()
+	w, h := c.size()
+	if !force && draft == c.lastDraft && pos == c.lastCursor && w == c.lastW && h == c.lastH {
+		return
+	}
+	c.lastDraft, c.lastCursor, c.lastW, c.lastH = draft, pos, w, h
+	c.Draw()
+}
+
+// commitAccepted commits the complete accepted user message once (P2-029).
+// The viewport may show only the end, but scrollback gets the full message and
+// the session gets one entry. No second draft copy as the accepted message.
+func (c *Console) commitAccepted() {
+	// Render full draft to scrollback as one message (append-only).
+	full := c.Editor.Text()
+	lines := strings.Split(full, "\n")
+	var b strings.Builder
+	b.WriteString("> ")
+	for i, ln := range lines {
+		if i > 0 {
+			b.WriteString("\n  ")
+		}
+		b.WriteString(Sanitize(ln))
+	}
+	b.WriteString("\n")
+	_ = WriteBounded(c.Out, []byte(strings.ReplaceAll(b.String(), "\n", "\r\n")))
+	// Reset tail ownership: next Draw starts fresh.
+	c.visibleTail = nil
+	c.writer.prevTail = nil
+	c.lastDraft = ""
+}
+
+func (c *Console) size() (int, int) {
 	width, height, err := term.GetSize(int(c.In.Fd()))
 	if err != nil || width < 4 {
 		width = 80
@@ -209,67 +270,44 @@ func (c *Console) Draw() {
 	if height < 4 {
 		height = 24
 	}
-	// Leave the final column unused to avoid ambiguous delayed-wrap state.
-	limit := width - 1
-	if c.visible {
-		fmt.Fprint(c.Out, "\r")
-		if c.cursorRow > 0 {
-			fmt.Fprintf(c.Out, "\x1b[%dA", c.cursorRow)
-		}
-		fmt.Fprint(c.Out, "\x1b[J")
+	return width, height
+}
+
+func (c *Console) Draw() {
+	width, height := c.size()
+	// Build viewport from shared layout (P2-016): same function as tests.
+	layout := LayoutDraft(c.Editor.buf, c.Editor.pos, width)
+	rows := layout.Rows
+	// Sanitize content rows (trusted cursor bytes stay separate).
+	for i, r := range rows {
+		rows[i] = sanitizeRow(r)
 	}
-	var b strings.Builder
-	b.WriteString("> ")
-	row, col, cursorRow, cursorCol := 0, 2, 0, 2
-	for i, r := range c.Editor.buf {
-		if i == c.Editor.pos {
-			cursorRow, cursorCol = row, col
-		}
-		if r == '\n' {
-			b.WriteString("\r\n  ")
-			row++
-			col = 2
-			continue
-		}
-		rw := RuneWidth(r)
-		if col+rw > limit {
-			b.WriteString("\r\n  ")
-			row++
-			col = 2
-		}
-		if r == '\t' {
-			b.WriteString(" ")
-			col++
-		} else {
-			b.WriteString(Sanitize(string(r)))
-			col += rw
-		}
-	}
-	if c.Editor.pos == len(c.Editor.buf) {
-		cursorRow, cursorCol = row, col
-	}
-	// Keep a large multiline draft inside a small viewport. Do not push
-	// hundreds of redraw copies of the paste into native scrollback.
-	lines := strings.Split(b.String(), "\r\n")
+	// Viewport: keep active rows within terminal height, preserve logical cursor.
 	maxRows := max(1, height-2)
+	cursorRow := layout.CursorRow
 	start := max(0, cursorRow-maxRows+1)
-	end := min(len(lines), start+maxRows)
+	end := min(len(rows), start+maxRows)
 	if end-start < maxRows {
 		start = max(0, end-maxRows)
 	}
-	visible := strings.Join(lines[start:end], "\r\n")
+	visible := rows[start:end]
 	cursorRow -= start
-	lastRow := end - start - 1
-	fmt.Fprint(c.Out, visible)
-	if lastRow > cursorRow {
-		fmt.Fprintf(c.Out, "\x1b[%dA", lastRow-cursorRow)
-	}
-	fmt.Fprint(c.Out, "\r")
-	if cursorCol > 0 {
-		fmt.Fprintf(c.Out, "\x1b[%dC", cursorCol)
-	}
-	c.visible, c.cursorRow = true, cursorRow
+	// Emit one atomic frame (P2-025): no separate clear, changed-row only, no ED.
+	f := Frame{Tail: visible, CursorRow: cursorRow, CursorCol: layout.CursorCol}
+	_ = c.writer.Emit(f)
+	c.visibleTail = visible
+	c.lastDraft, c.lastCursor = c.Editor.Text(), c.Editor.Pos()
+	c.lastW, c.lastH = width, height
 }
+
+func sanitizeRow(s string) string {
+	// Rows already contain "> " prefix and spaces; sanitize printable content.
+	// Sanitize strips ANSI/OSC/bidi but preserves our spaces.
+	return Sanitize(s)
+}
+
+// ResetBusyNotice clears the one-notice flag at run start.
+func (c *Console) ResetBusyNotice() { c.busyNoticed = false }
 
 // RawOutput retains terminal line endings while raw input disables OPOST.
 type RawOutput struct{ W io.Writer }

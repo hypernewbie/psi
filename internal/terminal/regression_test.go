@@ -21,16 +21,16 @@ func TestStreamingSanitizerKeepsEscapeState(t *testing.T) {
 }
 
 func TestBusyInputCannotSubmitOrExecutePastedControl(t *testing.T) {
-	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}}
-	_, _, _, cancel := c.Handle(Input{Key: []byte("\x1b[200~")}, true)
+	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}, writer: NewWriter(&strings.Builder{}), decoder: NewDecoder()}
+	_, _, _, cancel := c.Handle(Input{Paste: true, PasteStart: true}, true)
 	if cancel {
 		t.Fatal("paste delimiter cancelled run")
 	}
-	_, submitted, _, cancel := c.Handle(Input{Key: []byte{3}}, true)
+	_, submitted, _, cancel := c.Handle(Input{Key: []byte{3}, Paste: true}, true)
 	if submitted || cancel {
 		t.Fatal("pasted Ctrl+C was executed")
 	}
-	c.Handle(Input{Key: []byte("\x1b[201~")}, true)
+	c.Handle(Input{Paste: true, PasteEnd: true}, true)
 	_, _, _, cancel = c.Handle(Input{Key: []byte{3}}, true)
 	if !cancel {
 		t.Fatal("typed Ctrl+C did not cancel")
