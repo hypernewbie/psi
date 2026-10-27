@@ -25,7 +25,14 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 	}
 	data, readErr := readAuthShared(authPath)
 	if readErr != nil && !os.IsNotExist(readErr) {
-		return "", "", fmt.Errorf("cannot read auth.json: %w", readErr)
+		// A missing auth file is not an error: environment credentials
+		// remain available. Lease failures are reported, except when the
+		// file never existed (no writer to coordinate with).
+		if _, statErr := os.Lstat(authPath); os.IsNotExist(statErr) {
+			readErr = os.ErrNotExist
+		} else {
+			return "", "", fmt.Errorf("cannot read auth.json: %w", readErr)
+		}
 	}
 	if readErr == nil {
 		var entries map[string]json.RawMessage
