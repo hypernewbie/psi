@@ -23,7 +23,7 @@ field shapes and behavior; prose docs lag source.
 | `usage` | preserve/read totals | only if required | never invent measured values |
 | `compaction` | required | required | `summary, firstKeptEntryId, tokensBefore, details?, usage?, systemMessage?`; keep boundary semantics |
 | `branch_summary` | required | not written | contributes context as `branchSummary` |
-| `custom` | preserve | not written | state only, no context |
+| `custom` | preserve | `psi.input` provenance only | state only, no context |
 | `custom_message` | required | not written | contributes context as `custom`, no extension execution |
 | `context_edit` | required | limited | `replacement: {content} \| null`; latest wins; string normalized for assistant/toolResult |
 | `label` | preserve | not written (first release writes labels only via explicit command if added) | metadata, not instructions |
@@ -50,7 +50,7 @@ Additional storage rules:
 | Area | Supported | Boundary |
 |---|---|---|
 | `defaultProvider`, `defaultModel` | `anthropic` and `openai-codex` | reject unsupported families without changing defaults |
-| `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic token budgets; Codex effort and `thinkingLevelMap` |
+| `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic budget/adaptive profiles and Codex effort maps |
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | `read,bash,edit,write` with replacement and `+`/`-` | four tools only |
 | `skills` | `skills`, `enableSkillCommands` selector + path subset | instructions only, no install/run at discovery |
@@ -58,7 +58,7 @@ Additional storage rules:
 | `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |
 | `network` | idle timeout + bounded retries | one HTTP transport |
 | instructions | `AGENTS.override.md`, `AGENTS.md`, fallbacks, `SYSTEM.md`, `APPEND_SYSTEM.md` | documented discovery + consent |
-| `models.json` | endpoints, model metadata and overrides for supported providers | small bundled catalog; no catalog refresh |
+| `models.json` | endpoints, model metadata and overrides for supported providers | public versioned snapshot. No catalog refresh |
 | auth | Anthropic API keys; existing Codex OAuth login and refresh | no login UI or credential-command execution |
 | startup | `quietStartup` | no dynamic renderer |
 | terminal | always inline | ignore fullscreen/rich preferences |
@@ -80,7 +80,7 @@ Unknown harmless UI prefs need no per-key warning.
   signatures and Codex encrypted reasoning, text IDs/phases, and tool item/call
   IDs. Session records retain the selected provider/API, not hardcoded Anthropic.
 - Bounded retries, server `retry-after` honored within cap; no retry of completed tool side effects; partial streams are not invisible retries.
-- Usage: report provider usage + catalog estimate separately; never present unknown price as `$0.00`.
+- Accounting separates stored usage, estimated context, and requested versus returned models. Prices remain unknown without a cost calculation.
 
 ## Terminal
 
@@ -132,9 +132,9 @@ submission, session replacement, and cancellation. A synthetic Codex OAuth
 workflow checks a complete model/tool/model round trip and encrypted replay.
 OAuth refresh, rotation, cancellation, and concurrent access use dummy tokens
 and local HTTP servers. The optional
-`PSI_PI_SESSION_MODULE` test compares a Go-continued synthetic session against
-an actual Pi context projector. A JSON-shape test alone is not evidence of
-complete Pi interchange.
+`PSI_PI_SESSION_MODULE` suite uses the actual pinned Pi reader and writer.
+It covers both continuation directions and both provider metadata forms.
+A JSON-shape test alone is not evidence of complete Pi interchange.
 
 See `docs/limitations.md` for explicit size limits, reasoning-protocol limits,
 and compaction boundaries. The pinned source remains the target, not a claim

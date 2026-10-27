@@ -43,15 +43,76 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	if maxTokens <= 0 {
 		maxTokens = 16384
 	}
-	if budget >= maxTokens && budget > 0 {
+	if budget >= maxTokens && budget > 0 && !req.Model.AdaptiveThinking {
 		return nil, fmt.Errorf("thinking budget %d must be less than max output tokens %d", budget, maxTokens)
 	}
+	effort, err := anthropicEffort(req.Model, req.Thinking)
+	if err != nil {
+		return nil, err
+	}
+	managed := req.Model.AdaptiveThinking && req.Model.MidConvoEffort && effort != ""
 	var messages []map[string]any
+	var errorImages []any
 	for i, m := range req.Messages {
+		sameModel := (m.Provider == "" || m.Provider == req.Model.ProviderID()) && (m.API == "" || m.API == "anthropic-messages") && (m.Model == "" || m.Model == req.Model.ID)
+		if m.Role == "assistant" {
+			content := make([]Block, 0, len(m.Content))
+			for _, b := range m.Content {
+				if b.Type == "thinking" && !sameModel {
+					if b.Redacted || b.Thinking == "" {
+						continue
+					}
+					b = Block{Type: "text", Text: b.Thinking}
+				}
+				if b.Type == "toolCall" {
+					if b.ID == "" || b.Name == "" {
+						return nil, fmt.Errorf("invalid Anthropic tool call")
+					}
+					b.ID = codexID(b.ID) // both protocols require bounded identifier characters
+				}
+				content = append(content, b)
+			}
+			m.Content = content
+			if len(content) == 0 {
+				continue
+			}
+		}
+		if m.Role == "toolResult" {
+			if m.ToolCallID == "" {
+				return nil, fmt.Errorf("tool result is missing its call ID")
+			}
+			m.ToolCallID = codexID(m.ToolCallID)
+		}
+		if managed && m.Role == "assistant" && m.Provider == req.Model.ProviderID() && m.API == "anthropic-messages" && validAnthropicEffort(m.ThinkingLevel) {
+			messages = append(messages, effortMarker(m.ThinkingLevel))
+		}
 		for _, b := range m.Content {
 			if b.Type == "image" && !req.Model.InputImage {
 				return nil, fmt.Errorf("model %q is not configured for image input", req.Model.ID)
 			}
+		}
+		if m.Role == "toolResult" && m.IsError {
+			var text []Block
+			hadImage := false
+			for _, b := range m.Content {
+				if b.Type == "image" {
+					if !hadImage {
+						errorImages = append(errorImages, map[string]any{"type": "text", "text": "Image from failed tool " + m.ToolCallID + " (" + m.ToolName + ")"})
+					}
+					hadImage = true
+					converted, err := convertMessage(Message{Role: "user", Content: []Block{b}})
+					if err != nil {
+						return nil, err
+					}
+					errorImages = append(errorImages, converted["content"].([]any)...)
+				} else {
+					text = append(text, b)
+				}
+			}
+			if len(text) == 0 && hadImage {
+				text = append(text, Block{Type: "text", Text: "Tool returned image content with an error."})
+			}
+			m.Content = text
 		}
 		conv, err := convertMessage(m)
 		if err != nil {
@@ -65,6 +126,14 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 		} else {
 			messages = append(messages, conv)
 		}
+		if m.Role == "toolResult" && (i+1 == len(req.Messages) || req.Messages[i+1].Role != "toolResult") && len(errorImages) > 0 {
+			last := messages[len(messages)-1]
+			last["content"] = append(last["content"].([]any), errorImages...)
+			errorImages = nil
+		}
+	}
+	if managed {
+		messages = append(messages, effortMarker(effort))
 	}
 	out := map[string]any{
 		"model":      req.Model.ID,
@@ -86,10 +155,70 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 		}
 		out["tools"] = tools
 	}
-	if req.Thinking != "" && req.Thinking != "off" {
+	if req.Model.AdaptiveThinking {
+		if req.Thinking == "off" && !managed {
+			if mapped, exists := req.Model.ThinkingLevelMap["off"]; !exists || mapped != nil {
+				out["thinking"] = map[string]any{"type": "disabled"}
+			}
+		} else {
+			thinking := map[string]any{"type": "adaptive", "display": "summarized"}
+			out["output_config"] = map[string]any{"effort": effort}
+			if managed {
+				thinking["block_binding"] = map[string]any{"prefix_mismatch_behavior": "drop_block"}
+				out["output_config"] = map[string]any{"effort": "low"}
+			}
+			out["thinking"] = thinking
+		}
+	} else if req.Thinking != "off" {
 		out["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
 	}
 	return out, nil
+}
+
+func effortMarker(effort string) map[string]any {
+	return map[string]any{"role": "system", "content": []any{}, "output_config": map[string]any{"effort": effort}}
+}
+
+func validAnthropicEffort(level string) bool {
+	switch level {
+	case "low", "medium", "high", "xhigh", "max":
+		return true
+	}
+	return false
+}
+
+func anthropicEffort(model ModelMeta, level string) (string, error) {
+	if level == "" {
+		level = "off"
+	}
+	if !model.AdaptiveThinking {
+		return "", nil
+	}
+	if level == "off" {
+		if mapped, exists := model.ThinkingLevelMap["off"]; exists && mapped == nil && model.MidConvoEffort {
+			return "high", nil
+		}
+		return "", nil
+	}
+	if mapped, exists := model.ThinkingLevelMap[level]; exists {
+		if mapped == nil {
+			return "", fmt.Errorf("model %q does not support thinking level %q", model.ID, level)
+		}
+		switch *mapped {
+		case "low", "medium", "high", "xhigh", "max":
+			return *mapped, nil
+		default:
+			return "", fmt.Errorf("unsupported Anthropic effort mapping")
+		}
+	}
+	switch level {
+	case "minimal", "low":
+		return "low", nil
+	case "medium":
+		return "medium", nil
+	default:
+		return "high", nil
+	}
 }
 
 func convertMessage(m Message) (map[string]any, error) {

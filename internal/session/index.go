@@ -3,85 +3,78 @@ package session
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 )
 
-// RecordIndex is the entry index (P2-066): offsets + small envelope fields.
-// It decodes large bodies on demand and never retains every payload.
-// Reference: session-manager.ts buildSessionPath + reader streaming.
+// RecordIndex is reconstructible metadata, not another history database.
 type RecordIndex struct {
 	Records []RecordMeta
 	Path    string
+	Header  *SessionHeader
 }
-
 type RecordMeta struct {
-	Offset   int64
-	Length   int64
-	Type     string
-	ID       string
-	ParentID string
+	Offset, Length     int64
+	Type, ID, ParentID string
+	entry              *Entry
 }
 
-// BuildIndex scans JSONL without retaining large payloads (bounded metadata).
-// It enforces the 32 MiB record limit and reports record+limit on violation.
 func BuildIndex(path string) (*RecordIndex, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("session must be a regular file: %s", path)
+	}
 	return BuildIndexFrom(f, path)
 }
-
 func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
 	idx := &RecordIndex{Path: path}
-	var offset int64
 	br := bufio.NewReaderSize(r, 64*1024)
-	for {
+	var offset int64
+	for lineNo := 1; ; lineNo++ {
 		line, err := readRecord(br)
-		if err != nil && len(line) == 0 {
-			if err == io.EOF {
-				break
-			}
-			return nil, err
+		if err != nil && err != io.EOF {
+			return nil, &ParseError{Path: path, Line: lineNo, Err: err}
 		}
 		length := int64(len(line))
-		// Handle final record without newline.
-		hasNewline := length > 0 && line[length-1] == '\n'
-		trimmed := line
-		if hasNewline {
-			trimmed = line[:length-1]
-			if len(trimmed) > 0 && trimmed[len(trimmed)-1] == '\r' {
-				trimmed = trimmed[:len(trimmed)-1]
+		data := trimRecord(line)
+		if len(data) > MaxRecordBytes {
+			return nil, &ParseError{Path: path, Line: lineNo, Err: fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)}
+		}
+		if len(bytes.TrimSpace(data)) > 0 {
+			e, header, parseErr := metadataRecord(data)
+			if parseErr != nil {
+				return nil, &ParseError{Path: path, Line: lineNo, Err: parseErr}
 			}
-		}
-		if len(bytes.TrimSpace(trimmed)) == 0 {
-			offset += length
-			if err == io.EOF {
-				break
+			meta := RecordMeta{Offset: offset, Length: length}
+			if header != nil {
+				meta.Type = "session"
+				if idx.Header != nil || len(idx.Records) > 0 {
+					return nil, fmt.Errorf("%s:%d: misplaced or duplicate session header", path, lineNo)
+				}
+				idx.Header = header
+				if idx.Header.ID == "" {
+					return nil, fmt.Errorf("session header missing id")
+				}
+				if e := checkVersion(idx.Header, path); e != nil {
+					return nil, e
+				}
+				meta.ID = idx.Header.ID
+			} else {
+				meta.entry, meta.ID, meta.Type = e, e.ID(), e.Kind
+				if e.ParentID() != nil {
+					meta.ParentID = *e.ParentID()
+				}
 			}
-			continue
-		}
-		if int64(len(trimmed)) > MaxRecordBytes {
-			return nil, fmt.Errorf("record exceeds %d bytes at offset %d", MaxRecordBytes, offset)
-		}
-		// Decode envelope only.
-		var probe struct {
-			Type     string  `json:"type"`
-			ID       string  `json:"id"`
-			ParentID *string `json:"parentId"`
-		}
-		if err := json.Unmarshal(trimmed, &probe); err != nil {
-			return nil, fmt.Errorf("invalid record at offset %d: %w", offset, err)
-		} else {
-			pid := ""
-			if probe.ParentID != nil {
-				pid = *probe.ParentID
-			}
-			idx.Records = append(idx.Records, RecordMeta{Offset: offset, Length: length, Type: probe.Type, ID: probe.ID, ParentID: pid})
+			idx.Records = append(idx.Records, meta)
 		}
 		offset += length
 		if err == io.EOF {
@@ -90,41 +83,42 @@ func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
 	}
 	return idx, nil
 }
-
-// ActivePathIDs returns active-path membership without loading payloads.
-func (idx *RecordIndex) ActivePathIDs(leafID string) map[string]bool {
+func (idx *RecordIndex) ActivePathIDs(leaf string) map[string]bool {
 	byID := map[string]RecordMeta{}
 	for _, m := range idx.Records {
-		if m.ID != "" {
+		if m.Type != "session" {
 			byID[m.ID] = m
 		}
 	}
-	out := map[string]bool{}
-	cur := leafID
-	if cur == "" {
-		// Last record.
+	if leaf == "" {
 		for i := len(idx.Records) - 1; i >= 0; i-- {
-			if idx.Records[i].ID != "" {
-				cur = idx.Records[i].ID
+			if idx.Records[i].Type != "session" {
+				leaf = idx.Records[i].ID
 				break
 			}
 		}
 	}
-	for cur != "" {
-		if out[cur] {
-			break // cycle guard
-		}
-		out[cur] = true
-		m, ok := byID[cur]
-		if !ok || m.ParentID == "" {
+	out := map[string]bool{}
+	for leaf != "" && !out[leaf] {
+		m, ok := byID[leaf]
+		if !ok {
 			break
 		}
-		cur = m.ParentID
+		out[leaf] = true
+		leaf = m.ParentID
 	}
 	return out
 }
-
-// LoadEntry decodes one record body on demand.
+func loadRecord(f *os.File, meta RecordMeta) (*Entry, error) {
+	if meta.Offset < 0 || meta.Length <= 0 || meta.Length > MaxRecordBytes+2 {
+		return nil, fmt.Errorf("invalid indexed record bounds")
+	}
+	buf := make([]byte, meta.Length)
+	if _, err := f.ReadAt(buf, meta.Offset); err != nil {
+		return nil, err
+	}
+	return UnmarshalEntry(trimRecord(buf))
+}
 func (idx *RecordIndex) LoadEntry(meta RecordMeta) (*Entry, error) {
 	if meta.Offset < 0 || meta.Length <= 0 || meta.Length > MaxRecordBytes+2 {
 		return nil, fmt.Errorf("invalid indexed record bounds")
@@ -134,26 +128,5 @@ func (idx *RecordIndex) LoadEntry(meta RecordMeta) (*Entry, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if _, err := f.Seek(meta.Offset, io.SeekStart); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, meta.Length)
-	if _, err := io.ReadFull(f, buf); err != nil {
-		return nil, err
-	}
-	// Trim trailing newline.
-	if len(buf) > 0 && buf[len(buf)-1] == '\n' {
-		buf = buf[:len(buf)-1]
-		if len(buf) > 0 && buf[len(buf)-1] == '\r' {
-			buf = buf[:len(buf)-1]
-		}
-	}
-	fe, err := UnmarshalFileEntry(buf)
-	if err != nil {
-		return nil, err
-	}
-	if fe.IsHeader {
-		return nil, fmt.Errorf("record is session header, not entry")
-	}
-	return fe.Entry, nil
+	return loadRecord(f, meta)
 }

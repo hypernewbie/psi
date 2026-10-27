@@ -34,6 +34,8 @@ func ThinkingBudget(level string) (int, error) {
 
 // Metadata for the selected model (from models.json subset).
 type ModelMeta struct {
+	AdaptiveThinking bool
+	MidConvoEffort   bool
 	ID               string
 	API              string // anthropic-messages or openai-codex-responses
 	Provider         string
@@ -63,6 +65,7 @@ type Message struct {
 	ToolName             string
 	IsError              bool
 	Provider, API, Model string // source of opaque assistant replay metadata
+	ThinkingLevel        string // effective provider effort for historical replay
 }
 
 type Block struct {
@@ -105,11 +108,13 @@ type Response struct {
 }
 
 type Usage struct {
-	Input       int64
-	Output      int64
-	CacheRead   int64
-	CacheWrite  int64
-	TotalTokens int64
+	CacheWrite1h *int64
+	Reasoning    *int64
+	Input        int64
+	Output       int64
+	CacheRead    int64
+	CacheWrite   int64
+	TotalTokens  int64
 }
 
 // ProviderID returns the session provider name, including for callers that

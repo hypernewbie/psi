@@ -32,15 +32,20 @@ Partial streams do not permit an invisible request replay.
 
 ## Current implementation limits
 
-Sessions use Pi JSONL v3 with a 32 MiB record limit and a 256 MiB file limit.
-The live store retains full payloads.
-The record-index helper is not part of live activation.
-The claimed 512 MiB activation, less than 160 MiB RSS, and 3-second activation gates are not complete.
+Sessions use Pi JSONL v3 with a 32 MiB record limit.
+The live store indexes offsets and small metadata without a whole-file size cutoff.
+It decodes the selected context on demand and streams history one record at a time.
+The 512 MiB compacted fixture passed the 3-second and 160 MiB RSS limits on the recorded local profile.
+A large active context still requires memory for its decoded payloads.
 
-Branches, compactions, and context edits have synthetic projection tests.
-The current review does not establish actual pinned Pi→psi→Pi continuation.
-`psi.input` provenance uses state-only custom entries.
-Pinned-reader evidence for this metadata remains necessary.
+Recall retains at most 200 prompts within a 4 MiB text budget.
+
+Persistent continuation resolves symlinks to one canonical writer-lock path.
+Hard-linked sessions permit read-only history but require a separate copy for persistent continuation.
+
+The unmodified pinned Pi reader and writer passed both continuation directions for both provider metadata forms.
+The fixtures cover branches, context edits, compaction, signed reasoning, images, and state-only `psi.input` provenance.
+The acceptance ledger separates these results from unfinished user journeys.
 
 The editor uses `uniseg` for grapheme segmentation and width, with an explicit keycap-width correction.
 Prompts and bracketed pastes have a 256 KiB UTF-8 budget.

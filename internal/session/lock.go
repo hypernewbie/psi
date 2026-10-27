@@ -3,8 +3,23 @@ package session
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 )
+
+func canonicalSessionPath(path string) (string, error) {
+	path, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(path)
+}
+func checkSessionLinks(info os.FileInfo) error {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+		return fmt.Errorf("session has multiple hard links; continue a separate copy instead")
+	}
+	return nil
+}
 
 // sessionLock is an advisory exclusive lock for one psi writer.
 // Pi does not honor this lock; concurrent Pi+psi writes are out of scope

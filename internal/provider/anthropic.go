@@ -69,7 +69,14 @@ func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*R
 	if err != nil {
 		return nil, err
 	}
-	return sendWithRetry(ctx, c.MaxRetry, func() (*Response, error) { return c.doOnce(ctx, raw, onText, req) })
+	result, err := sendWithRetry(ctx, c.MaxRetry, func() (*Response, error) { return c.doOnce(ctx, raw, onText, req) })
+	if err == nil && result != nil {
+		result.ThinkingLevel = ""
+		if req.Model.AdaptiveThinking && req.Model.MidConvoEffort {
+			result.ThinkingLevel, _ = anthropicEffort(req.Model, req.Thinking)
+		}
+	}
+	return result, err
 }
 
 func sendWithRetry(ctx context.Context, maxRetry int, send func() (*Response, error)) (*Response, error) {
@@ -483,6 +490,12 @@ func mergeUsage(out *Usage, u map[string]any) {
 	for key, dest := range map[string]*int64{"input_tokens": &out.Input, "output_tokens": &out.Output, "cache_read_input_tokens": &out.CacheRead, "cache_creation_input_tokens": &out.CacheWrite} {
 		if v, ok := u[key]; ok {
 			*dest = int64(num(v))
+		}
+	}
+	if cache, ok := u["cache_creation"].(map[string]any); ok {
+		if n, ok := cache["ephemeral_1h_input_tokens"]; ok {
+			count := int64(num(n))
+			out.CacheWrite1h = &count
 		}
 	}
 	out.TotalTokens = out.Input + out.Output + out.CacheRead + out.CacheWrite

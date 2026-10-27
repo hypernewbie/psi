@@ -2,40 +2,46 @@ package app
 
 import (
 	"fmt"
-	"os"
+	"path/filepath"
 	"strings"
 
-	"psi/internal/config"
+	"psi/internal/provider"
 	"psi/internal/session"
 )
 
-func modelList(r *runtime) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("current %s/%s thinking %s\n", r.ov.Provider, r.ov.Model, r.ov.Thinking))
-	b.WriteString("supported (local, no catalog refresh):\n")
-	b.WriteString("  anthropic (api anthropic-messages) [key: " + credAvail("anthropic") + "]\n")
-	for _, id := range []string{"claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"} {
-		mark := " "
-		if r.ov.Provider == "anthropic" && r.ov.Model == id {
-			mark = "*"
+func modelSelector(r *runtime) *Selector {
+	var items []session.SessionInfo
+	for _, family := range []string{"anthropic", "openai-codex"} {
+		availability := r.credentialAvailability(family)
+		for _, m := range r.models.LocalModels(family) {
+			items = append(items, session.SessionInfo{ID: family + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", availability, m.API, m.ContextWindow, m.MaxTokens)})
 		}
-		b.WriteString(fmt.Sprintf("  %s anthropic/%s\n", mark, id))
 	}
-	b.WriteString("  openai-codex (api openai-codex-responses) [oauth: " + credAvail("openai-codex") + "]\n")
-	return strings.TrimSpace(b.String())
+	selector := NewSelector(items, r.ov.Provider+"/"+r.ov.Model)
+	selector.Models = true
+	return selector
 }
 
-func credAvail(provider string) string {
-	switch provider {
+func modelList(r *runtime) string {
+	return fmt.Sprintf("current %s/%s thinking %s\n%s", r.ov.Provider, r.ov.Model, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), strings.Join(modelSelector(r).Render(), "\n"))
+}
+
+func (r *runtime) credentialAvailability(family string) string {
+	path := filepath.Join(r.agentDir, "auth.json")
+	switch family {
 	case "anthropic":
-		if os.Getenv("ANTHROPIC_API_KEY") != "" {
-			return "env"
+		if _, _, err := provider.SelectAPIKey(envMap(), path); err == nil {
+			return "credential available"
 		}
-		return "missing (ANTHROPIC_API_KEY or auth.json)"
+		return "credential unavailable (environment or auth.json)"
 	case "openai-codex":
-		return "auth.json oauth (login remains Pi operation)"
+		auth := provider.CodexAuth{Path: path}
+		if err := auth.Check(); err == nil {
+			return "OAuth login present (access checked on request)"
+		}
+		return "OAuth login unavailable (run Pi /login)"
 	}
-	return "unknown"
+	return "credential status unknown"
 }
 
 func continuable(proj *session.Projection) string {
@@ -45,6 +51,5 @@ func continuable(proj *session.Projection) string {
 	if len(session.UnresolvedToolCalls(proj.Flat)) > 0 {
 		return "blocked: unresolved tool calls (inspect, then new session or copy)"
 	}
-	_ = config.ValidThinkingLevels
 	return "ok"
 }

@@ -542,7 +542,13 @@ func RedactCredential(s string) string {
 }
 
 // ModelMeta follows Pi's provider.models[] shape, not a private top-level catalog.
+type ModelCompat struct {
+	ForceAdaptiveThinking  bool `json:"forceAdaptiveThinking"`
+	SupportsMidConvoEffort bool `json:"supportsMidConvoEffort"`
+}
+
 type ModelMeta struct {
+	Compat           ModelCompat        `json:"compat"`
 	ID               string             `json:"id"`
 	API              string             `json:"api"`
 	BaseURL          string             `json:"baseUrl"`
@@ -594,8 +600,11 @@ func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
 		if id == "" {
 			id = "claude-sonnet-4-5"
 		}
-		m = ModelMeta{ID: id, API: "anthropic-messages", ContextWindow: 200000, MaxTokens: 16384, Reasoning: true, InputImage: true}
-		known = id == "claude-sonnet-4-5" || id == "claude-haiku-4-5" || id == "claude-opus-4-1" || id == "claude-sonnet-4-0" || id == "claude-opus-4-0"
+		m, known = bundledModel(provider, id)
+		if !known {
+			m = ModelMeta{ID: id, API: "anthropic-messages", ContextWindow: 200000, MaxTokens: 16384, Reasoning: true, InputImage: true}
+			known = id == "claude-opus-4-1" || id == "claude-sonnet-4-0" || id == "claude-opus-4-0"
+		}
 	case "openai-codex":
 		m, known = codexModel(id)
 		id = m.ID

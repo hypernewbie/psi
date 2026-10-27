@@ -458,8 +458,9 @@ type entryBase struct {
 
 // Entry is the union of all v3 session entries.
 type Entry struct {
-	Kind string // type discriminator
-	Base entryBase
+	provenanceTarget string // metadata only, never serialized
+	Kind             string // type discriminator
+	Base             entryBase
 	// Exactly one payload set (except header handled separately).
 	Message             *SessionMessageEntry
 	ThinkingLevelChange *ThinkingLevelChangeEntry

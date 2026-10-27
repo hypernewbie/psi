@@ -39,13 +39,13 @@ func TestAcceptanceResumeForms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actA.Timeline) == 0 || len(actA.Recall) == 0 {
+	if len(activationTimeline(t, actA)) == 0 || len(actA.Recall) == 0 {
 		t.Fatal("A08: empty timeline/recall")
 	}
 	// B activation.
 	sb, _ := session.OpenFile(pb, work, false)
 	actB, _ := PrepareActivation(sb)
-	if len(actB.Timeline) == 0 {
+	if len(activationTimeline(t, actB)) == 0 {
 		t.Fatal("A08: B empty")
 	}
 	// A→B→A: dividers + no duplicate on reselect (A10).

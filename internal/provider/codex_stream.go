@@ -50,6 +50,9 @@ type codexFinal struct {
 			Cached  int64 `json:"cached_tokens"`
 			Written int64 `json:"cache_write_tokens"`
 		} `json:"input_tokens_details"`
+		OutputDetails struct {
+			Reasoning *int64 `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -308,7 +311,7 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 	}
 	usage := terminal.Usage
 	result.Usage = Usage{Input: max(0, usage.Input-usage.InputDetails.Cached-usage.InputDetails.Written), Output: usage.Output,
-		CacheRead: usage.InputDetails.Cached, CacheWrite: usage.InputDetails.Written, TotalTokens: usage.Total}
+		CacheRead: usage.InputDetails.Cached, CacheWrite: usage.InputDetails.Written, TotalTokens: usage.Total, Reasoning: usage.OutputDetails.Reasoning}
 	if result.Usage.TotalTokens == 0 {
 		result.Usage.TotalTokens = result.Usage.Input + result.Usage.Output + result.Usage.CacheRead + result.Usage.CacheWrite
 	}

@@ -1,0 +1,11 @@
+{
+  "package": "@earendil-works/pi-ai",
+  "version": "1.4.0",
+  "sha256": {
+    "anthropic": "91f5da01452c7746645d3405bc91e09f849e4e4687c7c7ff22d8976eafe64b87",
+    "openai-codex": "533e0ddd7d212fa8433b974b19613301b093f171541e4f4e1fea1962e68928ad"
+  },
+  "protocolReference": "d5b3de22d0e24a3e9c38a9410d3329b099717283",
+  "generator": "snapshot-models-v1",
+  "scope": "all chat models in the two public provider catalogs; no credentials, endpoints, headers, or private configuration"
+}

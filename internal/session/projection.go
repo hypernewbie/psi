@@ -219,8 +219,10 @@ type Projection struct {
 
 // BuildProjection applies context edits (latest wins) over compaction-aware entries.
 func BuildProjection(path []*Entry) *Projection {
-	state := RestoreModelState(path)
-	ctxEntries := BuildContextEntries(path)
+	return projectEntries(BuildContextEntries(path), RestoreModelState(path))
+}
+
+func projectEntries(ctxEntries []*Entry, state ModelState) *Projection {
 	edits := map[string]*ContextEditEntry{}
 	for _, e := range ctxEntries {
 		if e.Kind == "context_edit" {

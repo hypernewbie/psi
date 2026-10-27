@@ -87,8 +87,8 @@ func (l *Loop) compact(ctx context.Context, cfg Config, focus string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	tokens, _ := (Estimator{}).Estimate(proj, 0, len(cfg.Tools))
-	usage := session.Usage{Input: float64(resp.Usage.Input), Output: float64(resp.Usage.Output), CacheRead: float64(resp.Usage.CacheRead), CacheWrite: float64(resp.Usage.CacheWrite), TotalTokens: float64(resp.Usage.TotalTokens)}
+	tokens := EstimatedContext(proj, cfg)
+	usage := sessionUsage(resp.Usage)
 	firstKeptID := ""
 	if boundary < len(proj.Entries) {
 		firstKeptID = proj.Entries[boundary].ID()

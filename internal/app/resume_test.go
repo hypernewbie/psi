@@ -42,11 +42,12 @@ func TestResumeDisplaysHistory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("prepare: %v", err)
 		}
-		if len(act.Timeline) < 4 {
-			t.Fatalf("resume hid history: %d items", len(act.Timeline))
+		timeline := activationTimeline(t, act)
+		if len(timeline) < 4 {
+			t.Fatalf("resume hid history: %d items", len(timeline))
 		}
 		foundUser, foundTool, foundSecond := false, false, false
-		for _, it := range act.Timeline {
+		for _, it := range timeline {
 			if it.Kind == session.KindUser && it.Text == "first" {
 				foundUser = true
 			}
@@ -58,7 +59,7 @@ func TestResumeDisplaysHistory(t *testing.T) {
 			}
 		}
 		if !foundUser || !foundTool || !foundSecond {
-			t.Fatalf("missing turns: user=%v tool=%v second=%v timeline=%v", foundUser, foundTool, foundSecond, act.Timeline)
+			t.Fatalf("missing turns: user=%v tool=%v second=%v timeline=%v", foundUser, foundTool, foundSecond, timeline)
 		}
 		// Recall must include the user submission.
 		if len(act.Recall) == 0 || act.Recall[0] != "first" {

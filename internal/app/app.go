@@ -211,7 +211,7 @@ func (r *runtime) restore() error {
 		return err
 	}
 	thinking := ""
-	if len(r.store.Entries()) > 0 {
+	if r.store.EntryCount() > 0 {
 		thinking = proj.State.ThinkingLevel
 	}
 	ov := config.ResolveStartup(r.options.Provider, r.options.Model, r.options.Thinking, r.options.SessionDir, r.options.NoSession,
@@ -242,7 +242,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	if ov.Thinking == "" {
 		ov.Thinking = "off"
 	}
-	pm := provider.ModelMeta{ID: meta.ID, API: meta.API, Provider: ov.Provider, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap}
+	pm := provider.ModelMeta{ID: meta.ID, API: meta.API, Provider: ov.Provider, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap, AdaptiveThinking: meta.Compat.ForceAdaptiveThinking, MidConvoEffort: meta.Compat.SupportsMidConvoEffort}
 	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt,
 		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveTokens, KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
 	if _, err := provider.BuildRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
@@ -421,6 +421,13 @@ func firstLine(s string) string {
 	return s
 }
 
+func (r *runtime) installConfiguration(candidate *runtime) {
+	if r.prov != nil {
+		r.prov.CloseIdle()
+	}
+	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
+}
+
 func (r *runtime) replace(next *session.Store) error {
 	if next.Persistent() && r.store.Persistent() && next.File() != "" && next.File() == r.store.File() {
 		return nil
@@ -428,13 +435,19 @@ func (r *runtime) replace(next *session.Store) error {
 	if err := next.TryLock(); err != nil {
 		return err
 	}
-	old := r.store
-	r.store = next
-	if err := r.restore(); err != nil {
+	candidate := *r
+	candidate.store, candidate.prov = next, nil
+	if _, err := PrepareActivation(next); err != nil {
 		next.Unlock()
-		r.store = old
 		return err
 	}
+	if err := candidate.restore(); err != nil {
+		next.Unlock()
+		return err
+	}
+	old := r.store
+	r.installConfiguration(&candidate)
+	r.store = next
 	old.Unlock()
 	return nil
 }
@@ -459,8 +472,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 	defer frameTimer.Stop()
 	var frameTick <-chan time.Time
 	refreshRecall := func() {
-		if path, err := r.store.ActivePath(); err == nil {
-			console.Editor.SetHistory(session.PromptRecall(path))
+		if recall, err := r.store.Recall(); err == nil {
+			console.Editor.SetHistory(recall)
 		}
 	}
 	for _, skill := range r.skills {
@@ -766,6 +779,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if sel != nil {
+					if r.selector.Models {
+						_, err := r.command(&terminal.Command{Name: "model", Arg: sel.ID}, out)
+						if err != nil {
+							print("error: " + err.Error())
+						}
+						r.selector = nil
+						r.state = StateIdle
+						console.Draw()
+						continue
+					}
 					if sel.ID == r.store.Header().ID {
 						// Same-session is a no-op, not another transcript copy (3.3).
 						print("already on session " + sel.ID)
@@ -829,22 +852,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if cmd.Name == "history" {
-					path, err := r.store.ActivePath()
+					complete, err := renderStoreHistory(r.store, cmd.Arg, emitReplay)
 					if err != nil {
 						print("error: " + err.Error())
-					} else {
-						items, err := historyItems(path, cmd.Arg)
-						if err != nil {
-							print("error: " + err.Error())
-						} else if !renderTimelineChecked(emitReplay, items) {
-							stoppedReplay()
-						}
+					} else if !complete {
+						stoppedReplay()
 					}
 					console.Draw()
 					continue
 				}
 				if cmd.Name == "compact" {
 					start("", cmd.Arg, "", "", true)
+					continue
+				}
+				if cmd.Name == "model" && strings.TrimSpace(cmd.Arg) == "" {
+					r.selector = modelSelector(r)
+					r.state = StateSelecting
+					for _, line := range r.selector.Render() {
+						print(line)
+					}
+					console.Draw()
 					continue
 				}
 				if cmd.Name == "resume" {
@@ -896,7 +923,15 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		print(fmt.Sprintf("session %s\nfile %s\ncwd %s\nprovider %s api %s model %s (requested %s)\nthinking %s\ncontext messages %d\ncontinuation: %s", r.store.Header().ID, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.cfg.Model.ID, r.ov.Model, r.ov.Thinking, len(proj.Flat), continuable(proj)))
+		accounting, err := r.store.Accounting()
+		if err != nil {
+			return false, err
+		}
+		returned := accounting.ReturnedModel
+		if returned == "" {
+			returned = "unknown (no stored response)"
+		}
+		print(fmt.Sprintf("session %s\nfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.EstimatedContext(proj, r.cfg), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
 	case "new":
 		next, err := session.New(session.OpenOptions{Cwd: r.store.Cwd(), SessionDir: r.store.Dir(), AgentDir: r.agentDir, Persist: r.store.Persistent()})
 		if err != nil {
@@ -912,15 +947,10 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 	case "history":
 		// /history [N|all]: append last N user spans or full active-branch history (P2-041).
 		// Display-only: no model request, no file change.
-		path, err := r.store.ActivePath()
+		_, err := renderStoreHistory(r.store, cmd.Arg, func(s string) bool { print(s); return true })
 		if err != nil {
 			return false, err
 		}
-		items, err := historyItems(path, cmd.Arg)
-		if err != nil {
-			return false, err
-		}
-		renderTimeline(print, items)
 	case "model":
 		if strings.TrimSpace(cmd.Arg) == "" {
 			print(modelList(r))
@@ -940,18 +970,20 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		} else {
 			return false, fmt.Errorf("use /model [provider/]model")
 		}
-		old := r.ov
-		if err := r.configure(next); err != nil {
+		candidate := *r
+		candidate.prov = nil
+		if err := candidate.configure(next); err != nil {
 			return false, err
 		}
-		if _, err := r.store.AppendModelChange(r.ov.Provider, r.ov.Model); err != nil {
-			_ = r.configure(old)
+		if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
+			candidate.prov.CloseIdle()
 			return false, err
 		}
+		r.installConfiguration(&candidate)
 		print(fmt.Sprintf("%s/%s thinking %s (session-local)", r.ov.Provider, r.ov.Model, r.ov.Thinking))
 	case "thinking":
 		if strings.TrimSpace(cmd.Arg) == "" {
-			print(fmt.Sprintf("thinking %s (supported: %s)", r.ov.Thinking, strings.Join(config.ValidThinkingLevels, ", ")))
+			print(fmt.Sprintf("thinking %s (supported: %s)", provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), provider.ThinkingChoices(r.cfg.Model)))
 			return false, nil
 		}
 		lvl := strings.TrimSpace(cmd.Arg)
@@ -967,15 +999,17 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		}
 		next := r.ov
 		next.Thinking = lvl
-		old := r.ov
-		if err := r.configure(next); err != nil {
+		candidate := *r
+		candidate.prov = nil
+		if err := candidate.configure(next); err != nil {
 			return false, err
 		}
 		if _, err := r.store.AppendThinkingLevelChange(lvl); err != nil {
-			_ = r.configure(old)
+			candidate.prov.CloseIdle()
 			return false, err
 		}
-		print(fmt.Sprintf("thinking %s (session-local)", lvl))
+		r.installConfiguration(&candidate)
+		print(fmt.Sprintf("thinking %s (session-local)", provider.ThinkingDescription(r.cfg.Model, lvl)))
 	default:
 		return false, fmt.Errorf("unknown command (see /help)")
 	}

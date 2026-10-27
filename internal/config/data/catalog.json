@@ -1,0 +1,475 @@
+{
+  "anthropic": [
+    {
+      "id": "claude-fable-5",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-fable-5-1",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "api": "anthropic-messages",
+      "contextWindow": 200000,
+      "maxTokens": 64000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "api": "anthropic-messages",
+      "contextWindow": 200000,
+      "maxTokens": 64000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "claude-opus-4-5",
+      "api": "anthropic-messages",
+      "contextWindow": 200000,
+      "maxTokens": 64000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-opus-4-5-20251101",
+      "api": "anthropic-messages",
+      "contextWindow": 200000,
+      "maxTokens": 64000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-opus-4-6",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-opus-4-7",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-opus-4-8",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-opus-5",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "claude-opus-5-5",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "api": "anthropic-messages",
+      "contextWindow": 200000,
+      "maxTokens": 64000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "api": "anthropic-messages",
+      "contextWindow": 200000,
+      "maxTokens": 64000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-sonnet-5",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "api": "anthropic-messages",
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsMidConvoEffort": true
+      }
+    }
+  ],
+  "openai-codex": [
+    {
+      "id": "gpt-5.6-luna",
+      "api": "openai-codex-responses",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "xhigh": "xhigh",
+        "max": "max",
+        "minimal": "low"
+      },
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "api": "openai-codex-responses",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "xhigh": "xhigh",
+        "max": "max",
+        "minimal": "low"
+      },
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "api": "openai-codex-responses",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "xhigh": "xhigh",
+        "max": "max",
+        "minimal": "low"
+      },
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "gpt-6-astra",
+      "api": "openai-codex-responses",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "gpt-6-luna",
+      "api": "openai-codex-responses",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "gpt-6-sol",
+      "api": "openai-codex-responses",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "api": "openai-codex-responses",
+      "contextWindow": 500000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "forceAdaptiveThinking": false,
+        "supportsMidConvoEffort": false
+      }
+    }
+  ]
+}

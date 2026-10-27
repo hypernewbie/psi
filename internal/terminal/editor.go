@@ -17,13 +17,14 @@ const (
 )
 
 type Editor struct {
-	buf      []rune
-	pos      int // rune index (always on grapheme boundary)
-	history  []string
-	histIdx  int // -1 = current draft
-	draft    string
-	draftPos int
-	prefCol  int // sticky visual column, -1 when inactive
+	buf            []rune
+	pos            int // rune index (always on grapheme boundary)
+	history        []string
+	histIdx        int // -1 = current draft
+	draft          string
+	draftPos       int
+	prefCol        int // sticky visual column, -1 when inactive
+	rejectedInsert bool
 }
 
 func NewEditor() *Editor { return &Editor{histIdx: -1, prefCol: -1} }
@@ -100,6 +101,7 @@ func (e *Editor) History() []string { return append([]string(nil), e.history...)
 // Insert inserts s at the cursor without splitting graphemes to fit the budget.
 // It normalizes CRLF/lone CR to LF first. Returns false if the whole insert was rejected.
 func (e *Editor) Insert(s string) bool {
+	e.rejectedInsert = false
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
 	if s == "" {
@@ -107,24 +109,8 @@ func (e *Editor) Insert(s string) bool {
 	}
 	cur := string(e.buf)
 	if len(cur)+len(s) > editorBudget {
-		// Try to fit a grapheme-prefix of s; never split a cluster.
-		allowed := editorBudget - len(cur)
-		if allowed <= 0 {
-			return false
-		}
-		var b strings.Builder
-		gr := uniseg.NewGraphemes(s)
-		for gr.Next() {
-			seg := string(gr.Str())
-			if b.Len()+len(seg) > allowed {
-				break
-			}
-			b.WriteString(seg)
-		}
-		s = b.String()
-		if s == "" {
-			return false
-		}
+		e.rejectedInsert = true
+		return false
 	}
 	boff := runeToByte(e.buf, e.pos)
 	// Ensure cursor is on a boundary (defensive).

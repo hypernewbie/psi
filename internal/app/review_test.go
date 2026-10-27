@@ -57,9 +57,14 @@ type reviewPTY struct {
 
 func startReviewPTY(t *testing.T, home, work, agentDir string, args ...string) *reviewPTY {
 	t.Helper()
+	return startReviewProcess(t, home, work, agentDir, *reviewBinary, "", args...)
+}
+
+func startReviewProcess(t *testing.T, home, work, agentDir, binary, searchPath string, args ...string) *reviewPTY {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReviewAppProcess$")
-	if *reviewBinary != "" {
-		executable, err := filepath.Abs(*reviewBinary)
+	if binary != "" {
+		executable, err := filepath.Abs(binary)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,6 +73,13 @@ func startReviewPTY(t *testing.T, home, work, agentDir string, args ...string) *
 	cmd.Dir = work
 	encoded, _ := json.Marshal(args)
 	cmd.Env = append(appTestEnv(home, agentDir), "PSI_APP_TEST_PROCESS=", "PSI_REVIEW_PROCESS=1", "PSI_REVIEW_ARGS="+string(encoded))
+	if searchPath != "" {
+		for i, value := range cmd.Env {
+			if strings.HasPrefix(value, "PATH=") {
+				cmd.Env[i] = "PATH=" + searchPath
+			}
+		}
+	}
 	master, slave, err := pty.Open()
 	if err != nil {
 		t.Fatal(err)

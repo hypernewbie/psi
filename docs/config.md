@@ -44,9 +44,14 @@ precede `models.json` credentials, then `ANTHROPIC_API_KEY`. An OAuth entry stop
 API-key selection instead of changing the billing path silently.
 
 With no saved provider/model, the default is Anthropic `claude-sonnet-4-5`.
-A saved `openai-codex` selection uses the bundled Codex catalog, including the
-GPT-5.6 and GPT-6 families. Its default is `gpt-5.6-luna`. Existing
-`modelOverrides` apply without requiring a duplicate `models[]` entry.
+The public snapshot contains 17 Anthropic models and seven Codex models from `@earendil-works/pi-ai` version `1.4.0`.
+Source hashes are in `internal/config/data/catalog-source.json`.
+The snapshot contains capabilities, not credentials, private endpoints, or user defaults.
+`/model` pages the local catalog and configured models without a network request.
+
+A saved Codex selection uses the GPT-5.6 and GPT-6 families.
+Its default is `gpt-5.6-luna`.
+Existing `modelOverrides` apply without a duplicate `models[]` entry.
 
 Codex uses the `openai-codex` OAuth credential in `auth.json`, including token
 refresh. Psi updates only that entry and preserves other providers and unknown
@@ -76,8 +81,14 @@ Configure other compatible models in Pi's normal shape:
 ```
 
 An Anthropic thinking budget must fit below the model's output limit.
-Codex reasoning uses effort names, not Anthropic token budgets. Model
-`thinkingLevelMap` entries override those names.
+Adaptive Anthropic models use effort levels instead of token budgets.
+Managed-effort models retain historical effort markers and send the current marker before the next response.
+Codex reasoning uses effort names, not Anthropic token budgets.
+Model `thinkingLevelMap` entries override those names.
+`/thinking` lists accepted levels and states the effective effort or token budget.
+An unavailable off switch appears as a provider default, not as disabled reasoning.
+`/session` separates stored usage counters, estimated context, and requested versus returned models.
+Prices remain unknown because psi does not calculate costs.
 Skill paths resolve from their source configuration directory. User and project
 skill lists combine. An empty `defaultTools` list disables tools. Project `+`/`-`
 tool entries modify the inherited user selection.

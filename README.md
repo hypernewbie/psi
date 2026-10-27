@@ -7,7 +7,7 @@ The implementation does not yet meet all PLAN2 acceptance gates.
 
 ## Quickstart (Linux / WSL2)
 
-Prerequisites: Go 1.24+, `bash`, a terminal with native scrollback.
+Prerequisites: Go 1.24.2+, `bash`, a terminal with native scrollback.
 
 ```sh
 # build
@@ -49,15 +49,25 @@ The normal suite uses local HTTP servers and real PTYs to exercise both provider
 Regression fixtures are synthetic. Test subprocesses have a temporary HOME and an
 allowlisted environment; they do not inherit your credentials or Pi configuration.
 
-An optional differential test uses a real Pi session reader:
+The reference suite uses the unmodified pinned Pi reader and writer:
 
 ```sh
-PSI_PI_SESSION_MODULE=/path/to/pi/dist/core/session-manager.js \
-  go test ./internal/session -run TestReferencePiProjection -count=1
+node scripts/build-reference.mjs temp/pi-mono temp/pi-reference.mjs
+PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
+  go test ./internal/session -run '^TestReferencePi' -count=1
 ```
 
-Node and Pi are needed only for this reference test, not for psi.
-The test is optional for routine development but required as release compatibility evidence.
+The adapter requires Node 24, the pinned checkout, and Pi's public `cross-spawn` dependency.
+psi does not require these dependencies at runtime.
+The suite covers both continuation directions and both provider metadata forms.
+It is optional for routine development but required as release compatibility evidence.
+
+Run the explicit local-storage resource checks:
+
+```sh
+go test -tags acceptance ./internal/app \
+  -run '^TestScale(512MiBActivation|10000MetadataFirstPage)$' -count=1 -v
+```
 
 ## Layout
 

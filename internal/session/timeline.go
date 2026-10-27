@@ -94,6 +94,32 @@ func displayTools(entries []*Entry) map[string]*displayTool {
 	return out
 }
 
+func provenanceEntries(path []*Entry) map[string]*Entry {
+	out := map[string]*Entry{}
+	for _, e := range path {
+		target := e.provenanceTarget
+		if target == "" {
+			var data json.RawMessage
+			if e.Custom != nil && e.Custom.CustomType == "psi.input" {
+				data = e.Custom.Data
+			}
+			if e.CustomMessage != nil && e.CustomMessage.CustomType == "psi.input" {
+				data = e.CustomMessage.Details
+			}
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			if json.Unmarshal(data, &p) == nil {
+				target = p.TargetID
+			}
+		}
+		if target != "" {
+			out[target] = e
+		}
+	}
+	return out
+}
+
 func inputProvenance(path []*Entry) map[string]string {
 	out := map[string]string{}
 	for _, e := range path {
@@ -121,66 +147,72 @@ func inputProvenance(path []*Entry) map[string]string {
 func timeline(entries, path []*Entry, historical bool) []TranscriptItem {
 	tools, inputs := displayTools(entries), inputProvenance(path)
 	var out []TranscriptItem
+	for _, e := range entries {
+		out = append(out, timelineEntry(e, tools, inputs, historical)...)
+	}
+	return out
+}
+
+func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]string, historical bool) []TranscriptItem {
+	var out []TranscriptItem
 	add := func(e *Entry, kind TranscriptKind, text string) {
 		out = append(out, TranscriptItem{Kind: kind, Text: text, SourceID: e.ID(), Historical: historical})
 	}
-	for _, e := range entries {
-		switch e.Kind {
-		case "message":
-			m := e.Message.Message
-			switch {
-			case m.User != nil:
-				text := timelineUserText(m.User.Content, nil)
-				if invocation, ok := inputs[e.ID()]; ok {
-					text = invocation
-				}
-				add(e, KindUser, text)
-			case m.Assistant != nil:
-				var text strings.Builder
-				flush := func() {
-					if text.Len() > 0 {
-						add(e, KindAssistant, text.String())
-						text.Reset()
-					}
-				}
-				for _, b := range m.Assistant.Content {
-					if b.Text != nil {
-						text.WriteString(b.Text.Text)
-					}
-					if b.Call != nil {
-						flush()
-						t := tools[b.Call.ID]
-						out = append(out, TranscriptItem{Kind: KindTool, Text: t.name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{b.Call.ID}, Note: t.note, Historical: historical})
-					}
-				}
-				flush()
-			case m.ToolResult != nil:
-				t := tools[m.ToolResult.ToolCallID]
-				if !t.call {
-					name := t.name
-					if name == "" {
-						name = "tool"
-					}
-					out = append(out, TranscriptItem{Kind: KindTool, Text: name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{m.ToolResult.ToolCallID}, Note: "historical result without retained call", Historical: historical})
-				}
-			case m.BashExecution != nil:
-				add(e, KindTool, "bash: "+bashOutcome(m.BashExecution))
+	switch e.Kind {
+	case "message":
+		m := e.Message.Message
+		switch {
+		case m.User != nil:
+			text := timelineUserText(m.User.Content, nil)
+			if invocation, ok := inputs[e.ID()]; ok {
+				text = invocation
 			}
-		case "compaction":
-			add(e, KindCompaction, e.Compaction.Summary)
-		case "branch_summary":
-			add(e, KindBranchSummary, "Branch: "+e.BranchSummary.Summary)
-		case "custom_message":
-			if e.CustomMessage.Display {
-				add(e, KindAssistant, "["+e.CustomMessage.CustomType+"] "+timelineUserText(e.CustomMessage.Content, nil))
+			add(e, KindUser, text)
+		case m.Assistant != nil:
+			var text strings.Builder
+			flush := func() {
+				if text.Len() > 0 {
+					add(e, KindAssistant, text.String())
+					text.Reset()
+				}
 			}
-		case "model_change":
-			add(e, KindSystemMarker, fmt.Sprintf("model: %s/%s", e.ModelChange.Provider, e.ModelChange.ModelID))
-		case "thinking_level_change":
-			add(e, KindSystemMarker, "thinking: "+e.ThinkingLevelChange.ThinkingLevel)
-		case "context_edit":
-			add(e, KindSystemMarker, "Context edited (model context updated, transcript preserved).")
+			for _, b := range m.Assistant.Content {
+				if b.Text != nil {
+					text.WriteString(b.Text.Text)
+				}
+				if b.Call != nil {
+					flush()
+					t := tools[b.Call.ID]
+					out = append(out, TranscriptItem{Kind: KindTool, Text: t.name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{b.Call.ID}, Note: t.note, Historical: historical})
+				}
+			}
+			flush()
+		case m.ToolResult != nil:
+			t := tools[m.ToolResult.ToolCallID]
+			if !t.call {
+				name := t.name
+				if name == "" {
+					name = "tool"
+				}
+				out = append(out, TranscriptItem{Kind: KindTool, Text: name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{m.ToolResult.ToolCallID}, Note: "historical result without retained call", Historical: historical})
+			}
+		case m.BashExecution != nil:
+			add(e, KindTool, "bash: "+bashOutcome(m.BashExecution))
 		}
+	case "compaction":
+		add(e, KindCompaction, e.Compaction.Summary)
+	case "branch_summary":
+		add(e, KindBranchSummary, "Branch: "+e.BranchSummary.Summary)
+	case "custom_message":
+		if e.CustomMessage.Display {
+			add(e, KindAssistant, "["+e.CustomMessage.CustomType+"] "+timelineUserText(e.CustomMessage.Content, nil))
+		}
+	case "model_change":
+		add(e, KindSystemMarker, fmt.Sprintf("model: %s/%s", e.ModelChange.Provider, e.ModelChange.ModelID))
+	case "thinking_level_change":
+		add(e, KindSystemMarker, "thinking: "+e.ThinkingLevelChange.ThinkingLevel)
+	case "context_edit":
+		add(e, KindSystemMarker, "Context edited (model context updated, transcript preserved).")
 	}
 	return out
 }

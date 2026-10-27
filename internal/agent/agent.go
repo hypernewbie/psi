@@ -218,7 +218,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 		if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
 			return err
 		}
-		estimated, _ := (Estimator{}).Estimate(proj, 0, len(cfg.Tools))
+		estimated := EstimatedContext(proj, cfg)
 		if ShouldCompact(estimated, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact) {
 			if err := l.compact(ctx, cfg, ""); err != nil {
 				return fmt.Errorf("automatic compaction: %w", err)
@@ -377,7 +377,11 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 					return provider.Request{}, fmt.Errorf("unsupported assistant block %q", b.Type)
 				}
 			}
-			msgs = append(msgs, provider.Message{Role: "assistant", Content: blocks, Provider: m.Assistant.Provider, API: m.Assistant.API, Model: m.Assistant.Model})
+			effort := ""
+			if m.Assistant.ProviderThinkingLevel != nil {
+				effort = *m.Assistant.ProviderThinkingLevel
+			}
+			msgs = append(msgs, provider.Message{Role: "assistant", Content: blocks, Provider: m.Assistant.Provider, API: m.Assistant.API, Model: m.Assistant.Model, ThinkingLevel: effort})
 		case "toolResult":
 			msgs = append(msgs, provider.Message{Role: "toolResult", ToolCallID: m.ToolResult.ToolCallID, ToolName: m.ToolResult.ToolName, IsError: m.ToolResult.IsError, Content: userBlocks(m.ToolResult.Content)})
 		default:
@@ -457,7 +461,7 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 		api = "anthropic-messages"
 	}
 	a := &session.AssistantMessage{Role: "assistant", Content: blocks, API: api, Provider: cfg.Model.ProviderID(), Model: cfg.Model.ID,
-		Usage: session.Usage{Input: float64(resp.Usage.Input), Output: float64(resp.Usage.Output), CacheRead: float64(resp.Usage.CacheRead), CacheWrite: float64(resp.Usage.CacheWrite), TotalTokens: float64(resp.Usage.TotalTokens)}, StopReason: stop, Timestamp: time.Now().UnixMilli()}
+		Usage: sessionUsage(resp.Usage), StopReason: stop, Timestamp: time.Now().UnixMilli()}
 	if resp.ResponseID != "" {
 		id := resp.ResponseID
 		a.ResponseID = &id
@@ -465,6 +469,10 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 	if resp.Model != "" && resp.Model != cfg.Model.ID {
 		model := resp.Model
 		a.ResponseModel = &model
+	}
+	if resp.ThinkingLevel != "" {
+		effort := resp.ThinkingLevel
+		a.ProviderThinkingLevel = &effort
 	}
 	level := cfg.Thinking
 	a.ThinkingLevel = &level

@@ -43,9 +43,10 @@ type Console struct {
 	writer  *Writer
 	decoder *Decoder
 
-	pasteActive bool
-	pasteBuf    strings.Builder
-	pasteNotice bool
+	pasteActive     bool
+	pasteBuf        strings.Builder
+	pasteNotice     bool
+	inputLimitShown bool
 
 	lastDraft    string
 	lastCursor   int
@@ -231,6 +232,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 				// Pasted controls never cancel/submit during run.
 				return "", false, false, false
 			}
+			c.inputLimitShown = false
 			prev := c.Editor.Text()
 			if content != "" {
 				c.Editor.Insert(Sanitize(content))
@@ -255,6 +257,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 				return "", false, true, false
 			}
 			c.Editor.Clear()
+			c.inputLimitShown = false
 			c.drawIfChanged(false)
 			return "", false, false, false
 		case 4: // Ctrl+D: delete at cursor when nonempty, exit when empty.
@@ -269,6 +272,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.pasteBuf.Reset()
 			return "", false, false, false
 		case '\r': // Enter submits outside paste.
+			c.inputLimitShown = false
 			c.commitAccepted()
 			return c.Editor.Submit(), true, false, false
 		}
@@ -307,7 +311,14 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		return "", false, false, false
 	}
 	prevDraft, prevPos := c.Editor.Text(), c.Editor.Pos()
+	c.Editor.rejectedInsert = false
 	c.Editor.HandleKey(input.Key, false)
+	if c.Editor.rejectedInsert {
+		c.inputLimit()
+	}
+	if c.Editor.Text() != prevDraft {
+		c.inputLimitShown = false
+	}
 	if c.Editor.Text() != prevDraft || c.Editor.Pos() != prevPos {
 		c.drawIfChanged(false)
 	}
@@ -330,7 +341,11 @@ func (c *Console) complete() {
 		}
 		token := string(runes[start:pos])
 		suffix := cands[0][len(token):] + " "
-		c.Editor.Insert(suffix)
+		if !c.Editor.Insert(suffix) {
+			c.inputLimit()
+		} else {
+			c.inputLimitShown = false
+		}
 		c.drawIfChanged(false)
 		return
 	}
@@ -340,6 +355,15 @@ func (c *Console) complete() {
 		_, _ = c.Write([]byte("Candidates: " + strings.Join(bounded(cands, 10), " ") + "\r\n"))
 		c.Draw()
 	}
+}
+
+func (c *Console) inputLimit() {
+	if c.inputLimitShown {
+		return
+	}
+	c.inputLimitShown = true
+	_, _ = c.Write([]byte("Input exceeds 256 KiB. Draft unchanged.\r\n"))
+	c.Draw()
 }
 
 func bounded(s []string, n int) []string {

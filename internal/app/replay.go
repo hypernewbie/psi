@@ -66,12 +66,17 @@ func replayActivationChecked(emit func(string) bool, act *Activation, isNew bool
 			return false
 		}
 	}
-	if !renderTimelineChecked(emit, act.Timeline) {
+	visible := map[string]bool{}
+	complete, err := act.Store.Timeline(false, 0, func(it session.TranscriptItem) bool {
+		visible[it.SourceID] = true
+		return renderTimelineChecked(emit, []session.TranscriptItem{it})
+	})
+	if err != nil {
+		emit("History unavailable: " + err.Error())
 		return false
 	}
-	visible := map[string]bool{}
-	for _, it := range act.Timeline {
-		visible[it.SourceID] = true
+	if !complete {
+		return false
 	}
 	omitted := 0
 	for _, e := range act.Path {

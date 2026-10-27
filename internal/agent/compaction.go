@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -31,6 +32,18 @@ func (e Estimator) Estimate(proj *session.Projection, systemLen, toolCount int) 
 	return total, true
 }
 
+// EstimatedContext includes the effective system, actual tool schemas, and
+// selected message content. It is never labeled as provider-reported usage.
+func EstimatedContext(proj *session.Projection, cfg Config) int {
+	n, _ := (Estimator{}).Estimate(proj, 0, 0)
+	if session.ReplaySystem(proj.Flat).Content == "" {
+		n += (len(cfg.System) + 2) / 3
+	}
+	encoded, _ := json.Marshal(cfg.Tools)
+	n += (len(encoded) + 2) / 3
+	return n
+}
+
 func messageTokens(m session.AgentMessage) int {
 	n := 0
 	switch m.Role {
@@ -54,7 +67,7 @@ func messageTokens(m session.AgentMessage) int {
 					// Exclude opaque reasoning from the estimate budget? No:
 					// reasoning still occupies context for replay. Count it.
 					if b.Thinking != nil {
-						n += len(b.Thinking.Thinking)/4 + 5
+						n += (len(b.Thinking.Thinking)+lenString(b.Thinking.ThinkingSignature))/4 + 5
 					}
 				case "toolCall":
 					if b.Call != nil {
@@ -92,23 +105,28 @@ func contentLen(v any) int {
 	return len(fmt.Sprint(v))
 }
 
-func userLen(u *session.UserMessage) int {
-	switch c := u.Content.(type) {
-	case string:
-		return len(c)
-	case []session.UserContentBlock:
-		n := 0
-		for _, b := range c {
-			if b.Text != nil {
-				n += len(b.Text.Text)
-			}
-			if b.Image != nil {
-				n += 24000
-			}
-		}
-		return n
+func lenString(s *string) int {
+	if s == nil {
+		return 0
 	}
-	return 0
+	return len(*s)
+}
+
+func userLen(u *session.UserMessage) int {
+	blocks, err := session.UserBlocks(u.Content)
+	if err != nil {
+		return len(u.Raw)
+	}
+	n := 0
+	for _, b := range blocks {
+		if b.Text != nil {
+			n += len(b.Text.Text)
+		}
+		if b.Image != nil {
+			n += 24000
+		}
+	}
+	return n
 }
 
 // Boundary selects a safe compaction boundary: tool calls stay with results,

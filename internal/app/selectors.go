@@ -17,6 +17,7 @@ type Selector struct {
 	Filter   string
 	ActiveID string
 	PageSize int
+	Models   bool
 }
 
 func NewSelector(items []session.SessionInfo, activeID string) *Selector {
@@ -32,7 +33,7 @@ func (s *Selector) apply() {
 		q := strings.ToLower(s.Filter)
 		s.Filtered = nil
 		for _, it := range s.Items {
-			if strings.Contains(strings.ToLower(it.ID), q) || strings.Contains(strings.ToLower(it.FirstMessage), q) {
+			if strings.Contains(strings.ToLower(it.ID), q) || strings.Contains(strings.ToLower(it.FirstMessage), q) || strings.Contains(strings.ToLower(it.Name), q) {
 				s.Filtered = append(s.Filtered, it)
 			}
 		}
@@ -81,14 +82,31 @@ func (s *Selector) Render() []string {
 	if totalPages == 0 {
 		totalPages = 1
 	}
-	out = append(out, fmt.Sprintf("Sessions (page %d/%d, %d matches, filter: %q)", s.Page+1, totalPages, len(s.Filtered), s.Filter))
+	label := "Sessions"
+	if s.Models {
+		label = "Models"
+	}
+	out = append(out, fmt.Sprintf("%s (page %d/%d, %d matches, filter: %q)", label, s.Page+1, totalPages, len(s.Filtered), s.Filter))
 	for i, it := range items {
 		marker := " "
 		if it.ID == s.ActiveID {
 			marker = "*"
 		}
 		preview := firstLine(it.FirstMessage)
-		out = append(out, fmt.Sprintf("%s%2d) %s %s — %s", marker, s.Page*s.PageSize+i+1, it.ID, it.Modified.Format("01-02 15:04"), preview))
+		identity := it.ID
+		if !s.Models {
+			if len(identity) > 12 {
+				identity = identity[:12]
+			}
+			if it.Name != "" {
+				identity = firstLine(it.Name) + " (" + identity + ")"
+			}
+			identity += " " + it.Modified.Format("01-02 15:04")
+			if it.Unavailable != "" && it.ID != s.ActiveID {
+				identity += " [unavailable: " + it.Unavailable + "]"
+			}
+		}
+		out = append(out, fmt.Sprintf("%s%2d) %s — %s", marker, s.Page*s.PageSize+i+1, identity, preview))
 	}
 	out = append(out, "n/p: page, /text: filter, number: select, empty: cancel")
 	return out

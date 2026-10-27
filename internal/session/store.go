@@ -1,12 +1,10 @@
 package session
 
 import (
-	"bufio"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,6 +30,8 @@ type Store struct {
 	knownSize int64
 	knownInfo os.FileInfo
 	writeErr  error
+	records   map[string]RecordMeta // disk-backed payloads; entries contains small metadata only
+	storage   *storageOps
 }
 
 // OpenOptions controls Store creation.
@@ -77,6 +77,11 @@ func New(opts OpenOptions) (*Store, error) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
 		}
+		dir, err := canonicalSessionPath(dir)
+		if err != nil {
+			return nil, err
+		}
+		s.dir = dir
 		ts := strings.ReplaceAll(strings.ReplaceAll(now, ":", "-"), ".", "-")
 		s.file = filepath.Join(dir, fmt.Sprintf("%s_%s.jsonl", ts, id))
 		s.flushed = false
@@ -87,6 +92,13 @@ func New(opts OpenOptions) (*Store, error) {
 
 // OpenFile opens an explicit session path.
 func OpenFile(path, cwd string, persist bool) (*Store, error) {
+	if persist {
+		resolved, err := canonicalSessionPath(path)
+		if err != nil {
+			return nil, err
+		}
+		path = resolved
+	}
 	before, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -94,9 +106,27 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	if !before.Mode().IsRegular() {
 		return nil, fmt.Errorf("session must be a regular file: %s", path)
 	}
-	header, entries, _, err := ReadFileEntries(path)
+	if persist {
+		if err := checkSessionLinks(before); err != nil {
+			return nil, err
+		}
+	}
+	idx, err := BuildIndex(path)
 	if err != nil {
 		return nil, err
+	}
+	header := idx.Header
+	var entries []*Entry
+	records := map[string]RecordMeta{}
+	for _, m := range idx.Records {
+		if m.Type == "session" {
+			continue
+		}
+		entries = append(entries, m.entry)
+		if _, exists := records[m.ID]; exists {
+			return nil, fmt.Errorf("duplicate entry id %q", m.ID)
+		}
+		records[m.ID] = m
 	}
 	if header == nil {
 		return nil, fmt.Errorf("session file has no valid header; refusing to initialize an explicit existing file: %s", path)
@@ -109,7 +139,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	} else if incomplete {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
-	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true}
+	s := &Store{header: header, entries: entries, records: records, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true}
 	s.rebuildIndex()
 	s.knownInfo, err = os.Stat(path)
 	if err != nil {
@@ -119,7 +149,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 		return nil, fmt.Errorf("session file changed while reading: %s", path)
 	}
 	s.knownSize = s.knownInfo.Size()
-	if _, err := BuildPath(entries, ""); err != nil {
+	if err := validateGraph(entries); err != nil {
 		return nil, err
 	}
 	// leaf = last entry (pinned default leaf selection on reopen).
@@ -170,11 +200,13 @@ func (s *Store) rebuildIndex() {
 // Header returns the session header.
 func (s *Store) Header() *SessionHeader { return s.header }
 
-// Entries returns all non-header entries (shallow copy).
+// Entries materializes every record for diagnostics and tests. A load error
+// returns nil. Runtime paths use Projection, Timeline, and MetadataPath instead.
 func (s *Store) Entries() []*Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]*Entry(nil), s.entries...)
+	entries, _ := s.loadEntriesLocked(s.entries)
+	return entries
 }
 
 // LeafID returns the current leaf.
@@ -207,16 +239,27 @@ func (s *Store) WriteError() error {
 func (s *Store) ActivePath() ([]*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return BuildPath(s.entries, s.leafID)
+	path, err := BuildPath(s.entries, s.leafID)
+	if err != nil {
+		return nil, err
+	}
+	return s.loadEntriesLocked(path)
 }
 
 // Projection builds the provenance-preserving context.
 func (s *Store) Projection() (*Projection, error) {
-	path, err := s.ActivePath()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := BuildPath(s.entries, s.leafID)
 	if err != nil {
 		return nil, err
 	}
-	return BuildProjection(path), nil
+	state := RestoreModelState(path)
+	path, err = s.loadEntriesLocked(BuildContextEntries(path))
+	if err != nil {
+		return nil, err
+	}
+	return projectEntries(path, state), nil
 }
 
 // AppendMessage appends a message as a child of the leaf.
@@ -310,6 +353,11 @@ func (s *Store) AppendContextEdit(targetID string, replacement json.RawMessage) 
 	if !ok {
 		return "", fmt.Errorf("entry %s not found", targetID)
 	}
+	loaded, err := s.loadEntriesLocked([]*Entry{target})
+	if err != nil {
+		return "", err
+	}
+	target = loaded[0]
 	// Must be on the active branch.
 	path, err := BuildPath(s.entries, s.leafID)
 	if err != nil {
@@ -387,7 +435,15 @@ func (s *Store) Branch(branchFromID string) error {
 func (s *Store) GetEntry(id string) *Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.byID[id]
+	e := s.byID[id]
+	if e == nil {
+		return nil
+	}
+	loaded, err := s.loadEntriesLocked([]*Entry{e})
+	if err != nil {
+		return nil
+	}
+	return loaded[0]
 }
 
 // appendLocked validates, persists, and advances the leaf. Caller holds mu.
@@ -401,7 +457,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 		}
 	}()
 	if s.persist && s.file != "" && s.flushed {
-		st, err := os.Stat(s.file)
+		st, err := s.statDurable()
 		if err != nil {
 			return fmt.Errorf("cannot inspect active session: %w", err)
 		}
@@ -431,7 +487,12 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	if len(data) > MaxRecordBytes {
 		return fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)
 	}
+	thin, err := metadataEntry(data)
+	if err != nil {
+		return err
+	}
 	e.Raw = data
+	expectedSize := int64(-1)
 	if s.persist && s.file != "" {
 		if !s.flushed {
 			// First durable message boundary: write header + all entries atomically via O_EXCL.
@@ -459,9 +520,22 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 			}
 			// Setup-only entries stay in memory (no file) until first user/assistant message.
 		} else {
-			f, err := os.OpenFile(s.file, os.O_RDWR|os.O_APPEND, 0o600)
+			f, err := s.openDurable(s.file, os.O_RDWR|os.O_APPEND, 0o600)
 			if err != nil {
 				return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
+			}
+			opened, err := f.Stat()
+			if err != nil {
+				f.Close()
+				return err
+			}
+			if err := checkSessionLinks(opened); err != nil {
+				f.Close()
+				return err
+			}
+			if opened.Size() != s.knownSize || s.knownInfo != nil && (!os.SameFile(opened, s.knownInfo) || !opened.ModTime().Equal(s.knownInfo.ModTime())) {
+				f.Close()
+				return fmt.Errorf("session file changed before append: %s", s.file)
 			}
 			record := append(append([]byte(nil), data...), '\n')
 			if s.knownSize > 0 {
@@ -474,27 +548,45 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 					record = append([]byte{'\n'}, record...)
 				}
 			}
-			_, writeErr := f.Write(record)
-			if writeErr == nil {
-				writeErr = f.Sync()
+			expectedSize = s.knownSize + int64(len(record))
+			if err := writeDurable(f, record); err != nil {
+				return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
 			}
-			closeErr := f.Close()
-			if writeErr != nil {
-				return fmt.Errorf("append failed (stopping further model/tool actions): %w", writeErr)
-			}
-			if closeErr != nil {
-				return closeErr
-			}
+		}
+	}
+	var st os.FileInfo
+	if s.persist && s.file != "" && s.flushed {
+		st, err = s.statDurable()
+		if err != nil {
+			return fmt.Errorf("cannot inspect durable append: %w", err)
+		}
+		if expectedSize >= 0 && (st.Size() != expectedSize || s.knownInfo != nil && !os.SameFile(st, s.knownInfo)) {
+			return fmt.Errorf("session file changed during append: %s", s.file)
 		}
 	}
 	s.entries = append(s.entries, e)
 	s.byID[e.ID()] = e
 	s.leafID = e.ID()
-	if s.persist && s.file != "" {
-		if st, err := os.Stat(s.file); err == nil {
-			s.knownSize = st.Size()
-			s.knownInfo = st
+	if st != nil {
+		if s.records == nil {
+			// Initial flush contains only buffered setup and the first message.
+			s.records = map[string]RecordMeta{}
+			hdr, _ := json.Marshal(s.header)
+			offset := int64(len(hdr) + 1)
+			for i, entry := range s.entries {
+				thin, err := metadataEntry(entry.Raw)
+				if err != nil {
+					return err
+				}
+				s.records[entry.ID()] = RecordMeta{Offset: offset, Length: int64(len(entry.Raw) + 1), Type: entry.Kind, ID: entry.ID(), entry: thin}
+				offset += int64(len(entry.Raw) + 1)
+				s.entries[i], s.byID[entry.ID()] = thin, thin
+			}
+		} else {
+			s.records[e.ID()] = RecordMeta{Offset: st.Size() - int64(len(data)+1), Length: int64(len(data) + 1), Type: e.Kind, ID: e.ID(), entry: thin}
+			s.entries[len(s.entries)-1], s.byID[e.ID()] = thin, thin
 		}
+		s.knownSize, s.knownInfo = st.Size(), st
 	}
 	return nil
 }
@@ -504,9 +596,12 @@ func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
 		return nil
 	}
 	// O_EXCL: never clobber an existing session file on first flush.
-	f, err := os.OpenFile(s.file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := s.openDurable(s.file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("session file already exists, refusing to overwrite: %s: %w", s.file, err)
+		if os.IsExist(err) {
+			return fmt.Errorf("session file already exists, refusing to overwrite: %s: %w", s.file, err)
+		}
+		return fmt.Errorf("cannot create session file %s: %w", s.file, err)
 	}
 	hdr, err := json.Marshal(s.header)
 	if err != nil {
@@ -523,15 +618,20 @@ func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
 	}()...)
 	buf = append(buf, extraData...)
 	buf = append(buf, '\n')
-	if _, err := f.Write(buf); err != nil {
-		f.Close()
+	if err := writeDurable(f, buf); err != nil {
 		return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
+	// A synced new file also needs a durable directory entry.
+	dir, err := os.Open(filepath.Dir(s.file))
+	if err != nil {
 		return err
 	}
-	return f.Close()
+	err = dir.Sync()
+	closeErr := dir.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 // SessionInfo summarizes a session for discovery.
@@ -543,6 +643,8 @@ type SessionInfo struct {
 	Modified     time.Time
 	MessageCount int
 	FirstMessage string
+	Name         string
+	Unavailable  string
 }
 
 // Discover enumerates sessions for a workspace dir without loading full transcripts.
@@ -572,80 +674,18 @@ func Discover(sessionDir string) ([]SessionInfo, error) {
 			out = append(out, *info)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Modified.Equal(out[j].Modified) {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Modified.After(out[j].Modified)
+	})
 	return out, nil
 }
 
 // InspectSession reads bounded metadata (header + message counts + first user text).
 func InspectSession(path string) (*SessionInfo, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !st.Mode().IsRegular() || st.Size() > 256*1024*1024 {
-		return nil, fmt.Errorf("session exceeds discovery bounds")
-	}
-	br := bufio.NewReader(f)
-	info := &SessionInfo{Path: path, Modified: st.ModTime(), FirstMessage: "(no messages)"}
-	// Hold only one record at a time; discovery must not load an entire tree.
-	for {
-		line, readErr := readRecord(br)
-		if readErr != nil && readErr != io.EOF {
-			return nil, readErr
-		}
-		if len(strings.TrimSpace(string(line))) > 0 {
-			var meta struct {
-				Type      string `json:"type"`
-				ID        string `json:"id"`
-				Cwd       string `json:"cwd"`
-				Timestamp string `json:"timestamp"`
-				Message   struct {
-					Role    string          `json:"role"`
-					Content json.RawMessage `json:"content"`
-				} `json:"message"`
-			}
-			if err := json.Unmarshal(line, &meta); err != nil {
-				return nil, err
-			}
-			if info.ID == "" {
-				if meta.Type != "session" || meta.ID == "" {
-					return nil, fmt.Errorf("missing session header")
-				}
-				info.ID, info.Cwd = meta.ID, meta.Cwd
-				info.Created, _ = time.Parse(time.RFC3339Nano, meta.Timestamp)
-			} else if meta.Type == "message" {
-				info.MessageCount++
-				if info.FirstMessage == "(no messages)" && meta.Message.Role == "user" {
-					var content any
-					if json.Unmarshal(meta.Message.Content, &content) == nil {
-						blocks, _ := UserBlocks(content)
-						for _, b := range blocks {
-							if b.Text != nil {
-								preview := []rune(b.Text.Text)
-								if len(preview) > 200 {
-									preview = preview[:200]
-								}
-								info.FirstMessage = string(preview)
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-	}
-	if info.ID == "" {
-		return nil, fmt.Errorf("missing session header")
-	}
-	return info, nil
+	return inspectSessionMetadata(path)
 }
 
 func userText(u *UserMessage) string {
