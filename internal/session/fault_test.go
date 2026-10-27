@@ -5,10 +5,11 @@ package session
 // without repair, retry, or false success, and block further model/tool work.
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -51,10 +52,8 @@ func (f *faultFile) Sync() error {
 }
 
 func (f *faultFile) Close() error {
-	if f.closeErr != nil {
-		return f.closeErr
-	}
-	return f.File.Close()
+	// An injected close error still releases the test's real descriptor.
+	return errors.Join(f.File.Close(), f.closeErr)
 }
 
 func faultStore(t *testing.T, open func(string, int, os.FileMode) (durableFile, error), stat func(string) (os.FileInfo, error)) *Store {
@@ -67,13 +66,8 @@ func faultStore(t *testing.T, open func(string, int, os.FileMode) (durableFile, 
 	if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "hello", Timestamp: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(s.File())
-	if err != nil {
-		t.Fatal(err)
-	}
 	s.storage = &storageOps{open: open, stat: stat}
 	t.Cleanup(func() { s.storage = nil })
-	_ = before
 	return s
 }
 
@@ -108,14 +102,24 @@ func TestF53FaultMatrix(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := faultStore(t, mkFault(t, tc.wrap), nil)
-			before, _ := os.ReadFile(s.File())
+			before, err := os.ReadFile(s.File())
+			if err != nil {
+				t.Fatal(err)
+			}
+			count, leaf := len(s.entries), s.leafID
 			if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "next", Timestamp: 2}}); err == nil {
 				t.Fatal("fault accepted as success")
 			}
-			after, _ := os.ReadFile(s.File())
-			// Failed append never truncates or repairs the durable prefix.
-			if len(after) > len(before) && !strings.HasPrefix(string(after), string(before)) {
-				t.Fatal("durable prefix rewritten after fault")
+			after, err := os.ReadFile(s.File())
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A failed append can leave an uncertain tail, never a damaged prefix.
+			if !bytes.HasPrefix(after, before) {
+				t.Fatal("durable prefix rewritten or truncated after fault")
+			}
+			if len(s.entries) != count || s.leafID != leaf || s.writeErr == nil {
+				t.Fatal("failed append advanced logical state or left writes enabled")
 			}
 			// Fail-stop: further model/tool work is blocked, not retried.
 			if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "retry", Timestamp: 3}}); err == nil {
