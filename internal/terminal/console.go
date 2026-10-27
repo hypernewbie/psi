@@ -49,6 +49,9 @@ type Console struct {
 	lastW, lastH int
 	visibleTail  []string
 	busyNoticed  bool
+	// Completion sources (no exec/scan/provider).
+	Commands []string
+	Skills   []string
 }
 
 func NewConsole(in *os.File, out io.Writer) *Console {
@@ -186,10 +189,11 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		return "", false, false, false
 	}
 	if busy {
-		// Cancellation only. Ctrl+C cancels; everything else ignored with one notice.
+		// Cancellation only. Ctrl+C cancels; everything else ignored with one quiet notice per run.
 		if len(input.Key) == 1 && input.Key[0] == 3 {
 			return "", false, false, true
 		}
+		// Pasted content never cancels/submits (handled above).
 		return "", false, false, false
 	}
 	if len(input.Key) == 1 {
@@ -220,12 +224,79 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			return c.Editor.Submit(), true, false, false
 		}
 	}
+	// Tab: complete slash-command/skill names (P2-022). No overlay, no exec.
+	if len(input.Key) == 1 && input.Key[0] == 9 {
+		c.complete()
+		return "", false, false, false
+	}
+	// Up/Down with real width: visual rows first, history at outer rows (3.4).
+	w, _ := c.size()
+	s := string(input.Key)
+	if s == "\x1b[A" {
+		if c.Editor.MoveUp(w) {
+			c.drawIfChanged(false)
+		} else {
+			c.Editor.PrevHistory()
+			c.drawIfChanged(false)
+		}
+		return "", false, false, false
+	} else if s == "\x1b[B" {
+		if c.Editor.MoveDown(w) {
+			c.drawIfChanged(false)
+		} else {
+			c.Editor.NextHistory()
+			c.drawIfChanged(false)
+		}
+		return "", false, false, false
+	} else if len(input.Key) == 1 && input.Key[0] == 16 { // Ctrl+P
+		c.Editor.PrevHistory()
+		c.drawIfChanged(false)
+		return "", false, false, false
+	} else if len(input.Key) == 1 && input.Key[0] == 14 { // Ctrl+N
+		c.Editor.NextHistory()
+		c.drawIfChanged(false)
+		return "", false, false, false
+	}
 	prevDraft, prevPos := c.Editor.Text(), c.Editor.Pos()
 	c.Editor.HandleKey(input.Key, false)
 	if c.Editor.Text() != prevDraft || c.Editor.Pos() != prevPos {
 		c.drawIfChanged(false)
 	}
 	return "", false, false, false
+}
+
+// complete implements lightweight Tab completion (P2-022).
+func (c *Console) complete() {
+	if c.Commands == nil {
+		c.Commands = []string{"help", "new", "resume", "model", "thinking", "compact", "session", "history", "quit"}
+	}
+	draft, pos := c.Editor.Text(), c.Editor.Pos()
+	cands, showList := Complete(draft, pos, c.Commands, c.Skills)
+	if len(cands) == 1 {
+		// Single match: complete in place, stable cursor.
+		runes := []rune(draft)
+		start := pos
+		for start > 0 && runes[start-1] != ' ' && runes[start-1] != '\n' && runes[start-1] != '\t' {
+			start--
+		}
+		token := string(runes[start:pos])
+		suffix := cands[0][len(token):] + " "
+		c.Editor.Insert(suffix)
+		c.drawIfChanged(false)
+		return
+	}
+	if showList {
+		// Bounded ambiguity list only on explicit Tab; draft/cursor stable.
+		// Printed as a notice row, not an overlay (UX-lite).
+		_ = c.writer.Emit(Frame{Append: "Candidates: " + strings.Join(bounded(cands, 10), " ") + "\r\n"})
+	}
+}
+
+func bounded(s []string, n int) []string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // drawIfChanged draws only when visible state changes.

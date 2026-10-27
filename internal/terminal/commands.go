@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// Commands (Step 84): /help /new /resume /model /thinking /compact /session /quit
-// plus /skill:name. Bounded interactions, no fullscreen dialogs.
+// Commands (P2-045, Section 7.3): bounded inline flows, no fullscreen dialogs.
+// The command table drives both help checks and parser tests.
 
 type Command struct {
 	Name string
@@ -37,7 +37,7 @@ func ParseCommand(line string) (*Command, bool) {
 		arg = strings.TrimSpace(parts[1])
 	}
 	switch name {
-	case "help", "new", "resume", "model", "thinking", "compact", "session", "quit":
+	case "help", "new", "resume", "model", "thinking", "compact", "session", "history", "quit":
 		return &Command{Name: name, Arg: arg}, true
 	default:
 		return &Command{Name: "unknown:" + name, Arg: arg}, true
@@ -46,18 +46,29 @@ func ParseCommand(line string) (*Command, bool) {
 
 func HelpText() string {
 	return strings.Join([]string{
-		"Commands:",
-		"  /help              show this help",
-		"  /new               start a new session",
-		"  /resume            resume a session (numbered list)",
-		"  /model PROVIDER MODEL  switch model (session-local)",
-		"  /thinking LEVEL    switch thinking (off,minimal,low,medium,high,xhigh,max)",
-		"  /compact [focus]   compact context now",
-		"  /session           show session path and usage",
-		"  /skill:name [args] invoke a skill",
-		"  /quit              exit (Ctrl+D also exits)",
+		"Commands (inline, no fullscreen):",
+		"  /help                show commands, keys, limits, examples",
+		"  /new                 new session (keeps scrollback, resets recall)",
+		"  /resume [filter]      select session (20/page, n/p, /filter, number, empty cancels)",
+		"  /model               show provider/model; /model [provider] model (session-local)",
+		"  /thinking [level]    show or set thinking (off,minimal,low,medium,high,xhigh,max)",
+		"  /compact [focus]     real cancellable summary with start/settled outcome",
+		"  /session             identity, workspace, provider/model, thinking, continuation, usage",
+		"  /history [N|all]     last N user spans (default 20) or full history (display-only)",
+		"  /skill:name [args]   resolve skill, persist reproducible input, show invocation",
+		"  /quit                settle work, restore terminal (Ctrl+D empty also exits)",
 		"",
-		"Keys: Enter submit, Ctrl+J newline, Ctrl+C cancel run (idle: clear draft, again: exit).",
+		"Keys (fixed, no Kitty required):",
+		"  Enter submit · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows (edges browse history)",
+		"  Ctrl+P/N history · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
+		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels selector",
+		"  Ctrl+C cancels run (idle: clear draft, empty exits) · Ctrl+D delete/exit · paste literal, no submit",
+		"",
+		"Limits: busy input is cancellation-only (one quiet notice); unknown /commands never become prompts;",
+		"every command works after resume and after cancellation; draft preserved on command errors.",
+		"",
+		"Examples:",
+		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /skill:review fix login",
 	}, "\n")
 }
 

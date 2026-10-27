@@ -23,9 +23,10 @@ type Editor struct {
 	histIdx  int // -1 = current draft
 	draft    string
 	draftPos int
+	prefCol  int // sticky visual column, -1 when inactive
 }
 
-func NewEditor() *Editor { return &Editor{histIdx: -1} }
+func NewEditor() *Editor { return &Editor{histIdx: -1, prefCol: -1} }
 
 // graphemeBounds returns byte offsets of grapheme boundaries for s.
 func graphemeBounds(s string) []int {
@@ -89,6 +90,7 @@ func (e *Editor) SetHistory(h []string) {
 	e.history = append([]string(nil), h...)
 	e.histIdx = -1
 	e.draft, e.draftPos = "", 0
+	e.prefCol = -1
 }
 
 // History returns a copy of recall history.
@@ -181,6 +183,7 @@ func (e *Editor) Delete() {
 }
 
 func (e *Editor) MoveLeft() {
+	e.prefCol = -1
 	s := string(e.buf)
 	boff := runeToByte(e.buf, e.pos)
 	if boff <= 0 {
@@ -199,6 +202,7 @@ func (e *Editor) MoveLeft() {
 }
 
 func (e *Editor) MoveRight() {
+	e.prefCol = -1
 	s := string(e.buf)
 	boff := runeToByte(e.buf, e.pos)
 	if boff >= len(s) {
@@ -237,6 +241,80 @@ func (e *Editor) End() {
 }
 func (e *Editor) DocStart() { e.pos = 0 }
 func (e *Editor) DocEnd()   { e.pos = len(e.buf) }
+
+// MoveUp moves through visual draft rows; returns false when already on first row.
+// It preserves the preferred visual column (pi sticky column).
+func (e *Editor) MoveUp(width int) bool {
+	layout := LayoutDraft(e.buf, e.pos, width)
+	if layout.CursorRow <= 0 {
+		return false
+	}
+	target := layout.CursorRow - 1
+	col := layout.CursorCol
+	if e.prefCol >= 0 {
+		col = e.prefCol
+	} else {
+		e.prefCol = col
+	}
+	e.pos = layout.VisualRunePos(e.buf, target, col)
+	return true
+}
+
+// MoveDown moves through visual draft rows; returns false when already on last row.
+func (e *Editor) MoveDown(width int) bool {
+	layout := LayoutDraft(e.buf, e.pos, width)
+	if layout.CursorRow >= len(layout.Rows)-1 {
+		return false
+	}
+	target := layout.CursorRow + 1
+	col := layout.CursorCol
+	if e.prefCol >= 0 {
+		col = e.prefCol
+	} else {
+		e.prefCol = col
+	}
+	e.pos = layout.VisualRunePos(e.buf, target, col)
+	return true
+}
+
+// Complete returns slash-command and skill-name candidates for Tab (P2-022).
+// No tool/shell execution, no filesystem scan, no provider request.
+func Complete(draft string, pos int, commands []string, skills []string) (candidates []string, showList bool) {
+	// Find current token start (after whitespace or start).
+	start := pos
+	runes := []rune(draft)
+	if start > len(runes) {
+		start = len(runes)
+	}
+	for start > 0 && runes[start-1] != ' ' && runes[start-1] != '\n' && runes[start-1] != '\t' {
+		start--
+	}
+	token := string(runes[start:pos])
+	if !startsWith(token, "/") {
+		return nil, false
+	}
+	// Strip leading / and optional skill: prefix handling.
+	var pool []string
+	for _, c := range commands {
+		pool = append(pool, "/"+c)
+	}
+	for _, sk := range skills {
+		pool = append(pool, "/skill:"+sk)
+	}
+	for _, p := range pool {
+		if startsWith(p, token) && p != token {
+			candidates = append(candidates, p)
+		}
+	}
+	return candidates, len(candidates) > 1
+}
+
+func startsWith(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	return s[:len(prefix)] == prefix
+}
 
 // DeleteWordBackward implements Ctrl+W using pi word-navigation semantics:
 // skip trailing whitespace, then one word-like or punctuation run.
@@ -443,6 +521,20 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 			return "", false
 		}
 	}
+	// Ctrl+P / Ctrl+N browse history directly (3.4).
+	if len(key) == 1 && (key[0] == 16 || key[0] == 14) {
+		if key[0] == 16 {
+			e.PrevHistory()
+		} else {
+			e.NextHistory()
+		}
+		return "", false
+	}
+	// Tab completion is handled by outer Console (needs skill/command lists).
+	// Editor exposes Complete(); HandleKey leaves Tab for the caller.
+	if len(key) == 1 && key[0] == 9 {
+		return "", false
+	}
 	s := string(key)
 	switch s {
 	case "\x1b[D":
@@ -450,9 +542,13 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 	case "\x1b[C":
 		e.MoveRight()
 	case "\x1b[A":
-		e.PrevHistory()
+		if !e.MoveUp(80) {
+			e.PrevHistory()
+		}
 	case "\x1b[B":
-		e.NextHistory()
+		if !e.MoveDown(80) {
+			e.NextHistory()
+		}
 	case "\x1b[H", "\x1b[1~":
 		e.Home()
 	case "\x1b[F", "\x1b[4~":
