@@ -56,10 +56,13 @@ Session decoders use exact field names, including nested usage fields.
 Prompts and bracketed pastes have a 256 KiB UTF-8 budget.
 The terminal writer changes only its owned tail and uses writes of at most 64 KiB.
 Stream output coalesces at scheduled frames and flushes at semantic boundaries.
+Assistant Markdown commits stable blocks and code lines to native scrollback.
+Only the unresolved block stays in the bounded active tail; live and replay output use the same formatter.
 
 Regression tests cover startup history, `/history all`, Backspace, nonduplicated submission, and `/new` recall reset.
 Actual-app PTY tests cover Ctrl+Z/SIGCONT and terminal-attribute restoration.
-These tests do not establish every terminal profile, latency target, or human flicker check.
+These tests do not establish every terminal profile, scheduled frame-rate bound, or human flicker check.
+See [the UI acceptance ledger](ui-acceptance.md) for measured coverage and blocked platform/human checks.
 Linux, WSL2, and SSH acceptance still require the complete platform matrix.
 
 History hides reasoning, tool arguments, tool results, diffs, and image payloads.
@@ -75,6 +78,6 @@ Context-limit recovery permits at most one compaction and retry before visible p
 Synthetic loop/provider tests cover that path.
 Full compaction, provider, storage-fault, and actual-binary journeys remain incomplete acceptance requirements.
 
-The required measurements remain in [the acceptance ledger](acceptance.md) and [the robustness ledger](robustness.md).
+The required measurements remain in [the acceptance ledger](acceptance.md), [the UI acceptance ledger](ui-acceptance.md), and [the robustness ledger](robustness.md).
 PLAN3 acceptance remains incomplete.
 These requirements are not new permanent exclusions.

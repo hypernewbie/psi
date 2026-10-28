@@ -41,4 +41,4 @@ settled cleanup and truthful transcript; next prompt appears after persistence.
 Recovery: truncated/malformed/locked sessions refuse writes with original bytes
 intact; use a copy, `/new`, or `/resume`. See `docs/recovery.md`.
 
-See `COMPATIBILITY.md` for the pinned baseline and `docs/acceptance.md` for gates.
+See `COMPATIBILITY.md` for the pinned baseline, `docs/keyboard.md` for key precedence, and `docs/ui-acceptance.md` for UI evidence and remaining gates.

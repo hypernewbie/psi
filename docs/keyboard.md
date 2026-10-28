@@ -5,15 +5,15 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Enter` submit outside bracketed paste; pasted newlines are literal, never submit
 - `Ctrl+J` newline (reliable legacy binding)
 - `Left/Right` move by grapheme cluster (uniseg)
-- `Up/Down` move through visual draft rows; at outer row browse session prompt history
+- `Up/Down` first control an active completion or picker; otherwise they move through visual draft rows and browse session prompt history at an outer row
 - `Ctrl+P` / `Ctrl+N` browse history directly
 - `Home/End`, `Ctrl+A`/`Ctrl+E` logical line; `Ctrl+Home`/`Ctrl+End` document
 - `Backspace/Delete` one grapheme; `Ctrl+W` previous word; `Ctrl+U`/`Ctrl+K` line
 - `/command` and `/skill:name` completion stays in the editor tail (at most five rows); `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
 - Search pickers replace the editor query; `Up/Down` select, `PageUp/PageDown` move five rows, `Enter` applies, `Esc` or `Ctrl+C` cancels
-- `Ctrl+L` opens the model picker; `Shift+Tab` cycles supported thinking levels
+- `Ctrl+L` opens the model picker; `Shift+Tab` cycles the selected model's supported thinking levels
 - Completion and picker search never scan files or call a provider; picker queries are not conversation messages
-- `Ctrl+C` cancels run; idle clears draft first, empty exits; busy is cancellation-only (one quiet notice)
+- `Ctrl+C` cancels a picker; during a run it cancels the run. When idle it clears the draft first and exits only when the draft is empty
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
 - `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
