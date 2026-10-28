@@ -21,6 +21,7 @@ import (
 	"psi/internal/config"
 	"psi/internal/session"
 	"psi/internal/terminal"
+	"psi/internal/testutil"
 )
 
 func TestParseBoundary(t *testing.T) {
@@ -59,6 +60,31 @@ func testRuntime(t *testing.T) *runtime {
 		}
 	})
 	return r
+}
+
+func TestFooterSnapshotIsCachedAcrossRedraws(t *testing.T) {
+	r := testRuntime(t)
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+	r.draw(console)
+	first, key := r.footerSnapshot, r.footerKey
+	bytesAfterFirst := output.Len()
+	r.draw(console)
+	if r.footerKey != key || r.footerSnapshot != first {
+		t.Fatal("unchanged session/config snapshot was recomputed")
+	}
+	if output.Len() != bytesAfterFirst {
+		t.Fatalf("idle redraw emitted %d extra bytes", output.Len()-bytesAfterFirst)
+	}
+	if strings.Contains(first.WorkingDirectory, "SYNTHETIC") || strings.Contains(first.Usage, "$") {
+		t.Fatalf("footer fabricated or leaked data: %+v", first)
+	}
 }
 
 func TestCommandsReplaceSessionAndValidateBeforeMutation(t *testing.T) {
@@ -208,6 +234,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 		}
 	}()
 	var pending string
+	screen := testutil.NewVTModel(80, 24)
 	wait := func(want string) {
 		t.Helper()
 		timer := time.NewTimer(8 * time.Second)
@@ -220,6 +247,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 			select {
 			case chunk, ok := <-chunks:
 				pending += chunk
+				screen.Feed([]byte(chunk))
 				if !ok {
 					t.Fatalf("process exited waiting for %q: %q", want, pending)
 				}
@@ -234,11 +262,12 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	wait("/help")
-	wait("> \r\x1b[2C")
+	waitEditor := func() { waitForEditorScreen(t, chunks, screen, &pending) }
+	wait("/ commands")
+	waitEditor()
 	write("hello\r")
 	wait("APP_OK")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	body := <-requests
 	initialSessions, err := session.Discover(session.DefaultSessionDir(ws, agentDir))
 	if err != nil || len(initialSessions) != 1 {
@@ -261,7 +290,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	}
 	write("/skill:doer run-it\r")
 	wait("APP_OK")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	skillRequest := <-requests
 	encoded, _ := json.Marshal(skillRequest["messages"])
 	if !bytes.Contains(encoded, []byte("SKILL_BODY")) || !bytes.Contains(encoded, []byte("run-it")) {
@@ -269,10 +298,10 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	}
 	write("/new\r")
 	wait("new session")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	write("fresh-session\r")
 	wait("APP_OK")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	fresh := <-requests
 	encoded, _ = json.Marshal(fresh["messages"])
 	if bytes.Contains(encoded, []byte("hello")) {
@@ -284,13 +313,13 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	contender.Unlock()
 	write("/resume\r")
 	wait("Sessions (page")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	write("2\r")
 	wait("resumed ")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	write("resumed-session\r")
 	wait("APP_OK")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	resumed := <-requests
 	encoded, _ = json.Marshal(resumed["messages"])
 	if !bytes.Contains(encoded, []byte("SKILL_BODY")) || bytes.Contains(encoded, []byte("fresh-session")) {
@@ -300,11 +329,11 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	select {
 	case <-requests:
 	case <-time.After(5 * time.Second):
-		t.Fatal("cancel request not received")
+		t.Fatalf("cancel request not received; cursorVisible=%v screen=%q pending=%q", screen.CursorVisible, screen.Text(), pending)
 	}
 	write("\x03")
 	wait("(cancelled)")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	write("/quit\r")
 	finished := make(chan error, 1)
 	go func() { finished <- cmd.Wait() }()
@@ -329,5 +358,71 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 			t.Fatalf("lock leaked on exit: %v", err)
 		}
 		s.Unlock()
+	}
+}
+
+// semanticEditorReady synchronizes on a visible cursor between editor borders,
+// not an implementation-specific prompt prefix or cursor escape.
+func semanticEditorReady(screen *testutil.VTModel) bool {
+	if screen == nil || !screen.CursorVisible || screen.CursorRow <= 0 || screen.CursorRow >= screen.Height-1 {
+		return false
+	}
+	rows := strings.Split(screen.Text(), "\n")
+	above, below := false, false
+	for i, row := range rows {
+		if !strings.Contains(row, "─") {
+			continue
+		}
+		if i < screen.CursorRow {
+			above = true
+		}
+		if i > screen.CursorRow {
+			below = true
+		}
+	}
+	return above && below
+}
+
+func waitForEditorScreen(t *testing.T, chunks <-chan string, screen *testutil.VTModel, pending *string) {
+	t.Helper()
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
+	quiet := time.NewTimer(40 * time.Millisecond)
+	defer quiet.Stop()
+	for {
+		ready := semanticEditorReady(screen)
+		if ready {
+			select {
+			case chunk, ok := <-chunks:
+				if !ok {
+					t.Fatalf("process exited before editor became ready: %q", *pending)
+				}
+				*pending += chunk
+				screen.Feed([]byte(chunk))
+				if !quiet.Stop() {
+					select {
+					case <-quiet.C:
+					default:
+					}
+				}
+				quiet.Reset(40 * time.Millisecond)
+			case <-quiet.C:
+				*pending = ""
+				return
+			case <-deadline.C:
+				t.Fatalf("timeout waiting for bordered editor: %q", *pending)
+			}
+		} else {
+			select {
+			case chunk, ok := <-chunks:
+				if !ok {
+					t.Fatalf("process exited before editor became ready: %q", *pending)
+				}
+				*pending += chunk
+				screen.Feed([]byte(chunk))
+			case <-deadline.C:
+				t.Fatalf("timeout waiting for bordered editor: %q", *pending)
+			}
+		}
 	}
 }

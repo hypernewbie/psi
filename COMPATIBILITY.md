@@ -84,8 +84,9 @@ Unknown harmless UI prefs need no per-key warning.
 
 ## Terminal
 
-- Main screen only, native scrollback, no alternate screen, no mouse, no overlays, no image protocol, no theme engine.
-- Assistant text as plain Markdown source; compact tool status (`read: done`, `bash: failed`); no args, no result bodies, no diffs, no expand-details.
+- Inline Pi regular-mode composition: native scrollback, horizontal editor borders, and a compact two-line folder/usage/model/thinking footer. No alternate screen, mouse, overlays, image protocol, or transcript viewport.
+- Retained components use Pi-derived semantic tokens with indexed terminal-palette fallbacks. This is an internal style table, not a theme engine; `NO_COLOR` disables all generated SGR.
+- Assistant text remains plain Markdown source in the current implementation slice. Compact tool status (`read: done`, `bash: failed`) has no args, result bodies, diffs, or expand-details.
 - No reasoning text by default.
 - Keyboard (fixed): `Enter` submit, `Ctrl+J` newline, `Ctrl+C` cancel run, `Ctrl+D`/`/quit` exit, `Up/Down` history, paste inserts literally.
 - Input during active run is cancellation only (no steering/follow-up queues).

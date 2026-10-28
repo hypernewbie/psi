@@ -50,7 +50,7 @@ func TestSubmitReplacesViewportAndPreservesCommittedRows(t *testing.T) {
 	c.Draw()
 	fmt.Fprintln(RawOutput{W: c}, "a local notice")
 	c.Draw()
-	want := "committed sentinel\n> first\n  second\n  third\na local notice\n>"
+	want := "committed sentinel\n> first\n  second\n  third\na local notice\n─"
 	if !strings.HasPrefix(vt.Text(), want) {
 		t.Fatalf("screen:\n%s\nwant:\n%s", vt.Text(), want)
 	}
@@ -144,11 +144,11 @@ func TestDecoderKeepsSlowUTF8AndUsesEscapeIdleTime(t *testing.T) {
 func TestLayoutNewlineAndSoftWrapSourceBoundaries(t *testing.T) {
 	buf := []rune("abc\ndef")
 	l := LayoutDraft(buf, 4, 80)
-	if l.CursorRow != 1 || l.CursorCol != 2 || l.VisualRunePos(buf, 1, 3) != 5 {
+	if l.CursorRow != 1 || l.CursorCol != 0 || l.VisualRunePos(buf, 1, 3) != 7 {
 		t.Fatalf("newline source ranges: %+v", l)
 	}
 	l = LayoutDraft([]rune("abcd"), 3, 6)
-	if l.CursorRow != 1 || l.CursorCol != 2 {
+	if l.CursorRow != 0 || l.CursorCol != 3 {
 		t.Fatalf("cursor before wrapped cluster: %+v", l)
 	}
 	for _, text := range []string{"1️⃣", "👨‍👩‍👧‍👦", "🇺🇸"} {

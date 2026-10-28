@@ -50,6 +50,8 @@ type Console struct {
 	lastCursor   int
 	lastW, lastH int
 	visibleTail  []string
+	presentation PresentationSnapshot
+	activity     string
 	busyNoticed  bool
 	dirty        bool
 	lastDraw     time.Time
@@ -126,6 +128,12 @@ func (c *Console) Write(p []byte) (int, error) {
 }
 
 func (c *Console) Err() error { return c.err }
+
+// SetPresentation installs an application-computed snapshot. Draw never reads
+// session files, credentials, or provider state.
+func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
+	c.presentation = snapshot
+}
 
 func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder) {
 	send := func(input Input) bool {
@@ -434,41 +442,23 @@ func (c *Console) Flush() {
 	}
 }
 
-// Status is an owned transient row, replaced by the eventual settled output.
+// Status is the activity shown in Pi's editor top border. It remains owned by
+// the composed tail until the application clears or replaces it.
 func (c *Console) Status(text string) {
-	w, _ := c.size()
-	rows := []string{TruncateToWidth(SanitizeStatusRow(text), max(1, w-1))}
-	_ = c.emit(Frame{Tail: rows, HideCursor: true})
-	c.hidden = true
-	c.visibleTail = rows
+	c.activity = SanitizeStatusRow(text)
+	c.Draw()
 }
 
 func (c *Console) Draw() {
 	c.dirty = false
 	c.lastDraw = time.Now()
 	width, height := c.size()
-	// Build viewport from shared layout (P2-016): same function as tests.
-	layout := LayoutDraft(c.Editor.buf, c.Editor.pos, width)
-	rows := layout.Rows
-	// Sanitize content rows (trusted cursor bytes stay separate).
-	for i, r := range rows {
-		rows[i] = sanitizeRow(r)
-	}
-	// Viewport: keep active rows within terminal height, preserve logical cursor.
-	maxRows := max(1, height-2)
-	cursorRow := layout.CursorRow
-	start := max(0, cursorRow-maxRows+1)
-	end := min(len(rows), start+maxRows)
-	if end-start < maxRows {
-		start = max(0, end-maxRows)
-	}
-	visible := rows[start:end]
-	cursorRow -= start
-	// Emit one atomic frame (P2-025): no separate clear, changed-row only, no ED.
-	f := Frame{Tail: visible, CursorRow: cursorRow, CursorCol: layout.CursorCol, ShowCursor: c.hidden}
+	view := ComposeEditorView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity)
+	f := Frame{Tail: view.Rows, TailCellWidth: view.CellWidth, CursorRow: view.CursorRow,
+		CursorCol: view.CursorCol, ShowCursor: c.hidden && c.activity == "", HideCursor: c.activity != ""}
 	_ = c.emit(f)
-	c.hidden = false
-	c.visibleTail = visible
+	c.hidden = c.activity != ""
+	c.visibleTail = view.Rows
 	c.lastDraft, c.lastCursor = c.Editor.Text(), c.Editor.Pos()
 	c.lastW, c.lastH = width, height
 }

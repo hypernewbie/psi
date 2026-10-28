@@ -166,7 +166,53 @@ func (q *reviewPTY) wait(want string) {
 		}
 	}
 }
-func (q *reviewPTY) prompt() { q.t.Helper(); q.wait("> \r\x1b[2C") }
+func (q *reviewPTY) prompt() {
+	q.t.Helper()
+	ready := func() bool {
+		return semanticEditorReady(q.screen)
+	}
+	timer := time.NewTimer(8 * time.Second)
+	defer timer.Stop()
+	quiet := time.NewTimer(40 * time.Millisecond)
+	defer quiet.Stop()
+	for {
+		if ready() {
+			select {
+			case chunk, ok := <-q.chunks:
+				if !ok {
+					q.t.Fatalf("process exited before editor became ready: %q", q.raw.String())
+				}
+				q.pending += string(chunk)
+				q.raw.Write(chunk)
+				q.screen.Feed(chunk)
+				if !quiet.Stop() {
+					select {
+					case <-quiet.C:
+					default:
+					}
+				}
+				quiet.Reset(40 * time.Millisecond)
+			case <-quiet.C:
+				q.pending = "" // all bytes are represented in the VT screen model
+				return
+			case <-timer.C:
+				q.t.Fatalf("timeout waiting for bordered editor: %q", q.raw.String())
+			}
+		} else {
+			select {
+			case chunk, ok := <-q.chunks:
+				if !ok {
+					q.t.Fatalf("process exited before editor became ready: %q", q.raw.String())
+				}
+				q.pending += string(chunk)
+				q.raw.Write(chunk)
+				q.screen.Feed(chunk)
+			case <-timer.C:
+				q.t.Fatalf("timeout waiting for bordered editor: %q", q.raw.String())
+			}
+		}
+	}
+}
 func (q *reviewPTY) finish() {
 	q.t.Helper()
 	done := make(chan error, 1)
@@ -328,7 +374,7 @@ func TestActualSuspendRestoresTerminalAndResumesInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	q.wait("unfinished")
-	q.wait("\r\x1b[12C")
+	q.prompt()
 	q.write("\x03/quit\r")
 	q.finish()
 }

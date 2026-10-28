@@ -14,8 +14,8 @@ func TestAcceptanceLifecycleCleanup(t *testing.T) {
 	c.Draw()
 	// Close commits tail + disables paste (no hang, no replay).
 	// (Close needs In/done channels; test Draw/Emit only to avoid goroutine.)
-	if !strings.Contains(sb.String(), ">") {
-		t.Fatalf("A29: prompt not drawn: %q", sb.String())
+	if !strings.Contains(sb.String(), "─") {
+		t.Fatalf("A29: bordered editor not drawn: %q", sb.String())
 	}
 	// No screen/scrollback clear in normal operation.
 	if strings.Contains(sb.String(), "\x1b[2J") || strings.Contains(sb.String(), "\x1b[3J") {

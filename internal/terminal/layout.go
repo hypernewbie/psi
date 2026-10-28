@@ -20,23 +20,19 @@ type Layout struct {
 func LayoutDraft(buf []rune, pos int, width int) Layout {
 	width = max(1, width)
 	limit := max(1, width-1)
-	prefix, continuation := "> ", "  "
-	if width < 4 {
-		prefix, continuation = "", ""
-	}
-	promptCols := len(prefix)
+	// Pi's editor has horizontal borders, not a prompt prefix. The owned
+	// editor rows therefore contain draft text only.
+	promptCols := 0
 	pos = max(0, min(pos, len(buf)))
 	var rows []string
 	var ranges [][2]int
 	var line strings.Builder
-	line.WriteString(prefix)
 	cells, sourcePos, rowStart := promptCols, 0, 0
 	cursorRow, cursorCol := 0, promptCols
 	flush := func() {
 		rows = append(rows, line.String())
 		ranges = append(ranges, [2]int{rowStart, sourcePos})
 		line.Reset()
-		line.WriteString(continuation)
 		cells = promptCols
 		rowStart = sourcePos
 	}

@@ -10,8 +10,11 @@ import (
 // Frame appends committed text and replaces only the bounded, owned tail.
 // Content is sanitized before composition. Cursor coordinates are tail-relative.
 type Frame struct {
-	Append        string
-	Tail          []string
+	Append string
+	Tail   []string
+	// TailCellWidth carries plain-text cell widths when Tail rows contain
+	// trusted presentation SGR. Content width must never count ANSI bytes.
+	TailCellWidth []int
 	CursorRow     int
 	CursorCol     int
 	CursorVisible bool
@@ -95,7 +98,7 @@ func (w *Writer) Emit(f Frame) error {
 		}
 		if i < len(f.Tail) {
 			b.WriteString(f.Tail[i])
-			col = CellWidth(f.Tail[i])
+			col = frameTailWidth(f, i)
 		}
 		if i < len(old) {
 			b.WriteString("\x1b[K")
@@ -137,6 +140,13 @@ func (w *Writer) Emit(f Frame) error {
 	w.prevTail = append([]string(nil), f.Tail...)
 	w.prevCursorRow, w.prevCursorCol = f.CursorRow, f.CursorCol
 	return nil
+}
+
+func frameTailWidth(f Frame, row int) int {
+	if row < len(f.TailCellWidth) {
+		return f.TailCellWidth[row]
+	}
+	return CellWidth(f.Tail[row])
 }
 
 func equalRows(a, b []string) bool {

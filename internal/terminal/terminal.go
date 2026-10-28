@@ -1,9 +1,10 @@
-// Package terminal implements the simple inline terminal (Phase 10).
+// Package terminal implements psi's inline, Pi-regular-mode subset.
 //
-// Main screen only, native scrollback, no alternate screen, no mouse, no
-// overlays, no image protocol, no theme engine. Assistant text is plain
-// Markdown source; tool status is compact (name + state) with no arguments,
-// bodies, or diffs. Reasoning hidden by default. See COMPATIBILITY.md.
+// It uses native scrollback, horizontal editor borders, a persistent compact
+// footer, and a small internal semantic style table. There is no alternate
+// screen, mouse, overlay, image protocol, or user theme engine. Assistant text
+// remains plain Markdown source in this implementation slice; tool status
+// contains no arguments, bodies, or diffs. Reasoning stays hidden by default.
 package terminal
 
 // Mode is always inline in the first release.

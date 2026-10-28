@@ -156,7 +156,7 @@ func Run(args []string, version string) error {
 		grouped[d.Message]++
 	}
 	if !st.QuietStartup {
-		fmt.Println(terminal.Sanitize(terminal.StartupLine(r.ov.Provider, r.ov.Model, cwd, store.Header().ID, len(sk))))
+		fmt.Println(terminal.Sanitize("psi v" + version))
 		for msg, n := range grouped {
 			if n > 1 {
 				fmt.Println(terminal.Sanitize(fmt.Sprintf("note: %s (x%d, see /session)", msg, n)))
@@ -172,7 +172,7 @@ func Run(args []string, version string) error {
 		if r.authErr != nil {
 			fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error() + " (offline commands still work; /model to select, /session for status)"))
 		}
-		fmt.Println("Enter submits · Ctrl+J newline · Ctrl+C cancel · /help · /quit")
+		fmt.Println("esc interrupt · ctrl+c/d clear/exit · / commands")
 	} else if r.authErr != nil {
 		fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error()))
 	}
@@ -184,6 +184,7 @@ func Run(args []string, version string) error {
 	r.tty = tty
 	console := terminal.NewConsole(os.Stdin, os.Stdout)
 	defer console.Close()
+	r.refreshPresentation(console)
 	return r.repl(console)
 }
 
@@ -203,6 +204,8 @@ type runtime struct {
 	state            State
 	selector         *Selector
 	tty              *terminal.Term
+	footerKey        string
+	footerSnapshot   terminal.PresentationSnapshot
 }
 
 func (r *runtime) restore() error {
@@ -440,6 +443,57 @@ func (r *runtime) installConfiguration(candidate *runtime) {
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
 }
 
+func (r *runtime) refreshPresentation(console *terminal.Console) {
+	if console == nil || r.store == nil {
+		return
+	}
+	key := fmt.Sprintf("%s/%d/%s/%s/%s/%s", r.store.Header().ID, r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd())
+	if key != r.footerKey {
+		home := os.Getenv("HOME")
+		if home == "" {
+			home = os.Getenv("USERPROFILE")
+		}
+		snapshot := terminal.PresentationSnapshot{
+			WorkingDirectory: r.store.Cwd(), HomeDirectory: home,
+			Provider: r.ov.Provider, Model: r.ov.Model, Thinking: r.ov.Thinking,
+		}
+		if accounting, err := r.store.Accounting(); err == nil {
+			if accounting.Usage.Input > 0 {
+				snapshot.Usage = "↑" + formatFooterTokens(accounting.Usage.Input)
+			}
+			if accounting.Usage.Output > 0 {
+				if snapshot.Usage != "" {
+					snapshot.Usage += " "
+				}
+				snapshot.Usage += "↓" + formatFooterTokens(accounting.Usage.Output)
+			}
+		}
+		if projection, err := r.store.Projection(); err == nil && r.cfg.Model.ContextWindow > 0 {
+			estimated := agent.EstimatedContext(projection, r.cfg)
+			percent := 100 * float64(estimated) / float64(r.cfg.Model.ContextWindow)
+			snapshot.ContextEstimate = fmt.Sprintf("~%.1f%%/%s", percent, formatFooterTokens(float64(r.cfg.Model.ContextWindow)))
+		}
+		r.footerKey, r.footerSnapshot = key, snapshot
+	}
+	console.SetPresentation(r.footerSnapshot)
+}
+
+func formatFooterTokens(n float64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", int64(n))
+	}
+	if n < 10000 {
+		return fmt.Sprintf("%.1fk", n/1000)
+	}
+	if n < 1000000 {
+		return fmt.Sprintf("%dk", int64(n+500)/1000)
+	}
+	if n < 10000000 {
+		return fmt.Sprintf("%.1fM", n/1000000)
+	}
+	return fmt.Sprintf("%dM", int64(n+500000)/1000000)
+}
+
 func (r *runtime) replace(next *session.Store) error {
 	if next.Persistent() && r.store.Persistent() && next.File() != "" && next.File() == r.store.File() {
 		return nil
@@ -462,6 +516,11 @@ func (r *runtime) replace(next *session.Store) error {
 	r.store = next
 	old.Unlock()
 	return nil
+}
+
+func (r *runtime) draw(console *terminal.Console) {
+	r.refreshPresentation(console)
+	console.Draw()
 }
 
 func (r *runtime) repl(console *terminal.Console) error {
@@ -576,12 +635,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if err := r.store.WriteError(); err != nil {
 			r.state = StateStorageBlocked
 			print("storage blocked: " + err.Error() + " (open a checked copy or /new)")
-			console.Draw()
+			r.draw(console)
 			return
 		}
 		if r.authErr != nil {
 			print("error: " + r.authErr.Error())
-			console.Draw()
+			r.draw(console)
 			return
 		}
 		ctx, stop := context.WithCancel(context.Background())
@@ -631,10 +690,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		console.Resume()
 		inputs = console.Inputs
-		console.Draw()
+		r.draw(console)
 		return console.Err()
 	}
-	console.Draw()
+	r.draw(console)
 	for {
 		if exiting && !busy {
 			return console.Err()
@@ -666,7 +725,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case sig := <-signals:
 			if isResize(sig) {
 				if !busy {
-					console.Draw()
+					r.draw(console)
 				}
 				continue
 			}
@@ -682,7 +741,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if isResume(sig) {
 				// Reacquire tail only, no full replay (3.3, P2-032).
 				if !busy {
-					console.Draw()
+					r.draw(console)
 				}
 				continue
 			}
@@ -727,7 +786,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 					return err
 				}
 			} else {
-				console.Draw()
+				console.Status("")
+				r.refreshPresentation(console)
+				r.draw(console)
 			}
 		case input, ok := <-inputs:
 			if !ok {
@@ -752,7 +813,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.selector, r.state = nil, StateIdle
 				console.Editor.Clear()
 				refreshRecall()
-				console.Draw()
+				r.draw(console)
 				continue
 			}
 			text, submitted, quit, abort := console.Handle(input, busy)
@@ -778,14 +839,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 					// Cancelled selector preserves active session, draft, recall (P2-040).
 					r.selector = nil
 					r.state = StateIdle
-					console.Draw()
+					r.draw(console)
 					continue
 				}
 				if redraw {
 					for _, line := range r.selector.Render() {
 						print(line)
 					}
-					console.Draw()
+					r.draw(console)
 					continue
 				}
 				if sel != nil {
@@ -796,7 +857,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						r.selector = nil
 						r.state = StateIdle
-						console.Draw()
+						r.draw(console)
 						continue
 					}
 					if sel.ID == r.store.Header().ID {
@@ -830,18 +891,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 					r.selector = nil
 					r.state = StateIdle
-					console.Draw()
+					r.draw(console)
 					continue
 				}
 				// Invalid selection: reprompt within same bounded flow (P2-040).
 				for _, line := range r.selector.Render() {
 					print(line)
 				}
-				console.Draw()
+				r.draw(console)
 				continue
 			}
 			if strings.TrimSpace(text) == "" {
-				console.Draw()
+				r.draw(console)
 				continue
 			}
 			if cmd, ok := terminal.ParseCommand(text); ok {
@@ -850,7 +911,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					expanded, err := skills.Invoke(r.skills, name, cmd.Arg)
 					if err != nil {
 						print("error: " + err.Error())
-						console.Draw()
+						r.draw(console)
 					} else {
 						// P2-043, P2-054: expanded input + visible invocation provenance, one user entry.
 						invocation := "/skill:" + name
@@ -868,7 +929,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					} else if !complete {
 						stoppedReplay()
 					}
-					console.Draw()
+					r.draw(console)
 					continue
 				}
 				if cmd.Name == "compact" {
@@ -881,7 +942,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					for _, line := range r.selector.Render() {
 						print(line)
 					}
-					console.Draw()
+					r.draw(console)
 					continue
 				}
 				if cmd.Name == "resume" {
@@ -902,7 +963,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							print(line)
 						}
 					}
-					console.Draw()
+					r.draw(console)
 					continue
 				}
 				quit, err := r.command(cmd, out)
@@ -913,7 +974,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if quit {
 					return nil
 				}
-				console.Draw()
+				r.draw(console)
 				continue
 			}
 			start(text, "", "", "", false)

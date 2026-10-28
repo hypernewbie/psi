@@ -17,6 +17,7 @@ import (
 
 	"github.com/creack/pty"
 	"psi/internal/session"
+	"psi/internal/testutil"
 )
 
 // This is entirely synthetic: a temporary HOME, dummy OAuth credentials,
@@ -121,6 +122,7 @@ func TestCodexActualAppPTYToolRoundTrip(t *testing.T) {
 		}
 	}()
 	pending := ""
+	screen := testutil.NewVTModel(80, 24)
 	wait := func(want string) {
 		t.Helper()
 		timer := time.NewTimer(8 * time.Second)
@@ -136,17 +138,19 @@ func TestCodexActualAppPTYToolRoundTrip(t *testing.T) {
 					t.Fatalf("synthetic app process exited waiting for %q", want)
 				}
 				pending += chunk
+				screen.Feed([]byte(chunk))
 			case <-timer.C:
 				t.Fatalf("synthetic app timed out waiting for %q", want)
 			}
 		}
 	}
-	wait("/help")
-	wait("> \r\x1b[2C")
+	waitEditor := func() { waitForEditorScreen(t, chunks, screen, &pending) }
+	wait("/ commands")
+	waitEditor()
 	master.WriteString("read fixture\r")
 	wait("read: done")
 	wait("CODEX_APP_OK")
-	wait("> \r\x1b[2C")
+	waitEditor()
 	master.WriteString("/quit\r")
 	finished := make(chan error, 1)
 	go func() { finished <- cmd.Wait() }()

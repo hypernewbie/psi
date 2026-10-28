@@ -1,0 +1,32 @@
+{
+  "psiRevision": "9baf1d786b367417592d173f4299ddc2c8fe5985",
+  "piRevision": "d5b3de22d0e24a3e9c38a9410d3329b099717283",
+  "environment": "isolated synthetic HOME; loopback protocol only; Linux amd64 PTY",
+  "sizes": ["40x12", "80x24"],
+  "offlineStartup40x12": [
+    "<WORKSPACE> · <SESSION> (0 skills)",
+    "warning: no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry",
+    "to <PRIVATE_HOME>/agent/auth.json (offline commands still work; /model to select, /session for status)",
+    "Enter submits · Ctrl+J newline · Ctrl+C cancel · /help · /quit",
+    "--- session <SESSION> ---",
+    ">"
+  ],
+  "offlineModelPicker": {
+    "initialScrollbackRows": 65,
+    "afterFilteringScrollbackRows": 91,
+    "credentialsRequiredToFilter": false
+  },
+  "syntheticJourney": {
+    "requests": 2,
+    "messages": ["Show a short code example.", "I will inspect the workspace."],
+    "tool": "bash: done",
+    "assistantHeading": "Assistant",
+    "midStreamHasActiveIndicator": false,
+    "hiddenToolCanaryVisible": false
+  },
+  "mustNotContain": [
+    "SYNTHETIC_HIDDEN_TOOL_RESULT_CANARY",
+    "SYNTHETIC_HIDDEN_TOOL_ARGUMENT_CANARY",
+    "sk-ant-synthetic"
+  ]
+}

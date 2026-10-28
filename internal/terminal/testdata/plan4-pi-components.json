@@ -1,0 +1,24 @@
+{
+  "reference": "Pi regular mode at d5b3de22d0e24a3e9c38a9410d3329b099717283",
+  "size": "40x12",
+  "snapshot": {
+    "workingDirectory": "/home/operator/work",
+    "homeDirectory": "/home/operator",
+    "provider": "anthropic",
+    "model": "m",
+    "thinking": "high"
+  },
+  "plainRows": [
+    "───────────────────────────────────────",
+    "",
+    "───────────────────────────────────────",
+    "~/work",
+    "                   (anthropic) m • high"
+  ],
+  "omissions": [
+    "No side borders, fullscreen screen, mouse, or transcript viewport",
+    "No theme files or user-configurable token mappings",
+    "No tool arguments, results, command text, or diffs",
+    "No Pi queues, extensions, widgets, Git watcher, or generated progress"
+  ]
+}

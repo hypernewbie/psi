@@ -1,9 +1,6 @@
 package terminal
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 // Commands (P2-045, Section 7.3): bounded inline flows, no fullscreen dialogs.
 // The command table drives both help checks and parser tests.
@@ -70,15 +67,4 @@ func HelpText() string {
 		"Examples:",
 		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /skill:review fix login",
 	}, "\n")
-}
-
-func StartupLine(provider, model, workspace, sessionID string, skills int) string {
-	return fmt.Sprintf("psi — %s/%s · %s · %s (%d skills)", provider, model, workspace, shortID(sessionID), skills)
-}
-
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
 }
