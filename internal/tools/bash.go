@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -87,7 +86,7 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	}
 	cmd := exec.Command(t.shell(), "-c", cmdStr)
 	cmd.Dir = t.Cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {
 		pr.Close()
@@ -119,11 +118,7 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	go func() { waitDone <- cmd.Wait() }()
 	var runErr error
 	var timedOut bool
-	killGroup := func() {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-	}
+	killGroup := func() { killProcessGroup(cmd) }
 	drain := func() {
 		tick := time.NewTicker(10 * time.Millisecond)
 		defer tick.Stop()

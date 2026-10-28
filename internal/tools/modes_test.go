@@ -1,3 +1,5 @@
+//go:build unix
+
 package tools
 
 // Phase D regression for PLAN3 F13: ordinary new tool files and directories

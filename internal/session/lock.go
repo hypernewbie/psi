@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 func canonicalSessionPath(path string) (string, error) {
@@ -14,8 +13,15 @@ func canonicalSessionPath(path string) (string, error) {
 	}
 	return filepath.Abs(path)
 }
-func checkSessionLinks(info os.FileInfo) error {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+
+// checkSessionLinks refuses a session file with multiple hard links.
+// Continuation then needs a separate copy.
+func checkSessionLinks(path string) error {
+	n, err := hardLinkCount(path)
+	if err != nil {
+		return err
+	}
+	if n > 1 {
 		return fmt.Errorf("session has multiple hard links; continue a separate copy instead")
 	}
 	return nil
@@ -29,7 +35,8 @@ type sessionLock struct {
 	f *os.File
 }
 
-// acquireLock opens (creating) path+".lock" and takes LOCK_EX|LOCK_NB.
+// acquireLock opens (creating) path+".lock" and takes an exclusive,
+// non-blocking lock.
 func acquireLock(sessionFile string) (*sessionLock, error) {
 	if sessionFile == "" {
 		return nil, nil
@@ -39,7 +46,7 @@ func acquireLock(sessionFile string) (*sessionLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot open lock %s: %w", lockPath, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockExclusive(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("session is locked by another psi process: %s", sessionFile)
 	}
@@ -50,6 +57,6 @@ func (l *sessionLock) Release() {
 	if l == nil || l.f == nil {
 		return
 	}
-	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
+	_ = unlockExclusive(l.f)
 	_ = l.f.Close()
 }

@@ -6,10 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -140,16 +138,12 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 	}
 	buf := make([]byte, 4096)
 	for ctx.Err() == nil {
-		fds := []unix.PollFd{{Fd: int32(in.Fd()), Events: unix.POLLIN}}
-		n, err := unix.Poll(fds, 20)
-		if err == syscall.EINTR {
-			continue
-		}
+		ready, err := waitInputReady(in, 20)
 		if err != nil {
 			send(Input{Err: err})
 			return
 		}
-		if n == 0 {
+		if !ready {
 			// Timeout tick: flush incomplete Escape prefix (50ms rule).
 			for _, d := range dec.Feed(nil) {
 				if d.Reply {
@@ -161,7 +155,7 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 			}
 			continue
 		}
-		n, err = in.Read(buf)
+		n, err := in.Read(buf)
 		if err != nil {
 			send(Input{Err: err})
 			return

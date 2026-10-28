@@ -110,7 +110,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 		return nil, fmt.Errorf("session must be a regular file: %s", path)
 	}
 	if persist {
-		if err := checkSessionLinks(before); err != nil {
+		if err := checkSessionLinks(path); err != nil {
 			return nil, err
 		}
 	}
@@ -532,7 +532,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 				f.Close()
 				return err
 			}
-			if err := checkSessionLinks(opened); err != nil {
+			if err := checkSessionLinks(s.file); err != nil {
 				f.Close()
 				return err
 			}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"syscall"
 	"time"
 )
 
@@ -77,11 +76,10 @@ func inspectSessionMetadata(path string) (*SessionInfo, error) {
 		return nil, fmt.Errorf("missing session header")
 	}
 	// Inspect an existing advisory lock without creating files or changing it.
-	if lock, err := os.Open(path + ".lock"); err == nil {
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+	if held, err := probeSharedLock(path); err == nil {
+		if held {
 			info.Unavailable = "locked by another psi process"
 		}
-		lock.Close()
 	} else if !os.IsNotExist(err) {
 		info.Unavailable = "cannot inspect ownership lock"
 	}
