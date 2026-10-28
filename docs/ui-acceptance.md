@@ -80,7 +80,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from source revision `2e74bd311efd8193ee9e06207bcee66f914fe4ba` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-2e74bd3 ./cmd/psi` on Linux amd64 using Go 1.26.4.
+Built from source revision `e82391da7dd53e107aa13380227e0c495b20ce9f` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-e82391d ./cmd/psi` on Linux amd64 using Go 1.26.4. Later commits changed only this ledger; a final-tree rebuild was byte-identical.
 
 ```text
 SHA-256  a1756d8850d13bf01b872114a2ab8a2e37244936cd7394250ff51dc68d67af3e
