@@ -237,6 +237,18 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	waitFor("editor after tool", func(_ string) bool { return conptyEditorReady(screen) })
 	write("/model\r")
 	waitFor("model picker", func(_ string) bool { return conptyPickerVisible(screen) })
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
+		beforeSelection := conptyPickerSelection(screen)
+		if beforeSelection == "" {
+			t.Fatalf("model picker has no visible selected row before resize to %dx%d: %q", size[0], size[1], conptyVisibleText(screen))
+		}
+		resize(size[0], size[1])
+		beforeBytes := raw.Len()
+		write("\x1b[B")
+		waitFor(fmt.Sprintf("picker resize %dx%d", size[0], size[1]), func(_ string) bool {
+			return raw.Len() > beforeBytes && conptyPickerSelection(screen) != "" && conptyPickerSelection(screen) != beforeSelection
+		})
+	}
 	write("\x03\x03") // Cancel the picker, then clear any restored search text.
 	waitFor("editor after picker", func(_ string) bool { return conptyEditorReady(screen) && !conptyPickerVisible(screen) })
 	write("/quit\r")
@@ -320,6 +332,15 @@ func conptyBusyVisible(text string) bool {
 func conptyPickerVisible(screen *vt.Emulator) bool {
 	text := conptyVisibleText(screen)
 	return strings.Contains(text, "Models ·") || (screen.Width() < 32 && strings.Contains(text, "› "))
+}
+
+func conptyPickerSelection(screen *vt.Emulator) string {
+	for _, row := range strings.Split(conptyVisibleText(screen), "\n") {
+		if at := strings.Index(row, "›"); at >= 0 {
+			return strings.TrimSpace(row[at:])
+		}
+	}
+	return ""
 }
 
 func pseudoConsoleValue(handle windows.Handle) unsafe.Pointer {
