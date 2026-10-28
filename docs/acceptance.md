@@ -1,5 +1,7 @@
 # PLAN2 acceptance ledger
 
+PLAN4 UI evidence is tracked separately in [the UI acceptance ledger](ui-acceptance.md).
+
 ## Status
 
 **PLAN2 is not release-complete.** Passing tests does not close every task or user journey.
