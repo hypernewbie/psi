@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -90,15 +91,22 @@ func TestComposeEditorViewGeometryAndDraftPreservation(t *testing.T) {
 }
 
 func TestHomeAbbreviationRespectsDirectoryBoundary(t *testing.T) {
-	cases := map[string]string{
-		"/home/operator":          "~",
-		"/home/operator/work":     "~/work",
-		"/home/operator-old/work": "/home/operator-old/work",
-		"/tmp/work":               "/tmp/work",
+	root := string(filepath.Separator)
+	if volume := filepath.VolumeName(t.TempDir()); volume != "" {
+		root = volume + string(filepath.Separator)
 	}
-	for input, want := range cases {
-		if got := homeAbbreviated(input, "/home/operator"); got != want {
-			t.Errorf("%q: got %q want %q", input, got, want)
+	home := filepath.Join(root, "synthetic", "operator")
+	outsideHome := filepath.Join(root, "synthetic", "operator-old", "work")
+	other := filepath.Join(root, "tmp", "work")
+	cases := []struct{ input, want string }{
+		{home, "~"},
+		{filepath.Join(home, "work"), "~" + string(filepath.Separator) + "work"},
+		{outsideHome, outsideHome},
+		{other, other},
+	}
+	for _, tc := range cases {
+		if got := homeAbbreviated(tc.input, home); got != tc.want {
+			t.Errorf("home abbreviation case: got %q want %q", got, tc.want)
 		}
 	}
 }

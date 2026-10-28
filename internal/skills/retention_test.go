@@ -37,6 +37,7 @@ func heapBytes() uint64 {
 }
 
 func TestF15DiscoveryRetainsMetadataOnly(t *testing.T) {
+	setSyntheticHome(t)
 	for _, n := range []int{16, 256} {
 		t.Run(fmt.Sprintf("skills-%d", n), func(t *testing.T) {
 			agent := t.TempDir()
@@ -65,6 +66,7 @@ func TestF15DiscoveryRetainsMetadataOnly(t *testing.T) {
 }
 
 func TestF15InvocationSeesCurrentFile(t *testing.T) {
+	setSyntheticHome(t)
 	agent := t.TempDir()
 	mkSkillDir(t, agent, 2, 1024)
 	got, _ := Discover(t.TempDir(), agent, nil, true)
@@ -94,6 +96,7 @@ func TestF15InvocationSeesCurrentFile(t *testing.T) {
 }
 
 func TestF15SymlinkCycleAndDuplicates(t *testing.T) {
+	setSyntheticHome(t)
 	agent := t.TempDir()
 	skillsRoot := filepath.Join(agent, "skills")
 	mkSkillDir(t, agent, 2, 64)

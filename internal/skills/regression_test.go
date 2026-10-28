@@ -7,7 +7,7 @@ import (
 )
 
 func TestYAMLMultilineDescriptionAndInvocationDirectory(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setSyntheticHome(t)
 	agent, ws := t.TempDir(), t.TempDir()
 	file := writeSkill(t, filepath.Join(agent, "skills"), "folded", "name: folded\ndescription: >\n  Read the repository:\n  then run its tests.\nmetadata:\n  owner: test", "Read references/example.md")
 	found, diagnostics := Discover(ws, agent, nil, false)

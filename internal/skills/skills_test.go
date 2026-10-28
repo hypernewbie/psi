@@ -3,8 +3,22 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
+
+func setSyntheticHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(home)
+		t.Setenv("USERPROFILE", home)
+		t.Setenv("HOMEDRIVE", volume)
+		t.Setenv("HOMEPATH", strings.TrimPrefix(home, volume))
+	}
+}
 
 func writeSkill(t *testing.T, dir, name, frontmatter, body string) string {
 	t.Helper()
@@ -21,7 +35,7 @@ func writeSkill(t *testing.T, dir, name, frontmatter, body string) string {
 }
 
 func TestDiscoverDeterministic(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setSyntheticHome(t)
 	agent := t.TempDir()
 	ws := t.TempDir()
 	writeSkill(t, filepath.Join(agent, "skills"), "alpha", "name: alpha\ndescription: Does alpha things", "body alpha")
@@ -41,7 +55,7 @@ func TestDiscoverDeterministic(t *testing.T) {
 }
 
 func TestMalformedAndCollision(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setSyntheticHome(t)
 	agent := t.TempDir()
 	ws := t.TempDir()
 	writeSkill(t, filepath.Join(agent, "skills"), "dup", "name: dup\ndescription: first", "first")
@@ -88,7 +102,7 @@ func contains(s, sub string) bool {
 }
 
 func TestInvoke(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setSyntheticHome(t)
 	agent := t.TempDir()
 	ws := t.TempDir()
 	fp := writeSkill(t, filepath.Join(agent, "skills"), "doer", "name: doer\ndescription: Does things", "follow these steps")

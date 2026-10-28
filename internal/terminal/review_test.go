@@ -328,12 +328,11 @@ func (w *recoverableWriter) Write(p []byte) (int, error) {
 }
 
 func TestCleanupRestoresModesAfterFrameOutputFailure(t *testing.T) {
-	in, peer, err := os.Pipe()
+	in, err := os.Open(os.DevNull)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer in.Close()
-	defer peer.Close()
 	out := &recoverableWriter{}
 	c := NewConsole(in, out)
 	c.Status("working")

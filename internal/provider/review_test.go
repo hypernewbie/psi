@@ -34,7 +34,11 @@ func TestReviewAuthLeaseSurvivesKilledHolder(t *testing.T) {
 	lock := filepath.Join(dir, "auth.json.lock")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestReviewAuthLeaseChild$")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestReviewAuthLeaseChild$")
 	cmd.Env = testutil.ChildEnv(dir, map[string]string{"PSI_SYNTHETIC_LEASE_CHILD": lock})
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

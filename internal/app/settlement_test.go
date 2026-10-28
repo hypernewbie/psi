@@ -55,15 +55,17 @@ func TestVisibleDeltasThatFailPersistenceShowUnsavedNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inputWrite.Close()
-	defer input.Close()
 	out := &synchronizedBuffer{}
 	console := terminal.NewConsole(input, out)
 	console.SizeFunc = func() (int, int) { return 80, 24 }
 	if !console.Editor.Insert("question") {
 		t.Fatal("could not install synthetic draft")
 	}
-	defer console.Close()
+	defer func() {
+		_ = inputWrite.Close()
+		console.Close()
+		_ = input.Close()
+	}()
 
 	result := make(chan error, 1)
 	go func() { result <- r.repl(console) }()

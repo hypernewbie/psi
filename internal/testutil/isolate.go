@@ -24,6 +24,14 @@ func IsolatedEnv(t *testing.T) (home, work, agent, sessions string) {
 		}
 	}
 	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(home)
+		t.Setenv("USERPROFILE", home)
+		t.Setenv("HOMEDRIVE", volume)
+		t.Setenv("HOMEPATH", strings.TrimPrefix(home, volume))
+		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+		t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	}
 	// Strip parent secrets/proxy/live flags from child env allowlist.
 	for _, k := range []string{
 		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "PSI_LIVE_PROVIDER",
@@ -52,6 +60,14 @@ func ChildEnv(home string, extra map[string]string) []string {
 	}
 	env := []string{"HOME=" + home, "PATH=" + path}
 	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(home)
+		env = append(env,
+			"USERPROFILE="+home,
+			"HOMEDRIVE="+volume,
+			"HOMEPATH="+strings.TrimPrefix(home, volume),
+			"APPDATA="+filepath.Join(home, "AppData", "Roaming"),
+			"LOCALAPPDATA="+filepath.Join(home, "AppData", "Local"),
+		)
 		// Node and Winsock fail without SystemRoot in child processes.
 		if v := os.Getenv("SystemRoot"); v != "" {
 			env = append(env, "SystemRoot="+v)

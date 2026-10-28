@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestStreamFragmentKeepsEditorFooterAndStableScrollback(t *testing.T) {
 	out := ioMultiWriter{vt: vt, raw: raw}
 	c := &Console{Editor: NewEditor(), Out: out, writer: NewWriter(out), decoder: NewDecoder()}
 	c.SetPresentation(PresentationSnapshot{
-		WorkingDirectory: "/home/operator/work", HomeDirectory: "/home/operator",
+		WorkingDirectory: filepath.FromSlash("/home/operator/work"), HomeDirectory: filepath.FromSlash("/home/operator"),
 		Provider: "anthropic", Model: "example-model", Thinking: "high", NoColor: true,
 	})
 	c.Status("⠋ Working… (Esc/Ctrl+C cancel, input paused)")
@@ -23,7 +24,7 @@ func TestStreamFragmentKeepsEditorFooterAndStableScrollback(t *testing.T) {
 	assertComposed := func(where string) {
 		t.Helper()
 		visible := strings.Join(vt.Scrollback, "\n") + "\n" + vt.Text()
-		for _, want := range []string{"A partial answer", "Working…", "~/work", "example-model"} {
+		for _, want := range []string{"A partial answer", "Working…", "~" + string(filepath.Separator) + "work", "example-model"} {
 			if !strings.Contains(visible, want) {
 				t.Fatalf("%s lost %q:\n%s", where, want, visible)
 			}

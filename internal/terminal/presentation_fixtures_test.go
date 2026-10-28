@@ -3,6 +3,7 @@ package terminal
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -84,13 +85,20 @@ func TestPlan4PiEditorAndFooterFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
+	fixture.Snapshot.WorkingDirectory = filepath.FromSlash(fixture.Snapshot.WorkingDirectory)
+	fixture.Snapshot.HomeDirectory = filepath.FromSlash(fixture.Snapshot.HomeDirectory)
+	if len(fixture.PlainRows) <= 3 {
+		t.Fatalf("component fixture is missing the footer path row: %q", fixture.PlainRows)
+	}
+	wantRows := append([]string(nil), fixture.PlainRows...)
+	wantRows[3] = strings.ReplaceAll(wantRows[3], "/", string(filepath.Separator))
 	view := ComposeEditorView(40, 12, nil, 0, fixture.Snapshot, "")
-	if len(view.Rows) != len(fixture.PlainRows) {
-		t.Fatalf("rows=%d want=%d: %q", len(view.Rows), len(fixture.PlainRows), view.Rows)
+	if len(view.Rows) != len(wantRows) {
+		t.Fatalf("rows=%d want=%d: %q", len(view.Rows), len(wantRows), view.Rows)
 	}
 	for i, row := range view.Rows {
-		if got := Sanitize(row); got != fixture.PlainRows[i] {
-			t.Errorf("row %d: got %q want %q", i, got, fixture.PlainRows[i])
+		if got := Sanitize(row); got != wantRows[i] {
+			t.Errorf("row %d: got %q want %q", i, got, wantRows[i])
 		}
 	}
 	if !strings.Contains(fixture.Reference, "d5b3de22d0e24a3e9c38a9410d3329b099717283") {
