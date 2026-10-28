@@ -28,7 +28,7 @@ func TestResourceBounds(t *testing.T) {
 			fi, err := os.Stat(fp)
 			if err != nil {
 				t.Errorf("full output missing: %v", err)
-			// Windows has no Unix mode bits; a private file stats 0666.
+				// Windows has no Unix mode bits; a private file stats 0666.
 			} else if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 				t.Errorf("full output not private: %v", fi.Mode())
 			}
