@@ -130,7 +130,11 @@ func TestAppProcess(t *testing.T) {
 	if os.Getenv("PSI_APP_TEST_PROCESS") != "1" || flag.Lookup("test.run").Value.String() != "^TestAppProcess$" {
 		return
 	}
-	if err := Run([]string{"--deny-project", "--tools", "read"}, "test"); err != nil {
+	args := []string{"--deny-project", "--tools", "read"}
+	if testTools := os.Getenv("PSI_APP_TEST_TOOLS"); testTools != "" {
+		args[2] = testTools
+	}
+	if err := Run(args, "test"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

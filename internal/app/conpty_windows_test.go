@@ -24,6 +24,8 @@ const procThreadAttributePseudoConsole = 0x00020016
 func TestActualWindowsConPTYInteraction(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := t.TempDir()
+	server, streamStarted, releaseStream, toolStarted := startConPTYTestProvider(t, agentDir)
+	defer server.Close()
 	inRead, inWrite, outRead, outWrite := windows.Handle(0), windows.Handle(0), windows.Handle(0), windows.Handle(0)
 	if err := windows.CreatePipe(&inRead, &inWrite, nil, 0); err != nil {
 		t.Fatal(err)
@@ -204,6 +206,39 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	}
 	write("\x03")
 	waitFor("cleared draft", func(text string) bool { return !strings.Contains(text, "abc") })
+	write("resize-stream\r")
+	waitFor("stream start", func(text string) bool { return strings.Contains(text, "STREAM_SENTINEL") })
+	select {
+	case <-streamStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("synthetic stream did not start")
+	}
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
+		resize(size[0], size[1])
+		beforeBytes := raw.Len()
+		waitFor("stream resize", func(text string) bool { return raw.Len() > beforeBytes && conptyBusyVisible(text) })
+	}
+	close(releaseStream)
+	waitFor("stream completion", func(text string) bool { return strings.Contains(text, "STREAM_FINISHED") })
+	waitFor("editor after stream", func(_ string) bool { return conptyEditorReady(screen) })
+	write("resize-tool\r")
+	select {
+	case <-toolStarted:
+	case <-time.After(8 * time.Second):
+		t.Fatal("synthetic tool request did not start")
+	}
+	waitFor("running bash tool", func(text string) bool { return strings.Contains(text, "bash") })
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
+		resize(size[0], size[1])
+		beforeBytes := raw.Len()
+		waitFor("tool resize", func(text string) bool { return raw.Len() > beforeBytes && conptyBusyVisible(text) })
+	}
+	waitFor("tool completion", func(text string) bool { return strings.Contains(text, "TOOL_FINISHED") })
+	waitFor("editor after tool", func(_ string) bool { return conptyEditorReady(screen) })
+	write("/model\r")
+	waitFor("model picker", func(_ string) bool { return conptyPickerVisible(screen) })
+	write("\x03\x03") // Cancel the picker, then clear any restored search text.
+	waitFor("editor after picker", func(_ string) bool { return conptyEditorReady(screen) && !conptyPickerVisible(screen) })
 	write("/quit\r")
 	result := make(chan error, 1)
 	go func() {
@@ -227,7 +262,8 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	select {
 	case err := <-result:
 		if err != nil {
-			t.Fatal(err)
+			drain()
+			t.Fatalf("%v: screen=%q", err, conptyVisibleText(screen))
 		}
 	case <-time.After(12 * time.Second):
 		windows.TerminateProcess(process.Process, 1)
@@ -277,6 +313,15 @@ func conptyEditorReady(screen *vt.Emulator) bool {
 	return above && below
 }
 
+func conptyBusyVisible(text string) bool {
+	return strings.Contains(text, "Working") || strings.Contains(text, "Esc/Ctrl+C")
+}
+
+func conptyPickerVisible(screen *vt.Emulator) bool {
+	text := conptyVisibleText(screen)
+	return strings.Contains(text, "Models ·") || (screen.Width() < 32 && strings.Contains(text, "› "))
+}
+
 func pseudoConsoleValue(handle windows.Handle) unsafe.Pointer {
 	return *(*unsafe.Pointer)(unsafe.Pointer(&handle))
 }
@@ -285,7 +330,8 @@ func conptyTestEnvironment(home, agentDir string) string {
 	values := []string{
 		"HOME=" + home,
 		"LANG=C.UTF-8",
-		"PATH=" + os.Getenv("SystemRoot") + `\System32`,
+		"PATH=C:\\Program Files\\Git\\usr\\bin;" + os.Getenv("SystemRoot") + `\System32`,
+		"PSI_APP_TEST_TOOLS=read,bash",
 		"PI_CODING_AGENT_DIR=" + agentDir,
 		"PI_CODING_AGENT_SESSION_DIR=",
 		"PSI_APP_TEST_PROCESS=1",
