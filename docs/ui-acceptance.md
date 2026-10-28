@@ -2,9 +2,9 @@
 
 ## Status
 
-The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows CI, broader Windows Terminal interactions, human terminal review, and the full actual-app resize-operation matrix remain outstanding. Native Windows test-package suites and a ConPTY smoke now pass.
+The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `dc7a19dd6b08419c7172f3b4dd9851fd5e70dc4d` (`dc7a19d`; quantitative UI profiles were collected at `51a56e3`, followed by resize and native Windows test suites). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `1cf201b3a39973f07d92399fefa779619a98712a` (`1cf201b`; quantitative UI profiles were collected at `51a56e3`, followed by resize and native Windows test suites). The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -12,7 +12,7 @@ Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `
 |---|---|---|
 | Component | `go test ./internal/terminal ./internal/app`; Markdown, styled-row, editor, completion, picker, notice, and settlement fixtures | Pass |
 | VT emulator | `testutil.VTModel` screen/cursor/scrollback checks across the 120×40, 80×24, 60×16, 40×12, and 20×6 geometry matrix; 1×1 and 2×2 safety cases | Pass for automated cell and cursor assertions |
-| Actual app | Synthetic-provider PTYs and subprocess tests, including offline model/thinking selection, resume, startup consent, picker cancellation, suspend/resume, shutdown, and privacy canaries; Windows ConPTY exercises local SSE streaming, a running Git Bash tool, and six-size typing/stream/tool resizes | Pass on Linux/WSL2 and native Windows; picker resize matrix remains partial |
+| Actual app | Synthetic-provider PTYs and subprocess tests, including offline model/thinking selection, resume, startup consent, picker cancellation, suspend/resume, shutdown, and privacy canaries; Windows ConPTY exercises typing, local SSE streaming, a running Git Bash tool, and model-picker navigation at all six sizes | Automated pass on Linux/WSL2 and native Windows; human checks remain blocked |
 | Human terminal | Native selection/copy, perceived redraw flicker, light/dark theme readability, and Pi side-by-side review | Blocked; no human terminal session was available |
 
 No live provider request was made. Tests use synthetic credentials, temporary workspaces, and local protocol servers.
@@ -24,9 +24,9 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | A4-01–02 | Inline startup/editor, grapheme editing, literal paste, recall, cursor, overflow, and responsive geometry tests; actual-app PTY coverage | Human readability and copy check blocked |
 | A4-03 | Slow-stream and actual-app PTY tests preserve the indicator, footer, editor, and partial text. A loopback provider sends 10,000 one-character deltas in 30 paced batches; order and persistence are checked. The REPL profile separately counts timer and event-boundary frames, writer frames/writes, and maximum write size. | Automated pass; human perception/flicker check remains blocked |
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests | Automated pass |
-| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; Windows ConPTY opens/cancels the model picker, but does not resize it |
+| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; Windows ConPTY opens/cancels and navigates the model picker at all six sizes |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests | Automated pass |
-| A4-18 | Maintained VT keeps an active draft and committed sentinel through all six sizes. Native Windows ConPTY exercises the actual app at those sizes while typing, streaming from a local SSE provider, and running a five-second Git Bash tool; the model picker opens/cancels at 80×24. | **Partial:** the picker has not been resized through all sizes in the actual app |
+| A4-18 | Maintained VT keeps an active draft and committed sentinel through all six sizes. Native Windows ConPTY exercises the actual app at those sizes while typing, streaming from a local SSE provider, running a five-second Git Bash tool, and navigating the model picker. | Automated pass for the resize matrix; human flicker/readability checks remain blocked |
 | A4-19 | `NO_COLOR`, semantic token, and no-generated-SGR fixtures | Automated pass; light/dark human checks blocked |
 | A4-20 | Unix PTY suspend/resume, EOF, shutdown, and termios restoration; comparison masks only macOS PENDIN. Native Windows ConPTY draft/clear/quit smoke also passes. | Linux lifecycle and Windows ConPTY smoke pass; macOS runtime and human shell restoration remain blocked |
 | A4-21 | Malicious control, path, provider, Markdown, tool-body, and secret canaries across display tests | Automated pass for covered paths |
@@ -49,7 +49,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 | Long fenced code | 8,192 completed lines plus an over-limit single-line case | active source ≤64 KiB; completed code lines commit incrementally; output matches replay | Pass component bounds and shared formatting |
 | Large writes | Existing short-write and 64 KiB batching tests | no write unit exceeds 64 KiB; suffix bytes preserved | Pass |
 | Scheduled frame composition | One VT component frame | stable append + active tail + status use one `Writer.Emit` frame; runtime batches timer-flush and spinner updates | Pass |
-| Six-size resize | Maintained VT plus actual Windows ConPTY app with synthetic SSE and Git Bash tool | component retains draft/sentinel; actual app exercises typing, streaming, and running-tool redraws at each size; picker opens/cancels at 80×24 | Pass for measured operations; picker resize remains partial |
+| Six-size resize | Maintained VT plus actual Windows ConPTY app with synthetic SSE and Git Bash tool | component retains draft/sentinel; actual app exercises typing, streaming, running-tool redraws, and picker selection at each size | Pass for all four scripted operations; human flicker review remains blocked |
 | Ten-second idle | One settled REPL session | zero new frames, writes, or bytes over 10 seconds | Pass for the measured idle path |
 | Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass |
 | 10,000 tiny output deltas | Actual-app PTY plus paced in-process REPL profile | PTY `1.095512757s`; REPL `1.145584044s`, 12 timer frames, 6 event frames, 26 writer frames, 24 writes, `20,736` bytes, max write `11,284` bytes | Pass: timer rate <30/s, categories counted separately, write units <64 KiB; PTY confirms ordered persistence and footer |
@@ -57,7 +57,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 Profile fixture hashes:
 
 ```text
-internal/app/conpty_windows_test.go    b79025e6f16053097894cd50eba0711ab52c586271f196e218519031fb253aee
+internal/app/conpty_windows_test.go    ecdc7b90cdace9da295bf450bfe7d04999c373a59d4c4e38614849b270bf306c
 internal/app/conpty_provider_windows_test.go f557d3b375d586583499da9365d0404feeb0083dabd911934cc4bcb6ec5a1844
 internal/app/app_test.go              2358b6fe0abb0686f0ab37e38f0921075994adc0c8c7903068555fd0419a7001
 internal/app/review_test.go            2e4c30ee82f217d84427d8bbf7fcaddf3c85a895689ad9a589c06afdfe0e9e9d
@@ -86,7 +86,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 - Local `go test ./...`, `go test -race ./...`, `go vet ./...`, and `go build ./...` passed.
 - Package builds and test-binary compilation passed for `darwin/amd64`, `darwin/arm64`, and `windows/amd64`; `GOOS=windows go vet ./...` and `GOOS=windows go build ./...` passed. macOS binaries were not executed.
 - All Windows test-package binaries passed on native Windows 11 `10.0.26200.8875` through WSL2 interop: `agent`, `app`, `config`, `provider`, `session`, `skills`, `terminal`, `testutil`, and `tools`. Git for Windows `usr/bin` was added to `PATH` for shell tests, as in `.github/workflows/ci.yml`. Unix-only PTY tests were skipped.
-- The Windows ConPTY test launched the real app with a local Anthropic-protocol server. It exercised a paused stream and a `sleep 5` Bash call while resizing, then opened/cancelled the model picker. No live provider request ran; no alternate-screen or full-screen clear occurred.
+- The Windows ConPTY test launched the real app with a local Anthropic-protocol server. It exercised typing, a paused stream, a `sleep 5` Bash call, and model-picker selection through the six-size matrix. Three repeated journeys and the full Windows app test package passed. No live provider request ran; no alternate-screen or full-screen clear occurred.
 - `vci wait-ready` could not run because `/home/hypernewbie/.vci/config.toml` is absent. The Vci client was not configured because no existing coordinator destination was supplied.
 - Remote Linux/macOS/Windows CI, macOS runtime tests, SSH/tmux checks, Windows Terminal/Git Bash human checks, and all human visual/copy checks remain blocked. The ConPTY test covers only its scripted Windows interaction.
 
