@@ -90,7 +90,7 @@ Unknown harmless UI prefs need no per-key warning.
 - No reasoning text by default.
 - Keyboard (fixed): `Enter` submit, `Ctrl+J` newline, `Ctrl+C` cancels a picker/run (idle clears the draft first), `Ctrl+D`/`/quit` exit, `Ctrl+L` opens model selection, and `Shift+Tab` cycles supported thinking levels.
 - Slash-command and skill completion is editor-owned and limited to five visible rows. `Up/Down` navigate active completion/pickers before normal draft/history movement; `Tab` applies completion; `Enter` applies and submits.
-- `/model`, `/resume`, and `/thinking` use searchable inline editor pickers with stable selection and bounded rows. `--resume` uses the same session-picker presentation. Picker input is not a conversation message or recall entry.
+- `/model`, `/resume`, and `/thinking` use case-insensitive substring search, stable selection, and at most ten visible inline picker entries. Page keys move by the visible list size. Model rows use Pi's pointer/current markers and provider badges; only the selected model shows API/context/credential details. Session rows prioritize a name or prompt preview. `--resume` uses the same session-picker presentation. Picker input is not a conversation message or recall entry.
 - Project-resource consent uses an inline choice with deny selected by default. The trust choice is per-run only; `--allow-project` and `--deny-project` remain explicit overrides.
 - Input during active run is cancellation only (no steering/follow-up queues).
 - Offline, interrupted, unsaved, and storage-blocked outcomes use semantic notices. Run settlement carries durable/interrupted/unsaved state; a visible response that fails persistence cannot return the app to a successful idle state.

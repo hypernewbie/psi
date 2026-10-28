@@ -2,9 +2,9 @@
 
 ## Status
 
-The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
+The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `391139f6a07a1459fc72b63703f50797d1cdfd2f` (`391139f`; quantitative UI profiles were collected at `51a56e3`, followed by resize and native Windows test suites). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `543eaa3e551c8bf4c1397e808ba34f72a4c3ad75` (`543eaa3`; original quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below). The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -32,6 +32,27 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | A4-21 | Malicious control, path, provider, Markdown, tool-body, and secret canaries across display tests | Automated pass for covered paths |
 | A4-22 | Native terminal behavior is preserved by the inline writer; no application mouse capture or clipboard path exists | **Blocked:** prose/code selection and copy were not checked by a human |
 
+## Source-parity audit at `543eaa3`
+
+The audit found implementation gaps, not just missing external evidence:
+
+- **P4-023:** Removed the unplanned fuzzy search. Queries use case-insensitive substrings and source ordering. A matching selection keeps its identity; otherwise the first match is selected, not the active item elsewhere in the results.
+- **P4-024:** Matched Pi's `model-selector.ts` rows: `→` pointer, separate `✓` current marker, model ID before `[provider]`, and selected-only credential/API/context details. No full metadata paragraph repeats on every row.
+- **P4-025:** Matched `session-selector.ts` primary name/prompt and compact age treatment. An active session's own lock no longer hides its preview behind an unavailable warning.
+- **P4-027:** Lists use up to ten entries and the actual available height. Page keys move by the visible count. Tiny views retain a real selected row instead of a duplicate selected-item header.
+- **P4-009/P4-031:** Native ConPTY exposed stale differential row assumptions when the old picker exceeded the resized viewport. Resize invalidates only the owned tail and reallocates its rows with CRLF. There is no screen clear or committed transcript replay. Windows now posts changed-size events to the application owner, corresponding to Pi's `ProcessTerminal.start` resize callback. Its 100 ms size watcher produces no events for an unchanged size and stops with console input ownership.
+
+Validation: `./scripts/check.sh`, Windows vet/build, and Darwin amd64/arm64 builds plus app/terminal test-binary compilation passed. The full native Windows app and terminal packages passed. Five repeated ConPTY journeys checked all six sizes, including draft and picker redraws without a new key. Tests wait for the selected row **and** editor cursor, not a partial output chunk. Three synthetic PTY journeys also passed against the rebuilt `./psi` executable: streaming/tools, model/thinking/restart, and resume/recall.
+
+On the same Linux/amd64 host, 100 edits over 10,000 picker entries measured p50 `2.80682ms`, p95 `3.854093ms`, max `4.112572ms`. All remained below the 50 ms p95 budget. Audit fixture hashes:
+
+```text
+internal/app/picker_perf_test.go       3b20091169b79f7ef9eefe220ee8adf7ea5fd0e2b4e640fa8380e910b3a1ae1b
+internal/app/selectors_test.go         80f4d45211941f80f45f2a66328708a7f4704b4a643d60507ab818739d167816
+internal/app/conpty_windows_test.go    071b677bf05e11a8ae80fb4900cf14123713eed1351723a3668d6af55763e95a
+internal/terminal/maintained_test.go    cae637bec61339370782861eb3a7cda73f0fbb345541fbeb3028fc8a4e55e912
+```
+
 ## Resource profiles
 
 Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`.
@@ -54,7 +75,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 | Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass |
 | 10,000 tiny output deltas | Actual-app PTY plus paced in-process REPL profile | PTY `1.095512757s`; REPL `1.145584044s`, 12 timer frames, 6 event frames, 26 writer frames, 24 writes, `20,736` bytes, max write `11,284` bytes | Pass: timer rate <30/s, categories counted separately, write units <64 KiB; PTY confirms ordered persistence and footer |
 
-Profile fixture hashes:
+Historical profile fixture hashes (the newer picker/resize fixtures are recorded above):
 
 ```text
 internal/app/conpty_windows_test.go    ecdc7b90cdace9da295bf450bfe7d04999c373a59d4c4e38614849b270bf306c
@@ -86,16 +107,16 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 - Local `go test ./...`, `go test -race ./...`, `go vet ./...`, and `go build ./...` passed.
 - Package builds and test-binary compilation passed for `darwin/amd64`, `darwin/arm64`, and `windows/amd64`; `GOOS=windows go vet ./...` and `GOOS=windows go build ./...` passed. macOS binaries were not executed.
 - All Windows test-package binaries passed on native Windows 11 `10.0.26200.8875` through WSL2 interop: `agent`, `app`, `config`, `provider`, `session`, `skills`, `terminal`, `testutil`, and `tools`. Git for Windows `usr/bin` was added to `PATH` for shell tests, as in `.github/workflows/ci.yml`. Unix-only PTY tests were skipped.
-- The Windows ConPTY test launched the real app with a local Anthropic-protocol server. It exercised typing, a paused stream, a `sleep 5` Bash call, and model-picker selection through the six-size matrix. Three repeated journeys and the full Windows app test package passed. No live provider request ran; no alternate-screen or full-screen clear occurred.
+- The Windows ConPTY test launched the real app with a local Anthropic-protocol server. It exercised typing, a paused stream, a `sleep 5` Bash call, and model-picker selection through the six-size matrix. Five repeated journeys and the full Windows app and terminal test packages passed; draft and picker resize redraws no longer require a key. No live provider request ran; no alternate-screen or full-screen clear occurred.
 - `vci wait-ready` could not run because `/home/hypernewbie/.vci/config.toml` is absent. The Vci client was not configured because no existing coordinator destination was supplied.
 - Remote Linux/macOS/Windows CI, macOS runtime tests, SSH/tmux checks, Windows Terminal/Git Bash human checks, and all human visual/copy checks remain blocked. The ConPTY test covers only its scripted Windows interaction.
 
 ### Final executable provenance
 
-Built from repository tree revision `391139f` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-391139f ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9b9cad9`; on Windows the console now reads viewport dimensions from the output handle, matching Pi's `process.stdout.columns/rows`. Later changes are tests and documentation. The documentation-only ledger update followed this build.
+Built from repository tree revision `543eaa3` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The synthetic PTY checks above ran against this executable. The documentation-only ledger update followed this build.
 
 ```text
-SHA-256  44e1db5bca2391d316cb91c7a80fa802bfa61acf7ea57b9dc79defe587215e34
+SHA-256  a6f937c180d49bed0b48d028eb96f40a5321bf14cefec18d1eb66e52b113adf5
 ```
 
 ## Gate disposition
