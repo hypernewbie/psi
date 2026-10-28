@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,8 @@ func TestResourceBounds(t *testing.T) {
 			fi, err := os.Stat(fp)
 			if err != nil {
 				t.Errorf("full output missing: %v", err)
-			} else if fi.Mode().Perm()&0o077 != 0 {
+			// Windows has no Unix mode bits; a private file stats 0666.
+			} else if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 				t.Errorf("full output not private: %v", fi.Mode())
 			}
 			os.Remove(fp)
