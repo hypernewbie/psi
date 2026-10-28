@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -606,7 +607,15 @@ func (c *Console) size() (int, int) {
 		width, height := c.SizeFunc()
 		return max(1, width), max(1, height)
 	}
-	width, height, err := term.GetSize(int(c.In.Fd()))
+	fd := c.In.Fd()
+	if runtime.GOOS == "windows" {
+		// GetConsoleScreenBufferInfo reports ConPTY's resized viewport from
+		// the output handle; the input handle can retain the old dimensions.
+		if output, ok := c.Out.(*os.File); ok {
+			fd = output.Fd()
+		}
+	}
+	width, height, err := term.GetSize(int(fd))
 	if err != nil || width <= 0 {
 		width = 80
 	}

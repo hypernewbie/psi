@@ -13,8 +13,8 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/charmbracelet/x/vt"
 	"golang.org/x/sys/windows"
-	"psi/internal/testutil"
 )
 
 const procThreadAttributePseudoConsole = 0x00020016
@@ -114,7 +114,8 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		}
 	}()
 
-	screen, raw := testutil.NewVTModel(80, 24), &bytes.Buffer{}
+	screen, raw := vt.NewEmulator(80, 24), &bytes.Buffer{}
+	defer screen.Close()
 	drain := func() {
 		t.Helper()
 		for {
@@ -124,7 +125,9 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 					return
 				}
 				raw.Write(chunk)
-				screen.Feed(chunk)
+				if _, err := screen.Write(chunk); err != nil {
+					t.Fatalf("update ConPTY screen: %v", err)
+				}
 			default:
 				return
 			}
@@ -138,22 +141,24 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		defer tick.Stop()
 		for {
 			drain()
-			if match(screen.Text()) {
+			if match(conptyVisibleText(screen)) {
 				return
 			}
 			select {
 			case chunk, ok := <-readChunks:
 				if !ok {
-					t.Fatalf("ConPTY closed waiting for %s: %q", label, screen.Text())
+					t.Fatalf("ConPTY closed waiting for %s: %q", label, conptyVisibleText(screen))
 				}
 				raw.Write(chunk)
-				screen.Feed(chunk)
+				if _, err := screen.Write(chunk); err != nil {
+					t.Fatalf("update ConPTY screen: %v", err)
+				}
 			case <-tick.C:
 			case <-deadline.C:
 				waitState, _ := windows.WaitForSingleObject(process.Process, 0)
 				var exitCode uint32
 				_ = windows.GetExitCodeProcess(process.Process, &exitCode)
-				t.Fatalf("timeout waiting for %s: screen=%q raw=%q process_wait=%#x exit_code=%d", label, screen.Text(), raw.String(), waitState, exitCode)
+				t.Fatalf("timeout waiting for %s: screen=%q raw=%q process_wait=%#x exit_code=%d", label, conptyVisibleText(screen), raw.String(), waitState, exitCode)
 			}
 		}
 	}
@@ -172,13 +177,31 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		}
 	}
 
-	waitFor("inline editor", func(_ string) bool { return semanticEditorReady(screen) })
+	resize := func(width, height int) {
+		t.Helper()
+		if err := windows.ResizePseudoConsole(pseudo, windows.Coord{X: int16(width), Y: int16(height)}); err != nil {
+			t.Fatalf("ResizePseudoConsole(%dx%d): %v", width, height, err)
+		}
+		screen.Resize(width, height)
+	}
+	waitFor("inline editor", func(_ string) bool { return conptyEditorReady(screen) })
 	// ConPTY may emit its own screen initialization before the child starts.
 	// Check only the application's interactive redraws below.
 	drain()
 	raw.Reset()
 	write("abc")
 	waitFor("typed draft", func(text string) bool { return strings.Contains(text, "abc") })
+	expectedDraft := "abc"
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
+		resize(size[0], size[1])
+		expectedDraft += "x"
+		write("x") // A real key redraws the active editor at the new size.
+		waitFor("resized draft", func(text string) bool { return strings.Contains(text, expectedDraft) })
+		visible := conptyVisibleText(screen)
+		if !strings.Contains(visible, expectedDraft) || !conptyEditorReady(screen) {
+			t.Fatalf("resize to %dx%d lost active draft/cursor %q: %q", size[0], size[1], expectedDraft, visible)
+		}
+	}
 	write("\x03")
 	waitFor("cleared draft", func(text string) bool { return !strings.Contains(text, "abc") })
 	write("/quit\r")
@@ -217,6 +240,41 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 			t.Fatalf("inline session emitted forbidden screen control %q at %d: %q", sequence, at, raw.Bytes()[start:end])
 		}
 	}
+}
+
+func conptyVisibleText(screen *vt.Emulator) string {
+	rows := make([]string, screen.Height())
+	for y := 0; y < screen.Height(); y++ {
+		var row strings.Builder
+		for x := 0; x < screen.Width(); x++ {
+			if cell := screen.CellAt(x, y); cell != nil {
+				row.WriteString(cell.Content)
+			} else {
+				row.WriteByte(' ')
+			}
+		}
+		rows[y] = strings.TrimRight(row.String(), " ")
+	}
+	return strings.Join(rows, "\n")
+}
+
+func conptyEditorReady(screen *vt.Emulator) bool {
+	if screen == nil || screen.CursorHidden() || screen.Height() < 3 {
+		return false
+	}
+	pos := screen.CursorPosition()
+	if pos.Y <= 0 || pos.Y >= screen.Height()-1 {
+		return false
+	}
+	rows := strings.Split(conptyVisibleText(screen), "\n")
+	above, below := false, false
+	for i, row := range rows {
+		if strings.Contains(row, "─") {
+			above = above || i < pos.Y
+			below = below || i > pos.Y
+		}
+	}
+	return above && below
 }
 
 func pseudoConsoleValue(handle windows.Handle) unsafe.Pointer {
