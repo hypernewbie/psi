@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. The release gates are **partial**, not complete: the strict scheduled-frame profile is not directly instrumented, remote macOS/Windows tests did not run, native Windows console input/output was not exercised, and human visual/copy checks remain unavailable.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest measured source revision: `943abd282fe8aed02ea2ca9eef0540c10ab79be9` (`943abd2`). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest measured source revision: `f56d0d4112061c796892ab9c31a1fe5aede540a7` (`f56d0d4`). The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -22,7 +22,7 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | Cases | Automated evidence | Human/platform status |
 |---|---|---|
 | A4-01–02 | Inline startup/editor, grapheme editing, literal paste, recall, cursor, overflow, and responsive geometry tests; actual-app PTY coverage | Human readability and copy check blocked |
-| A4-03 | Slow synthetic stream tests preserve the indicator, footer, editor, and partial text. Streamer tests coalesce 10,000 tiny deltas. | **Partial:** the runtime uses one 30 Hz timer, but the actual-app test does not separately count timer frames, event-boundary frames, and write batches over a controlled second |
+| A4-03 | Slow-stream and actual-app PTY tests preserve the indicator, footer, editor, and partial text. A loopback provider sends 10,000 one-character deltas in 30 paced batches over about one second; the answer is ordered and persisted. | **Partial:** the runtime uses one 30 Hz timer, but the actual-app test does not separately count timer frames, event-boundary frames, and write batches over a controlled second |
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests | Automated pass |
 | A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; native console checks remain blocked |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests | Automated pass |
@@ -34,26 +34,27 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 
 ## Resource profiles
 
-Measurements below were collected at revision `943abd2` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`.
+Measurements below were collected at revision `f56d0d4` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`.
 
 | Profile | Samples / fixture | Raw result | Assessment |
 |---|---|---|---|
-| Editor key-to-frame | 100 warm local interactions | p50 `173.63µs`, p95 `215.011µs`, max `247.541µs` | Pass, p95 ≤50 ms |
+| Editor key-to-frame | 100 warm local interactions | p50 `180.001µs`, p95 `243.991µs`, max `449.751µs` | Pass, p95 ≤50 ms |
 | Cancellation dispatch | 100 busy Ctrl+C dispatches | p50 `40ns`, p95 `50ns`, max `140ns` | Pass for dispatch only; descendant cleanup is separate |
-| 256 KiB paste | One warm end-marker-to-frame sample | `95.971959ms` | Pass, ≤200 ms |
-| 1,000 vs 10,000 one-character Markdown deltas | One allocation sample each | `107,752` / `869,512` bytes; ratio `8.07×` | Pass, ≤15× allocation growth; component stream path, not a runtime frame-count measurement |
-| Picker search/render, 10,000 entries | 100 edits | p50 `2.567858ms`, p95 `3.627072ms`, max `4.028164ms` | Pass, p95 ≤50 ms |
-| 10,000-session metadata activation | One synthetic workspace | `681.364841ms` to a usable 20-item first page | Pass for measured activation path |
-| 512 MiB compacted session | 15,328 historical tool records; 15,331 total entries | activation `2,357ms`, peak RSS `43,844 KiB` | Pass existing 3 s / 160 MiB budgets |
-| 1 MiB prose stream | One benchmark iteration | `493,061,147ns/op`, `2.15 MB/s`, `66,765,640 B/op`, `706,474 allocs/op` | Recorded; allocations are cumulative churn, not retained response size. Active source remains bounded by tests. |
+| 256 KiB paste | One warm end-marker-to-frame sample | `99.181589ms` | Pass, ≤200 ms |
+| 1,000 vs 10,000 one-character Markdown deltas | One allocation sample each | `107,752` / `887,240` bytes; ratio `8.24×` | Pass, ≤15× allocation growth; component stream path, not a runtime frame-count measurement |
+| Picker search/render, 10,000 entries | 100 edits | p50 `2.612856ms`, p95 `3.585780ms`, max `3.751490ms` | Pass, p95 ≤50 ms |
+| 10,000-session metadata activation | One synthetic workspace | `735.457020ms` to a usable 20-item first page | Pass for measured activation path |
+| 512 MiB compacted session | 15,328 historical tool records; 15,331 total entries | activation `2,469ms`, peak RSS `43,656 KiB` | Pass existing 3 s / 160 MiB budgets |
+| 1 MiB prose stream | One benchmark iteration | `529,011,872ns/op`, `2.00 MB/s`, `66,859,680 B/op`, `707,043 allocs/op` | Recorded; allocations are cumulative churn, not retained response size. Active source remains bounded by tests. |
 | Long fenced code | 8,192 completed lines plus an over-limit single-line case | active source ≤64 KiB; completed code lines commit incrementally; output matches replay | Pass component bounds and shared formatting |
 | Large writes | Existing short-write and 64 KiB batching tests | no write unit exceeds 64 KiB; suffix bytes preserved | Pass |
 | Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass for unchanged redraw; a dedicated ten-second timer/frame counter is not present |
-| 10,000 tiny output deltas | Streamer coalescing tests | ordered bytes retained; no per-delta writer call | Pass at stream-adapter level; strict scheduled frame rate remains partial |
+| 10,000 tiny output deltas | Actual-app PTY with 30 paced flush groups; one measured run | `1.133725929s` elapsed; all 10,000 deltas plus marker persisted in order; footer remained | Actual-app journey passes. Strict scheduled frame rate remains partial because frame categories are not separately counted |
 
 Profile fixture hashes:
 
 ```text
+internal/app/app_test.go              3f2f4def8bbbe35ef38055d4657ec736010e7fd495ba2540b75ddee6d3309f35
 internal/app/picker_perf_test.go       64e1e8bb98fe076a623bca933be25c192648405841748b0485686b6327d553f8
 internal/terminal/markdown_stream_test.go f045bef2f2a763154948a278ae6d0143894b0ad7549e7f57cdc18bbb3f886bbf
 internal/app/scale_test.go             9cbb18c8593ca28c0997040256ccee1911145feb719ce96f33773bb4c47362af
@@ -63,6 +64,7 @@ Re-run from the repository root:
 
 ```sh
 go test ./internal/app -run '^TestTenThousandPickerQueriesStayResponsive$' -count=1 -v
+go test ./internal/app -run '^TestActualAppPTYWorkflow$' -count=1 -v
 go test ./internal/app -tags acceptance -run 'TestScale10000MetadataFirstPage|TestScale512MiBActivation' -count=1 -v
 go test ./internal/terminal -run 'Test(EditorKeyToFrameLatencyP95|CancellationDispatchP95|256KiBPasteUpdatesWithinBudget|MarkdownStreamDeltaAllocationGrowthBounded)$' -count=1 -v
 go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -benchtime=1x -benchmem
