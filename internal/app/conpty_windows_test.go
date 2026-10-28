@@ -59,7 +59,7 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer attributes.Delete()
-	if err := attributes.Update(procThreadAttributePseudoConsole, unsafe.Pointer(&pseudo), unsafe.Sizeof(pseudo)); err != nil {
+	if err := attributes.Update(procThreadAttributePseudoConsole, pseudoConsoleValue(pseudo), unsafe.Sizeof(pseudo)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,6 +82,7 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	env := utf16.Encode([]rune(conptyTestEnvironment(home, agentDir)))
 	startup := windows.StartupInfoEx{}
 	startup.StartupInfo.Cb = uint32(unsafe.Sizeof(startup))
+	startup.StartupInfo.Flags = windows.STARTF_USESTDHANDLES
 	startup.ProcThreadAttributeList = attributes.List()
 	var process windows.ProcessInformation
 	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT)
@@ -149,7 +150,10 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 				screen.Feed(chunk)
 			case <-tick.C:
 			case <-deadline.C:
-				t.Fatalf("timeout waiting for %s: %q", label, screen.Text())
+				waitState, _ := windows.WaitForSingleObject(process.Process, 0)
+				var exitCode uint32
+				_ = windows.GetExitCodeProcess(process.Process, &exitCode)
+				t.Fatalf("timeout waiting for %s: screen=%q raw=%q process_wait=%#x exit_code=%d", label, screen.Text(), raw.String(), waitState, exitCode)
 			}
 		}
 	}
@@ -169,6 +173,10 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	}
 
 	waitFor("inline editor", func(_ string) bool { return semanticEditorReady(screen) })
+	// ConPTY may emit its own screen initialization before the child starts.
+	// Check only the application's interactive redraws below.
+	drain()
+	raw.Reset()
 	write("abc")
 	waitFor("typed draft", func(text string) bool { return strings.Contains(text, "abc") })
 	write("\x03")
@@ -203,9 +211,16 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		t.Fatal("psi did not settle and exit under ConPTY")
 	}
 	drain()
-	if bytes.Contains(raw.Bytes(), []byte("\x1b[?1049h")) || bytes.Contains(raw.Bytes(), []byte("\x1b[2J")) {
-		t.Fatal("inline session switched to or cleared the full screen")
+	for _, sequence := range [][]byte{[]byte("\x1b[?1049h"), []byte("\x1b[2J")} {
+		if at := bytes.Index(raw.Bytes(), sequence); at >= 0 {
+			start, end := max(0, at-24), min(raw.Len(), at+len(sequence)+24)
+			t.Fatalf("inline session emitted forbidden screen control %q at %d: %q", sequence, at, raw.Bytes()[start:end])
+		}
 	}
+}
+
+func pseudoConsoleValue(handle windows.Handle) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&handle))
 }
 
 func conptyTestEnvironment(home, agentDir string) string {
