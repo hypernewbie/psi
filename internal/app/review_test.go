@@ -13,7 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -183,7 +183,7 @@ func (q *reviewPTY) finish() {
 	// Post-exit slave ioctls return ENOTTY on macOS once the session
 	// leader is gone. The suspend test verifies restore on the live
 	// slave; here Linux keeps the exact check.
-	if runtime.GOOS != "darwin" {
+	if goruntime.GOOS != "darwin" {
 		state, err := term.GetState(int(q.tty.Fd()))
 		if err != nil || !reflect.DeepEqual(state, q.original) {
 			q.t.Fatalf("terminal not restored: %v", err)
