@@ -71,9 +71,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 ## Build and platform evidence
 
 - Local `go test ./...`, `go test -race ./...`, `go vet ./...`, and `go build ./...` passed.
-- Package builds and test-binary compilation passed for `darwin/amd64`, `darwin/arm64`, and `windows/amd64`. These are compile checks only; no foreign test binary was executed.
+- Package builds and test-binary compilation passed for `darwin/amd64`, `darwin/arm64`, and `windows/amd64`; `GOOS=windows go vet ./internal/app` also passed. These are compile/static checks only; no foreign test binary was executed.
+- A Windows-only ConPTY test now launches the actual interactive app test process, types a draft, clears it, and exits. It cross-compiles but has not run on a native Windows host.
 - `vci wait-ready` could not run because `/home/hypernewbie/.vci/config.toml` is absent. The Vci client was not configured because no existing coordinator destination was supplied.
-- Native Windows console/ConPTY smoke, macOS runtime tests, SSH/tmux checks, and all human terminal checks remain blocked. A successful cross-build is not runtime evidence.
+- Native Windows ConPTY execution, macOS runtime tests, SSH/tmux checks, remote CI, and all human terminal checks remain blocked. A successful cross-build is not runtime evidence.
 
 ### Final executable provenance
 
