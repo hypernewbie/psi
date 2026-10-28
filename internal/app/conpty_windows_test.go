@@ -196,9 +196,14 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	expectedDraft := "abc"
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
 		resize(size[0], size[1])
+		waitFor("resize without a key", func(_ string) bool {
+			return conptyEditorReady(screen) && conptyLayoutSized(screen)
+		})
 		expectedDraft += "x"
 		write("x") // A real key redraws the active editor at the new size.
-		waitFor("resized draft", func(text string) bool { return strings.Contains(text, expectedDraft) })
+		waitFor("resized draft and cursor", func(text string) bool {
+			return strings.Contains(text, expectedDraft) && conptyEditorReady(screen)
+		})
 		visible := conptyVisibleText(screen)
 		if !strings.Contains(visible, expectedDraft) || !conptyEditorReady(screen) {
 			t.Fatalf("resize to %dx%d lost active draft/cursor %q: %q", size[0], size[1], expectedDraft, visible)
@@ -243,10 +248,13 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 			t.Fatalf("model picker has no visible selected row before resize to %dx%d: %q", size[0], size[1], conptyVisibleText(screen))
 		}
 		resize(size[0], size[1])
+		waitFor("picker resize without a key", func(_ string) bool {
+			return conptyEditorReady(screen) && conptyLayoutSized(screen) && conptyPickerSelection(screen) == beforeSelection
+		})
 		beforeBytes := raw.Len()
 		write("\x1b[B")
 		waitFor(fmt.Sprintf("picker resize %dx%d", size[0], size[1]), func(_ string) bool {
-			return raw.Len() > beforeBytes && conptyPickerSelection(screen) != "" && conptyPickerSelection(screen) != beforeSelection
+			return raw.Len() > beforeBytes && conptyEditorReady(screen) && conptyPickerSelection(screen) != "" && conptyPickerSelection(screen) != beforeSelection
 		})
 	}
 	write("\x03\x03") // Cancel the picker, then clear any restored search text.
@@ -325,19 +333,32 @@ func conptyEditorReady(screen *vt.Emulator) bool {
 	return above && below
 }
 
+func conptyLayoutSized(screen *vt.Emulator) bool {
+	border := strings.Repeat("─", max(1, screen.Width()-1))
+	for _, row := range strings.Split(conptyVisibleText(screen), "\n") {
+		if row == border {
+			return true
+		}
+	}
+	return false
+}
+
 func conptyBusyVisible(text string) bool {
 	return strings.Contains(text, "Working") || strings.Contains(text, "Esc/Ctrl+C")
 }
 
 func conptyPickerVisible(screen *vt.Emulator) bool {
 	text := conptyVisibleText(screen)
-	return strings.Contains(text, "Models ·") || (screen.Width() < 32 && strings.Contains(text, "› "))
+	return strings.Contains(text, "Models ·") || strings.Contains(text, "→ ")
 }
 
 func conptyPickerSelection(screen *vt.Emulator) string {
 	for _, row := range strings.Split(conptyVisibleText(screen), "\n") {
-		if at := strings.Index(row, "›"); at >= 0 {
-			return strings.TrimSpace(row[at:])
+		if at := strings.Index(row, "→"); at >= 0 {
+			label := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(row[at+len("→"):]), "✓"))
+			if fields := strings.Fields(label); len(fields) > 0 {
+				return fields[0] // Ignore provider metadata and resize clipping.
+			}
 		}
 	}
 	return ""

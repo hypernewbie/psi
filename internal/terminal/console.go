@@ -16,6 +16,8 @@ import (
 type Input struct {
 	Key []byte
 	Err error
+	// Resize is a viewport change, never an editor key or pasted content.
+	Resize bool
 	// Paste transaction markers from the bounded decoder.
 	Paste      bool
 	PasteStart bool
@@ -112,7 +114,26 @@ func (c *Console) Resume() {
 	c.pasteActive = false
 	c.pasteBuf.Reset()
 	c.mode("\x1b[?2004h")
-	go func() { defer close(done); defer close(inputs); readInputs(ctx, c.In, inputs, decoder) }()
+	resizeDone := make(chan struct{})
+	if runtime.GOOS == "windows" {
+		fd := c.In.Fd()
+		if output, ok := c.Out.(*os.File); ok {
+			fd = output.Fd()
+		}
+		go func() {
+			defer close(resizeDone)
+			watchConsoleResize(ctx, func() (int, int, error) { return term.GetSize(int(fd)) }, inputs, 100*time.Millisecond)
+		}()
+	} else {
+		close(resizeDone)
+	}
+	go func() {
+		defer close(done)
+		defer close(inputs)
+		readInputs(ctx, c.In, inputs, decoder)
+		cancel()
+		<-resizeDone
+	}()
 }
 
 func (c *Console) Close() {
@@ -226,6 +247,13 @@ func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
 	if c.markdownStream != nil {
 		c.markdownStream.noColor = snapshot.NoColor
 	}
+}
+
+// PickerSize returns the width and row budget available below the focused
+// input. This is the same budget used by the inline compositor.
+func (c *Console) PickerSize() (width, rows int) {
+	width, height := c.size()
+	return width, EditorComponentRowBudget(height)
 }
 
 // SetPickerRows installs the app-owned inline picker in the mutable tail.
@@ -746,6 +774,9 @@ func (c *Console) emitComposed(appendText string) error {
 	f := Frame{Append: appendText, Tail: view.Rows, TailCellWidth: view.CellWidth,
 		CursorRow: view.CursorRow, CursorCol: view.CursorCol,
 		ShowCursor: c.hidden && c.activity == "", HideCursor: c.activity != ""}
+	if c.lastW > 0 && (c.lastW != width || c.lastH != height) {
+		c.writer.InvalidateTail()
+	}
 	err := c.emit(f)
 	c.hidden = c.activity != ""
 	c.visibleTail = view.Rows

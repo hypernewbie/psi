@@ -290,6 +290,19 @@ func ComposeConsoleViewWithRows(width, height int, buf []rune, pos int, snapshot
 	return ComposeConsoleViewComponents(width, height, buf, pos, snapshot, activity, fragmentRows, nil)
 }
 
+// EditorComponentRowBudget leaves room for the focused input row, borders,
+// and footer. Picker layout and composition must use the same height budget.
+func EditorComponentRowBudget(height int) int {
+	if height <= 2 {
+		return 0
+	}
+	footer := 2
+	if height < 8 {
+		footer = 1
+	}
+	return max(0, height-footer-3)
+}
+
 // ComposeConsoleViewComponents places an active fragment above the editor,
 // then editor-owned suggestions, then the persistent footer.
 func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string, fragmentRows, completionRows []string) EditorView {
@@ -319,7 +332,7 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	preferred = min(preferred, len(layout.Rows))
 	// Preserve the focused editor row, then allocate remaining height to the
 	// active picker/completion before expanding the draft viewport.
-	componentBudget := max(0, height-footerCount-borderCount-1)
+	componentBudget := EditorComponentRowBudget(height)
 	if len(completionRows) > componentBudget {
 		completionRows = completionRows[:componentBudget]
 	}

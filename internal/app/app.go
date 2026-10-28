@@ -556,7 +556,8 @@ func (r *runtime) replace(next *session.Store) error {
 func (r *runtime) draw(console *terminal.Console) {
 	r.refreshPresentation(console)
 	if r.selector != nil {
-		console.SetPickerRows(r.selector.RenderPickerRows(console.StatusWidth(), r.footerSnapshot.NoColor))
+		width, rows := console.PickerSize()
+		console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor))
 	} else {
 		console.ClearPickerRows()
 	}
@@ -1012,6 +1013,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				return nil
+			}
+			if input.Resize {
+				r.draw(console)
+				continue
 			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
 				if busy {

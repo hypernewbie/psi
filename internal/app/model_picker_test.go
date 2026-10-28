@@ -43,6 +43,9 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.write("/model\r")
 	q.wait("Models ·")
 	q.prompt()
+	if screen := q.screen.Text(); !strings.Contains(screen, "→ ✓ m [anthropic]") || strings.Count(screen, "context ") != 1 {
+		t.Fatalf("actual model picker is not using compact Pi rows and selected-only detail: %q", screen)
+	}
 	q.write("\x1b[6~\x1b[5~") // bounded PageDown/PageUp navigation
 	q.prompt()
 	q.write("lunaa") // Not a substring: no fuzzy fallback or accidental selection.
@@ -78,6 +81,10 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.prompt()
 	q.write("/resume\r")
 	q.wait("Sessions ·")
+	q.prompt()
+	if screen := q.screen.Text(); !strings.Contains(screen, "› ✓ synthetic recalled prompt") {
+		t.Fatalf("actual session picker did not prioritize the prompt preview: %q", screen)
+	}
 	q.write("\x03") // Ctrl+C cancels the picker and restores its submitted draft.
 	q.wait("/resume")
 	q.prompt()

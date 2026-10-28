@@ -26,8 +26,8 @@ func TestTenThousandPickerQueriesStayResponsive(t *testing.T) {
 	for i := range samples {
 		start := time.Now()
 		selector.SetFilter(queries[i%len(queries)])
-		rows := selector.RenderPickerRows(80, true)
-		if len(rows) > 7 {
+		rows := selector.RenderPickerRows(80, 19, true)
+		if len(rows) > 13 {
 			t.Fatalf("picker exceeded bounded rows: %d", len(rows))
 		}
 		samples[i] = time.Since(start)

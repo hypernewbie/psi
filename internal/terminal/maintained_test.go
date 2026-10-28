@@ -108,6 +108,65 @@ func TestMaintainedVTResizeKeepsActiveDraftAndCommittedHistory(t *testing.T) {
 	}
 }
 
+func TestMaintainedVTTallPickerShrinkRedrawsOwnedTail(t *testing.T) {
+	model := vt.NewEmulator(80, 24)
+	defer model.Close()
+	width, height := 80, 24
+	c := &Console{Editor: NewEditor(), Out: model, writer: NewWriter(model), SizeFunc: func() (int, int) { return width, height }}
+	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
+	fmt.Fprintln(RawOutput{W: c}, "COMMITTED_SENTINEL")
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
+		width, height = size[0], size[1]
+		model.Resize(width, height)
+		rows := make([]string, min(13, EditorComponentRowBudget(height)))
+		for i := range rows {
+			rows[i] = fmt.Sprintf("choice-%02d", i)
+		}
+		rows[len(rows)/2] = "→ selected"
+		c.SetPickerRows(rows)
+		c.Draw()
+		visible := model.String()
+		if !strings.Contains(visible, "→ selected") || !strings.Contains(visible, "model") {
+			t.Fatalf("resize to %dx%d hid selected row/footer: %q", width, height, visible)
+		}
+		pos := model.CursorPosition()
+		if pos.Y <= 0 || pos.Y >= height-1 {
+			t.Fatalf("resize to %dx%d lost editor cursor: %+v screen=%q", width, height, pos, visible)
+		}
+		found := strings.Contains(visible, "COMMITTED_SENTINEL")
+		for y := 0; y < model.ScrollbackLen() && !found; y++ {
+			var line strings.Builder
+			for x := 0; x < width; x++ {
+				if cell := model.ScrollbackCellAt(x, y); cell != nil {
+					line.WriteString(cell.Content)
+				}
+			}
+			found = strings.Contains(line.String(), "COMMITTED_SENTINEL")
+		}
+		if !found {
+			t.Fatalf("resize to %dx%d erased committed history", width, height)
+		}
+	}
+}
+
+func TestMaintainedVTInvalidatedAppendErasesOnlyOldTailSuffixes(t *testing.T) {
+	model := vt.NewEmulator(40, 8)
+	defer model.Close()
+	model.WriteString("COMMITTED_SENTINEL\r\n")
+	writer := NewWriter(model)
+	if err := writer.Emit(Frame{Tail: []string{"stale-long-picker-row", "stale-long-footer"}}); err != nil {
+		t.Fatal(err)
+	}
+	writer.InvalidateTail()
+	if err := writer.Emit(Frame{Append: "short\r\nnext\r\n", Tail: []string{"draft"}}); err != nil {
+		t.Fatal(err)
+	}
+	visible := model.String()
+	if strings.Contains(visible, "stale") || !strings.Contains(visible, "COMMITTED_SENTINEL\nshort\nnext\ndraft") {
+		t.Fatalf("invalidated append corrupted committed rows or retained chrome: %q", visible)
+	}
+}
+
 func TestMaintainedVTOverwriteEraseWrapAndCursor(t *testing.T) {
 	model := vt.NewEmulator(8, 3)
 	defer model.Close()

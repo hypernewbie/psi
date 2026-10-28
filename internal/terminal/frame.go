@@ -29,9 +29,15 @@ type Writer struct {
 	prevCursorRow, prevCursorCol int
 	writes, frames, bytes        int
 	unchanged                    int
+	invalidTail                  bool
 }
 
 func NewWriter(out io.Writer) *Writer { return &Writer{Out: out} }
+
+// InvalidateTail discards differential row assumptions after native resize or
+// reflow. Unlike Pi's whole-document resize path, only psi's owned tail is
+// redrawn; committed conversation is never cleared or replayed.
+func (w *Writer) InvalidateTail() { w.invalidTail = true }
 
 func (w *Writer) Stats() (writes, frames, bytes, unchanged int) {
 	return w.writes, w.frames, w.bytes, w.unchanged
@@ -39,7 +45,7 @@ func (w *Writer) Stats() (writes, frames, bytes, unchanged int) {
 
 func (w *Writer) Emit(f Frame) error {
 	w.frames++
-	if f.Append == "" && equalRows(w.prevTail, f.Tail) && f.CursorRow == w.prevCursorRow && f.CursorCol == w.prevCursorCol && !f.HideCursor && !f.ShowCursor {
+	if !w.invalidTail && f.Append == "" && equalRows(w.prevTail, f.Tail) && f.CursorRow == w.prevCursorRow && f.CursorCol == w.prevCursorCol && !f.HideCursor && !f.ShowCursor {
 		w.unchanged++
 		return nil
 	}
@@ -60,6 +66,13 @@ func (w *Writer) Emit(f Frame) error {
 		row, col = r, c
 	}
 	old := w.prevTail
+	if w.invalidTail && len(old) > 0 {
+		move(0, 0)
+		// Reallocate rows with CRLF. Differential CSI-down movement clamps at
+		// the bottom when the old tail is taller than the resized viewport.
+		// Each rewritten row erases only its own stale suffix.
+		old = nil
+	}
 	if f.Append != "" {
 		if len(old) > 0 {
 			// Remove only the old viewport, never rows preceding its anchor.
@@ -75,6 +88,16 @@ func (w *Writer) Emit(f Frame) error {
 				b.WriteString(f.Append[i+1:])
 			} else {
 				b.WriteString(f.Append)
+				b.WriteString("\x1b[K")
+			}
+		} else if w.invalidTail {
+			// Native reflow may have left old chrome on the rows receiving
+			// committed text. Clear each suffix without walking the stale
+			// old row count (which can exceed the new viewport height).
+			text := strings.ReplaceAll(f.Append, "\r\n", "\n")
+			text = strings.ReplaceAll(text, "\n", "\x1b[K\r\n")
+			b.WriteString(text)
+			if !strings.HasSuffix(f.Append, "\n") {
 				b.WriteString("\x1b[K")
 			}
 		} else {
@@ -100,7 +123,7 @@ func (w *Writer) Emit(f Frame) error {
 			b.WriteString(f.Tail[i])
 			col = frameTailWidth(f, i)
 		}
-		if i < len(old) {
+		if i < len(old) || w.invalidTail {
 			b.WriteString("\x1b[K")
 		}
 	}
@@ -135,6 +158,7 @@ func (w *Writer) Emit(f Frame) error {
 	if err := WriteBounded(w.Out, b.Bytes()); err != nil {
 		return err
 	}
+	w.invalidTail = false
 	w.writes++
 	w.bytes += b.Len()
 	w.prevTail = append([]string(nil), f.Tail...)

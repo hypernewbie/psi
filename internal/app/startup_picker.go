@@ -85,6 +85,10 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 			if input.Err != nil {
 				return -1, true, input.Err
 			}
+			if input.Resize {
+				draw()
+				continue
+			}
 			if input.Paste || input.PasteStart || input.PasteEnd {
 				continue
 			}
@@ -128,7 +132,9 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 // behavior as /resume. Search text remains editor state and never enters recall.
 func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, selector *Selector) (*session.SessionInfo, bool, error) {
 	draw := func() {
-		lifecycle.redrawPicker(func(width int) []string { return selector.RenderPickerRows(width, false) })
+		width, rows := console.PickerSize()
+		console.SetPickerRows(selector.RenderPickerRows(width, rows, false))
+		console.Draw()
 	}
 	console.Editor.Clear()
 	draw()
@@ -148,6 +154,10 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 			}
 			if input.Err != nil {
 				return nil, true, input.Err
+			}
+			if input.Resize {
+				draw()
+				continue
 			}
 			if !input.Paste && !input.PasteStart && !input.PasteEnd {
 				switch string(input.Key) {

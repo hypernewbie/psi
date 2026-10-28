@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"psi/internal/session"
 	"psi/internal/terminal"
@@ -21,12 +22,13 @@ type Selector struct {
 	Models   bool
 	Thinking bool
 
-	Selected   int
-	SelectedID string
+	Selected     int
+	SelectedID   string
+	visibleCount int
 }
 
 func NewSelector(items []session.SessionInfo, activeID string) *Selector {
-	s := &Selector{Items: items, ActiveID: activeID, SelectedID: activeID, PageSize: 20}
+	s := &Selector{Items: items, ActiveID: activeID, SelectedID: activeID, PageSize: 20, visibleCount: 10}
 	s.apply()
 	return s
 }
@@ -108,7 +110,7 @@ func (s *Selector) MovePage(delta int) {
 	if len(s.Filtered) == 0 || delta == 0 {
 		return
 	}
-	s.Move(delta * 5)
+	s.Move(delta * max(1, s.visibleCount))
 }
 
 func (s *Selector) SelectedItem() *session.SessionInfo {
@@ -143,90 +145,153 @@ func (s *Selector) PageItems() []session.SessionInfo {
 
 // RenderPickerRows returns a bounded, searchable picker for the inline editor.
 // It never opens a transcript or reads session contents beyond supplied metadata.
-func (s *Selector) RenderPickerRows(width int, noColor bool) []string {
+func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string {
+	s.visibleCount = 0
+	if rowBudget <= 0 {
+		return nil
+	}
 	label := "Sessions"
 	if s.Models {
 		label = "Models"
 	} else if s.Thinking {
 		label = "Thinking levels"
 	}
-	header := terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), Token: terminal.TokenMuted}}}
-	if selected := s.SelectedItem(); selected != nil {
-		name, _ := s.pickerText(*selected)
-		if width < 32 {
-			header = terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: "› " + compactPickerName(name), Token: terminal.TokenAccent}}}
-		} else {
-			header.Spans = append(header.Spans, terminal.StyledSpan{Text: " · selected ", Token: terminal.TokenMuted}, terminal.StyledSpan{Text: name, Token: terminal.TokenAccent})
-		}
+	var rows []string
+	appendRow := func(text string, token terminal.ThemeToken) {
+		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: text, Token: token}}}, width, noColor))
 	}
-	rows := []string{terminal.FormatStyledRow(header, width, noColor)}
+	// At short heights retain real selectable rows, not a duplicate selected
+	// label in a header. Optional metadata disappears before list entries.
+	if rowBudget >= 3 {
+		appendRow(fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), terminal.TokenMuted)
+	}
 	if len(s.Filtered) == 0 {
-		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: "No matches", Token: terminal.TokenWarning}}}, width, noColor))
-		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: "Type to search · Esc/Ctrl+C cancel", Token: terminal.TokenMuted}}}, width, noColor))
+		appendRow("No matches", terminal.TokenMuted)
+		if rowBudget-len(rows) > 0 {
+			appendRow("Type to search · Esc/Ctrl+C cancel", terminal.TokenMuted)
+		}
 		return rows
 	}
-	start := max(0, min(s.Selected-1, len(s.Filtered)-5))
-	end := min(len(s.Filtered), start+5)
+	help := rowBudget >= 4
+	detail := s.Models && width >= 60 && rowBudget >= min(10, len(s.Filtered))+3
+	count := rowBudget - len(rows)
+	if help {
+		count--
+	}
+	if detail {
+		count--
+	}
+	count = min(10, count, len(s.Filtered))
+	s.visibleCount = count
+	// Pi centers the selection in its bounded list. Use the actual visible
+	// count, so a short terminal never clips away the selected row.
+	start := max(0, min(s.Selected-count/2, len(s.Filtered)-count))
+	end := min(len(s.Filtered), start+count)
+	now := time.Now()
 	for i := start; i < end; i++ {
 		item := s.Filtered[i]
 		selected := i == s.Selected
 		marker, markerToken := "  ", terminal.TokenMuted
 		if selected {
 			marker, markerToken = "› ", terminal.TokenAccent
+			if s.Models {
+				marker = "→ " // Pi's model selector uses →; session lists use ›.
+			}
 		}
 		spans := []terminal.StyledSpan{{Text: marker, Token: markerToken}}
 		if item.ID == s.ActiveID {
-			spans = append(spans, terminal.StyledSpan{Text: "* ", Token: terminal.TokenSuccess})
+			spans = append(spans, terminal.StyledSpan{Text: "✓ ", Token: terminal.TokenAccent})
 		} else {
 			spans = append(spans, terminal.StyledSpan{Text: "  ", Token: terminal.TokenMuted})
 		}
-		name, detail := s.pickerText(item)
+		name, metadata := s.pickerText(item, now)
+		name = terminal.SanitizeStatusRow(name)
+		metadata = terminal.SanitizeStatusRow(metadata)
 		nameToken := terminal.TokenText
-		if item.Unavailable != "" {
+		if item.Unavailable != "" && item.ID != s.ActiveID {
 			nameToken = terminal.TokenWarning
 		}
+		if selected {
+			nameToken = terminal.TokenAccent
+		}
+		if width < 48 && !s.Models {
+			metadata = ""
+		}
+		if metadata != "" && !s.Models && !s.Thinking {
+			// Like Pi's session list, keep compact age/identity at the right
+			// rather than letting a long prompt push it out of view.
+			metadata = terminal.TruncateToWidth(metadata, max(0, (width-7)/2))
+			name = terminal.TruncateToWidth(name, max(1, width-7-terminal.CellWidth(metadata)))
+		}
 		spans = append(spans, terminal.StyledSpan{Text: name, Token: nameToken})
-		if detail != "" {
-			spans = append(spans, terminal.StyledSpan{Text: "  " + detail, Token: terminal.TokenMuted})
+		if metadata != "" {
+			gap := 2
+			if s.Models {
+				gap = 1
+			} else if !s.Thinking {
+				gap = max(2, width-5-terminal.CellWidth(name)-terminal.CellWidth(metadata))
+			}
+			spans = append(spans, terminal.StyledSpan{Text: strings.Repeat(" ", gap) + metadata, Token: terminal.TokenMuted})
 		}
 		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: spans}, width, noColor))
 	}
-	rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: "↑/↓ select · PageUp/PageDown move · Enter apply · Esc cancel", Token: terminal.TokenMuted}}}, width, noColor))
+	if detail {
+		appendRow("  "+s.Filtered[s.Selected].FirstMessage, terminal.TokenMuted)
+	}
+	if help {
+		appendRow("↑/↓ select · PageUp/PageDown move · Enter apply · Esc cancel", terminal.TokenMuted)
+	}
 	return rows
 }
 
-func (s *Selector) pickerText(item session.SessionInfo) (string, string) {
+func (s *Selector) pickerText(item session.SessionInfo, now time.Time) (string, string) {
 	if s.Thinking {
 		return item.ID, item.FirstMessage
 	}
 	if s.Models {
-		return item.ID, item.FirstMessage
+		provider, model, found := strings.Cut(item.ID, "/")
+		if found {
+			return model, "[" + provider + "]"
+		}
+		return item.ID, ""
 	}
-	name := item.ID
-	if item.Name != "" {
-		name = firstLine(item.Name) + " · " + shortID(item.ID)
-	} else {
+	name := strings.TrimSpace(terminal.SanitizeStatusRow(item.Name))
+	if name == "" {
+		name = strings.TrimSpace(terminal.SanitizeStatusRow(item.FirstMessage))
+	}
+	if name == "" {
 		name = shortID(item.ID)
 	}
-	detail := item.Modified.Format("2006-01-02 15:04")
-	if preview := firstLine(item.FirstMessage); preview != "" {
-		detail += " · " + preview
+	metadata := fmt.Sprintf("%d %s · %s", item.MessageCount, formatSessionAge(item.Modified, now), shortID(item.ID))
+	if item.Unavailable != "" && item.ID != s.ActiveID {
+		metadata = "unavailable: " + item.Unavailable + " · " + shortID(item.ID)
 	}
-	if item.Unavailable != "" {
-		detail += " · unavailable: " + item.Unavailable
-	}
-	return name, detail
+	return name, metadata
 }
 
-func compactPickerName(name string) string {
-	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
-		name = name[slash+1:]
+// formatSessionAge follows Pi's session-selector.ts formatSessionDate. Unknown
+// timestamps stay unknown instead of becoming a fabricated age.
+func formatSessionAge(modified, now time.Time) string {
+	if modified.IsZero() {
+		return "?"
 	}
-	runes := []rune(name)
-	if len(runes) > 14 {
-		return string(runes[:14])
+	age := now.Sub(modified)
+	switch {
+	case age < time.Minute:
+		return "now"
+	case age < time.Hour:
+		return fmt.Sprintf("%dm", age/time.Minute)
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%dh", age/time.Hour)
+	case age < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", age/(24*time.Hour))
+	case age < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", age/(7*24*time.Hour))
+	case age < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", age/(30*24*time.Hour))
+	default:
+		return fmt.Sprintf("%dy", age/(365*24*time.Hour))
 	}
-	return name
 }
 
 func shortID(id string) string {
