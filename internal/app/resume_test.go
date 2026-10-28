@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,8 +16,14 @@ func TestResumeDisplaysHistory(t *testing.T) {
 	_, work, _, sessions := testutil.IsolatedEnv(t)
 	sessFile := filepath.Join(sessions, "ws", "s.jsonl")
 	os.MkdirAll(filepath.Dir(sessFile), 0o755)
+	// Marshal the workspace path: Windows temp dirs contain backslashes,
+	// which are invalid raw in a JSON string.
+	cwdJSON, err := json.Marshal(work)
+	if err != nil {
+		t.Fatal(err)
+	}
 	lines := []string{
-		`{"type":"session","version":3,"id":"r1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"` + work + `"}`,
+		`{"type":"session","version":3,"id":"r1","timestamp":"2026-01-01T00:00:00.000Z","cwd":` + string(cwdJSON) + `}`,
 		`{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"first","timestamp":1}}`,
 		`{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"checking"}],"api":"anthropic-messages","provider":"anthropic","model":"m","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}`,
 		`{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"read","arguments":{}}],"api":"anthropic-messages","provider":"anthropic","model":"m","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"tool_use","timestamp":3}}`,

@@ -49,7 +49,9 @@ func TestReviewCancelledEditWaitDoesNotRead(t *testing.T) {
 
 func TestReviewDrainGraceStartsAtLeaderExit(t *testing.T) {
 	res := NewRegistry(t.TempDir()).Dispatch(Invocation{Name: Bash, Arguments: map[string]any{
-		"command": "sleep 0.25; (sleep 0.04; printf after-exit) &",
+		// Short sleeps keep the regression sharp with margin for loaded
+		// CI hosts: the child must land inside the 100ms post-exit grace.
+		"command": "sleep 0.15; (sleep 0.01; printf after-exit) &",
 	}})
 	if res.IsError || !strings.Contains(res.Content[0].Text, "after-exit") {
 		t.Fatalf("quiet leader consumed descendant drain grace: %+v", res)

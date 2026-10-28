@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,9 @@ import (
 // allowlisted child environment, and an in-process HTTP server. Never use the
 // operator's real config as a fixture or enable a real provider in this test.
 func TestCodexActualAppPTYToolRoundTrip(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("app PTY workflow needs a Unix PTY")
+	}
 	home, ws := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, ".pi", "agent")
 	var requests atomic.Int32

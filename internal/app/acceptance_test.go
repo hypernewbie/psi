@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,13 @@ func TestAcceptanceResumeForms(t *testing.T) {
 	mk := func(id, msg string) string {
 		p := filepath.Join(sdir, "ws-"+id+".jsonl")
 		os.MkdirAll(filepath.Dir(p), 0o755)
-		data := `{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-01-01T00:00:00.000Z","cwd":"` + work + `"}` + "\n" +
+		// Marshal the workspace path: Windows temp dirs contain
+		// backslashes, which are invalid raw in a JSON string.
+		cwdJSON, err := json.Marshal(work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := `{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-01-01T00:00:00.000Z","cwd":` + string(cwdJSON) + `}` + "\n" +
 			`{"type":"message","id":"u-` + id + `","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"` + msg + `","timestamp":1}}` + "\n"
 		os.WriteFile(p, []byte(data), 0o644)
 		return p

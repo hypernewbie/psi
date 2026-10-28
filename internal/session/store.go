@@ -633,16 +633,7 @@ func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
 		return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
 	}
 	// A synced new file also needs a durable directory entry.
-	dir, err := os.Open(filepath.Dir(s.file))
-	if err != nil {
-		return err
-	}
-	err = dir.Sync()
-	closeErr := dir.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
+	return syncSessionDir(filepath.Dir(s.file))
 }
 
 // SessionInfo summarizes a session for discovery.

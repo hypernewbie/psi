@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -11,7 +12,9 @@ import (
 // credentials, proxies, provider opt-ins, and the user's configuration paths.
 // Use from TestMain in packages whose tests run real local tools.
 func RunIsolated(run func() int) int {
-	root, err := os.MkdirTemp("/tmp", "psi-regression-*")
+	// Empty dir means the platform default temp location. /tmp does not
+	// exist on Windows.
+	root, err := os.MkdirTemp("", "psi-regression-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cannot create isolated regression environment")
 		return 1
@@ -36,13 +39,24 @@ func RunIsolated(run func() int) int {
 			return 1
 		}
 	}
+	// Windows has no fixed coreutils path; shell tests there use the
+	// runner-provided bash, so PATH stays inherited on Windows.
+	isolatedPath := "/usr/local/bin:/usr/bin:/bin"
+	if runtime.GOOS == "windows" {
+		isolatedPath = os.Getenv("PATH")
+	}
 	for key, value := range map[string]string{
-		"PATH": "/usr/local/bin:/usr/bin:/bin",
+		"PATH": isolatedPath,
 		"HOME": filepath.Join(root, "home"), "TMPDIR": filepath.Join(root, "tmp"),
 		"PI_CODING_AGENT_DIR": filepath.Join(root, "agent"), "PI_CODING_AGENT_SESSION_DIR": filepath.Join(root, "sessions"),
 		"LANG": "C.UTF-8", "TERM": "xterm",
 	} {
 		os.Setenv(key, value)
+	}
+	if runtime.GOOS == "windows" {
+		// Go and most Windows tools read TEMP/TMP, not TMPDIR.
+		os.Setenv("TEMP", filepath.Join(root, "tmp"))
+		os.Setenv("TMP", filepath.Join(root, "tmp"))
 	}
 	// Probe markers for subprocess helpers survive isolation (P3-004).
 	for _, entry := range saved {

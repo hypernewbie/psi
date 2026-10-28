@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,9 @@ func writeAppFile(t *testing.T, path, text string) {
 }
 
 func TestActualAppPTYWorkflow(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("app PTY workflow needs a Unix PTY")
+	}
 	home, ws := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, ".pi", "agent")
 	requests := make(chan map[string]any, 16)

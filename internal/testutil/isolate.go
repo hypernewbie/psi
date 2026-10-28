@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -42,9 +43,14 @@ func IsolatedEnv(t *testing.T) (home, work, agent, sessions string) {
 }
 
 // ChildEnv returns the allowlisted env for a regression subprocess.
-// Only PATH, HOME, and explicit synthetic vars pass through.
+// Only PATH, HOME, and explicit synthetic vars pass through. Windows has
+// no fixed coreutils path, so children there inherit PATH for node/bash.
 func ChildEnv(home string, extra map[string]string) []string {
-	env := []string{"HOME=" + home, "PATH=/usr/local/bin:/usr/bin:/bin"}
+	path := "/usr/local/bin:/usr/bin:/bin"
+	if runtime.GOOS == "windows" {
+		path = os.Getenv("PATH")
+	}
+	env := []string{"HOME=" + home, "PATH=" + path}
 	for k, v := range extra {
 		env = append(env, k+"="+v)
 	}

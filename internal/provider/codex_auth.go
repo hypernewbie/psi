@@ -380,10 +380,13 @@ func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat tim
 		once.Do(func() {
 			close(stop)
 			<-done
-			if valid() {
+			stillValid := valid()
+			// Windows cannot remove a directory with an open handle in
+			// it, so release the descriptor before removing the lease.
+			dir.Close()
+			if stillValid {
 				_ = os.Remove(path)
 			}
-			dir.Close()
 		})
 	}
 	return unlock, valid, nil
