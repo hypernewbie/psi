@@ -108,3 +108,11 @@ SHA-256  44e1db5bca2391d316cb91c7a80fa802bfa61acf7ea57b9dc79defe587215e34
 | G4-04 completion and pickers | Automated pass | Search, keyboard precedence, persistence, and lifecycle tests pass |
 | G4-05 startup/cancellation/lifecycle | Linux and Windows automated pass; platform partial | Windows package suites and ConPTY draft/clear/quit plus the six-size interaction matrix pass; macOS execution and human terminal lifecycle remain unverified |
 | G4-06 supported platforms/delivery | Blocked | Final Linux binary provenance and native Windows test evidence are recorded. Remote CI, macOS runtime, and Windows Terminal/human checks remain outstanding |
+
+## Handoff for blocked acceptance
+
+| Required input | Acceptance work | Record in this ledger |
+|---|---|---|
+| An existing VCI coordinator destination and explicit client-configuration authorization | Configure only the VCI client, then run the repository CI workflow through VCI. Do not create or administer a coordinator. | Run ID, target states, and any unavailable targets for P4-034/G4-06 |
+| A native macOS host or runner | Execute the repository macOS CI jobs, including PTY and terminal-state comparisons. Cross-compilation is not runtime evidence. | Job result and any platform-specific failures for A4-20/G4-05/G4-06 |
+| A human with access to a supported terminal and a pinned-Pi comparison runtime | Compare regular-mode structure; check delayed-stream flicker, light/dark and `NO_COLOR` readability, shell restoration, and native selection/copy of prose and code. No application-controlled mouse or clipboard path should appear. | Terminal/emulator/version, comparison basis, and pass/fail notes for A4-19/A4-20/A4-22 and G4-01/G4-02/G4-06 |
