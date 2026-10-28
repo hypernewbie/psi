@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"psi/internal/session"
+	"psi/internal/terminal"
 )
 
 func renderTimeline(print func(string), items []session.TranscriptItem) {
@@ -13,13 +14,15 @@ func renderTimeline(print func(string), items []session.TranscriptItem) {
 // The checked path lets the actual event loop stop between bounded output
 // batches. Merely splitting a string into batches does not make replay cancellable.
 func renderTimelineChecked(emit func(string) bool, items []session.TranscriptItem) bool {
+	return renderTimelineAtWidth(emit, items, 80)
+}
+
+func renderTimelineAtWidth(emit func(string) bool, items []session.TranscriptItem, width int) bool {
 	for _, it := range items {
 		var lines []string
 		switch it.Kind {
-		case session.KindUser:
-			lines = []string{"You", it.Text, ""}
-		case session.KindAssistant:
-			lines = []string{"Assistant", it.Text, ""}
+		case session.KindUser, session.KindAssistant:
+			lines = terminal.FormatMessage(it.Text, width, false)
 		case session.KindTool:
 			text := it.Text
 			if it.Note != "" {
@@ -42,6 +45,9 @@ func renderTimelineChecked(emit func(string) bool, items []session.TranscriptIte
 			lines = []string{it.Text}
 		}
 		for _, line := range lines {
+			if it.Kind != session.KindUser && it.Kind != session.KindAssistant {
+				line = terminal.Sanitize(line)
+			}
 			if !emit(line) {
 				return false
 			}
@@ -55,24 +61,28 @@ func replayActivation(print func(string), act *Activation, isNew bool, activeID 
 }
 
 func replayActivationChecked(emit func(string) bool, act *Activation, isNew bool, activeID string) bool {
+	return replayActivationAtWidth(emit, act, isNew, activeID, 80)
+}
+
+func replayActivationAtWidth(emit func(string) bool, act *Activation, isNew bool, activeID string, width int) bool {
 	if act.Store.Header().ID == activeID && !isNew {
 		return true
 	}
-	if !emit("--- session " + act.Store.Header().ID + " ---") {
+	if !emit("--- session " + terminal.Sanitize(act.Store.Header().ID) + " ---") {
 		return false
 	}
 	if act.Offline && act.OfflineErr != nil {
-		if !emit("offline: " + act.OfflineErr.Error() + " (history readable, continuation blocked)") {
+		if !emit(terminal.Sanitize("offline: " + act.OfflineErr.Error() + " (history readable, continuation blocked)")) {
 			return false
 		}
 	}
 	visible := map[string]bool{}
 	complete, err := act.Store.Timeline(false, 0, func(it session.TranscriptItem) bool {
 		visible[it.SourceID] = true
-		return renderTimelineChecked(emit, []session.TranscriptItem{it})
+		return renderTimelineAtWidth(emit, []session.TranscriptItem{it}, width)
 	})
 	if err != nil {
-		emit("History unavailable: " + err.Error())
+		emit(terminal.Sanitize("History unavailable: " + err.Error()))
 		return false
 	}
 	if !complete {

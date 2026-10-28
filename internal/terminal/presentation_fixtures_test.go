@@ -44,6 +44,37 @@ func TestPlan4BaselineFixtureIsSyntheticAndCanaryFree(t *testing.T) {
 	}
 }
 
+func TestPlan4PiMarkdownFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/plan4-pi-markdown.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Reference   string   `json:"reference"`
+		Size        string   `json:"size"`
+		Width       int      `json:"width"`
+		Source      string   `json:"source"`
+		MessageRows []string `json:"messageRows"`
+		StyleTokens []string `json:"styleTokens"`
+		Omissions   []string `json:"omissions"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	got := FormatMessage(fixture.Source, fixture.Width, true)
+	if len(got) != len(fixture.MessageRows) {
+		t.Fatalf("message rows=%#v want %#v", got, fixture.MessageRows)
+	}
+	for i := range got {
+		if got[i] != fixture.MessageRows[i] {
+			t.Errorf("message row %d: got %q want %q", i, got[i], fixture.MessageRows[i])
+		}
+	}
+	if !strings.Contains(fixture.Reference, "d5b3de22d0e24a3e9c38a9410d3329b099717283") || len(fixture.StyleTokens) == 0 || len(fixture.Omissions) == 0 {
+		t.Fatal("Markdown fixture must identify pinned behavior and intentional omissions")
+	}
+}
+
 func TestPlan4PiEditorAndFooterFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/plan4-pi-components.json")
 	if err != nil {

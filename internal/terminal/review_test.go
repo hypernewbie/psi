@@ -36,7 +36,7 @@ func TestModelActuallyOverwritesAndErases(t *testing.T) {
 	}
 }
 
-func TestSubmitReplacesViewportAndPreservesCommittedRows(t *testing.T) {
+func TestSubmitDefersMessageOutputUntilApplicationClassification(t *testing.T) {
 	c, vt, raw := reviewConsole()
 	fmt.Fprintln(RawOutput{W: c}, "committed sentinel")
 	c.Editor.Insert("first\nsecond\nthird")
@@ -50,12 +50,12 @@ func TestSubmitReplacesViewportAndPreservesCommittedRows(t *testing.T) {
 	c.Draw()
 	fmt.Fprintln(RawOutput{W: c}, "a local notice")
 	c.Draw()
-	want := "committed sentinel\n> first\n  second\n  third\na local notice\n─"
+	want := "committed sentinel\na local notice\n─"
 	if !strings.HasPrefix(vt.Text(), want) {
 		t.Fatalf("screen:\n%s\nwant:\n%s", vt.Text(), want)
 	}
-	if strings.Count(vt.Text(), "> first") != 1 {
-		t.Fatal("accepted draft duplicated")
+	if strings.Contains(vt.Text(), "first") || strings.Contains(vt.Text(), "second") {
+		t.Fatal("Console committed a message before the application classified it")
 	}
 	for _, forbidden := range []string{"\x1b[J", "\x1b[0J", "\x1b[2J", "\x1b[3J"} {
 		if bytes.Contains(raw.Bytes(), []byte(forbidden)) {

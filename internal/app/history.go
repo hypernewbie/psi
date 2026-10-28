@@ -47,6 +47,10 @@ func historyItems(path []*session.Entry, arg string) ([]session.TranscriptItem, 
 }
 
 func renderStoreHistory(store *session.Store, arg string, emit func(string) bool) (bool, error) {
+	return renderStoreHistoryAtWidth(store, arg, emit, 80)
+}
+
+func renderStoreHistoryAtWidth(store *session.Store, arg string, emit func(string) bool, width int) (bool, error) {
 	all, n, err := historySelection(arg)
 	if err != nil {
 		return false, err
@@ -54,5 +58,7 @@ func renderStoreHistory(store *session.Store, arg string, emit func(string) bool
 	if !all && !emit("--- Conversation history (display only, not model input) ---") {
 		return false, nil
 	}
-	return store.Timeline(all, n, func(it session.TranscriptItem) bool { return renderTimelineChecked(emit, []session.TranscriptItem{it}) })
+	return store.Timeline(all, n, func(it session.TranscriptItem) bool {
+		return renderTimelineAtWidth(emit, []session.TranscriptItem{it}, width)
+	})
 }

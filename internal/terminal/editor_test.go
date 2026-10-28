@@ -33,6 +33,16 @@ func TestCompletion(t *testing.T) {
 	}
 }
 
+func TestRestoreDraftPreservesTextAndGraphemeSafeCursorWithoutHistory(t *testing.T) {
+	e := NewEditor()
+	if !e.RestoreDraft("e\u0301x", 1) {
+		t.Fatal("restore rejected a bounded draft")
+	}
+	if e.Text() != "e\u0301x" || e.Pos() != 2 || len(e.History()) != 0 {
+		t.Fatalf("draft=%q pos=%d history=%q", e.Text(), e.Pos(), e.History())
+	}
+}
+
 // P2-023: viewport resize-safe, 1-column + very short terminals.
 func TestViewportResizeSafe(t *testing.T) {
 	e := NewEditor()

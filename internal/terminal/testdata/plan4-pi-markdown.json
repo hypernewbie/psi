@@ -1,0 +1,29 @@
+{
+  "reference": "Pi Markdown component at d5b3de22d0e24a3e9c38a9410d3329b099717283",
+  "size": "60x16",
+  "width": 60,
+  "source": "# Result\n\nThe fix **passes** with `go test`.\n\n```go\nfmt.Println(\"ok\")\n```",
+  "messageRows": [
+    "  Result",
+    "",
+    "  The fix passes with go test.",
+    "",
+    "```go",
+    "  fmt.Println(\"ok\")",
+    "```",
+    ""
+  ],
+  "styleTokens": [
+    "mdHeading/bold/underline",
+    "bold",
+    "mdCode",
+    "mdCodeBlock",
+    "muted fence border"
+  ],
+  "omissions": [
+    "No language highlighter",
+    "No OSC 8 hyperlinks",
+    "No math, Mermaid, terminal images, or table layout",
+    "Raw HTML and unsupported structures remain literal text"
+  ]
+}

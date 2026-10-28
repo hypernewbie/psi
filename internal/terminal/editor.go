@@ -80,6 +80,23 @@ func snapByte(s string, off int) int {
 
 func (e *Editor) Text() string { return string(e.buf) }
 func (e *Editor) Pos() int     { return e.pos }
+
+// RestoreDraft restores a submitted draft after application preflight rejects
+// the operation. It does not add the text to recall history.
+func (e *Editor) RestoreDraft(text string, pos int) bool {
+	text = normalizeRecall(text)
+	if len(text) > editorBudget {
+		return false
+	}
+	e.buf = []rune(text)
+	pos = max(0, min(pos, len(e.buf)))
+	offset := runeToByte(e.buf, pos)
+	e.pos = byteToRune(e.buf, snapByte(text, offset))
+	e.histIdx = -1
+	e.draft, e.draftPos = "", 0
+	e.prefCol = -1
+	return true
+}
 func (e *Editor) Clear() {
 	e.buf = nil
 	e.pos = 0

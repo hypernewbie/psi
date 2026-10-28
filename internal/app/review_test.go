@@ -307,7 +307,7 @@ func TestActualResumeScreenBackspaceAndNewSessionRecall(t *testing.T) {
 	}
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
 	q.prompt()
-	if !strings.Contains(q.screen.Text(), "You\nold question\n\nAssistant\nold answer") {
+	if !strings.Contains(q.screen.Text(), "  old question\n\n  old answer") {
 		t.Fatal("resumed history missing from screen: " + q.screen.Text())
 	}
 	q.write("abc\x7fd\r")
@@ -319,7 +319,7 @@ func TestActualResumeScreenBackspaceAndNewSessionRecall(t *testing.T) {
 	if !bytes.Contains(last, []byte(`"abd"`)) || bytes.Contains(last, []byte("abcd")) {
 		t.Fatalf("backspace not reflected in request: %s", last)
 	}
-	if strings.Count(q.screen.Text(), "> abd") != 1 {
+	if strings.Count(q.screen.Text(), "  abd") != 1 {
 		t.Fatal("accepted input duplicated: " + q.screen.Text())
 	}
 	q.write("/history all\r")

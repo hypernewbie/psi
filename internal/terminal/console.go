@@ -351,10 +351,11 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.pasteActive = false
 			c.pasteBuf.Reset()
 			return "", false, false, false
-		case '\r': // Enter submits outside paste.
+		case '\r': // Enter submits outside paste; the application classifies before display.
 			c.inputLimitShown = false
-			c.commitAccepted()
-			return c.Editor.Submit(), true, false, false
+			text := c.Editor.Submit()
+			c.Draw()
+			return text, true, false, false
 		}
 	}
 	// Tab: complete slash-command/skill names (P2-022). No overlay, no exec.
@@ -478,27 +479,6 @@ func (c *Console) drawIfChanged(force bool) {
 		return
 	}
 	c.Draw()
-}
-
-// commitAccepted commits the complete accepted user message once (P2-029).
-// The viewport may show only the end, but scrollback gets the full message and
-// the session gets one entry. No second draft copy as the accepted message.
-func (c *Console) commitAccepted() {
-	// Render full draft to scrollback as one message (append-only).
-	full := c.Editor.Text()
-	lines := strings.Split(full, "\n")
-	var b strings.Builder
-	b.WriteString("> ")
-	for i, ln := range lines {
-		if i > 0 {
-			b.WriteString("\n  ")
-		}
-		b.WriteString(Sanitize(ln))
-	}
-	b.WriteString("\n")
-	_, _ = c.Write([]byte(strings.ReplaceAll(b.String(), "\n", "\r\n")))
-	c.lastDraft = ""
-	c.dirty = false
 }
 
 func (c *Console) StatusWidth() int {

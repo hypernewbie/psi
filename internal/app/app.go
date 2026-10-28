@@ -536,6 +536,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
 	var outputErr error
+	var submittedDraft string
+	var submittedCursor int
 	var suspendPending bool
 	inputs := console.Inputs
 	frameTimer := time.NewTimer(time.Hour)
@@ -575,7 +577,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.Skills = append(console.Skills, skill.Name)
 	}
 	emitReplay := func(text string) bool {
-		for _, batch := range terminal.Batches(terminal.Sanitize(text)+"\n", 64*1024) {
+		for _, batch := range terminal.Batches(text+"\n", 64*1024) {
 		inputScan:
 			for i := 0; i < 64; i++ {
 				select {
@@ -619,7 +621,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// Startup activation: display current view before the next editable prompt (P2-035).
 	// Same projector + replay engine as /resume (P2-036).
 	if act, err := PrepareActivation(r.store); err == nil {
-		if !replayActivationChecked(emitReplay, act, true, "") {
+		if !replayActivationAtWidth(emitReplay, act, true, "", console.StatusWidth()) {
 			stoppedReplay()
 		}
 		console.Editor.SetHistory(act.Recall)
@@ -632,22 +634,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 		print("error: " + err.Error())
 		r.state = StateIdle
 	}
-	assistantOpen := false
 	applyEvent := func(ev event.Event) {
 		if ev.Generation != 0 && ev.Generation != r.generation {
 			return
 		}
 		switch ev.Type {
 		case event.TextDelta:
-			if !assistantOpen {
-				print("Assistant")
-				assistantOpen = true
-			}
 			r.state = StateStreaming
 			stream.Delta(ev.Text)
 		case event.ToolStart:
 			stream.Close()
-			assistantOpen = false
 			r.state = StateRunningTool
 			setActivity(terminal.FormatStatus(ev.ToolName, terminal.ToolRunning) + " · Esc/Ctrl+C cancel, input paused")
 			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
@@ -674,17 +670,24 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		}
 	}
-	start := func(text, focus, invocation, source string, compact bool) {
+	start := func(text, display, focus, invocation, source string, compact bool) {
 		if err := r.store.WriteError(); err != nil {
 			r.state = StateStorageBlocked
 			print("storage blocked: " + err.Error() + " (open a checked copy or /new)")
+			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 			r.draw(console)
 			return
 		}
 		if r.authErr != nil {
 			print("error: " + r.authErr.Error())
+			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 			r.draw(console)
 			return
+		}
+		if strings.TrimSpace(display) != "" {
+			for _, line := range terminal.FormatMessage(display, console.StatusWidth(), false) {
+				fmt.Fprintln(out, line)
+			}
 		}
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
@@ -695,7 +698,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.state = StateCompacting
 			setActivity("Compacting context… (Esc/Ctrl+C cancel)")
 		}
-		assistantOpen = false
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
 		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
@@ -871,7 +873,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.draw(console)
 				continue
 			}
+			draftBefore, cursorBefore := console.Editor.Text(), console.Editor.Pos()
 			text, submitted, quit, abort := console.Handle(input, busy)
+			if submitted {
+				submittedDraft, submittedCursor = draftBefore, cursorBefore
+			}
 			if abort && busy {
 				cancelActive()
 			}
@@ -932,7 +938,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							} else {
 								print("resumed " + r.store.Header().ID)
 								r.generation++
-								if !replayActivationChecked(emitReplay, act, false, oldID) {
+								if !replayActivationAtWidth(emitReplay, act, false, oldID, console.StatusWidth()) {
 									stoppedReplay()
 								}
 								console.Editor.SetHistory(act.Recall)
@@ -973,12 +979,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 						if strings.TrimSpace(cmd.Arg) != "" {
 							invocation += " " + cmd.Arg
 						}
-						start(expanded, "", invocation, "skill", false)
+						start(expanded, text, "", invocation, "skill", false)
 					}
 					continue
 				}
 				if cmd.Name == "history" {
-					complete, err := renderStoreHistory(r.store, cmd.Arg, emitReplay)
+					complete, err := renderStoreHistoryAtWidth(r.store, cmd.Arg, emitReplay, console.StatusWidth())
 					if err != nil {
 						print("error: " + err.Error())
 					} else if !complete {
@@ -988,7 +994,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if cmd.Name == "compact" {
-					start("", cmd.Arg, "", "", true)
+					start("", "", cmd.Arg, "", "", true)
 					continue
 				}
 				if cmd.Name == "model" && strings.TrimSpace(cmd.Arg) == "" {
@@ -1032,7 +1038,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.draw(console)
 				continue
 			}
-			start(text, "", "", "", false)
+			start(text, text, "", "", "", false)
 		}
 	}
 }

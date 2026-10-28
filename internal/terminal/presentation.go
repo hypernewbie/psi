@@ -22,6 +22,7 @@ const (
 	TokenError           ThemeToken = "error"
 	TokenHeading         ThemeToken = "mdHeading"
 	TokenCode            ThemeToken = "mdCode"
+	TokenCodeBlock       ThemeToken = "mdCodeBlock"
 	TokenLink            ThemeToken = "mdLink"
 	TokenQuote           ThemeToken = "mdQuote"
 	TokenThinkingOff     ThemeToken = "thinkingOff"
@@ -44,7 +45,7 @@ func tokenSGR(token ThemeToken) string {
 		return "34" // palette slot 4, blue
 	case TokenAccent, TokenCode, TokenThinkingHigh:
 		return "35" // palette slot 5, violet
-	case TokenSuccess:
+	case TokenCodeBlock, TokenSuccess:
 		return "32" // palette slot 2, green
 	case TokenWarning, TokenHeading:
 		return "33" // palette slot 3, yellow
@@ -81,8 +82,11 @@ func thinkingToken(level string) ThemeToken {
 }
 
 type StyledSpan struct {
-	Text  string
-	Token ThemeToken
+	Text      string
+	Token     ThemeToken
+	Bold      bool
+	Italic    bool
+	Underline bool
 }
 
 // StyledRow contains untrusted, plain-text spans. Only Serialize generates
@@ -101,25 +105,54 @@ func (r StyledRow) Width() int { return CellWidth(r.Plain()) }
 
 func (r StyledRow) Serialize(noColor bool) string {
 	var b strings.Builder
-	for _, span := range r.Spans {
-		text := SanitizeStatusRow(span.Text)
-		if text == "" {
-			continue
+	var text strings.Builder
+	var active StyledSpan
+	activeSet := false
+	flush := func() {
+		if text.Len() == 0 {
+			return
 		}
-		sgr := ""
+		var codes []string
 		if !noColor {
-			sgr = tokenSGR(span.Token)
+			if sgr := tokenSGR(active.Token); sgr != "" {
+				codes = append(codes, sgr)
+			}
+			if active.Bold {
+				codes = append(codes, "1")
+			}
+			if active.Italic {
+				codes = append(codes, "3")
+			}
+			if active.Underline {
+				codes = append(codes, "4")
+			}
 		}
-		if sgr != "" {
+		if len(codes) > 0 {
 			b.WriteString("\x1b[")
-			b.WriteString(sgr)
+			b.WriteString(strings.Join(codes, ";"))
 			b.WriteByte('m')
 		}
-		b.WriteString(text)
-		if sgr != "" {
+		b.WriteString(text.String())
+		if len(codes) > 0 {
 			b.WriteString("\x1b[0m")
 		}
+		text.Reset()
 	}
+	for _, span := range r.Spans {
+		plain := SanitizeStatusRow(span.Text)
+		if plain == "" {
+			continue
+		}
+		if activeSet && (active.Token != span.Token || active.Bold != span.Bold || active.Italic != span.Italic || active.Underline != span.Underline) {
+			flush()
+			activeSet = false
+		}
+		if !activeSet {
+			active, activeSet = span, true
+		}
+		text.WriteString(plain)
+	}
+	flush()
 	return b.String()
 }
 
@@ -132,7 +165,7 @@ func ClipStyledRow(row StyledRow, maxCells int) StyledRow {
 		text := SanitizeStatusRow(span.Text)
 		clipped := TruncateToWidth(text, left)
 		if clipped != "" {
-			out.Spans = append(out.Spans, StyledSpan{Text: clipped, Token: span.Token})
+			out.Spans = append(out.Spans, StyledSpan{Text: clipped, Token: span.Token, Bold: span.Bold, Italic: span.Italic, Underline: span.Underline})
 			left -= CellWidth(clipped)
 		}
 		if CellWidth(clipped) < CellWidth(text) || left == 0 {

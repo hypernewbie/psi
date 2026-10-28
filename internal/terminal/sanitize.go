@@ -90,7 +90,32 @@ func (s *Sanitizer) Feed(text string) string {
 	return out.String()
 }
 
-func Sanitize(text string) string { var s Sanitizer; return s.Feed(text) }
+func Sanitize(text string) string {
+	if !requiresSanitization(text) {
+		return text
+	}
+	var s Sanitizer
+	return s.Feed(text)
+}
+
+func requiresSanitization(text string) bool {
+	for i := 0; i < len(text); {
+		if text[i] < utf8.RuneSelf {
+			b := text[i]
+			if b == 27 || b == 0x7f || (b < 0x20 && b != '\n' && b != '\t') {
+				return true
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if (r == utf8.RuneError && size == 1) || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) {
+			return true
+		}
+		i += size
+	}
+	return false
+}
 
 func isBidiControl(r rune) bool {
 	switch r {
