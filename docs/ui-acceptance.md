@@ -2,9 +2,9 @@
 
 ## Status
 
-The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows tests, native Windows console execution, human terminal review, and the full actual-app resize matrix remain unavailable.
+The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows CI, broader Windows Terminal interactions, human terminal review, and the full actual-app resize matrix remain unavailable. A native Windows ConPTY smoke now passes.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest measured source revision: `b79ecd9616cf76568b176cd4eca3a398a6e2b727` (`b79ecd9`; the UI profile suite is recorded at `51a56e3`, followed by a maintained-VT resize regression). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `68a29be444fdbb52ea4ffb8688c339e90f47c4cc` (`68a29be`; quantitative UI profiles were collected at `51a56e3`, followed by resize and Windows ConPTY tests). The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -24,11 +24,11 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | A4-01–02 | Inline startup/editor, grapheme editing, literal paste, recall, cursor, overflow, and responsive geometry tests; actual-app PTY coverage | Human readability and copy check blocked |
 | A4-03 | Slow-stream and actual-app PTY tests preserve the indicator, footer, editor, and partial text. A loopback provider sends 10,000 one-character deltas in 30 paced batches; order and persistence are checked. The REPL profile separately counts timer and event-boundary frames, writer frames/writes, and maximum write size. | Automated pass; human perception/flicker check remains blocked |
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests | Automated pass |
-| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; native console checks remain blocked |
+| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; Windows ConPTY draft/clear/quit smoke passes, but Windows picker interactions are unverified |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests | Automated pass |
 | A4-18 | Maintained VT test keeps an active draft and committed sentinel through 120×40, 80×24, 60×16, 40×12, 20×6, then back to 80×24; picker and tail geometry fixtures cover the same sizes | **Partial:** no actual-app matrix combines every operation (typing, stream, tool, picker) at every size |
 | A4-19 | `NO_COLOR`, semantic token, and no-generated-SGR fixtures | Automated pass; light/dark human checks blocked |
-| A4-20 | Unix PTY suspend/resume, EOF, shutdown, and termios restoration; comparison masks only macOS PENDIN | Linux pass; macOS/native Windows execution and human shell restoration blocked |
+| A4-20 | Unix PTY suspend/resume, EOF, shutdown, and termios restoration; comparison masks only macOS PENDIN. Native Windows ConPTY draft/clear/quit smoke also passes. | Linux lifecycle and Windows ConPTY smoke pass; macOS runtime and human shell restoration remain blocked |
 | A4-21 | Malicious control, path, provider, Markdown, tool-body, and secret canaries across display tests | Automated pass for covered paths |
 | A4-22 | Native terminal behavior is preserved by the inline writer; no application mouse capture or clipboard path exists | **Blocked:** prose/code selection and copy were not checked by a human |
 
@@ -57,6 +57,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 Profile fixture hashes:
 
 ```text
+internal/app/conpty_windows_test.go    791e11d6e62af2df9fe1d913c0fd701a6c1d753fe1219b8199482c47946398b6
 internal/app/app_test.go              3f2f4def8bbbe35ef38055d4657ec736010e7fd495ba2540b75ddee6d3309f35
 internal/app/review_test.go            2e4c30ee82f217d84427d8bbf7fcaddf3c85a895689ad9a589c06afdfe0e9e9d
 internal/app/idle_profile_test.go       f0251fc7cbbed3339d16afd3e3cd2f66dbafd167f7c2be512399e82025117985
@@ -82,14 +83,14 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 ## Build and platform evidence
 
 - Local `go test ./...`, `go test -race ./...`, `go vet ./...`, and `go build ./...` passed.
-- Package builds and test-binary compilation passed for `darwin/amd64`, `darwin/arm64`, and `windows/amd64`; `GOOS=windows go vet ./internal/app` also passed. These are compile/static checks only; no foreign test binary was executed.
-- A Windows-only ConPTY test now launches the actual interactive app test process, types a draft, clears it, and exits. It cross-compiles but has not run on a native Windows host.
+- Package builds and test-binary compilation passed for `darwin/amd64`, `darwin/arm64`, and `windows/amd64`; `GOOS=windows go vet ./internal/app` also passed. macOS binaries were not executed. The Windows ConPTY test binary was executed on native Windows through WSL2 interop.
+- The Windows-only ConPTY test passed on native Windows 11 `10.0.26200.8875` through WSL2 interop. It launched the real interactive app test process, typed a draft, cleared it with Ctrl+C, exited with `/quit`, and found no alternate-screen or full-screen clear during the app interaction.
 - `vci wait-ready` could not run because `/home/hypernewbie/.vci/config.toml` is absent. The Vci client was not configured because no existing coordinator destination was supplied.
-- Native Windows ConPTY execution, macOS runtime tests, SSH/tmux checks, remote CI, and all human terminal checks remain blocked. A successful cross-build is not runtime evidence.
+- Remote Linux/macOS/Windows CI, macOS runtime tests, SSH/tmux checks, Windows Terminal/Git Bash human checks, and all human visual/copy checks remain blocked. The ConPTY test covers only its scripted Windows interaction.
 
 ### Final executable provenance
 
-Built from repository tree revision `51a56e3ca822c529a3e06f59982391eb37701720` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-51a56e3 ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9d64580`; subsequent changes are test/documentation only. The final-tree rebuild was byte-identical.
+Built from repository tree revision `68a29be444fdbb52ea4ffb8688c339e90f47c4cc` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-68a29be ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9d64580`; subsequent changes are test/documentation only. The final-tree rebuild was byte-identical.
 
 ```text
 SHA-256  ab811a7a72c08de11b7aea3fdff847717cfd3253256e8a3f761d25863acfd870
@@ -103,5 +104,5 @@ SHA-256  ab811a7a72c08de11b7aea3fdff847717cfd3253256e8a3f761d25863acfd870
 | G4-02 editor/footer/scrollback | Automated pass; human partial | VT and PTY evidence passes; human flicker/selection check unavailable |
 | G4-03 messages/Markdown/tools/restart | Automated pass | Shared formatter and synthetic replay/settlement tests pass |
 | G4-04 completion and pickers | Automated pass | Search, keyboard precedence, persistence, and lifecycle tests pass |
-| G4-05 startup/cancellation/lifecycle | Linux automated pass; platform partial | Unix PTY lifecycle passes; macOS/Windows execution remains unverified |
-| G4-06 supported platforms/delivery | Blocked | Final Linux binary provenance is recorded. Remote CI, Windows console smoke, and human checks remain outstanding |
+| G4-05 startup/cancellation/lifecycle | Linux automated pass; Windows ConPTY smoke pass; platform partial | Unix PTY lifecycle and Windows draft/clear/quit pass; macOS execution and broader Windows lifecycle remain unverified |
+| G4-06 supported platforms/delivery | Blocked | Final Linux binary provenance and a Windows ConPTY smoke are recorded. Remote CI, macOS runtime, Windows Terminal/human checks remain outstanding |
