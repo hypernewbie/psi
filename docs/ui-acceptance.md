@@ -75,6 +75,14 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 - `vci wait-ready` could not run because `/home/hypernewbie/.vci/config.toml` is absent. The Vci client was not configured because no existing coordinator destination was supplied.
 - Native Windows console/ConPTY smoke, macOS runtime tests, SSH/tmux checks, and all human terminal checks remain blocked. A successful cross-build is not runtime evidence.
 
+### Final executable provenance
+
+Built from source revision `2e74bd311efd8193ee9e06207bcee66f914fe4ba` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-2e74bd3 ./cmd/psi` on Linux amd64 using Go 1.26.4.
+
+```text
+SHA-256  a1756d8850d13bf01b872114a2ab8a2e37244936cd7394250ff51dc68d67af3e
+```
+
 ## Gate disposition
 
 | Gate | Status | Reason |
@@ -84,4 +92,4 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 | G4-03 messages/Markdown/tools/restart | Automated pass | Shared formatter and synthetic replay/settlement tests pass |
 | G4-04 completion and pickers | Automated pass | Search, keyboard precedence, persistence, and lifecycle tests pass |
 | G4-05 startup/cancellation/lifecycle | Linux automated pass; platform partial | Unix PTY lifecycle passes; macOS/Windows execution remains unverified |
-| G4-06 supported platforms/delivery | Blocked | Remote CI, Windows console smoke, human checks, and final binary checksum remain outstanding |
+| G4-06 supported platforms/delivery | Blocked | Final Linux binary provenance is recorded. Remote CI, Windows console smoke, and human checks remain outstanding |
