@@ -77,6 +77,34 @@ func Test256KiBPasteUpdatesWithinBudget(t *testing.T) {
 	}
 }
 
+func TestScheduledFrameBatchCombinesAppendAndStatus(t *testing.T) {
+	c, vt, _ := reviewConsole()
+	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
+	_, before, _, _ := c.writer.Stats()
+	c.BeginFrame()
+	if _, err := c.MarkdownWrite([]byte("First stable paragraph.\n\nActive tail")); err != nil {
+		t.Fatal(err)
+	}
+	c.Status("Working…")
+	_, during, _, _ := c.writer.Stats()
+	if during != before {
+		t.Fatalf("batched updates emitted early: before=%d during=%d", before, during)
+	}
+	if err := c.EndFrame(); err != nil {
+		t.Fatal(err)
+	}
+	_, after, _, _ := c.writer.Stats()
+	if after-before != 1 {
+		t.Fatalf("append, active tail, and status used %d frames, want one", after-before)
+	}
+	visible := strings.Join(vt.Scrollback, "\n") + "\n" + vt.Text()
+	for _, text := range []string{"First stable paragraph.", "Active tail", "Working…", "model"} {
+		if !strings.Contains(visible, text) {
+			t.Fatalf("combined frame lost %q: %q", text, visible)
+		}
+	}
+}
+
 func TestModelActuallyOverwritesAndErases(t *testing.T) {
 	vt := testutil.NewVTModel(12, 3)
 	vt.Feed([]byte("abcde\rXY\x1b[K"))

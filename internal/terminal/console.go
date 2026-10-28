@@ -69,6 +69,8 @@ type Console struct {
 	pickerRows          []string
 	busyNoticed         bool
 	dirty               bool
+	frameDepth          int
+	pendingAppend       strings.Builder
 	lastDraw            time.Time
 	// Completion sources (no exec/scan/provider).
 	Commands               []string
@@ -681,7 +683,34 @@ func (c *Console) pickerOrCompletionRows() []string {
 	return c.completionRows
 }
 
+func (c *Console) BeginFrame() { c.frameDepth++ }
+
+// EndFrame emits one combined append-and-tail update for the current batch.
+func (c *Console) EndFrame() error {
+	if c.frameDepth == 0 {
+		return c.err
+	}
+	c.frameDepth--
+	if c.frameDepth > 0 {
+		return c.err
+	}
+	appendText := c.pendingAppend.String()
+	c.pendingAppend.Reset()
+	if !c.dirty && appendText == "" {
+		return c.err
+	}
+	c.dirty = false
+	return c.emitComposed(appendText)
+}
+
 func (c *Console) emitComposed(appendText string) error {
+	if c.frameDepth > 0 {
+		if appendText != "" {
+			c.pendingAppend.WriteString(appendText)
+		}
+		c.dirty = true
+		return c.err
+	}
 	c.lastDraw = time.Now()
 	width, height := c.size()
 	var view EditorView

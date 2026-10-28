@@ -879,6 +879,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		select {
 		case <-frameTick:
 			frameTick = nil
+			console.BeginFrame()
 			stream.Flush()
 			if busy && activityText != "" && time.Since(lastSpinner) >= 80*time.Millisecond {
 				spinnerIndex = (spinnerIndex + 1) % len(spinnerFrames)
@@ -888,6 +889,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !busy {
 				console.Flush()
 			}
+			_ = console.EndFrame()
 		case sig := <-signals:
 			if isResize(sig) {
 				r.draw(console)
