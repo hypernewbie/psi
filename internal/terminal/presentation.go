@@ -387,6 +387,10 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	bottom, bottomWidth := borderRow(false)
 	rows, cells = append(rows, bottom), append(cells, bottomWidth)
 	for _, row := range completionRows {
+		plain := Sanitize(row)
+		if CellWidth(plain) > width-1 {
+			row = TruncateToWidth(plain, max(0, width-1))
+		}
 		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
 	}
 	rows = append(rows, footerRows...)

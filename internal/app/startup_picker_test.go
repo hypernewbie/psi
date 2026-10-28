@@ -3,9 +3,12 @@
 package app
 
 import (
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,6 +130,79 @@ func TestWorkspaceMismatchConfirmationDefaultsToCancelAndRestoresTerminal(t *tes
 		t.Fatalf("startup cancellation leaked the session lock: %v", err)
 	}
 	store.Unlock()
+}
+
+func TestPickerSuspendResumePreservesQueryAndFocus(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	sessionDir := session.DefaultSessionDir(work, agentDir)
+	var current *session.Store
+	for _, prompt := range []string{"alpha session", "beta session"} {
+		store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: sessionDir, AgentDir: agentDir, Persist: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: prompt}}); err != nil {
+			t.Fatal(err)
+		}
+		current = store
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--session", current.File())
+	q.prompt()
+	q.write("/resume\r")
+	q.wait("Sessions · 2 matches")
+	q.prompt()
+	q.write("not-a-session")
+	q.prompt()
+	q.write("\x1a")
+	q.wait("\x1b[?2004l")
+	deadline := time.Now().Add(3 * time.Second)
+	stopped := false
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(q.cmd.Process.Pid)).Output()
+		if err == nil && len(out) > 0 && out[0] == 'T' {
+			stopped = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !stopped {
+		t.Fatal("picker suspension did not stop the process")
+	}
+	state, err := term.GetState(int(q.tty.Fd()))
+	if err != nil || !sameTermState(state, q.original) {
+		t.Fatalf("picker suspension did not restore terminal: %v", err)
+	}
+	if err := q.cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	q.wait("Sessions · 0 matches")
+	q.prompt()
+	if !strings.Contains(q.screen.Text(), "not-a-session") {
+		t.Fatalf("picker query was lost on resume: %q", q.screen.Text())
+	}
+	q.write("\x1b")
+	q.wait("/resume")
+	q.prompt()
+	q.write("\x03")
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+}
+
+func TestShutdownDuringPickerRestoresTerminal(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-session")
+	q.prompt()
+	q.write("/model\r")
+	q.wait("Models ·")
+	if err := q.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	q.finish()
 }
 
 func TestBootstrapConfigurationErrorRestoresTerminal(t *testing.T) {

@@ -194,7 +194,11 @@ func (s *Selector) RenderPickerRows(width int, noColor bool) []string {
 	header := terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), Token: terminal.TokenMuted}}}
 	if selected := s.SelectedItem(); selected != nil {
 		name, _ := s.pickerText(*selected)
-		header.Spans = append(header.Spans, terminal.StyledSpan{Text: " · selected ", Token: terminal.TokenMuted}, terminal.StyledSpan{Text: name, Token: terminal.TokenAccent})
+		if width < 32 {
+			header = terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: "› " + compactPickerName(name), Token: terminal.TokenAccent}}}
+		} else {
+			header.Spans = append(header.Spans, terminal.StyledSpan{Text: " · selected ", Token: terminal.TokenMuted}, terminal.StyledSpan{Text: name, Token: terminal.TokenAccent})
+		}
 	}
 	rows := []string{terminal.FormatStyledRow(header, width, noColor)}
 	if len(s.Filtered) == 0 {
@@ -253,6 +257,17 @@ func (s *Selector) pickerText(item session.SessionInfo) (string, string) {
 		detail += " · unavailable: " + item.Unavailable
 	}
 	return name, detail
+}
+
+func compactPickerName(name string) string {
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	runes := []rune(name)
+	if len(runes) > 14 {
+		return string(runes[:14])
+	}
+	return name
 }
 
 func shortID(id string) string {

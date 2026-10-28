@@ -37,7 +37,11 @@ func (p *ChoicePicker) Rows(width int, noColor bool) []string {
 	selected, hasSelected := p.SelectedOption()
 	header := StyledRow{Spans: []StyledSpan{{Text: p.Title, Token: TokenMuted}}}
 	if hasSelected {
-		header.Spans = append(header.Spans, StyledSpan{Text: " · selected ", Token: TokenMuted}, StyledSpan{Text: selected.Label, Token: TokenAccent})
+		if width < 32 {
+			header = StyledRow{Spans: []StyledSpan{{Text: "› " + selected.Label, Token: TokenAccent}}}
+		} else {
+			header.Spans = append(header.Spans, StyledSpan{Text: " · selected ", Token: TokenMuted}, StyledSpan{Text: selected.Label, Token: TokenAccent})
+		}
 	}
 	rows := []string{FormatStyledRow(header, width, noColor)}
 	// Put alternatives before optional context and help so a short terminal

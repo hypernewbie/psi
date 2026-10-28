@@ -30,4 +30,11 @@ func TestChoicePickerIsBoundedAndHonorsNoColor(t *testing.T) {
 	if option, _ := picker.SelectedOption(); option.Label != "Trust for this run" {
 		t.Fatalf("selection moved below first row: %+v", option)
 	}
+
+	picker.Selected = 1
+	tiny := ComposeConsoleViewComponents(20, 6, nil, 0, PresentationSnapshot{NoColor: true}, "", nil, picker.Rows(20, true))
+	visible := strings.Join(tiny.Rows, "\n")
+	if !strings.Contains(visible, "› Deny") || !strings.Contains(visible, "Trust for this") {
+		t.Fatalf("tiny choice picker hid its selected/default-deny choices: %q", tiny.Rows)
+	}
 }

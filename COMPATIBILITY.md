@@ -88,7 +88,10 @@ Unknown harmless UI prefs need no per-key warning.
 - Retained components use Pi-derived semantic tokens with indexed terminal-palette fallbacks. This is an internal style table, not a theme engine; `NO_COLOR` disables all generated SGR.
 - User submissions, live assistant streams, and history replay share Pi-style padding and a retained CommonMark renderer (headings, emphasis, code, lists, quotes, rules, and visible link destinations). Live output commits stable blocks and retains at most 64 KiB of unresolved source; oversized blocks use a sanitized source fallback shared with replay. No syntax highlighter or OSC 8 links. Compact tool status (`read: done`, `bash: failed`) has no args, result bodies, diffs, or expand-details.
 - No reasoning text by default.
-- Keyboard (fixed): `Enter` submit, `Ctrl+J` newline, `Ctrl+C` cancel run, `Ctrl+D`/`/quit` exit, `Up/Down` history, paste inserts literally.
+- Keyboard (fixed): `Enter` submit, `Ctrl+J` newline, `Ctrl+C` cancels a picker/run (idle clears the draft first), `Ctrl+D`/`/quit` exit, `Ctrl+L` opens model selection, and `Shift+Tab` cycles supported thinking levels.
+- Slash-command and skill completion is editor-owned and limited to five visible rows. `Up/Down` navigate active completion/pickers before normal draft/history movement; `Tab` applies completion; `Enter` applies and submits.
+- `/model`, `/resume`, and `/thinking` use searchable inline editor pickers with stable selection and bounded rows. `--resume` uses the same session-picker presentation. Picker input is not a conversation message or recall entry.
+- Project-resource consent uses an inline choice with deny selected by default. The trust choice is per-run only; `--allow-project` and `--deny-project` remain explicit overrides.
 - Input during active run is cancellation only (no steering/follow-up queues).
 - Offline, interrupted, unsaved, and storage-blocked outcomes use semantic notices. Run settlement carries durable/interrupted/unsaved state; a visible response that fails persistence cannot return the app to a successful idle state.
 - Idle `Ctrl+C` clears draft first, second exits (documented); repeated interrupts never create overlapping runs.
@@ -141,6 +144,7 @@ It covers both continuation directions and both provider metadata forms.
 A JSON-shape test alone is not evidence of complete Pi interchange.
 
 See `docs/limitations.md` for explicit size limits, reasoning-protocol limits,
-and compaction boundaries. The pinned source remains the target, not a claim
-of compatibility with every newer Pi feature.
+and compaction boundaries. See `docs/ui-acceptance.md` for component, emulator,
+actual-app, platform, and human evidence for this UI pass. The pinned source
+remains the target, not a claim of compatibility with every newer Pi feature.
 - Never test against the only copy of a real session.

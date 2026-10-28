@@ -76,3 +76,27 @@ func TestModelAndThinkingPickerRowsAreBoundedAndColorSafe(t *testing.T) {
 		t.Fatal("thinking picker label missing")
 	}
 }
+
+func TestPickerTailGeometryRetainsSelectionAcrossPlanSizes(t *testing.T) {
+	items := make([]session.SessionInfo, 40)
+	for i := range items {
+		items[i] = session.SessionInfo{ID: "provider/gpt-model-" + strings.Repeat("x", i+1), FirstMessage: "credential available"}
+	}
+	selector := NewSelector(items, items[20].ID)
+	selector.Models = true
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}} {
+		width, height := size[0], size[1]
+		view := terminal.ComposeConsoleViewComponents(width, height, nil, 0, terminal.PresentationSnapshot{NoColor: true}, "", nil, selector.RenderPickerRows(width, true))
+		if len(view.Rows) > height || view.CursorRow < 0 || view.CursorRow >= len(view.Rows) {
+			t.Fatalf("geometry %dx%d: rows=%d cursor=%d", width, height, len(view.Rows), view.CursorRow)
+		}
+		for _, row := range view.Rows {
+			if terminal.CellWidth(row) > width {
+				t.Fatalf("geometry %dx%d overflowed: %q (%d)", width, height, row, terminal.CellWidth(row))
+			}
+		}
+		if width == 20 && !strings.Contains(strings.Join(view.Rows, "\n"), "gpt-model") {
+			t.Fatalf("tiny picker hid the selected model: %q", view.Rows)
+		}
+	}
+}
