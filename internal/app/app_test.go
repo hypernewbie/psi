@@ -326,9 +326,9 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	}
 	contender.Unlock()
 	write("/resume\r")
-	wait("Sessions (page")
+	wait("Sessions ·")
 	waitEditor()
-	write("2\r")
+	write("\x1b[B\r")
 	wait("resumed ")
 	waitEditor()
 	write("resumed-session\r")

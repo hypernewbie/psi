@@ -9,21 +9,23 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+P` / `Ctrl+N` browse history directly
 - `Home/End`, `Ctrl+A`/`Ctrl+E` logical line; `Ctrl+Home`/`Ctrl+End` document
 - `Backspace/Delete` one grapheme; `Ctrl+W` previous word; `Ctrl+U`/`Ctrl+K` line
-- `Tab` complete `/command` and `/skill:name` (bounded list on ambiguity, no exec/scan/provider)
-- `Esc` cancels selector/completion, never blocks (50ms prefix timeout)
+- `/command` and `/skill:name` completion stays in the editor tail (at most five rows); `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
+- Search pickers replace the editor query; `Up/Down` select, `PageUp/PageDown` move five rows, `Enter` applies, `Esc` or `Ctrl+C` cancels
+- `Ctrl+L` opens the model picker; `Shift+Tab` cycles supported thinking levels
+- Completion and picker search never scan files or call a provider; picker queries are not conversation messages
 - `Ctrl+C` cancels run; idle clears draft first, empty exits; busy is cancellation-only (one quiet notice)
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
 - `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
 - Draft budget 256 KiB UTF-8, never splits grapheme; recalled draft editable, returning past newest restores unfinished draft
 
-Commands (bounded inline, 20/page selector, no fullscreen):
+Commands (bounded inline, searchable editor pickers, no fullscreen):
 
 - `/help` — commands, keys, limits, examples
 - `/new` — new session (keeps scrollback, resets recall)
-- `/resume [filter]` — 20/page, n/p, /filter, number, empty cancels; same-session no-op
-- `/model` — list with provider/credential availability; `/model [provider/]model` session-local
-- `/thinking [level]` — list or set (off,minimal,low,medium,high,xhigh,max), session-local
+- `/resume [filter]` — search workspace sessions, use arrows/PageUp/PageDown and Enter; same-session no-op
+- `/model` — searchable model picker with current and credential-availability markers; `/model [provider/]model` applies a direct session-local choice
+- `/thinking` — searchable supported-level picker; `/thinking [level]` applies a direct session-local choice
 - `/compact [focus]` — real cancellable summary, start/settled outcome
 - `/session` — identity, workspace, provider/API/model, thinking, continuation, usage (no secrets, no invented $0.00)
 - `/history [N|all]` — last N user spans (default 20) or full history, display-only, no mutation

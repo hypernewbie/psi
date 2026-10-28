@@ -157,6 +157,12 @@ func (r StyledRow) Serialize(noColor bool) string {
 }
 
 // ClipStyledRow clips at grapheme boundaries using the plain-cell width policy.
+// FormatStyledRow applies the plain-cell width boundary, sanitizes text, and
+// serializes only the small semantic token vocabulary.
+func FormatStyledRow(row StyledRow, width int, noColor bool) string {
+	return ClipStyledRow(row, max(0, width-1)).Serialize(colorDisabled(PresentationSnapshot{NoColor: noColor}))
+}
+
 func ClipStyledRow(row StyledRow, maxCells int) StyledRow {
 	maxCells = max(0, maxCells)
 	left := maxCells

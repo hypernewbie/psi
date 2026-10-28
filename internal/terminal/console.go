@@ -231,19 +231,16 @@ func (c *Console) SetPickerRows(rows []string) {
 	if len(rows) > 0 {
 		c.clearCompletion(false)
 	}
-	c.Draw()
 }
 
 func (c *Console) ClearPickerRows() {
 	c.pickerRows = nil
-	c.Draw()
 }
 
 // RefreshCompletion recomputes suggestions after an application-owned draft restore.
 func (c *Console) RefreshCompletion() {
 	c.completionDismissed = false
 	c.refreshCompletion()
-	c.Draw()
 }
 
 func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder) {
@@ -351,6 +348,8 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 				c.Editor.Insert(Sanitize(content))
 			}
 			if c.Editor.Text() != prev {
+				c.completionDismissed = false
+				c.refreshCompletion()
 				c.drawIfChanged(false)
 			}
 		}
@@ -526,8 +525,8 @@ func (c *Console) renderCompletionRows() {
 		if description := c.CompletionDescriptions[item]; description != "" {
 			spans = append(spans, StyledSpan{Text: "  " + description, Token: TokenMuted})
 		}
-		row := ClipStyledRow(StyledRow{Spans: spans}, max(1, c.currentWidth()-1))
-		c.completionRows = append(c.completionRows, row.Serialize(colorDisabled(c.presentation)))
+		row := StyledRow{Spans: spans}
+		c.completionRows = append(c.completionRows, FormatStyledRow(row, c.currentWidth(), c.presentation.NoColor))
 	}
 }
 

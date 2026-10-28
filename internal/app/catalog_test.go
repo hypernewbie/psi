@@ -99,15 +99,15 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 	}
 	selector := modelSelector(r)
 	if !selector.Models || len(selector.Items) != 24 || len(selector.PageItems()) != 20 {
-		t.Fatal("model picker did not page the complete local catalog")
+		t.Fatalf("model picker did not page the complete local catalog: models=%v items=%d page=%d size=%d selected=%d", selector.Models, len(selector.Items), selector.Page, len(selector.PageItems()), selector.Selected)
 	}
 	selector.NextPage()
 	if len(selector.PageItems()) != 4 {
 		t.Fatal("last catalog page missing")
 	}
 	selector.SetFilter("claude-opus-4-6")
-	selected, cancel, _ := selector.Resolve("1")
-	if cancel || selected == nil || selected.ID != "anthropic/claude-opus-4-6" {
+	selected := selector.SelectedItem()
+	if selected == nil || selected.ID != "anthropic/claude-opus-4-6" {
 		t.Fatal("filtered model selection lost its stable identity")
 	}
 }

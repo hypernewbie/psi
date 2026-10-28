@@ -14,11 +14,26 @@ func modelSelector(r *runtime) *Selector {
 	for _, family := range []string{"anthropic", "openai-codex"} {
 		availability := r.credentialAvailability(family)
 		for _, m := range r.models.LocalModels(family) {
-			items = append(items, session.SessionInfo{ID: family + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", availability, m.API, m.ContextWindow, m.MaxTokens)})
+			item := session.SessionInfo{ID: family + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", availability, m.API, m.ContextWindow, m.MaxTokens)}
+			if strings.Contains(availability, "unavailable") {
+				item.Unavailable = availability
+			}
+			items = append(items, item)
 		}
 	}
 	selector := NewSelector(items, r.ov.Provider+"/"+r.ov.Model)
 	selector.Models = true
+	return selector
+}
+
+func thinkingSelector(r *runtime) *Selector {
+	levels := provider.SupportedThinking(r.cfg.Model)
+	items := make([]session.SessionInfo, 0, len(levels))
+	for _, level := range levels {
+		items = append(items, session.SessionInfo{ID: level, FirstMessage: provider.ThinkingDescription(r.cfg.Model, level)})
+	}
+	selector := NewSelector(items, r.ov.Thinking)
+	selector.Thinking = true
 	return selector
 }
 

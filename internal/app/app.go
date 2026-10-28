@@ -193,23 +193,26 @@ func Run(args []string, version string) error {
 }
 
 type runtime struct {
-	store            *session.Store
-	reg              *tools.Registry
-	options          Options
-	settings         config.Settings
-	models           *config.ModelsFile
-	skills           []skills.Skill
-	prompt, agentDir string
-	ov               config.StartupOverrides
-	cfg              agent.Config
-	prov             provider.Provider
-	authErr          error
-	generation       int64
-	state            State
-	selector         *Selector
-	tty              *terminal.Term
-	footerKey        string
-	footerSnapshot   terminal.PresentationSnapshot
+	store                    *session.Store
+	reg                      *tools.Registry
+	options                  Options
+	settings                 config.Settings
+	models                   *config.ModelsFile
+	skills                   []skills.Skill
+	prompt, agentDir         string
+	ov                       config.StartupOverrides
+	cfg                      agent.Config
+	prov                     provider.Provider
+	authErr                  error
+	generation               int64
+	state                    State
+	selector                 *Selector
+	selectorDraft            string
+	selectorCursor           int
+	selectorRestoreOnSuccess bool
+	tty                      *terminal.Term
+	footerKey                string
+	footerSnapshot           terminal.PresentationSnapshot
 }
 
 func (r *runtime) restore() error {
@@ -370,17 +373,20 @@ func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.
 			for _, line := range selector.Render() {
 				fmt.Println(terminal.Sanitize(line))
 			}
-			fmt.Print("Select session: ")
+			fmt.Print("Search sessions (empty to cancel): ")
 			line, err := readStartupLine(os.Stdin)
 			if err != nil {
 				return nil, err
 			}
-			selected, cancelled, _ := selector.Resolve(line)
+			_, cancelled, _ := selector.Resolve(line)
 			if cancelled {
 				return nil, errStartupCancelled
 			}
-			if selected != nil {
-				return session.OpenFile(selected.Path, cwd, persist)
+			if len(selector.Filtered) == 1 {
+				return session.OpenFile(selector.Filtered[0].Path, cwd, persist)
+			}
+			if len(selector.Filtered) == 0 {
+				fmt.Println("no matching sessions")
 			}
 		}
 	}
@@ -524,6 +530,11 @@ func (r *runtime) replace(next *session.Store) error {
 
 func (r *runtime) draw(console *terminal.Console) {
 	r.refreshPresentation(console)
+	if r.selector != nil {
+		console.SetPickerRows(r.selector.RenderPickerRows(console.StatusWidth(), r.footerSnapshot.NoColor))
+	} else {
+		console.ClearPickerRows()
+	}
 	console.Draw()
 }
 
@@ -583,6 +594,51 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if recall, err := r.store.Recall(); err == nil {
 			console.Editor.SetHistory(recall)
 		}
+	}
+	openSelector := func(selector *Selector, draft string, cursor int, query string, restoreOnSuccess bool) {
+		r.selector = selector
+		r.selectorDraft, r.selectorCursor = draft, cursor
+		r.selectorRestoreOnSuccess = restoreOnSuccess
+		selector.SetFilter(query)
+		console.Editor.RestoreDraft(query, len([]rune(query)))
+		r.state = StateSelecting
+		r.draw(console)
+	}
+	closeSelector := func(restoreDraft bool) {
+		r.selector = nil
+		console.ClearPickerRows()
+		r.selectorRestoreOnSuccess = false
+		r.state = StateIdle
+		if r.authErr != nil {
+			r.state = StateOffline
+		}
+		if restoreDraft {
+			console.Editor.RestoreDraft(r.selectorDraft, r.selectorCursor)
+			console.RefreshCompletion()
+		} else {
+			console.Editor.Clear()
+		}
+		r.selectorDraft, r.selectorCursor = "", 0
+		r.draw(console)
+	}
+	cycleThinking := func() {
+		levels := provider.SupportedThinking(r.cfg.Model)
+		if len(levels) == 0 {
+			return
+		}
+		current := 0
+		for i, level := range levels {
+			if level == r.ov.Thinking {
+				current = i
+				break
+			}
+		}
+		next := levels[(current+1)%len(levels)]
+		if _, err := r.command(&terminal.Command{Name: "thinking", Arg: next}, out); err != nil {
+			notice(terminal.NoticeError, err.Error())
+		}
+		refreshRecall()
+		r.draw(console)
 	}
 	console.Commands = terminal.CommandNames()
 	console.CompletionDescriptions = make(map[string]string)
@@ -910,11 +966,103 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if !busy && r.selector != nil && len(input.Key) == 1 && input.Key[0] == 27 {
-				r.selector, r.state = nil, StateIdle
-				console.Editor.Clear()
-				refreshRecall()
-				r.draw(console)
+			if !busy && r.selector != nil {
+				key := string(input.Key)
+				if !input.Paste {
+					switch key {
+					case "\x1b", string([]byte{3}):
+						closeSelector(true)
+						continue
+					case "\x1b[A":
+						r.selector.Move(-1)
+						r.draw(console)
+						continue
+					case "\x1b[B":
+						r.selector.Move(1)
+						r.draw(console)
+						continue
+					case "\x1b[5~":
+						r.selector.MovePage(-1)
+						r.draw(console)
+						continue
+					case "\x1b[6~":
+						r.selector.MovePage(1)
+						r.draw(console)
+						continue
+					case "\r":
+						selected := r.selector.SelectedItem()
+						if selected == nil {
+							continue
+						}
+						if r.selector.Thinking {
+							if _, err := r.command(&terminal.Command{Name: "thinking", Arg: selected.ID}, out); err != nil {
+								notice(terminal.NoticeError, err.Error())
+								closeSelector(true)
+								continue
+							}
+							closeSelector(false)
+							continue
+						}
+						if r.selector.Models {
+							if _, err := r.command(&terminal.Command{Name: "model", Arg: selected.ID}, out); err != nil {
+								notice(terminal.NoticeError, err.Error())
+								closeSelector(true)
+								continue
+							}
+							closeSelector(r.selectorRestoreOnSuccess)
+							continue
+						}
+						if selected.ID == r.store.Header().ID {
+							print("already on session " + selected.ID)
+							closeSelector(false)
+							continue
+						}
+						next, err := session.OpenFile(selected.Path, r.store.Cwd(), r.store.Persistent())
+						if err != nil {
+							notice(terminal.NoticeError, err.Error())
+							closeSelector(true)
+							continue
+						}
+						act, err := PrepareActivation(next)
+						if err != nil {
+							notice(terminal.NoticeError, err.Error())
+							closeSelector(true)
+							continue
+						}
+						oldID := r.store.Header().ID
+						if err := r.replace(next); err != nil {
+							notice(terminal.NoticeError, err.Error())
+							closeSelector(true)
+							continue
+						}
+						print("resumed " + r.store.Header().ID)
+						r.generation++
+						if !replayActivationAtWidth(emitReplay, act, false, oldID, console.StatusWidth()) {
+							stoppedReplay()
+						}
+						console.Editor.SetHistory(act.Recall)
+						refreshRecall()
+						closeSelector(false)
+						continue
+					}
+				}
+				before := console.Editor.Text()
+				_, _, quit, _ := console.Handle(input, false)
+				if quit {
+					return console.Err()
+				}
+				if query := console.Editor.Text(); query != before {
+					r.selector.SetFilter(query)
+					r.draw(console)
+				}
+				continue
+			}
+			if !busy && !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
+				openSelector(modelSelector(r), console.Editor.Text(), console.Editor.Pos(), "", true)
+				continue
+			}
+			if !busy && !input.Paste && string(input.Key) == "\x1b[Z" {
+				cycleThinking()
 				continue
 			}
 			draftBefore, cursorBefore := console.Editor.Text(), console.Editor.Pos()
@@ -938,74 +1086,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			// Only durable user submissions belong to recall, never commands or selector answers.
 			refreshRecall()
-			if r.selector != nil {
-				sel, cancelSel, redraw := r.selector.Resolve(text)
-				if cancelSel {
-					// Cancelled selector preserves active session, draft, recall (P2-040).
-					r.selector = nil
-					r.state = StateIdle
-					r.draw(console)
-					continue
-				}
-				if redraw {
-					for _, line := range r.selector.Render() {
-						print(line)
-					}
-					r.draw(console)
-					continue
-				}
-				if sel != nil {
-					if r.selector.Models {
-						_, err := r.command(&terminal.Command{Name: "model", Arg: sel.ID}, out)
-						if err != nil {
-							print("error: " + err.Error())
-						}
-						r.selector = nil
-						r.state = StateIdle
-						r.draw(console)
-						continue
-					}
-					if sel.ID == r.store.Header().ID {
-						// Same-session is a no-op, not another transcript copy (3.3).
-						print("already on session " + sel.ID)
-					} else {
-						next, err := session.OpenFile(sel.Path, r.store.Cwd(), r.store.Persistent())
-						if err != nil {
-							print("error: " + err.Error())
-						} else if act, err := PrepareActivation(next); err != nil {
-							print("error: " + err.Error())
-							// Failed candidate leaves old session/draft/recall/provider/lock intact (P2-012).
-						} else {
-							oldID := r.store.Header().ID
-							if err := r.replace(next); err != nil {
-								print("error: " + err.Error())
-							} else {
-								print("resumed " + r.store.Header().ID)
-								r.generation++
-								if !replayActivationAtWidth(emitReplay, act, false, oldID, console.StatusWidth()) {
-									stoppedReplay()
-								}
-								console.Editor.SetHistory(act.Recall)
-								if act.Offline {
-									r.state = StateOffline
-								} else {
-									r.state = StateIdle
-								}
-							}
-						}
-					}
-					r.selector = nil
-					r.state = StateIdle
-					r.draw(console)
-					continue
-				}
-				// Invalid selection: reprompt within same bounded flow (P2-040).
-				for _, line := range r.selector.Render() {
-					print(line)
-				}
-				r.draw(console)
-				continue
-			}
 			if strings.TrimSpace(text) == "" {
 				r.draw(console)
 				continue
@@ -1041,32 +1121,29 @@ func (r *runtime) repl(console *terminal.Console) error {
 					start("", "", cmd.Arg, "", "", true)
 					continue
 				}
-				if cmd.Name == "model" && strings.TrimSpace(cmd.Arg) == "" {
-					r.selector = modelSelector(r)
-					r.state = StateSelecting
-					for _, line := range r.selector.Render() {
-						print(line)
+				if cmd.Name == "model" {
+					query := strings.TrimSpace(cmd.Arg)
+					if query == "" || !r.modelArgumentKnown(query) {
+						openSelector(modelSelector(r), submittedDraft, submittedCursor, query, false)
+						continue
 					}
-					r.draw(console)
+				}
+				if cmd.Name == "thinking" && strings.TrimSpace(cmd.Arg) == "" {
+					openSelector(thinkingSelector(r), submittedDraft, submittedCursor, "", false)
 					continue
 				}
 				if cmd.Name == "resume" {
-					// Complete inline selector with 20/page + filter (P2-039).
-					// Filter arg: /resume [filter].
 					infos, err := discoverAll(r.store.Dir(), r.store.Cwd())
 					if err != nil {
-						print("error: " + err.Error())
+						notice(terminal.NoticeError, err.Error())
+						console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+						console.RefreshCompletion()
 					} else if len(infos) == 0 {
 						print("no sessions found")
+						console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+						console.RefreshCompletion()
 					} else {
-						r.selector = NewSelector(infos, r.store.Header().ID)
-						if strings.TrimSpace(cmd.Arg) != "" {
-							r.selector.SetFilter(strings.TrimSpace(cmd.Arg))
-						}
-						r.state = StateSelecting
-						for _, line := range r.selector.Render() {
-							print(line)
-						}
+						openSelector(NewSelector(infos, r.store.Header().ID), submittedDraft, submittedCursor, cmd.Arg, false)
 					}
 					r.draw(console)
 					continue
@@ -1085,6 +1162,32 @@ func (r *runtime) repl(console *terminal.Console) error {
 			start(text, text, "", "", "", false)
 		}
 	}
+}
+
+func (r *runtime) modelArgumentKnown(arg string) bool {
+	if r.models == nil {
+		return false
+	}
+	parts := strings.Fields(arg)
+	providerName, modelID := r.ov.Provider, ""
+	switch len(parts) {
+	case 1:
+		if strings.Contains(parts[0], "/") {
+			qualified := strings.SplitN(parts[0], "/", 2)
+			providerName, modelID = qualified[0], qualified[1]
+		} else {
+			modelID = parts[0]
+		}
+	case 2:
+		providerName, modelID = parts[0], parts[1]
+	default:
+		return false
+	}
+	if providerName == "" || modelID == "" {
+		return false
+	}
+	_, err := r.models.SelectModel(providerName, modelID)
+	return err == nil
 }
 
 func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
