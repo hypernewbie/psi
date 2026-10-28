@@ -78,22 +78,39 @@ func TestRuntimeFrameMetricsForPacedText(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("provider did not settle after final text")
 	}
-	// Allow the REPL to consume RunEnd and its durable completion event before
-	// submitting the quit command.
+	// Let settlement progress, then retry /quit if the first key arrives before
+	// the REPL has returned to idle input ownership.
 	time.Sleep(50 * time.Millisecond)
 	elapsed := time.Since(start)
-	if _, err := input.Write([]byte("/quit\r")); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-finished:
-		cleanupDone = true
-		if err != nil {
+	quitDeadline := time.After(5 * time.Second)
+	quitRetry := time.NewTicker(100 * time.Millisecond)
+	defer quitRetry.Stop()
+	for {
+		select {
+		case err := <-finished:
+			cleanupDone = true
+			if err != nil {
+				t.Fatal(err)
+			}
+			goto replExited
+		default:
+		}
+		if _, err := input.Write([]byte("/quit\r")); err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("REPL did not exit after /quit")
+		select {
+		case err := <-finished:
+			cleanupDone = true
+			if err != nil {
+				t.Fatal(err)
+			}
+			goto replExited
+		case <-quitRetry.C:
+		case <-quitDeadline:
+			t.Fatal("REPL did not exit after /quit")
+		}
 	}
+replExited:
 	writes, frames, bytesWritten, _ := console.FrameStats()
 	maxTimerFrames := int((elapsed*time.Duration(30)+time.Second-1)/time.Second) + 2
 	maxWrite := out.MaxWrite()
