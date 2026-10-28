@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,63 @@ func reviewConsole() (*Console, *testutil.VTModel, *bytes.Buffer) {
 	vt, raw := testutil.NewVTModel(80, 24), &bytes.Buffer{}
 	out := io.MultiWriter(vtFeed{vt}, raw)
 	return &Console{Editor: NewEditor(), Out: out, writer: NewWriter(out), decoder: NewDecoder()}, vt, raw
+}
+
+func TestEditorKeyToFrameLatencyP95(t *testing.T) {
+	c, _, _ := reviewConsole()
+	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/synthetic/work", Model: "offline/model", NoColor: true})
+	c.Draw()
+	samples := make([]time.Duration, 100)
+	for i := range samples {
+		start := time.Now()
+		c.Handle(Input{Key: []byte{'x'}}, false)
+		c.Draw()
+		samples[i] = time.Since(start)
+	}
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	t.Logf("editor key-to-frame: samples=%d p50=%s p95=%s max=%s", len(samples), samples[49], samples[94], samples[99])
+	if samples[94] > 50*time.Millisecond {
+		t.Fatalf("key-to-frame p95 %s exceeds 50ms", samples[94])
+	}
+}
+
+func TestCancellationDispatchP95(t *testing.T) {
+	c, _, _ := reviewConsole()
+	samples := make([]time.Duration, 100)
+	for i := range samples {
+		start := time.Now()
+		_, _, _, cancel := c.Handle(Input{Key: []byte{3}}, true)
+		samples[i] = time.Since(start)
+		if !cancel {
+			t.Fatal("Ctrl+C did not dispatch cancellation")
+		}
+	}
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	t.Logf("cancellation input dispatch: samples=%d p50=%s p95=%s max=%s", len(samples), samples[49], samples[94], samples[99])
+	if samples[94] > 100*time.Millisecond {
+		t.Fatalf("cancellation dispatch p95 %s exceeds 100ms", samples[94])
+	}
+}
+
+func Test256KiBPasteUpdatesWithinBudget(t *testing.T) {
+	c, _, _ := reviewConsole()
+	payload := bytes.Repeat([]byte{'x'}, pasteBudget)
+	c.Handle(Input{Paste: true, PasteStart: true}, false)
+	c.Handle(Input{Paste: true, Key: payload}, false)
+	start := time.Now()
+	c.Handle(Input{Paste: true, PasteEnd: true}, false)
+	elapsed := time.Since(start)
+	budget := 200 * time.Millisecond
+	if raceInstrumentation {
+		budget = 500 * time.Millisecond
+	}
+	t.Logf("256KiB paste end-to-frame: %s (budget %s)", elapsed, budget)
+	if elapsed > budget {
+		t.Fatalf("paste update took %s, exceeds %s", elapsed, budget)
+	}
+	if len(c.Editor.Text()) != pasteBudget {
+		t.Fatalf("paste admitted %d bytes, want %d", len(c.Editor.Text()), pasteBudget)
+	}
 }
 
 func TestModelActuallyOverwritesAndErases(t *testing.T) {

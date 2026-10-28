@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -69,19 +70,15 @@ func TestMarkdownStreamReferenceDefinitionsRemainMessageScoped(t *testing.T) {
 	}
 }
 
-func TestMarkdownStreamLongFenceFallsBackAndStaysBounded(t *testing.T) {
+func TestMarkdownStreamLongFenceCommitsLinesAndStaysBounded(t *testing.T) {
 	code := strings.Repeat("line of code\n", maxMarkdownActiveSource/8)
 	source := "```go\n" + code + "```\n\nAfter the oversized fence."
 	stream := NewMarkdownStream(50, true)
 	var rows []string
 	maxBuffered := 0
-	fallbackAt := -1
 	for offset := 0; offset < len(source); {
 		end := min(len(source), offset+1024)
 		stable, _ := stream.Feed(source[offset:end])
-		if stream.fallback && fallbackAt < 0 {
-			fallbackAt = offset
-		}
 		rows = append(rows, stable...)
 		maxBuffered = max(maxBuffered, stream.BufferedBytes())
 		offset = end
@@ -91,17 +88,48 @@ func TestMarkdownStreamLongFenceFallsBackAndStaysBounded(t *testing.T) {
 	if maxBuffered > maxMarkdownActiveSource {
 		t.Fatalf("oversized fence retained %d bytes", maxBuffered)
 	}
-	if !strings.Contains(joined, "  ```go") || !strings.Contains(joined, "  line of code") || !strings.Contains(joined, "After the oversized fence.") {
-		t.Fatalf("oversized fence fallback lost visible source or did not resume Markdown: prefix=%q suffix=%q", joined[:min(100, len(joined))], joined[max(0, len(joined)-200):])
+	if !strings.Contains(joined, "```go") || !strings.Contains(joined, "  line of code") || !strings.Contains(joined, "After the oversized fence.") {
+		t.Fatalf("long fence lost visible source or did not resume Markdown: prefix=%q suffix=%q", joined[:min(100, len(joined))], joined[max(0, len(joined)-200):])
 	}
 	if strings.Contains(joined, "\x1b[") {
 		t.Fatalf("NO_COLOR fallback emitted SGR: %q", joined)
 	}
 	if got := strings.Count(joined, "line of code"); got != maxMarkdownActiveSource/8 {
-		t.Fatalf("fallback lost or duplicated code lines: got=%d want=%d fallbackAt=%d rows=%d", got, maxMarkdownActiveSource/8, fallbackAt, len(rows))
+		t.Fatalf("stream lost or duplicated code lines: got=%d want=%d rows=%d", got, maxMarkdownActiveSource/8, len(rows))
 	}
 	if replay := strings.Join(RenderMarkdown(source, 50, true), "\n"); replay != joined {
-		t.Fatal("stream and replay fallback differ")
+		t.Fatal("stream and replay code formatting differ")
+	}
+}
+
+func TestMarkdownStreamEmptyFenceMatchesRenderer(t *testing.T) {
+	for _, source := range []string{"```text\n```", "~~~go\n~~~"} {
+		want := strings.Join(RenderMarkdown(source, 40, true), "\n")
+		for split := 1; split <= len(source); split++ {
+			got, _, _ := renderMarkdownChunks([]string{source[:split], source[split:]}, 40)
+			if strings.Join(got, "\n") != want {
+				t.Fatalf("empty fence changed at split %d: got=%q want=%q", split, got, want)
+			}
+		}
+	}
+}
+
+func TestMarkdownStreamOversizedCodeLineStaysBoundedAndChunkIndependent(t *testing.T) {
+	line := strings.Repeat("x", maxMarkdownActiveSource+4096)
+	source := "```go\n" + line + "\n```\n\nAfter."
+	want := strings.Join(RenderMarkdown(source, 50, true), "\n")
+	for _, chunkSize := range []int{1, 257, 1024, len(source)} {
+		var chunks []string
+		for offset := 0; offset < len(source); offset += chunkSize {
+			chunks = append(chunks, source[offset:min(len(source), offset+chunkSize)])
+		}
+		got, maxBuffered, _ := renderMarkdownChunks(chunks, 50)
+		if maxBuffered > maxMarkdownActiveSource {
+			t.Fatalf("chunk size %d retained %d active bytes", chunkSize, maxBuffered)
+		}
+		if strings.Join(got, "\n") != want {
+			t.Fatalf("oversized line output changed for chunk size %d", chunkSize)
+		}
 	}
 }
 
@@ -125,11 +153,11 @@ func TestMarkdownStreamMalformedAndSplitEscapeInputIsSafe(t *testing.T) {
 func TestMarkdownStreamPartialFenceEndsAtMessageBoundary(t *testing.T) {
 	stream := NewMarkdownStream(60, true)
 	stable, tail := stream.Feed("```go\nfmt.Println(\"partial\")\n``")
-	if len(stable) != 0 {
-		t.Fatalf("unfinished fence committed early: %q", stable)
+	if !strings.Contains(strings.Join(stable, "\n"), "fmt.Println(\"partial\")") {
+		t.Fatalf("completed code line was not committed: %q", stable)
 	}
-	if strings.Contains(strings.Join(tail, "\n"), "partial") == false {
-		t.Fatalf("active code tail lost partial text: %q", tail)
+	if strings.Contains(strings.Join(tail, "\n"), "``") == false {
+		t.Fatalf("active fence tail lost its partial closing marker: %q", tail)
 	}
 	first := append(stable, stream.Finish()...)
 	if !strings.Contains(strings.Join(first, "\n"), "partial") {
@@ -156,6 +184,37 @@ func BenchmarkMarkdownStream1MiB(b *testing.B) {
 			stream.Feed(source[offset:end])
 		}
 		stream.Finish()
+	}
+}
+
+func TestDisplayTailFormatsOnlyTheCurrentMarkdownBlock(t *testing.T) {
+	stream := NewMarkdownStream(60, true)
+	stream.Feed("A **bold** answer with a [link](https://example.test)")
+	tail := strings.Join(stream.DisplayTail(), "\n")
+	if !strings.Contains(tail, "bold") || strings.Contains(tail, "**") || strings.Contains(tail, "](") {
+		t.Fatalf("scheduled active-tail render did not format Markdown: %q", tail)
+	}
+}
+
+func TestConsoleMarkdownChunksKeepBorrowedActiveTail(t *testing.T) {
+	vt := testutil.NewVTModel(80, 24)
+	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 80, 24 }}
+	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
+	for _, chunk := range []string{"A partial ", "answer with **bold", " text**."} {
+		if _, err := c.MarkdownWrite([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	visible := strings.Join(vt.Scrollback, "\n") + "\n" + vt.Text()
+	if !strings.Contains(visible, "A partial answer with bold text.") {
+		t.Fatalf("borrowed tail lost prior stream chunks: %q", visible)
+	}
+	if err := c.CloseMarkdown(); err != nil {
+		t.Fatal(err)
+	}
+	final := strings.Join(vt.Scrollback, "\n") + "\n" + vt.Text()
+	if !strings.Contains(final, "A partial answer with bold text.") {
+		t.Fatalf("message settlement did not use the shared Markdown renderer: %q", final)
 	}
 }
 
@@ -220,5 +279,42 @@ func TestMarkdownStreamSetWidthOnlyReflowsTail(t *testing.T) {
 	tailAfter := strings.Join(stream.SetWidth(60), "\n")
 	if before != fmt.Sprint(stable) || tailBefore == tailAfter {
 		t.Fatalf("resize changed committed rows or failed to reflow active tail: stable=%q before=%q after=%q", stable, tailBefore, tailAfter)
+	}
+}
+
+func TestMarkdownStreamDeltaAllocationGrowthBounded(t *testing.T) {
+	allocated := func(size int) uint64 {
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		stream := NewMarkdownStream(80, true)
+		for i := 0; i < size; i++ {
+			stream.Feed("a")
+		}
+		stream.Finish()
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+
+	small, large := allocated(1000), allocated(10000)
+	if large > small*15 {
+		t.Fatalf("10x input grew allocations more than 15x: 1k=%d bytes, 10k=%d bytes", small, large)
+	}
+	t.Logf("1k/10k single-character delta allocations: %d/%d bytes", small, large)
+}
+
+func BenchmarkMarkdownStreamSingleCharacterDeltas(b *testing.B) {
+	for _, size := range []int{1000, 10000} {
+		b.Run(fmt.Sprintf("%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for run := 0; run < b.N; run++ {
+				stream := NewMarkdownStream(80, true)
+				for i := 0; i < size; i++ {
+					stream.Feed("a")
+				}
+				stream.Finish()
+			}
+		})
 	}
 }

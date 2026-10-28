@@ -16,15 +16,20 @@ type MarkdownStream struct {
 	noColor bool
 	filter  Sanitizer
 
-	pending        []byte
-	lineStart      int
-	fenceByte      byte
-	fenceLen       int
-	listBase       int
-	inQuote        bool
-	indentedCode   bool
-	candidateStart int
-	candidateEnd   int
+	pending          []byte
+	activePreviewLen int
+	blockGeneration  uint64
+	tailGeneration   uint64
+	lineStart        int
+	fenceByte        byte
+	fenceLen         int
+	fenceLanguage    string
+	fenceHasLine     bool
+	listBase         int
+	inQuote          bool
+	indentedCode     bool
+	candidateStart   int
+	candidateEnd     int
 
 	fallback          bool
 	fallbackLine      []byte
@@ -36,18 +41,21 @@ type MarkdownStream struct {
 	needsSeparator bool
 	seenOutput     bool
 	tailRows       []string
+	tailCells      int
 }
 
 func NewMarkdownStream(width int, noColor bool) *MarkdownStream {
 	return &MarkdownStream{width: max(1, width), noColor: noColor, listBase: -1, candidateStart: -1}
 }
 
-// Feed returns rows that are now stable and updates the bounded active tail.
+// Feed returns stable rows and a borrowed active-tail slice. The tail remains
+// valid only until the next call that changes this stream.
 func (m *MarkdownStream) Feed(chunk string) (stable, tail []string) {
+	generation := m.blockGeneration
 	text := m.normalizeNewlines(m.filter.Feed(chunk))
 	m.consume([]byte(text), &stable)
-	m.renderTail()
-	return stable, append([]string(nil), m.tailRows...)
+	m.updateTail(generation)
+	return stable, m.tailRows
 }
 
 // Finish commits the remaining active block and resets the stream for the next
@@ -64,6 +72,11 @@ func (m *MarkdownStream) Finish() []string {
 		if len(m.fallbackLine) > 0 {
 			m.appendRawFallbackLine(string(m.fallbackLine), &rows)
 		}
+	} else if m.fenceByte != 0 {
+		if len(m.pending) > 0 && !isMarkdownFenceClose(m.pending, m.fenceByte, m.fenceLen) {
+			m.commitCodeLine(m.pending, &rows)
+		}
+		m.commitFenceEnd(&rows)
 	} else if len(m.pending) > 0 {
 		if m.needsSeparator {
 			rows = append(rows, "")
@@ -71,6 +84,9 @@ func (m *MarkdownStream) Finish() []string {
 		}
 		rows = append(rows, renderMarkdownCore(string(m.pending), m.width, m.noColor)...)
 		m.seenOutput = m.seenOutput || len(rows) > 0
+	}
+	if m.fallback && m.fenceByte != 0 {
+		m.commitFenceEnd(&rows)
 	}
 	m.reset()
 	return rows
@@ -91,6 +107,29 @@ func (m *MarkdownStream) BufferedBytes() int {
 func (m *MarkdownStream) HasOutput() bool { return m.seenOutput }
 
 func (m *MarkdownStream) Tail() []string { return append([]string(nil), m.tailRows...) }
+
+// DisplayTail formats the current unresolved block once per scheduled draw.
+// Feed itself only appends a plain active preview, so tiny provider deltas do
+// not repeatedly parse the growing block.
+func (m *MarkdownStream) DisplayTail() []string {
+	source := m.previewSource()
+	if len(source) == 0 {
+		return nil
+	}
+	var rows []string
+	switch {
+	case m.fallback:
+		rows = wrapAssistantFragment(Sanitize(string(source)), m.width)
+	case m.fenceByte != 0:
+		rows = renderCodeRows(source, m.width, m.noColor)
+	default:
+		rows = renderMarkdownCore(string(source), m.width, m.noColor)
+	}
+	if m.needsSeparator && len(rows) > 0 {
+		rows = append([]string{""}, rows...)
+	}
+	return rows
+}
 
 func (m *MarkdownStream) normalizeNewlines(text string) string {
 	if text == "" && !m.pendingCR {
@@ -178,17 +217,35 @@ func (m *MarkdownStream) processNormalLine(stable *[]string) {
 
 		if m.fenceByte != 0 {
 			if isMarkdownFenceClose(lineBytes, m.fenceByte, m.fenceLen) {
-				m.commitBlock(m.pending, stable)
+				m.commitFenceEnd(stable)
 				m.clearPending()
 				m.resetBlockState()
 				m.needsSeparator = true
 				return
 			}
+			m.commitCodeLine(lineBytes, stable)
+			m.clearPending()
 			return
 		}
 		if marker, count, ok := markdownFenceStart(lineBytes); ok {
+			if m.candidateStart >= 0 && m.safeNormalBoundary(m.pending, m.candidateEnd, lineBytes) {
+				block := m.pending[:m.candidateStart]
+				rest := append([]byte(nil), m.pending[m.candidateEnd:]...)
+				m.commitBlock(block, stable)
+				m.clearPending()
+				m.pending = append(m.pending, rest...)
+				m.resetBlockState()
+				m.processNormalLine(stable)
+				return
+			}
 			m.fenceByte, m.fenceLen = marker, count
-			m.noteBlockShape(line)
+			m.fenceHasLine = false
+			info := strings.Fields(string(lineBytes[count:]))
+			if len(info) > 0 {
+				m.fenceLanguage = info[0]
+			}
+			m.commitFenceStart(stable)
+			m.clearPending()
 			return
 		}
 		if markdownBlank(lineBytes) {
@@ -254,6 +311,43 @@ func (m *MarkdownStream) safeNormalBoundary(_ []byte, _ int, nextLine []byte) bo
 	// Ambiguous containers are kept active above. A blank line is therefore a
 	// safe boundary for the remaining CommonMark block types.
 	return true
+}
+
+func (m *MarkdownStream) commitFenceStart(stable *[]string) {
+	if m.needsSeparator {
+		*stable = append(*stable, "")
+		m.needsSeparator = false
+	}
+	label := "```" + SanitizeStatusRow(m.fenceLanguage)
+	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth(label, max(0, m.width-1)), Token: TokenMuted}}}
+	*stable = append(*stable, row.Serialize(colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
+	m.seenOutput = true
+}
+
+func (m *MarkdownStream) commitCodeLine(line []byte, stable *[]string) {
+	m.fenceHasLine = true
+	*stable = append(*stable, renderCodeRows(line, m.width, m.noColor)...)
+	m.seenOutput = true
+}
+
+func renderCodeRows(line []byte, width int, noColor bool) []string {
+	text := strings.TrimSuffix(string(line), "\r")
+	spans := []StyledSpan{{Text: Sanitize(text), Token: TokenCodeBlock}}
+	rows := wrapMarkdown(spans, max(1, width-1), mdIndent(markdownIndent), mdIndent(markdownIndent))
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Serialize(colorDisabled(PresentationSnapshot{NoColor: noColor})))
+	}
+	return out
+}
+
+func (m *MarkdownStream) commitFenceEnd(stable *[]string) {
+	if !m.fenceHasLine {
+		m.commitCodeLine(nil, stable)
+	}
+	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth("```", max(0, m.width-1)), Token: TokenMuted}}}
+	*stable = append(*stable, row.Serialize(colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
+	m.seenOutput = true
 }
 
 func (m *MarkdownStream) commitBlock(source []byte, stable *[]string) {
@@ -432,26 +526,85 @@ func (m *MarkdownStream) appendRawFallbackFragment(fragment string, stable *[]st
 	m.seenOutput = true
 }
 
+func (m *MarkdownStream) previewSource() []byte {
+	if m.fallback {
+		return m.fallbackLine
+	}
+	return m.pending
+}
+
+func (m *MarkdownStream) updateTail(previousGeneration uint64) {
+	source := m.previewSource()
+	incremental := previousGeneration == m.blockGeneration && m.tailGeneration == m.blockGeneration && len(source) >= m.activePreviewLen
+	if incremental {
+		suffix := source[m.activePreviewLen:]
+		if previewASCII(suffix) {
+			m.appendPreviewASCII(suffix)
+		} else if len(suffix) > 0 {
+			incremental = false
+		}
+	}
+	if !incremental {
+		m.renderTail()
+	}
+	m.activePreviewLen = len(source)
+	m.tailGeneration = m.blockGeneration
+}
+
+func previewASCII(text []byte) bool {
+	for _, b := range text {
+		if b != '\n' && (b < 0x20 || b > 0x7e) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *MarkdownStream) appendPreviewASCII(text []byte) {
+	if len(text) == 0 {
+		return
+	}
+	if len(m.tailRows) == 0 {
+		if m.needsSeparator {
+			m.tailRows = append(m.tailRows, "")
+		}
+		m.tailRows = append(m.tailRows, "  ")
+		m.tailCells = 2
+	}
+	limit := max(1, m.width-1)
+	for _, b := range text {
+		if b == '\n' {
+			m.tailRows = append(m.tailRows, "  ")
+			m.tailCells = 2
+			continue
+		}
+		last := len(m.tailRows) - 1
+		row := m.tailRows[last]
+		if m.tailCells > 2 && m.tailCells+1 > limit {
+			m.tailRows = append(m.tailRows, "  ")
+			last++
+			row = m.tailRows[last]
+			m.tailCells = 2
+		}
+		m.tailRows[last] = row + string(b)
+		m.tailCells++
+	}
+}
+
 func (m *MarkdownStream) renderTail() {
 	clear(m.tailRows)
 	m.tailRows = m.tailRows[:0]
-	if m.fallback {
-		if len(m.fallbackLine) > 0 {
-			m.tailRows = append(m.tailRows, wrapAssistantFragment(Sanitize(string(m.fallbackLine)), m.width)...)
-		}
+	m.tailCells = 0
+	source := m.previewSource()
+	if len(source) == 0 {
 		return
 	}
-	if len(m.pending) == 0 {
-		return
-	}
-	rows := renderMarkdownCore(string(m.pending), m.width, m.noColor)
-	if m.fenceByte != 0 && len(rows) > 0 && Sanitize(rows[len(rows)-1]) == strings.Repeat("`", 3) {
-		rows = rows[:len(rows)-1]
-	}
+	rows := wrapAssistantFragment(Sanitize(string(source)), m.width)
 	if m.needsSeparator && len(rows) > 0 {
 		m.tailRows = append(m.tailRows, "")
 	}
 	m.tailRows = append(m.tailRows, rows...)
+	m.tailCells = CellWidth(m.tailRows[len(m.tailRows)-1])
 }
 
 func (m *MarkdownStream) reset() {
@@ -466,16 +619,25 @@ func (m *MarkdownStream) reset() {
 	m.pendingCR = false
 	m.needsSeparator = false
 	m.seenOutput = false
+	m.activePreviewLen = 0
+	m.blockGeneration++
+	m.tailGeneration = m.blockGeneration
 	m.resetBlockState()
 }
 
 func (m *MarkdownStream) clearPending() {
+	if len(m.pending) > 0 {
+		m.blockGeneration++
+	}
 	clear(m.pending)
 	m.pending = m.pending[:0]
 	m.lineStart = 0
 }
 
 func (m *MarkdownStream) clearFallbackLine() {
+	if len(m.fallbackLine) > 0 || len(m.fallbackLineStart) > 0 {
+		m.blockGeneration++
+	}
 	clear(m.fallbackLine)
 	clear(m.fallbackLineStart)
 	m.fallbackLine = m.fallbackLine[:0]
@@ -483,7 +645,8 @@ func (m *MarkdownStream) clearFallbackLine() {
 }
 
 func (m *MarkdownStream) resetBlockState() {
-	m.fenceByte, m.fenceLen = 0, 0
+	m.fenceByte, m.fenceLen, m.fenceLanguage = 0, 0, ""
+	m.fenceHasLine = false
 	m.listBase, m.inQuote, m.indentedCode = -1, false, false
 	m.candidateStart, m.candidateEnd = -1, -1
 	m.fallbackNoResume = false

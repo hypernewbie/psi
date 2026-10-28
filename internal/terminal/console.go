@@ -639,11 +639,11 @@ func (c *Console) Draw() {
 // retained in the composed tail.
 func (c *Console) MarkdownWrite(p []byte) (int, error) {
 	if c.markdownStream == nil {
-		c.markdownStream = NewMarkdownStream(c.currentWidth(), c.presentation.NoColor)
+		c.markdownWidth = c.currentWidth()
+		c.markdownStream = NewMarkdownStream(c.markdownWidth, c.presentation.NoColor)
 	}
-	stable, tail := c.markdownStream.Feed(string(p))
-	clear(c.streamRows)
-	c.streamRows = tail
+	stable, _ := c.markdownStream.Feed(string(p))
+	c.streamRows = c.markdownStream.DisplayTail()
 	appendText := markdownRowsAppend(stable)
 	if err := c.emitComposed(appendText); err != nil {
 		return 0, err
@@ -688,7 +688,8 @@ func (c *Console) emitComposed(appendText string) error {
 	if c.markdownStream != nil && len(c.streamRows) > 0 {
 		if c.markdownWidth != width {
 			c.markdownWidth = width
-			c.streamRows = c.markdownStream.SetWidth(width)
+			c.markdownStream.SetWidth(width)
+			c.streamRows = c.markdownStream.DisplayTail()
 		}
 		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, c.streamRows, c.pickerOrCompletionRows())
 	} else if len(c.pickerRows)+len(c.completionRows) > 0 {
