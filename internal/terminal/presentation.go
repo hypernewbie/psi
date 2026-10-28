@@ -275,12 +275,18 @@ func ComposeConsoleView(width, height int, buf []rune, pos int, snapshot Present
 	if fragment != "" && width > 3 {
 		fragmentRows = wrapAssistantFragment(fragment, width)
 	}
-	return ComposeConsoleViewWithRows(width, height, buf, pos, snapshot, activity, fragmentRows)
+	return ComposeConsoleViewComponents(width, height, buf, pos, snapshot, activity, fragmentRows, nil)
 }
 
 // ComposeConsoleViewWithRows composes already-rendered Markdown rows above the
 // editor and footer. Rows carry generated SGR only; their visible width is plain.
 func ComposeConsoleViewWithRows(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string, fragmentRows []string) EditorView {
+	return ComposeConsoleViewComponents(width, height, buf, pos, snapshot, activity, fragmentRows, nil)
+}
+
+// ComposeConsoleViewComponents places an active fragment above the editor,
+// then editor-owned suggestions, then the persistent footer.
+func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string, fragmentRows, completionRows []string) EditorView {
 	width, height = max(1, width), max(1, height)
 	noColor := colorDisabled(snapshot)
 	layout := LayoutDraft(buf, pos, width)
@@ -305,11 +311,15 @@ func ComposeConsoleViewWithRows(width, height int, buf []rune, pos int, snapshot
 	borderCount := 2
 	preferred := max(5, int(float64(height)*0.3))
 	preferred = min(preferred, len(layout.Rows))
-	fragmentBudget := max(0, height-footerCount-borderCount-max(1, preferred))
+	componentBudget := max(0, height-footerCount-borderCount-max(1, preferred))
+	if len(completionRows) > componentBudget {
+		completionRows = completionRows[:componentBudget]
+	}
+	fragmentBudget := max(0, componentBudget-len(completionRows))
 	if len(fragmentRows) > fragmentBudget {
 		fragmentRows = fragmentRows[len(fragmentRows)-fragmentBudget:]
 	}
-	bodyBudget := max(1, height-footerCount-borderCount-len(fragmentRows))
+	bodyBudget := max(1, height-footerCount-borderCount-len(fragmentRows)-len(completionRows))
 	bodyBudget = min(bodyBudget, preferred)
 	bodyBudget = min(bodyBudget, len(layout.Rows))
 	start := max(0, layout.CursorRow-bodyBudget+1)
@@ -368,6 +378,9 @@ func ComposeConsoleViewWithRows(width, height int, buf []rune, pos int, snapshot
 	}
 	bottom, bottomWidth := borderRow(false)
 	rows, cells = append(rows, bottom), append(cells, bottomWidth)
+	for _, row := range completionRows {
+		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
+	}
 	rows = append(rows, footerRows...)
 	cells = append(cells, footerWidths...)
 	if len(rows) > height {

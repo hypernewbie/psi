@@ -52,22 +52,28 @@ type Console struct {
 	pasteNotice     bool
 	inputLimitShown bool
 
-	lastDraft      string
-	lastCursor     int
-	lastW, lastH   int
-	visibleTail    []string
-	presentation   PresentationSnapshot
-	activity       string
-	streamFragment []byte
-	streamRows     []string
-	markdownStream *MarkdownStream
-	markdownWidth  int
-	busyNoticed    bool
-	dirty          bool
-	lastDraw       time.Time
+	lastDraft           string
+	lastCursor          int
+	lastW, lastH        int
+	visibleTail         []string
+	presentation        PresentationSnapshot
+	activity            string
+	streamFragment      []byte
+	streamRows          []string
+	markdownStream      *MarkdownStream
+	markdownWidth       int
+	completionItems     []string
+	completionRows      []string
+	completionSelected  int
+	completionDismissed bool
+	pickerRows          []string
+	busyNoticed         bool
+	dirty               bool
+	lastDraw            time.Time
 	// Completion sources (no exec/scan/provider).
-	Commands []string
-	Skills   []string
+	Commands               []string
+	Skills                 []string
+	CompletionDescriptions map[string]string
 }
 
 func NewConsole(in *os.File, out io.Writer) *Console {
@@ -219,6 +225,27 @@ func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
 	}
 }
 
+// SetPickerRows installs the app-owned inline picker in the mutable tail.
+func (c *Console) SetPickerRows(rows []string) {
+	c.pickerRows = append(c.pickerRows[:0], rows...)
+	if len(rows) > 0 {
+		c.clearCompletion(false)
+	}
+	c.Draw()
+}
+
+func (c *Console) ClearPickerRows() {
+	c.pickerRows = nil
+	c.Draw()
+}
+
+// RefreshCompletion recomputes suggestions after an application-owned draft restore.
+func (c *Console) RefreshCompletion() {
+	c.completionDismissed = false
+	c.refreshCompletion()
+	c.Draw()
+}
+
 func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder) {
 	send := func(input Input) bool {
 		select {
@@ -339,11 +366,13 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 	if len(input.Key) == 1 {
 		switch input.Key[0] {
 		case 3: // Ctrl+C idle: clear draft first, exit when empty.
-			if c.Editor.Text() == "" {
+			if c.Editor.Text() == "" && len(c.completionItems) == 0 {
 				return "", false, true, false
 			}
 			c.Editor.Clear()
 			c.inputLimitShown = false
+			c.completionDismissed = false
+			c.refreshCompletion()
 			c.drawIfChanged(false)
 			return "", false, false, false
 		case 4: // Ctrl+D: delete at cursor when nonempty, exit when empty.
@@ -353,13 +382,21 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.Editor.Delete()
 			c.drawIfChanged(false)
 			return "", false, false, false
-		case 27: // lone Escape: cancel selector/completion state, never block.
+		case 27: // Escape dismisses completion before it reaches the editor.
 			c.pasteActive = false
 			c.pasteBuf.Reset()
+			if len(c.completionItems) > 0 {
+				c.clearCompletion(true)
+				c.Draw()
+			}
 			return "", false, false, false
-		case '\r': // Enter submits outside paste; the application classifies before display.
+		case '\r': // Enter accepts an active completion, then classifies/submits.
+			if len(c.completionItems) > 0 {
+				c.applyCompletion()
+			}
 			c.inputLimitShown = false
 			text := c.Editor.Submit()
+			c.clearCompletion(false)
 			c.Draw()
 			return text, true, false, false
 		}
@@ -369,9 +406,19 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		c.complete()
 		return "", false, false, false
 	}
+	// Completion navigation precedes editor visual/history navigation.
+	s := string(input.Key)
+	if len(c.completionItems) > 0 && (s == "\x1b[A" || s == "\x1b[B") {
+		delta := -1
+		if s == "\x1b[B" {
+			delta = 1
+		}
+		c.moveCompletion(delta)
+		c.Draw()
+		return "", false, false, false
+	}
 	// Up/Down with real width: visual rows first, history at outer rows (3.4).
 	w, _ := c.size()
-	s := string(input.Key)
 	if s == "\x1b[A" {
 		if c.Editor.MoveUp(w) {
 			c.drawIfChanged(false)
@@ -411,40 +458,108 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		c.inputLimitShown = false
 	}
 	if c.Editor.Text() != prevDraft || c.Editor.Pos() != prevPos {
+		if c.Editor.Text() != prevDraft {
+			c.completionDismissed = false
+		}
+		c.refreshCompletion()
 		c.drawIfChanged(false)
 	}
 	return "", false, false, false
 }
 
-// complete implements lightweight Tab completion (P2-022).
+// complete accepts the selected slash-command or skill suggestion in place.
 func (c *Console) complete() {
-	if c.Commands == nil {
-		c.Commands = []string{"help", "new", "resume", "model", "thinking", "compact", "session", "history", "quit"}
+	if len(c.completionItems) == 0 {
+		c.completionDismissed = false
+		c.refreshCompletion()
 	}
-	draft, pos := c.Editor.Text(), c.Editor.Pos()
-	cands, showList := Complete(draft, pos, c.Commands, c.Skills)
-	if len(cands) == 1 {
-		// Single match: complete in place, stable cursor.
-		runes := []rune(draft)
-		start := pos
-		for start > 0 && runes[start-1] != ' ' && runes[start-1] != '\n' && runes[start-1] != '\t' {
-			start--
-		}
-		token := string(runes[start:pos])
-		suffix := cands[0][len(token):] + " "
-		if !c.Editor.Insert(suffix) {
-			c.inputLimit()
-		} else {
-			c.inputLimitShown = false
-		}
-		c.drawIfChanged(false)
+	if c.applyCompletion() {
+		c.Draw()
+	}
+}
+
+func (c *Console) hasCompletion() bool { return len(c.completionItems) > 0 }
+
+func (c *Console) refreshCompletion() {
+	if c.Commands == nil {
+		c.Commands = CommandNames()
+	}
+	if c.completionDismissed || len(c.pickerRows) > 0 {
+		c.clearCompletion(false)
 		return
 	}
-	if showList {
-		// Bounded ambiguity list only on explicit Tab; draft/cursor stable.
-		// Printed as a notice row, not an overlay (UX-lite).
-		_, _ = c.Write([]byte("Candidates: " + strings.Join(bounded(cands, 10), " ") + "\r\n"))
-		c.Draw()
+	previous := ""
+	if c.completionSelected >= 0 && c.completionSelected < len(c.completionItems) {
+		previous = c.completionItems[c.completionSelected]
+	}
+	items, _ := Complete(c.Editor.Text(), c.Editor.Pos(), c.Commands, c.Skills)
+	clear(c.completionItems)
+	c.completionItems = append(c.completionItems[:0], items...)
+	if len(items) == 0 {
+		c.completionSelected = 0
+		c.completionRows = nil
+		return
+	}
+	c.completionSelected = 0
+	for i, item := range items {
+		if item == previous {
+			c.completionSelected = i
+			break
+		}
+	}
+	c.renderCompletionRows()
+}
+
+func (c *Console) renderCompletionRows() {
+	const visible = 5
+	c.completionRows = c.completionRows[:0]
+	start := max(0, min(c.completionSelected-visible/2, len(c.completionItems)-visible))
+	end := min(len(c.completionItems), start+visible)
+	for i := start; i < end; i++ {
+		selected := i == c.completionSelected
+		marker, token := "  ", TokenMuted
+		if selected {
+			marker, token = "› ", TokenAccent
+		}
+		item := c.completionItems[i]
+		spans := []StyledSpan{{Text: marker, Token: token}, {Text: item, Token: token}}
+		if description := c.CompletionDescriptions[item]; description != "" {
+			spans = append(spans, StyledSpan{Text: "  " + description, Token: TokenMuted})
+		}
+		row := ClipStyledRow(StyledRow{Spans: spans}, max(1, c.currentWidth()-1))
+		c.completionRows = append(c.completionRows, row.Serialize(colorDisabled(c.presentation)))
+	}
+}
+
+func (c *Console) moveCompletion(delta int) {
+	if len(c.completionItems) == 0 {
+		return
+	}
+	c.completionSelected = (c.completionSelected + delta + len(c.completionItems)) % len(c.completionItems)
+	c.renderCompletionRows()
+}
+
+func (c *Console) applyCompletion() bool {
+	if !c.hasCompletion() {
+		return false
+	}
+	item := c.completionItems[c.completionSelected]
+	if !c.Editor.ReplaceCurrentToken(item) {
+		c.inputLimit()
+		return false
+	}
+	c.inputLimitShown = false
+	c.clearCompletion(true)
+	return true
+}
+
+func (c *Console) clearCompletion(dismiss bool) {
+	clear(c.completionItems)
+	clear(c.completionRows)
+	c.completionItems, c.completionRows = nil, nil
+	c.completionSelected = 0
+	if dismiss {
+		c.completionDismissed = true
 	}
 }
 
@@ -464,13 +579,6 @@ func (c *Console) inputLimit() {
 	c.inputLimitShown = true
 	_, _ = c.Write([]byte("Input exceeds 256 KiB. Draft unchanged.\r\n"))
 	c.Draw()
-}
-
-func bounded(s []string, n int) []string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 // drawIfChanged draws only when visible state changes.
@@ -567,6 +675,13 @@ func markdownRowsAppend(rows []string) string {
 	return strings.Join(rows, "\r\n") + "\r\n"
 }
 
+func (c *Console) pickerOrCompletionRows() []string {
+	if len(c.pickerRows) > 0 {
+		return c.pickerRows
+	}
+	return c.completionRows
+}
+
 func (c *Console) emitComposed(appendText string) error {
 	c.lastDraw = time.Now()
 	width, height := c.size()
@@ -576,7 +691,9 @@ func (c *Console) emitComposed(appendText string) error {
 			c.markdownWidth = width
 			c.streamRows = c.markdownStream.SetWidth(width)
 		}
-		view = ComposeConsoleViewWithRows(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, c.streamRows)
+		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, c.streamRows, c.pickerOrCompletionRows())
+	} else if len(c.pickerRows)+len(c.completionRows) > 0 {
+		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, wrapAssistantFragment(string(c.streamFragment), width), c.pickerOrCompletionRows())
 	} else {
 		view = ComposeConsoleView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, string(c.streamFragment))
 	}

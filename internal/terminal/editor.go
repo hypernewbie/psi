@@ -104,6 +104,33 @@ func (e *Editor) Clear() {
 	e.draft, e.draftPos, e.prefCol = "", 0, -1
 }
 
+// ReplaceCurrentToken replaces the whitespace-delimited token at the cursor.
+// It is used by slash completion without disturbing trailing draft text.
+func (e *Editor) ReplaceCurrentToken(value string) bool {
+	start, end := e.pos, e.pos
+	for start > 0 && !unicode.IsSpace(e.buf[start-1]) {
+		start--
+	}
+	for end < len(e.buf) && !unicode.IsSpace(e.buf[end]) {
+		end++
+	}
+	valueRunes := []rune(value)
+	newLen := len(e.buf) - (end - start) + len(valueRunes)
+	if newLen > editorBudget {
+		e.rejectedInsert = true
+		return false
+	}
+	buf := make([]rune, 0, newLen)
+	buf = append(buf, e.buf[:start]...)
+	buf = append(buf, valueRunes...)
+	buf = append(buf, e.buf[end:]...)
+	e.buf = buf
+	e.pos = start + len(valueRunes)
+	e.histIdx = -1
+	e.prefCol = -1
+	return true
+}
+
 // SetHistory replaces recall history (session-scoped, up to 200, oldest first).
 // Every entry passes the same whole-draft admission as insertion (F11):
 // oversized entries are skipped, never silently cut, with a bounded notice.

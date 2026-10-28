@@ -1,13 +1,44 @@
 package terminal
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Commands (P2-045, Section 7.3): bounded inline flows, no fullscreen dialogs.
-// The command table drives both help checks and parser tests.
+// The shared metadata drives parsing, help, and slash completion.
 
 type Command struct {
 	Name string
 	Arg  string
+}
+
+type CommandSpec struct {
+	Name        string
+	Syntax      string
+	Description string
+}
+
+var commandSpecs = []CommandSpec{
+	{Name: "help", Syntax: "/help", Description: "show commands, keys, limits, examples"},
+	{Name: "new", Syntax: "/new", Description: "new session (keeps scrollback, resets recall)"},
+	{Name: "resume", Syntax: "/resume [filter]", Description: "select session (search, arrows, Enter, Esc)"},
+	{Name: "model", Syntax: "/model [provider/]model", Description: "select or set a session-local model"},
+	{Name: "thinking", Syntax: "/thinking [level]", Description: "select or set thinking level"},
+	{Name: "compact", Syntax: "/compact [focus]", Description: "real cancellable summary with settled outcome"},
+	{Name: "session", Syntax: "/session", Description: "identity, workspace, provider/model, thinking, usage"},
+	{Name: "history", Syntax: "/history [N|all]", Description: "last N user spans or display full history"},
+	{Name: "quit", Syntax: "/quit", Description: "settle work, restore terminal"},
+}
+
+func CommandMetadata() []CommandSpec { return append([]CommandSpec(nil), commandSpecs...) }
+
+func CommandNames() []string {
+	names := make([]string, 0, len(commandSpecs))
+	for _, spec := range commandSpecs {
+		names = append(names, spec.Name)
+	}
+	return names
 }
 
 // ParseCommand splits "/name arg". Unknown /commands are distinct from user
@@ -33,38 +64,33 @@ func ParseCommand(line string) (*Command, bool) {
 	if len(parts) == 2 {
 		arg = strings.TrimSpace(parts[1])
 	}
-	switch name {
-	case "help", "new", "resume", "model", "thinking", "compact", "session", "history", "quit":
-		return &Command{Name: name, Arg: arg}, true
-	default:
-		return &Command{Name: "unknown:" + name, Arg: arg}, true
+	for _, spec := range commandSpecs {
+		if name == spec.Name {
+			return &Command{Name: name, Arg: arg}, true
+		}
 	}
+	return &Command{Name: "unknown:" + name, Arg: arg}, true
 }
 
 func HelpText() string {
-	return strings.Join([]string{
-		"Commands (inline, no fullscreen):",
-		"  /help                show commands, keys, limits, examples",
-		"  /new                 new session (keeps scrollback, resets recall)",
-		"  /resume [filter]      select session (20/page, n/p, /filter, number, empty cancels)",
-		"  /model               show provider/model; /model [provider] model (session-local)",
-		"  /thinking [level]    show or set thinking (off,minimal,low,medium,high,xhigh,max)",
-		"  /compact [focus]     real cancellable summary with start/settled outcome",
-		"  /session             identity, workspace, provider/model, thinking, continuation, usage",
-		"  /history [N|all]     last N user spans (default 20) or full history (display-only)",
+	lines := []string{"Commands (inline, no fullscreen):"}
+	for _, spec := range commandSpecs {
+		lines = append(lines, fmt.Sprintf("  %-22s %s", spec.Syntax, spec.Description))
+	}
+	lines = append(lines,
 		"  /skill:name [args]   resolve skill, persist reproducible input, show invocation",
-		"  /quit                settle work, restore terminal (Ctrl+D empty also exits)",
 		"",
 		"Keys (fixed, no Kitty required):",
 		"  Enter submit · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows (edges browse history)",
 		"  Ctrl+P/N history · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
-		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels selector",
-		"  Ctrl+C cancels run (idle: clear draft, empty exits) · Ctrl+D delete/exit · paste literal, no submit",
+		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
+		"  Shift+Tab cycle thinking · Ctrl+L select model · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  Ctrl+D delete/exit · paste literal, no submit",
 		"",
 		"Limits: busy input is cancellation-only (one quiet notice); unknown /commands never become prompts;",
 		"every command works after resume and after cancellation; draft preserved on command errors.",
 		"",
 		"Examples:",
-		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /skill:review fix login",
-	}, "\n")
+		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /skill:review fix login")
+	return strings.Join(lines, "\n")
 }

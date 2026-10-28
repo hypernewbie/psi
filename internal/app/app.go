@@ -584,8 +584,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.Editor.SetHistory(recall)
 		}
 	}
+	console.Commands = terminal.CommandNames()
+	console.CompletionDescriptions = make(map[string]string)
+	for _, spec := range terminal.CommandMetadata() {
+		console.CompletionDescriptions["/"+spec.Name] = spec.Description
+	}
 	for _, skill := range r.skills {
 		console.Skills = append(console.Skills, skill.Name)
+		console.CompletionDescriptions["/skill:"+skill.Name] = skill.Description
 	}
 	emitReplay := func(text string) bool {
 		for _, batch := range terminal.Batches(text+"\n", 64*1024) {
@@ -691,12 +697,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.state = StateStorageBlocked
 			notice(terminal.NoticeError, "Storage is blocked: "+err.Error()+" (open a checked copy or /new)")
 			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+			console.RefreshCompletion()
 			r.draw(console)
 			return
 		}
 		if r.authErr != nil {
 			notice(terminal.NoticeError, r.authErr.Error())
 			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+			console.RefreshCompletion()
 			r.draw(console)
 			return
 		}
