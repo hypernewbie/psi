@@ -2,7 +2,7 @@
 
 ## Status
 
-The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows CI, broader Windows Terminal interactions, human terminal review, and the full actual-app resize matrix remain unavailable. A native Windows ConPTY smoke now passes.
+The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows CI, broader Windows Terminal interactions, human terminal review, and the full actual-app resize matrix remain unavailable. Native Windows test-package suites and a ConPTY smoke now pass.
 
 Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `c2d5d751ed5218a78eb2b9cda1366494d28783eb` (`c2d5d75`; quantitative UI profiles were collected at `51a56e3`, followed by resize and native Windows test suites). The reference was source-reviewed; no pinned Pi comparison session was run.
 
