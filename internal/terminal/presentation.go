@@ -309,7 +309,7 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	}
 
 	footerCount := len(footerRows)
-	if height < 5 && footerCount > 0 {
+	if height < 8 && footerCount > 0 {
 		// Preserve model/status line before the optional folder line.
 		footerRows, footerWidths = footerRows[len(footerRows)-1:], footerWidths[len(footerWidths)-1:]
 		footerCount = 1
@@ -317,7 +317,9 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	borderCount := 2
 	preferred := max(5, int(float64(height)*0.3))
 	preferred = min(preferred, len(layout.Rows))
-	componentBudget := max(0, height-footerCount-borderCount-max(1, preferred))
+	// Preserve the focused editor row, then allocate remaining height to the
+	// active picker/completion before expanding the draft viewport.
+	componentBudget := max(0, height-footerCount-borderCount-1)
 	if len(completionRows) > componentBudget {
 		completionRows = completionRows[:componentBudget]
 	}

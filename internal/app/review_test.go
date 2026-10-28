@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	goruntime "runtime"
 	"strconv"
@@ -225,7 +224,7 @@ func (q *reviewPTY) finish() {
 	case <-time.After(8 * time.Second):
 		q.cmd.Process.Kill()
 		<-done
-		q.t.Fatal("process did not exit")
+		q.t.Fatalf("process did not exit; output=%q", q.raw.String())
 	}
 	// Post-exit slave ioctls return ENOTTY on macOS once the session
 	// leader is gone, so the exact state check stays Linux-only there.
@@ -238,38 +237,54 @@ func (q *reviewPTY) finish() {
 	}
 }
 
-// sameTermState compares terminal states exactly, except on darwin
-// where it tolerates the driver-managed PENDIN bit (0x20000000).
-// macOS sets PENDIN on the slave while its foreground group is
-// suspended; psi never sets it, raw-mode reacquire clears it, and every
-// other bit must still match. Any wider difference fails.
+// sameTermState compares every terminal field. macOS alone may change the
+// driver-managed PENDIN bit while the foreground group is suspended.
 func sameTermState(a, b *term.State) bool {
-	if reflect.DeepEqual(a, b) {
-		return true
+	return sameTermStateWithPENDIN(a, b, goruntime.GOOS == "darwin")
+}
+
+func sameTermStateWithPENDIN(a, b *term.State, allowPENDIN bool) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-	if goruntime.GOOS != "darwin" {
-		return false
-	}
-	va, oka := lflagValue(fmt.Sprintf("%#v", a))
-	vb, okb := lflagValue(fmt.Sprintf("%#v", b))
-	if !oka || !okb {
-		return false
-	}
-	return va^vb == 0x20000000
+	return sameTermStateDetails(fmt.Sprintf("%#v", a), fmt.Sprintf("%#v", b), allowPENDIN)
 }
 
 var lflagPattern = regexp.MustCompile(`Lflag:0x([0-9a-fA-F]+)`)
 
-func lflagValue(detail string) (uint64, bool) {
-	m := lflagPattern.FindStringSubmatch(detail)
-	if m == nil {
-		return 0, false
+func sameTermStateDetails(a, b string, allowPENDIN bool) bool {
+	if allowPENDIN {
+		a, b = withoutPENDIN(a), withoutPENDIN(b)
 	}
-	v, err := strconv.ParseUint(m[1], 16, 32)
+	return a == b
+}
+
+func withoutPENDIN(state string) string {
+	match := lflagPattern.FindStringSubmatchIndex(state)
+	if match == nil {
+		return state
+	}
+	value, err := strconv.ParseUint(state[match[2]:match[3]], 16, 64)
 	if err != nil {
-		return 0, false
+		return state
 	}
-	return v, true
+	normalized := fmt.Sprintf("Lflag:%#x", value&^uint64(0x20000000))
+	return state[:match[0]] + normalized + state[match[1]:]
+}
+
+func TestTerminalStateComparisonMasksOnlyPENDIN(t *testing.T) {
+	before := "termios{Iflag:0x1, Oflag:0x2, Lflag:0x100, Cflag:0x4}"
+	pendin := "termios{Iflag:0x1, Oflag:0x2, Lflag:0x20000100, Cflag:0x4}"
+	otherField := "termios{Iflag:0x1, Oflag:0x2, Lflag:0x20000100, Cflag:0x5}"
+	if !sameTermStateDetails(before, pendin, true) {
+		t.Fatal("PENDIN-only difference was not masked")
+	}
+	if sameTermStateDetails(before, otherField, true) {
+		t.Fatal("comparison ignored a non-PENDIN terminal field")
+	}
+	if sameTermStateDetails(before, pendin, false) {
+		t.Fatal("strict comparison masked a terminal difference")
+	}
 }
 
 func reviewSettings(t *testing.T, agentDir, url string) {
@@ -401,18 +416,5 @@ func TestReplayCancellationStopsTheActualTimelineWalk(t *testing.T) {
 	complete := renderTimelineChecked(func(s string) bool { calls++; return calls < 2 }, items)
 	if complete || calls != 2 {
 		t.Fatalf("cancelled walk kept printing: complete=%v calls=%d", complete, calls)
-	}
-}
-
-func TestStartupLineDoesNotConsumeFollowingEditorInput(t *testing.T) {
-	in := strings.NewReader("yes\nfirst prompt\n")
-	line, err := readStartupLine(in)
-	if err != nil || line != "yes" {
-		t.Fatal(line, err)
-	}
-	rest := make([]byte, in.Len())
-	in.Read(rest)
-	if string(rest) != "first prompt\n" {
-		t.Fatal("startup stole editor input")
 	}
 }

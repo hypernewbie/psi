@@ -22,18 +22,18 @@ Resume (every form shows current-view history before the next prompt):
 ```sh
 ./psi --continue
 ./psi --resume
-./psi --resume api
 ./psi --session ~/.pi/agent/sessions/<dir>/<file>.jsonl
 ./psi --no-session
 ```
 
 Inline commands: `/help /new /resume /model /thinking /compact /session /history /skill:name /quit`.
-`/resume [filter]` pages 20/page (`n/p`, `/filter`, number, empty cancels).
+`/resume [filter]` opens the searchable workspace picker; use arrows or PageUp/PageDown, Enter to select, Escape to cancel.
 `/history [N|all]` is display-only (default 20).
 
-Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (edges browse history),
-`Ctrl+P/N` history, `Tab` complete, `Ctrl+C` cancel (idle clears, empty exits),
-`Ctrl+D` delete/exit, paste literal, `Esc` cancels selector.
+Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/picker selection),
+`Ctrl+P/N` history, five-row slash completion, `Ctrl+L` model picker, `Shift+Tab` thinking cycle,
+`Ctrl+C` cancels a picker/run (idle clears, empty exits), `Ctrl+D` delete/exit, paste literal,
+`Escape` dismisses completion or cancels a picker.
 
 Cancel a run, then keep typing: `Ctrl+C` stops provider/tool/compact work with
 settled cleanup and truthful transcript; next prompt appears after persistence.

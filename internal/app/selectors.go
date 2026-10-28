@@ -191,7 +191,12 @@ func (s *Selector) RenderPickerRows(width int, noColor bool) []string {
 	} else if s.Thinking {
 		label = "Thinking levels"
 	}
-	rows := []string{terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), Token: terminal.TokenMuted}}}, width, noColor)}
+	header := terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), Token: terminal.TokenMuted}}}
+	if selected := s.SelectedItem(); selected != nil {
+		name, _ := s.pickerText(*selected)
+		header.Spans = append(header.Spans, terminal.StyledSpan{Text: " · selected ", Token: terminal.TokenMuted}, terminal.StyledSpan{Text: name, Token: terminal.TokenAccent})
+	}
+	rows := []string{terminal.FormatStyledRow(header, width, noColor)}
 	if len(s.Filtered) == 0 {
 		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: "No matches", Token: terminal.TokenWarning}}}, width, noColor))
 		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: "Type to search · Esc/Ctrl+C cancel", Token: terminal.TokenMuted}}}, width, noColor))

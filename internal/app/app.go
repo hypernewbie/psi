@@ -88,12 +88,27 @@ func Run(args []string, version string) error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return fmt.Errorf("noninteractive input: psi needs a terminal (no print/RPC mode)")
 	}
+	tty, _, err := terminal.Acquire()
+	if err != nil {
+		return err
+	}
+	defer tty.Restore()
+	console := terminal.NewConsole(os.Stdin, os.Stdout)
+	defer console.Close()
+	signals := make(chan os.Signal, 8)
+	signal.Notify(signals, handledSignals()...)
+	defer signal.Stop(signals)
+	lifecycle := &terminalLifecycle{tty: tty, console: console, signals: signals}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 	agentDir := session.AgentDir()
-	consent := askProjectConsent(o, cwd)
+	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME")})
+	consent, err := askProjectConsent(o, cwd, console, lifecycle)
+	if err != nil {
+		return err
+	}
 	loaded, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json"), consent)
 	if err != nil {
 		return err
@@ -121,7 +136,7 @@ func Run(args []string, version string) error {
 		return fmt.Errorf("unsupported provider %q (available: anthropic, openai-codex)", o.Provider)
 	}
 	ov := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
-	store, err := openSession(o, cwd, agentDir, st, ov)
+	store, err := openSession(o, cwd, agentDir, st, ov, console, lifecycle)
 	if errors.Is(err, errStartupCancelled) {
 		return nil
 	}
@@ -129,12 +144,11 @@ func Run(args []string, version string) error {
 		return err
 	}
 	if o.SessionPath != "" && !sameDir(store.Header().Cwd, cwd) {
-		fmt.Printf("%s [y/N] ", terminal.Sanitize("Session workspace: "+store.Header().Cwd+". Run tools in current workspace "+cwd+"?"))
-		answer, err := readStartupLine(os.Stdin)
+		confirmed, err := confirmWorkspaceMismatch(console, lifecycle, store.Header().Cwd, cwd)
 		if err != nil {
 			return err
 		}
-		if !strings.EqualFold(strings.TrimSpace(answer), "y") && !strings.EqualFold(strings.TrimSpace(answer), "yes") {
+		if !confirmed {
 			return nil
 		}
 	}
@@ -151,19 +165,21 @@ func Run(args []string, version string) error {
 	if err := r.restore(); err != nil {
 		return err
 	}
+	r.tty, r.lifecycle, r.signals = tty, lifecycle, signals
+	startupOut := terminal.RawOutput{W: console}
 	grouped := map[string]int{}
 	for _, d := range diagnostics {
 		grouped[d.Message]++
 	}
 	if !st.QuietStartup {
-		fmt.Println(terminal.Sanitize("psi v" + version))
+		fmt.Fprintln(startupOut, terminal.Sanitize("psi v"+version))
 		for msg, n := range grouped {
 			if n > 1 {
-				fmt.Println(terminal.Sanitize(fmt.Sprintf("note: %s (x%d, see /session)", msg, n)))
+				fmt.Fprintln(startupOut, terminal.Sanitize(fmt.Sprintf("note: %s (x%d, see /session)", msg, n)))
 			} else {
 				for _, d := range diagnostics {
 					if d.Message == msg {
-						fmt.Println(terminal.Sanitize("note: skill " + d.Path + ": " + d.Message))
+						fmt.Fprintln(startupOut, terminal.Sanitize("note: skill "+d.Path+": "+d.Message))
 						break
 					}
 				}
@@ -171,23 +187,15 @@ func Run(args []string, version string) error {
 		}
 		if r.authErr != nil {
 			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error()+" (offline commands still work; /model to select, /session for status)", 80, false) {
-				fmt.Println(line)
+				fmt.Fprintln(startupOut, line)
 			}
 		}
-		fmt.Println("esc interrupt · ctrl+c/d clear/exit · / commands")
+		fmt.Fprintln(startupOut, "esc interrupt · ctrl+c/d clear/exit · / commands")
 	} else if r.authErr != nil {
 		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error(), 80, false) {
-			fmt.Println(line)
+			fmt.Fprintln(startupOut, line)
 		}
 	}
-	tty, _, err := terminal.Acquire()
-	if err != nil {
-		return err
-	}
-	defer tty.Restore()
-	r.tty = tty
-	console := terminal.NewConsole(os.Stdin, os.Stdout)
-	defer console.Close()
 	r.refreshPresentation(console)
 	return r.repl(console)
 }
@@ -211,6 +219,8 @@ type runtime struct {
 	selectorCursor           int
 	selectorRestoreOnSuccess bool
 	tty                      *terminal.Term
+	lifecycle                *terminalLifecycle
+	signals                  chan os.Signal
 	footerKey                string
 	footerSnapshot           terminal.PresentationSnapshot
 }
@@ -329,12 +339,12 @@ func sameDir(a, b string) bool {
 	return ea == nil && eb == nil && ra == rb
 }
 
-func askProjectConsent(o Options, cwd string) bool {
+func askProjectConsent(o Options, cwd string, console *terminal.Console, lifecycle *terminalLifecycle) (bool, error) {
 	if o.DenyProj {
-		return false
+		return false, nil
 	}
 	if o.AllowProj {
-		return true
+		return true, nil
 	}
 	hasProject := false
 	for _, p := range []string{".pi/settings.json", ".pi/skills", ".pi/SYSTEM.md", ".pi/APPEND_SYSTEM.md", ".agents/skills"} {
@@ -344,14 +354,39 @@ func askProjectConsent(o Options, cwd string) bool {
 		}
 	}
 	if !hasProject {
-		return false
+		return false, nil
 	}
-	fmt.Printf("%s [y/N] ", terminal.Sanitize("Load protected project resources from "+cwd+"?"))
-	line, _ := readStartupLine(os.Stdin)
-	return strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
+	picker := &terminal.ChoicePicker{
+		Title:   "Project trust",
+		Context: "Load protected project resources from " + cwd + "? This applies to this run only.",
+		Options: []terminal.ChoiceOption{
+			{Label: "Trust for this run", Description: "load project settings, instructions, and skills"},
+			{Label: "Deny", Description: "ignore protected project resources", Current: true},
+		},
+		Selected: 1,
+	}
+	selected, cancelled, err := runChoicePicker(console, lifecycle, picker)
+	if err != nil || cancelled {
+		return false, err
+	}
+	return selected == 0, nil
 }
 
-func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.StartupOverrides) (*session.Store, error) {
+func confirmWorkspaceMismatch(console *terminal.Console, lifecycle *terminalLifecycle, sessionCwd, toolCwd string) (bool, error) {
+	picker := &terminal.ChoicePicker{
+		Title:   "Workspace confirmation",
+		Context: "Session workspace: " + sessionCwd + " · tools will use: " + toolCwd,
+		Options: []terminal.ChoiceOption{
+			{Label: "Run tools in current workspace", Description: "the session's original workspace is not used"},
+			{Label: "Cancel", Description: "do not start this session", Current: true},
+		},
+		Selected: 1,
+	}
+	selected, cancelled, err := runChoicePicker(console, lifecycle, picker)
+	return !cancelled && selected == 0, err
+}
+
+func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.StartupOverrides, console *terminal.Console, lifecycle *terminalLifecycle) (*session.Store, error) {
 	dir := session.SessionDirOverride(ov.SessionDir, "", "", cwd, agentDir)
 	persist := !ov.NoSession
 	if o.SessionPath != "" {
@@ -369,26 +404,14 @@ func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.
 			return nil, fmt.Errorf("no sessions found in %s", dir)
 		}
 		selector := NewSelector(infos, "")
-		for {
-			for _, line := range selector.Render() {
-				fmt.Println(terminal.Sanitize(line))
-			}
-			fmt.Print("Search sessions (empty to cancel): ")
-			line, err := readStartupLine(os.Stdin)
-			if err != nil {
-				return nil, err
-			}
-			_, cancelled, _ := selector.Resolve(line)
-			if cancelled {
-				return nil, errStartupCancelled
-			}
-			if len(selector.Filtered) == 1 {
-				return session.OpenFile(selector.Filtered[0].Path, cwd, persist)
-			}
-			if len(selector.Filtered) == 0 {
-				fmt.Println("no matching sessions")
-			}
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil {
+			return nil, err
 		}
+		if cancelled || selected == nil {
+			return nil, errStartupCancelled
+		}
+		return session.OpenFile(selected.Path, cwd, persist)
 	}
 	return session.New(session.OpenOptions{Cwd: cwd, SessionDir: dir, AgentDir: agentDir, Persist: persist})
 }
@@ -550,9 +573,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 	status := terminal.NewStatusWriter(out)
 	events := make(chan event.Event, 64)
 	done := make(chan error, 1)
-	signals := make(chan os.Signal, 8)
-	signal.Notify(signals, handledSignals()...)
-	defer signal.Stop(signals)
+	signals := r.signals
+	if signals == nil {
+		signals = make(chan os.Signal, 8)
+		signal.Notify(signals, handledSignals()...)
+		defer signal.Stop(signals)
+	}
+	if r.lifecycle == nil {
+		r.lifecycle = &terminalLifecycle{tty: r.tty, console: console, signals: signals}
+	}
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
 	var outputErr error
@@ -562,6 +591,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var submittedCursor int
 	var suspendPending bool
 	inputs := console.Inputs
+	var pendingInputs []terminal.Input
+	var pendingInputBytes int
 	frameTimer := time.NewTimer(time.Hour)
 	frameTimer.Stop()
 	defer frameTimer.Stop()
@@ -662,6 +693,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 					if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
 						return false
 					}
+					if len(pendingInputs) >= 8192 || pendingInputBytes+len(input.Key) > 256*1024 {
+						pendingInputs = append(pendingInputs, input)
+						pendingInputBytes += len(input.Key)
+						return false
+					}
+					pendingInputs = append(pendingInputs, input)
+					pendingInputBytes += len(input.Key)
 				case sig := <-signals:
 					switch {
 					case sig == syscall.SIGINT:
@@ -797,24 +835,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}()
 	}
 	suspend := func() error {
-		if r.tty == nil {
-			return fmt.Errorf("terminal lifecycle unavailable")
-		}
-		console.Pause()
-		r.tty.Restore()
-		continued := make(chan os.Signal, 1)
-		signal.Notify(continued, resumeSignal())
-		defer signal.Stop(continued)
-		if err := stopSelf(); err != nil {
+		if err := r.lifecycle.Suspend(); err != nil {
 			return err
 		}
-		// A process-directed stop can reach another Go runtime thread first.
-		// Do not reacquire raw mode merely because kill returned.
-		<-continued
-		if err := r.tty.Reacquire(); err != nil {
-			return err
-		}
-		console.Resume()
 		inputs = console.Inputs
 		r.draw(console)
 		return console.Err()
@@ -836,6 +859,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			outputErr, exiting = err, true
 			cancel()
+		}
+		inputSource := inputs
+		fromPendingInput := len(pendingInputs) > 0
+		if fromPendingInput {
+			queued := make(chan terminal.Input, 1)
+			queued <- pendingInputs[0]
+			close(queued)
+			inputSource = queued
 		}
 		if frameTick == nil && (stream.Pending() || console.NeedsDraw() || (busy && activityText != "")) {
 			delay := time.Second / 30
@@ -947,7 +978,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.refreshPresentation(console)
 				r.draw(console)
 			}
-		case input, ok := <-inputs:
+		case input, ok := <-inputSource:
+			if fromPendingInput {
+				pendingInputs = pendingInputs[1:]
+				pendingInputBytes -= len(input.Key)
+			}
 			if !ok {
 				inputs = nil
 				if busy {

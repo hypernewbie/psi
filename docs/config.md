@@ -17,10 +17,12 @@ psi --help
 psi --version
 ```
 
-Project consent: `--allow-project` / `--deny-project`. Otherwise psi asks once
-per run before loading `.pi/settings.json`, project skills, and project
-`SYSTEM.md`/`APPEND_SYSTEM.md`. Context files such as `AGENTS.md` load separately,
-as in Pi. User instructions come from the agent directory and ancestor folders.
+Project consent: `--allow-project` / `--deny-project`. Otherwise an inline
+choice appears before psi reads `.pi/settings.json`, project skills, or project
+`SYSTEM.md`/`APPEND_SYSTEM.md`. The default is deny; Escape and Ctrl+C also deny.
+The choice applies to this run only. Context files such as `AGENTS.md` load
+separately, as in Pi. User instructions come from the agent directory and
+ancestor folders.
 
 | Area | Keys | Notes |
 |---|---|---|
@@ -47,7 +49,7 @@ With no saved provider/model, the default is Anthropic `claude-sonnet-4-5`.
 The public snapshot contains 17 Anthropic models and seven Codex models from `@earendil-works/pi-ai` version `1.4.0`.
 Source hashes are in `internal/config/data/catalog-source.json`.
 The snapshot contains capabilities, not credentials, private endpoints, or user defaults.
-`/model` pages the local catalog and configured models without a network request.
+`/model` searches the local catalog and configured models without a network request.
 
 A saved Codex selection uses the GPT-5.6 and GPT-6 families.
 Its default is `gpt-5.6-luna`.
