@@ -76,6 +76,38 @@ func TestMaintainedVTIntermediateFramesAndScrollback(t *testing.T) {
 	}
 }
 
+func TestMaintainedVTResizeKeepsActiveDraftAndCommittedHistory(t *testing.T) {
+	model := vt.NewEmulator(80, 24)
+	defer model.Close()
+	width, height := 80, 24
+	c := &Console{Editor: NewEditor(), Out: model, writer: NewWriter(model), SizeFunc: func() (int, int) { return width, height }}
+	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
+	fmt.Fprintln(RawOutput{W: c}, "COMMITTED_SENTINEL")
+	c.Editor.Insert("resize-draft")
+	c.Draw()
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
+		width, height = size[0], size[1]
+		model.Resize(width, height)
+		c.Draw()
+		if !strings.Contains(model.String(), "resize-draft") {
+			t.Fatalf("resize to %dx%d hid the active draft: %q", width, height, model.String())
+		}
+		sentinel := strings.Contains(model.String(), "COMMITTED_SENTINEL")
+		for y := 0; y < model.ScrollbackLen() && !sentinel; y++ {
+			var line strings.Builder
+			for x := 0; x < width; x++ {
+				if cell := model.ScrollbackCellAt(x, y); cell != nil {
+					line.WriteString(cell.Content)
+				}
+			}
+			sentinel = strings.Contains(line.String(), "COMMITTED_SENTINEL")
+		}
+		if !sentinel {
+			t.Fatalf("resize to %dx%d lost the committed sentinel", width, height)
+		}
+	}
+}
+
 func TestMaintainedVTOverwriteEraseWrapAndCursor(t *testing.T) {
 	model := vt.NewEmulator(8, 3)
 	defer model.Close()
