@@ -3,16 +3,27 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestDefaultSessionDirEncoding(t *testing.T) {
+	// Unix fixtures use Unix paths; Windows fixtures use Windows paths.
+	// A POSIX path on Windows is drive-relative, so it cannot encode
+	// the same way.
 	cases := []struct{ cwd, wantSuffix string }{
 		{"/home/user/proj", "--home-user-proj--"},
 		{"/", "----"},
 		{"/tmp/a b", "--tmp-a b--"},
-		{"/tmp/uni-café", "--tmp-uni-café--"},
+		{"/tmp/uni-caf\u00e9", "--tmp-uni-caf\u00e9--"},
+	}
+	if runtime.GOOS == "windows" {
+		cases = []struct{ cwd, wantSuffix string }{
+			{`C:\Users\u\proj`, "--C--Users-u-proj--"},
+			{`C:\`, "--C---"},
+			{`C:\tmp\a b`, "--C--tmp-a b--"},
+		}
 	}
 	for _, tc := range cases {
 		got := DefaultSessionDir(tc.cwd, "/tmp/agent")
@@ -27,19 +38,24 @@ func TestDefaultSessionDirEncoding(t *testing.T) {
 	}
 	// Separators: backslash and colon become dashes.
 	got := DefaultSessionDir(`/a\b:c`, "/tmp/agent")
-	if strings.Contains(filepath.Base(got), `\`) || strings.Contains(filepath.Base(got), ":") {
+	if runtime.GOOS != "windows" && (strings.Contains(filepath.Base(got), `\`) || strings.Contains(filepath.Base(got), ":")) {
 		t.Errorf("separators not encoded: %q", got)
 	}
 }
 
 func TestSessionDirOverridePrecedence(t *testing.T) {
-	cwd := "/home/u/w"
-	agent := "/home/u/.pi/agent"
+	// Absolute fixtures come from temp dirs so the test runs on every
+	// platform. Hardcoded POSIX paths are drive-relative on Windows.
+	root := t.TempDir()
+	cwd := filepath.Join(root, "w")
+	agent := filepath.Join(root, ".pi", "agent")
+	flagDir := filepath.Join(root, "flag", "dir")
+	envDir := filepath.Join(root, "env", "dir")
 	def := DefaultSessionDir(cwd, agent)
-	if got := SessionDirOverride("/flag/dir", "/env/dir", "set/dir", cwd, agent); got != "/flag/dir" {
+	if got := SessionDirOverride(flagDir, envDir, "set/dir", cwd, agent); got != flagDir {
 		t.Errorf("flag precedence: %q", got)
 	}
-	if got := SessionDirOverride("", "/env/dir", "set/dir", cwd, agent); got != "/env/dir" {
+	if got := SessionDirOverride("", envDir, "set/dir", cwd, agent); got != envDir {
 		t.Errorf("env precedence: %q", got)
 	}
 	// Relative settings dir resolves from agent dir.

@@ -51,6 +51,7 @@ type reviewPTY struct {
 	t        *testing.T
 	cmd      *exec.Cmd
 	master   *os.File
+	tty      *os.File
 	original *term.State
 	chunks   chan []byte
 	pending  string
@@ -91,6 +92,14 @@ func startReviewProcess(t *testing.T, home, work, agentDir, binary, searchPath s
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Watch the slave side, not the master: macOS gives the master a
+	// PENDIN flag the slave never has. A dup observes slave termios
+	// without disturbing the child stdio.
+	dup, err := syscall.Dup(int(slave.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tty := os.NewFile(uintptr(dup), "slave-watch")
 	if err := pty.Setsize(master, &pty.Winsize{Rows: 40, Cols: 80}); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +111,7 @@ func startReviewProcess(t *testing.T, home, work, agentDir, binary, searchPath s
 		t.Fatal(err)
 	}
 	slave.Close()
-	q := &reviewPTY{t: t, cmd: cmd, master: master, original: original, chunks: make(chan []byte, 256), screen: testutil.NewVTModel(80, 40)}
+	q := &reviewPTY{t: t, cmd: cmd, master: master, tty: tty, original: original, chunks: make(chan []byte, 256), screen: testutil.NewVTModel(80, 40)}
 	go func() {
 		defer close(q.chunks)
 		buf := make([]byte, 4096)
@@ -121,6 +130,7 @@ func startReviewProcess(t *testing.T, home, work, agentDir, binary, searchPath s
 			cmd.Process.Kill()
 			cmd.Wait()
 		}
+		tty.Close()
 		master.Close()
 	})
 	return q
@@ -169,7 +179,7 @@ func (q *reviewPTY) finish() {
 		<-done
 		q.t.Fatal("process did not exit")
 	}
-	state, err := term.GetState(int(q.master.Fd()))
+	state, err := term.GetState(int(q.tty.Fd()))
 	if err != nil || !reflect.DeepEqual(state, q.original) {
 		q.t.Fatalf("terminal not restored: %v", err)
 	}
@@ -269,7 +279,7 @@ func TestActualSuspendRestoresTerminalAndResumesInput(t *testing.T) {
 	if !stopped {
 		t.Fatal("suspend did not stop the process")
 	}
-	state, err := term.GetState(int(q.master.Fd()))
+	state, err := term.GetState(int(q.tty.Fd()))
 	if err != nil || !reflect.DeepEqual(state, q.original) {
 		t.Fatalf("terminal state during suspend: before=%#v after=%#v error=%v", q.original, state, err)
 	}

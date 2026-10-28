@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -235,6 +236,11 @@ func TestF02FreshLeaseNeverStolen(t *testing.T) {
 // TestF02ReplacedLeaseNotDeleted simulates a replacement lease appearing
 // under a former owner. valid() reports false and unlock() leaves it alone.
 func TestF02ReplacedLeaseNotDeleted(t *testing.T) {
+	// The holder keeps the lock directory open, which blocks removal
+	// and replacement on Windows. The scenario cannot occur there.
+	if runtime.GOOS == "windows" {
+		t.Skip("replacement under a live holder is impossible on Windows")
+	}
 	dir := t.TempDir()
 	lock := filepath.Join(dir, "auth.json.lock")
 	unlock, valid, err := acquireAuthLock(context.Background(), lock, 0, 0)
@@ -292,6 +298,11 @@ func TestF02HeartbeatKeepsLeaseFresh(t *testing.T) {
 // TestF03RefreshPreservesExistingModes covers 0600, 0640, and 0660 on a
 // supported local filesystem with a local token fixture.
 func TestF03RefreshPreservesExistingModes(t *testing.T) {
+	// Unix mode bits do not exist on Windows; preservation there means
+	// the file stays put, which other tests cover.
+	if runtime.GOOS == "windows" {
+		t.Skip("mode preservation needs Unix permission bits")
+	}
 	for _, mode := range []os.FileMode{0o600, 0o640, 0o660} {
 		t.Run(fmt.Sprintf("mode-%o", mode), func(t *testing.T) {
 			dir := t.TempDir()

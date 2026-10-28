@@ -17,6 +17,10 @@ jobs:
         with:
           go-version: "1.24.2"
           cache: true
+      - name: git-bash-on-path
+        if: runner.os == 'Windows'
+        # bash lives in Git\bin; sleep/seq live in Git\usr\bin.
+        run: Add-Content $env:GITHUB_PATH "C:\Program Files\Git\bin`nC:\Program Files\Git\usr\bin"
       - name: gofmt
         shell: bash
         run: |

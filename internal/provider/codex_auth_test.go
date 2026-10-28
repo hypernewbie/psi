@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,8 +69,11 @@ func TestCodexOAuthRefreshPreservesOtherCredentialsAndUnknownFields(t *testing.T
 	if updated.Refresh != "dummy-new-refresh" || updated.Expires < time.Now().Add(50*time.Minute).UnixMilli() {
 		t.Fatal("refresh rotation or expiry was not persisted")
 	}
-	if st, _ := os.Stat(path); st.Mode().Perm() != 0600 {
-		t.Fatal("refreshed auth is not private")
+	// Windows has no Unix mode bits; a private file stats as 0666.
+	if runtime.GOOS != "windows" {
+		if st, _ := os.Stat(path); st.Mode().Perm() != 0600 {
+			t.Fatal("refreshed auth is not private")
+		}
 	}
 	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
 		t.Fatal("auth lock leaked")

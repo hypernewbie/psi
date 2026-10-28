@@ -105,6 +105,12 @@ func (s *Store) loadEntriesLocked(entries []*Entry) ([]*Entry, error) {
 	out := make([]*Entry, 0, len(entries))
 	for _, e := range entries {
 		if meta, ok := s.records[e.ID()]; ok {
+			// Fire the mutation hook before opening the snapshot. On
+			// Windows an open handle pins the file and hides removal or
+			// replacement from this walk.
+			if hook != nil {
+				hook(meta)
+			}
 			if f == nil {
 				var err error
 				f, err = s.openSnapshotLocked()
@@ -114,9 +120,6 @@ func (s *Store) loadEntriesLocked(entries []*Entry) ([]*Entry, error) {
 			}
 			if !snap.unchanged() {
 				return nil, externalChangeError(s.file)
-			}
-			if hook != nil {
-				hook(meta)
 			}
 			loaded, err := loadRecord(f, meta)
 			if err != nil {
@@ -176,9 +179,11 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 	hook := s.LoadHook
 	filePath := s.file
 	s.mu.Unlock()
-	if f != nil {
-		defer f.Close()
-	}
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+	}()
 	load := func(e *Entry) (*Entry, error) {
 		if m, ok := records[e.ID()]; ok {
 			if !snap.unchanged() {
@@ -186,6 +191,20 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 			}
 			if hook != nil {
 				hook(m)
+				// The hook may remove or replace the file. Reopen the
+				// snapshot: on Windows an open handle pins the file
+				// and hides removal from this walk.
+				if f != nil {
+					f.Close()
+					f = nil
+				}
+			}
+			if f == nil {
+				var err error
+				f, err = s.openSnapshotLocked()
+				if err != nil {
+					return nil, err
+				}
 			}
 			loaded, err := loadRecord(f, m)
 			if err != nil {

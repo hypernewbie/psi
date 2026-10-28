@@ -616,7 +616,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return fmt.Errorf("terminal lifecycle unavailable")
 		}
 		console.Pause()
-		r.tty.RestoreForSuspend()
+		r.tty.Restore()
 		continued := make(chan os.Signal, 1)
 		signal.Notify(continued, resumeSignal())
 		defer signal.Stop(continued)

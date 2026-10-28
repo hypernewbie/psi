@@ -32,7 +32,20 @@ func RunIsolated(run func() int) int {
 			}
 		}
 	}()
+	// Windows sockets fail without SystemRoot, and child tool lookup
+	// needs PATHEXT. Keep both out of the cleared set on Windows.
+	keep := map[string]string{}
+	if runtime.GOOS == "windows" {
+		for _, k := range []string{"SystemRoot", "PATHEXT"} {
+			if v := os.Getenv(k); v != "" {
+				keep[k] = v
+			}
+		}
+	}
 	os.Clearenv()
+	for k, v := range keep {
+		os.Setenv(k, v)
+	}
 	for _, dir := range []string{"home", "tmp", "agent", "sessions"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 			fmt.Fprintln(os.Stderr, "cannot create regression directories")

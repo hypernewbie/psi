@@ -11,6 +11,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +96,11 @@ func TestF07StderrOnlyAndPartialLine(t *testing.T) {
 func TestF07CancelDuringDrainKillsGroup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("shell drain timing")
+	}
+	// Windows stops the leader only; descendants outlive cancellation
+	// (see proc_windows.go).
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is Unix-only")
 	}
 	dir := t.TempDir()
 	reg := NewRegistry(dir)

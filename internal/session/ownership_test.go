@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -126,7 +127,12 @@ func TestReadOnlySessionAppendPreservesBytesAndMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(after, prefix) || info.Mode().Perm() != 0400 || s.LeafID() != leaf || s.WriteError() == nil {
+	// Windows has no Unix mode bits: read-only files stat as 0444.
+	wantMode := os.FileMode(0400)
+	if runtime.GOOS == "windows" {
+		wantMode = 0444
+	}
+	if !bytes.Equal(after, prefix) || info.Mode().Perm() != wantMode || s.LeafID() != leaf || s.WriteError() == nil {
 		t.Fatal("permission failure changed bytes, mode, or logical state")
 	}
 }

@@ -51,6 +51,12 @@ func ChildEnv(home string, extra map[string]string) []string {
 		path = os.Getenv("PATH")
 	}
 	env := []string{"HOME=" + home, "PATH=" + path}
+	if runtime.GOOS == "windows" {
+		// Node and Winsock fail without SystemRoot in child processes.
+		if v := os.Getenv("SystemRoot"); v != "" {
+			env = append(env, "SystemRoot="+v)
+		}
+	}
 	for k, v := range extra {
 		env = append(env, k+"="+v)
 	}
