@@ -51,15 +51,7 @@ func (s *Selector) apply() {
 		}
 	}
 	if selected < 0 {
-		for i, it := range s.Filtered {
-			if it.ID == s.ActiveID {
-				selected = i
-				break
-			}
-		}
-	}
-	if selected < 0 {
-		selected = min(max(s.Selected, 0), len(s.Filtered)-1)
+		selected = 0
 	}
 	s.Selected = selected
 	s.SelectedID = s.Filtered[selected].ID
@@ -74,42 +66,9 @@ func selectorMatches(query string, item session.SessionInfo) bool {
 		return true
 	}
 	searchable := strings.Join([]string{item.ID, item.Name, item.Cwd, item.FirstMessage, item.Unavailable}, " ")
-	lowerQuery, lowerSearch := strings.ToLower(query), strings.ToLower(searchable)
-	if strings.Contains(lowerSearch, lowerQuery) {
-		return true
-	}
-	// Keep punctuation-heavy IDs exact. Fuzzy matching a model name against its
-	// credential description can otherwise produce unrelated matches.
-	if strings.ContainsAny(query, "-./_:") {
-		return false
-	}
-	for _, term := range strings.Fields(query) {
-		if !fuzzySubsequence(term, lowerSearch) {
-			return false
-		}
-	}
-	return true
-}
-
-// fuzzySubsequence follows Pi's forgiving search behavior while preserving the
-// source ordering: every query rune must occur in order in the item text.
-func fuzzySubsequence(query, text string) bool {
-	q := []rune(strings.ToLower(query))
-	if len(q) == 0 {
-		return true
-	}
-	candidate := []rune(strings.ToLower(text))
-	at := 0
-	for _, want := range q {
-		for at < len(candidate) && candidate[at] != want {
-			at++
-		}
-		if at == len(candidate) {
-			return false
-		}
-		at++
-	}
-	return true
+	// PLAN4 deliberately retains psi's substring search and source ordering,
+	// rather than porting Pi's fuzzy matching/ranking.
+	return strings.Contains(strings.ToLower(searchable), strings.ToLower(query))
 }
 
 func (s *Selector) SetFilter(q string) {

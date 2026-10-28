@@ -41,6 +41,35 @@ func TestSelectorSearchUsesStableIdentityAndKeyboardSelection(t *testing.T) {
 	}
 }
 
+func TestSelectorFilterUsesSubstringsAndFirstMatchFallback(t *testing.T) {
+	items := []session.SessionInfo{
+		{ID: "first", FirstMessage: "Alpha response"},
+		{ID: "active", FirstMessage: "Alpha beta"},
+		{ID: "selected", FirstMessage: "Separate conversation"},
+	}
+	s := NewSelector(items, "active")
+	s.Move(1)
+	s.SetFilter(" ALPHA ")
+	if len(s.Filtered) != 2 || s.Filtered[0].ID != "first" || s.Filtered[1].ID != "active" || s.SelectedID != "first" {
+		t.Fatalf("filter must keep source order and select first match, not active item: %+v", s)
+	}
+	s.Move(1)
+	s.SetFilter("alpha b")
+	if s.SelectedID != "active" {
+		t.Fatalf("retained matching identity lost: %+v", s)
+	}
+	for _, query := range []string{"alpr", "alpha beta response", "al be"} {
+		s.SetFilter(query)
+		if len(s.Filtered) != 0 || s.SelectedItem() != nil {
+			t.Fatalf("query %q used fuzzy/multi-term matching: %+v", query, s.Filtered)
+		}
+	}
+	s.SetFilter("")
+	if s.SelectedID != "first" {
+		t.Fatalf("empty result reset did not choose first match: %+v", s)
+	}
+}
+
 func TestModelAndThinkingPickerRowsAreBoundedAndColorSafe(t *testing.T) {
 	items := []session.SessionInfo{
 		{ID: "provider/model-a", FirstMessage: "credential available; api", Modified: time.Unix(1, 0)},

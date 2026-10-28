@@ -45,7 +45,10 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.prompt()
 	q.write("\x1b[6~\x1b[5~") // bounded PageDown/PageUp navigation
 	q.prompt()
-	q.write("gpt-5.6-luna")
+	q.write("lunaa") // Not a substring: no fuzzy fallback or accidental selection.
+	q.wait("0 matches")
+	q.prompt()
+	q.write("\x15gpt-5.6-luna")
 	q.wait("1 matches")
 	q.prompt()
 	q.write("\r")
