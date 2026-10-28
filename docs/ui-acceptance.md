@@ -2,9 +2,9 @@
 
 ## Status
 
-The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows CI, broader Windows Terminal interactions, human terminal review, and the full actual-app resize matrix remain unavailable. Native Windows test-package suites and a ConPTY smoke now pass.
+The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows CI, broader Windows Terminal interactions, human terminal review, and the full actual-app resize-operation matrix remain outstanding. Native Windows test-package suites and a ConPTY smoke now pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `c2d5d751ed5218a78eb2b9cda1366494d28783eb` (`c2d5d75`; quantitative UI profiles were collected at `51a56e3`, followed by resize and native Windows test suites). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `9b9cad930fa4f9cc9969a88c771cadf1cd7bda83` (`9b9cad9`; quantitative UI profiles were collected at `51a56e3`, followed by resize and native Windows test suites). The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -26,7 +26,7 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests | Automated pass |
 | A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; Windows ConPTY draft/clear/quit smoke passes, but Windows picker interactions are unverified |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests | Automated pass |
-| A4-18 | Maintained VT test keeps an active draft and committed sentinel through 120×40, 80×24, 60×16, 40×12, 20×6, then back to 80×24; picker and tail geometry fixtures cover the same sizes | **Partial:** no actual-app matrix combines every operation (typing, stream, tool, picker) at every size |
+| A4-18 | Maintained VT keeps an active draft and committed sentinel through all six sizes. Native Windows ConPTY runs the app through typing and the same six sizes, checking draft and cursor. Picker and tail geometry fixtures cover those sizes. | **Partial:** actual-app resize coverage still lacks streaming, tool, and picker operations at every size |
 | A4-19 | `NO_COLOR`, semantic token, and no-generated-SGR fixtures | Automated pass; light/dark human checks blocked |
 | A4-20 | Unix PTY suspend/resume, EOF, shutdown, and termios restoration; comparison masks only macOS PENDIN. Native Windows ConPTY draft/clear/quit smoke also passes. | Linux lifecycle and Windows ConPTY smoke pass; macOS runtime and human shell restoration remain blocked |
 | A4-21 | Malicious control, path, provider, Markdown, tool-body, and secret canaries across display tests | Automated pass for covered paths |
@@ -49,7 +49,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 | Long fenced code | 8,192 completed lines plus an over-limit single-line case | active source ≤64 KiB; completed code lines commit incrementally; output matches replay | Pass component bounds and shared formatting |
 | Large writes | Existing short-write and 64 KiB batching tests | no write unit exceeds 64 KiB; suffix bytes preserved | Pass |
 | Scheduled frame composition | One VT component frame | stable append + active tail + status use one `Writer.Emit` frame; runtime batches timer-flush and spinner updates | Pass |
-| Six-size resize | One maintained VT console journey | active draft and committed sentinel remain after each size change | Pass for component/emulator coverage; actual-app operation matrix remains partial |
+| Six-size resize | Maintained VT journey plus actual Windows ConPTY app draft | component retains the draft and committed sentinel; actual app retains the typed draft and cursor at all six sizes | Pass for typing and component coverage; stream/tool/picker matrix remains partial |
 | Ten-second idle | One settled REPL session | zero new frames, writes, or bytes over 10 seconds | Pass for the measured idle path |
 | Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass |
 | 10,000 tiny output deltas | Actual-app PTY plus paced in-process REPL profile | PTY `1.095512757s`; REPL `1.145584044s`, 12 timer frames, 6 event frames, 26 writer frames, 24 writes, `20,736` bytes, max write `11,284` bytes | Pass: timer rate <30/s, categories counted separately, write units <64 KiB; PTY confirms ordered persistence and footer |
@@ -57,7 +57,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 Profile fixture hashes:
 
 ```text
-internal/app/conpty_windows_test.go    791e11d6e62af2df9fe1d913c0fd701a6c1d753fe1219b8199482c47946398b6
+internal/app/conpty_windows_test.go    7d15f0e5d525d0204514a9918e2ff19622fa4e1db1971c90a765036271060056
 internal/app/app_test.go              3f2f4def8bbbe35ef38055d4657ec736010e7fd495ba2540b75ddee6d3309f35
 internal/app/review_test.go            2e4c30ee82f217d84427d8bbf7fcaddf3c85a895689ad9a589c06afdfe0e9e9d
 internal/app/idle_profile_test.go       f0251fc7cbbed3339d16afd3e3cd2f66dbafd167f7c2be512399e82025117985
@@ -91,10 +91,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `c2d5d75` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-c2d5d75 ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9d64580`; subsequent changes are tests and documentation. The final-tree rebuild was byte-identical.
+Built from repository tree revision `9b9cad9` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-9b9cad9 ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9b9cad9`; on Windows the console now reads viewport dimensions from the output handle, matching Pi's `process.stdout.columns/rows`. Later changes are tests and documentation. The final-tree rebuild was byte-identical.
 
 ```text
-SHA-256  ab811a7a72c08de11b7aea3fdff847717cfd3253256e8a3f761d25863acfd870
+SHA-256  44e1db5bca2391d316cb91c7a80fa802bfa61acf7ea57b9dc79defe587215e34
 ```
 
 ## Gate disposition
