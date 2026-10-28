@@ -32,11 +32,15 @@ func RunIsolated(run func() int) int {
 			}
 		}
 	}()
-	// Windows sockets fail without SystemRoot, and child tool lookup
-	// needs PATHEXT. Keep both out of the cleared set on Windows.
+	// Windows sockets fail without SystemRoot, child tool lookup needs
+	// PATHEXT, and shell tests need the parent PATH (no fixed coreutils
+	// path exists). Keep them out of the cleared set on Windows. This
+	// must read the parent environment before Clearenv below.
 	keep := map[string]string{}
+	// Unix tests use a fixed minimal PATH.
+	keep["PATH"] = "/usr/local/bin:/usr/bin:/bin"
 	if runtime.GOOS == "windows" {
-		for _, k := range []string{"SystemRoot", "PATHEXT"} {
+		for _, k := range []string{"SystemRoot", "PATHEXT", "PATH"} {
 			if v := os.Getenv(k); v != "" {
 				keep[k] = v
 			}
@@ -52,14 +56,8 @@ func RunIsolated(run func() int) int {
 			return 1
 		}
 	}
-	// Windows has no fixed coreutils path; shell tests there use the
-	// runner-provided bash, so PATH stays inherited on Windows.
-	isolatedPath := "/usr/local/bin:/usr/bin:/bin"
-	if runtime.GOOS == "windows" {
-		isolatedPath = os.Getenv("PATH")
-	}
 	for key, value := range map[string]string{
-		"PATH": isolatedPath,
+		"PATH": keep["PATH"],
 		"HOME": filepath.Join(root, "home"), "TMPDIR": filepath.Join(root, "tmp"),
 		"PI_CODING_AGENT_DIR": filepath.Join(root, "agent"), "PI_CODING_AGENT_SESSION_DIR": filepath.Join(root, "sessions"),
 		"LANG": "C.UTF-8", "TERM": "xterm",

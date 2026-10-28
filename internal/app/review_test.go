@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -181,14 +182,48 @@ func (q *reviewPTY) finish() {
 		q.t.Fatal("process did not exit")
 	}
 	// Post-exit slave ioctls return ENOTTY on macOS once the session
-	// leader is gone. The suspend test verifies restore on the live
-	// slave; here Linux keeps the exact check.
+	// leader is gone, so the exact state check stays Linux-only there.
+	// The suspend test verifies restore on the live slave instead.
 	if goruntime.GOOS != "darwin" {
 		state, err := term.GetState(int(q.tty.Fd()))
-		if err != nil || !reflect.DeepEqual(state, q.original) {
+		if err != nil || !sameTermState(state, q.original) {
 			q.t.Fatalf("terminal not restored: %v", err)
 		}
 	}
+}
+
+// sameTermState compares terminal states exactly, except on darwin
+// where it tolerates the driver-managed PENDIN bit (0x20000000).
+// macOS sets PENDIN on the slave while its foreground group is
+// suspended; psi never sets it, raw-mode reacquire clears it, and every
+// other bit must still match. Any wider difference fails.
+func sameTermState(a, b *term.State) bool {
+	if reflect.DeepEqual(a, b) {
+		return true
+	}
+	if goruntime.GOOS != "darwin" {
+		return false
+	}
+	va, oka := lflagValue(fmt.Sprintf("%#v", a))
+	vb, okb := lflagValue(fmt.Sprintf("%#v", b))
+	if !oka || !okb {
+		return false
+	}
+	return va^vb == 0x20000000
+}
+
+var lflagPattern = regexp.MustCompile(`Lflag:0x([0-9a-fA-F]+)`)
+
+func lflagValue(detail string) (uint64, bool) {
+	m := lflagPattern.FindStringSubmatch(detail)
+	if m == nil {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(m[1], 16, 32)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 func reviewSettings(t *testing.T, agentDir, url string) {
@@ -286,7 +321,7 @@ func TestActualSuspendRestoresTerminalAndResumesInput(t *testing.T) {
 		t.Fatal("suspend did not stop the process")
 	}
 	state, err := term.GetState(int(q.tty.Fd()))
-	if err != nil || !reflect.DeepEqual(state, q.original) {
+	if err != nil || !sameTermState(state, q.original) {
 		t.Fatalf("terminal state during suspend: before=%#v after=%#v error=%v", q.original, state, err)
 	}
 	if err := q.cmd.Process.Signal(syscall.SIGCONT); err != nil {
