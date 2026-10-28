@@ -2,9 +2,9 @@
 
 ## Status
 
-The reduced Pi regular-mode UI is implemented and the local automated suite passes. The release gates are **partial**, not complete: the strict scheduled-frame profile is not directly instrumented, remote macOS/Windows tests did not run, native Windows console input/output was not exercised, and human visual/copy checks remain unavailable.
+The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows tests, native Windows console execution, human terminal review, and the full actual-app resize matrix remain unavailable.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest measured source revision: `fb46988f02e0d34263a5888fad3f7a0411206d90` (`fb46988`). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest measured source revision: `51a56e3ca822c529a3e06f59982391eb37701720` (`51a56e3`). The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -22,7 +22,7 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | Cases | Automated evidence | Human/platform status |
 |---|---|---|
 | A4-01–02 | Inline startup/editor, grapheme editing, literal paste, recall, cursor, overflow, and responsive geometry tests; actual-app PTY coverage | Human readability and copy check blocked |
-| A4-03 | Slow-stream and actual-app PTY tests preserve the indicator, footer, editor, and partial text. A loopback provider sends 10,000 one-character deltas in 30 paced batches over about one second; the answer is ordered and persisted. `TestScheduledFrameBatchCombinesAppendAndStatus` proves one timer-frame batch combines stable append, active tail, and activity status into one writer frame. | **Partial:** one outstanding 30 Hz timer is in use, but the actual-app run does not separately count timer frames, event-boundary frames, and bounded writes over a controlled second |
+| A4-03 | Slow-stream and actual-app PTY tests preserve the indicator, footer, editor, and partial text. A loopback provider sends 10,000 one-character deltas in 30 paced batches; order and persistence are checked. The REPL profile separately counts timer and event-boundary frames, writer frames/writes, and maximum write size. | Automated pass; human perception/flicker check remains blocked |
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests | Automated pass |
 | A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; native console checks remain blocked |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests | Automated pass |
@@ -34,28 +34,31 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 
 ## Resource profiles
 
-Measurements below were collected at revision `fb46988` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`.
+Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`.
 
 | Profile | Samples / fixture | Raw result | Assessment |
 |---|---|---|---|
-| Editor key-to-frame | 100 warm local interactions | p50 `172.771µs`, p95 `225.830µs`, max `265.261µs` | Pass, p95 ≤50 ms |
-| Cancellation dispatch | 100 busy Ctrl+C dispatches | p50 `30ns`, p95 `50ns`, max `330ns` | Pass for dispatch only; descendant cleanup is separate |
-| 256 KiB paste | One warm end-marker-to-frame sample | `96.037908ms` | Pass, ≤200 ms |
-| 1,000 vs 10,000 one-character Markdown deltas | One allocation sample each | `107,752` / `887,256` bytes; ratio `8.24×` | Pass, ≤15× allocation growth; component stream path, not a runtime frame-count measurement |
-| Picker search/render, 10,000 entries | 100 edits | p50 `2.734427ms`, p95 `3.493578ms`, max `3.724231ms` | Pass, p95 ≤50 ms |
-| 10,000-session metadata activation | One synthetic workspace | `688.132248ms` to a usable 20-item first page | Pass for measured activation path |
-| 512 MiB compacted session | 15,328 historical tool records; 15,331 total entries | activation `2,337ms`, peak RSS `42,136 KiB` | Pass existing 3 s / 160 MiB budgets |
-| 1 MiB prose stream | One benchmark iteration | `490,282,793ns/op`, `2.16 MB/s`, `66,985,136 B/op`, `707,845 allocs/op` | Recorded; allocations are cumulative churn, not retained response size. Active source remains bounded by tests. |
+| Editor key-to-frame | 100 warm local interactions | p50 `175.050µs`, p95 `223.080µs`, max `266.181µs` | Pass, p95 ≤50 ms |
+| Cancellation dispatch | 100 busy Ctrl+C dispatches | p50 `30ns`, p95 `50ns`, max `110ns` | Pass for dispatch only; descendant cleanup is separate |
+| 256 KiB paste | One warm end-marker-to-frame sample | `93.070487ms` | Pass, ≤200 ms |
+| 1,000 vs 10,000 one-character Markdown deltas | One allocation sample each | `107,752` / `887,288` bytes; ratio `8.24×` | Pass, ≤15× allocation growth; component stream path, not a runtime frame-count measurement |
+| Picker search/render, 10,000 entries | 100 edits | p50 `2.509537ms`, p95 `3.295760ms`, max `3.421518ms` | Pass, p95 ≤50 ms |
+| 10,000-session metadata activation | One synthetic workspace | `663.780031ms` to a usable 20-item first page | Pass for measured activation path |
+| 512 MiB compacted session | 15,328 historical tool records; 15,331 total entries | activation `2,280ms`, peak RSS `42,544 KiB` | Pass existing 3 s / 160 MiB budgets |
+| 1 MiB prose stream | One benchmark iteration | `477,780,897ns/op`, `2.22 MB/s`, `66,882,488 B/op`, `707,161 allocs/op` | Recorded; allocations are cumulative churn, not retained response size. Active source remains bounded by tests. |
 | Long fenced code | 8,192 completed lines plus an over-limit single-line case | active source ≤64 KiB; completed code lines commit incrementally; output matches replay | Pass component bounds and shared formatting |
 | Large writes | Existing short-write and 64 KiB batching tests | no write unit exceeds 64 KiB; suffix bytes preserved | Pass |
-| Scheduled frame composition | One VT component frame | stable append + active tail + status use one `Writer.Emit` frame; runtime batches timer-flush and spinner updates | Pass at component level; run-level timer/event/write counts remain partial |
-| Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass for unchanged redraw; a dedicated ten-second timer/frame counter is not present |
-| 10,000 tiny output deltas | Actual-app PTY with 30 paced flush groups; one measured run | `1.185452455s` elapsed; all 10,000 deltas plus marker persisted in order; footer remained | Actual-app journey passes. Timer-frame batching is component-tested; run-level frame categories remain partial |
+| Scheduled frame composition | One VT component frame | stable append + active tail + status use one `Writer.Emit` frame; runtime batches timer-flush and spinner updates | Pass |
+| Ten-second idle | One settled REPL session | zero new frames, writes, or bytes over 10 seconds | Pass for the measured idle path |
+| Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass |
+| 10,000 tiny output deltas | Actual-app PTY plus paced in-process REPL profile | PTY `1.095512757s`; REPL `1.145584044s`, 12 timer frames, 6 event frames, 26 writer frames, 24 writes, `20,736` bytes, max write `11,284` bytes | Pass: timer rate <30/s, categories counted separately, write units <64 KiB; PTY confirms ordered persistence and footer |
 
 Profile fixture hashes:
 
 ```text
 internal/app/app_test.go              3f2f4def8bbbe35ef38055d4657ec736010e7fd495ba2540b75ddee6d3309f35
+internal/app/review_test.go            2e4c30ee82f217d84427d8bbf7fcaddf3c85a895689ad9a589c06afdfe0e9e9d
+internal/app/idle_profile_test.go       f0251fc7cbbed3339d16afd3e3cd2f66dbafd167f7c2be512399e82025117985
 internal/terminal/review_test.go        59c4ae810a9156b7acdcbb367a67be2bfd04e544df9a43939f92d99e32b4c6b3
 internal/app/picker_perf_test.go       64e1e8bb98fe076a623bca933be25c192648405841748b0485686b6327d553f8
 internal/terminal/markdown_stream_test.go f045bef2f2a763154948a278ae6d0143894b0ad7549e7f57cdc18bbb3f886bbf
@@ -67,6 +70,8 @@ Re-run from the repository root:
 ```sh
 go test ./internal/app -run '^TestTenThousandPickerQueriesStayResponsive$' -count=1 -v
 go test ./internal/app -run '^TestActualAppPTYWorkflow$' -count=1 -v
+go test ./internal/app -run '^TestRuntimeFrameMetricsForPacedText$' -count=1 -v
+go test -tags acceptance ./internal/app -run '^TestTenIdleSecondsProduceNoScheduledFrames$' -count=1 -v
 go test ./internal/app -tags acceptance -run 'TestScale10000MetadataFirstPage|TestScale512MiBActivation' -count=1 -v
 go test ./internal/terminal -run 'Test(EditorKeyToFrameLatencyP95|CancellationDispatchP95|256KiBPasteUpdatesWithinBudget|MarkdownStreamDeltaAllocationGrowthBounded|ScheduledFrameBatchCombinesAppendAndStatus)$' -count=1 -v
 go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -benchtime=1x -benchmem
@@ -82,10 +87,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from source revision `fb46988f02e0d34263a5888fad3f7a0411206d90` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-fb46988 ./cmd/psi` on Linux amd64 using Go 1.26.4. Later commits changed only this ledger; a final-tree rebuild was byte-identical.
+Built from repository tree revision `51a56e3ca822c529a3e06f59982391eb37701720` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-51a56e3 ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9d64580`; subsequent changes are test/documentation only. The final-tree rebuild was byte-identical.
 
 ```text
-SHA-256  76e3681e33ef50626e34cc473a24016adfb99bae348e634e7f7c0605047e4e7c
+SHA-256  ab811a7a72c08de11b7aea3fdff847717cfd3253256e8a3f761d25863acfd870
 ```
 
 ## Gate disposition
