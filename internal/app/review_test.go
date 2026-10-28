@@ -4,6 +4,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
+	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/terminal"
 	"psi/internal/testutil"
@@ -31,6 +34,136 @@ import (
 // Explicit test flag, never an inherited environment switch. Every launch
 // still uses synthetic configuration, isolated HOME, and loopback endpoints.
 var reviewBinary = flag.String("psi-test-binary", "", "Run actual-app PTY regressions against this executable instead of the test helper")
+
+func TestRuntimeFrameMetricsForPacedText(t *testing.T) {
+	r := testRuntime(t)
+	p := &pacedFrameProvider{finished: make(chan struct{})}
+	r.prov, r.authErr = p, nil
+	in, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &lockedFrameOutput{}
+	console := terminal.NewConsole(in, out)
+	console.SizeFunc = func() (int, int) { return 80, 24 }
+	finished := make(chan error, 1)
+	go func() { finished <- r.repl(console) }()
+
+	cleanupDone := false
+	t.Cleanup(func() {
+		if !cleanupDone {
+			_ = input.Close()
+			select {
+			case <-finished:
+			case <-time.After(5 * time.Second):
+			}
+		}
+		console.Close()
+		_ = in.Close()
+	})
+	start := time.Now()
+	if _, err := input.Write([]byte("frame-profile\r")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(8 * time.Second)
+	for !strings.Contains(out.String(), "FRAME_DONE") {
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("paced provider did not finish: %q", out.String())
+		}
+	}
+	select {
+	case <-p.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not settle after final text")
+	}
+	// Allow the REPL to consume RunEnd and its durable completion event before
+	// submitting the quit command.
+	time.Sleep(50 * time.Millisecond)
+	elapsed := time.Since(start)
+	if _, err := input.Write([]byte("/quit\r")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-finished:
+		cleanupDone = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("REPL did not exit after /quit")
+	}
+	writes, frames, bytesWritten, _ := console.FrameStats()
+	maxTimerFrames := int((elapsed*time.Duration(30)+time.Second-1)/time.Second) + 2
+	maxWrite := out.MaxWrite()
+	t.Logf("paced 10k delta frame profile: elapsed=%s timer_frames=%d event_frames=%d writer_frames=%d writer_writes=%d bytes=%d max_write=%d", elapsed, r.timerFrames, r.eventFrames, frames, writes, bytesWritten, maxWrite)
+	if elapsed < 750*time.Millisecond {
+		t.Fatalf("provider did not span a controlled second: %s", elapsed)
+	}
+	if r.timerFrames > maxTimerFrames {
+		t.Fatalf("timer frames %d exceed 30Hz budget for %s: max=%d", r.timerFrames, elapsed, maxTimerFrames)
+	}
+	if frames > 100 || writes > frames {
+		t.Fatalf("unexpected frame/write storm: frames=%d writes=%d", frames, writes)
+	}
+	if maxWrite > 64*1024 {
+		t.Fatalf("console wrote an oversized batch: %d bytes", maxWrite)
+	}
+}
+
+type pacedFrameProvider struct{ finished chan struct{} }
+
+func (p *pacedFrameProvider) Send(ctx context.Context, _ provider.Request, onText func(string)) (*provider.Response, error) {
+	defer close(p.finished)
+	var text strings.Builder
+	for i := 0; i < 10_000; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		text.WriteByte('a')
+		onText("a")
+		if (i+1)%333 == 0 {
+			timer := time.NewTimer(33 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	text.WriteString("FRAME_DONE")
+	onText("FRAME_DONE")
+	return &provider.Response{Text: text.String(), StopReason: "end_turn", Usage: provider.Usage{Input: 1, Output: 10_001}}, nil
+}
+
+func (p *pacedFrameProvider) CloseIdle() {}
+
+type lockedFrameOutput struct {
+	mu sync.Mutex
+	bytes.Buffer
+	maxWrite int
+}
+
+func (w *lockedFrameOutput) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.maxWrite = max(w.maxWrite, len(data))
+	return w.Buffer.Write(data)
+}
+
+func (w *lockedFrameOutput) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.Buffer.String()
+}
+
+func (w *lockedFrameOutput) MaxWrite() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.maxWrite
+}
 
 func TestReviewAppProcess(t *testing.T) {
 	if os.Getenv("PSI_REVIEW_PROCESS") != "1" || flag.Lookup("test.run").Value.String() != "^TestReviewAppProcess$" {

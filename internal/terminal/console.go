@@ -618,6 +618,14 @@ func (c *Console) size() (int, int) {
 
 func (c *Console) NeedsDraw() bool { return c.dirty }
 
+// FrameStats reports the writer's cumulative frame and write counters.
+func (c *Console) FrameStats() (writes, frames, bytes, unchanged int) {
+	if c.writer == nil {
+		return 0, 0, 0, 0
+	}
+	return c.writer.Stats()
+}
+
 func (c *Console) Flush() {
 	if c.dirty {
 		c.Draw()

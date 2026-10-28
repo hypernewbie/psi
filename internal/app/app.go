@@ -223,6 +223,8 @@ type runtime struct {
 	signals                  chan os.Signal
 	footerKey                string
 	footerSnapshot           terminal.PresentationSnapshot
+	timerFrames              int
+	eventFrames              int
 }
 
 func (r *runtime) restore() error {
@@ -745,6 +747,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 		print("error: " + err.Error())
 		r.state = StateIdle
 	}
+	recordEventFrames := func(update func()) {
+		_, before, _, _ := console.FrameStats()
+		update()
+		_, after, _, _ := console.FrameStats()
+		r.eventFrames += after - before
+	}
 	applyEvent := func(ev event.Event) {
 		if ev.Generation != 0 && ev.Generation != r.generation {
 			return
@@ -879,6 +887,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		select {
 		case <-frameTick:
 			frameTick = nil
+			_, beforeFrames, _, _ := console.FrameStats()
 			console.BeginFrame()
 			stream.Flush()
 			if busy && activityText != "" && time.Since(lastSpinner) >= 80*time.Millisecond {
@@ -890,6 +899,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Flush()
 			}
 			_ = console.EndFrame()
+			_, afterFrames, _, _ := console.FrameStats()
+			r.timerFrames += afterFrames - beforeFrames
 		case sig := <-signals:
 			if isResize(sig) {
 				r.draw(console)
@@ -920,12 +931,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 				return nil
 			}
 		case ev := <-events:
-			applyEvent(ev)
+			recordEventFrames(func() { applyEvent(ev) })
 		case err := <-done:
+			_, doneFramesBefore, _, _ := console.FrameStats()
 			// Drain events before drawing the next prompt. A completed run can
 			// otherwise race its final text delta through this select.
 			for len(events) > 0 {
-				applyEvent(<-events)
+				ev := <-events
+				recordEventFrames(func() { applyEvent(ev) })
 			}
 			cancel()
 			busy = false
@@ -963,6 +976,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			compacting = false
 			if exiting {
+				_, doneFramesAfter, _, _ := console.FrameStats()
+				r.eventFrames += doneFramesAfter - doneFramesBefore
 				return outputErr
 			}
 			refreshRecall()
@@ -973,6 +988,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if suspendPending {
 				suspendPending = false
 				if err := suspend(); err != nil {
+					_, doneFramesAfter, _, _ := console.FrameStats()
+					r.eventFrames += doneFramesAfter - doneFramesBefore
 					return err
 				}
 			} else {
@@ -980,6 +997,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.refreshPresentation(console)
 				r.draw(console)
 			}
+			_, doneFramesAfter, _, _ := console.FrameStats()
+			r.eventFrames += doneFramesAfter - doneFramesBefore
 		case input, ok := <-inputSource:
 			if fromPendingInput {
 				pendingInputs = pendingInputs[1:]
