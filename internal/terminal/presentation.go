@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/rivo/uniseg"
 )
 
 // ThemeToken is the small semantic style vocabulary used by psi's Pi-derived
@@ -227,10 +229,14 @@ func colorDisabled(snapshot PresentationSnapshot) bool {
 	return set
 }
 
-// ComposeEditorView builds Pi's horizontal-border editor and compact two-line
-// footer. It preserves the logical draft/cursor while allocating a bounded
-// viewport. Components are omitted only as terminal height requires.
+// ComposeEditorView builds Pi's horizontal-border editor and compact footer.
 func ComposeEditorView(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string) EditorView {
+	return ComposeConsoleView(width, height, buf, pos, snapshot, activity, "")
+}
+
+// ComposeConsoleView composes the active assistant fragment above the editor,
+// then the persistent footer. The fragment is bounded by the console owner.
+func ComposeConsoleView(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity, fragment string) EditorView {
 	width, height = max(1, width), max(1, height)
 	noColor := colorDisabled(snapshot)
 	layout := LayoutDraft(buf, pos, width)
@@ -253,8 +259,17 @@ func ComposeEditorView(width, height int, buf []rune, pos int, snapshot Presenta
 		footerCount = 1
 	}
 	borderCount := 2
-	bodyBudget := max(1, height-footerCount-borderCount)
 	preferred := max(5, int(float64(height)*0.3))
+	preferred = min(preferred, len(layout.Rows))
+	fragmentRows := []string{}
+	if fragment != "" && width > 3 {
+		fragmentRows = wrapAssistantFragment(fragment, width)
+	}
+	fragmentBudget := max(0, height-footerCount-borderCount-max(1, preferred))
+	if len(fragmentRows) > fragmentBudget {
+		fragmentRows = fragmentRows[len(fragmentRows)-fragmentBudget:]
+	}
+	bodyBudget := max(1, height-footerCount-borderCount-len(fragmentRows))
 	bodyBudget = min(bodyBudget, preferred)
 	bodyBudget = min(bodyBudget, len(layout.Rows))
 	start := max(0, layout.CursorRow-bodyBudget+1)
@@ -269,7 +284,15 @@ func ComposeEditorView(width, height int, buf []rune, pos int, snapshot Presenta
 		label := ""
 		if top {
 			if activity != "" {
-				label = "── " + SanitizeStatusRow(activity) + " "
+				status := SanitizeStatusRow(activity)
+				reserve := 4
+				if above > 0 {
+					reserve += CellWidth("↑ " + itoa(above) + " more ")
+				}
+				status = compactActivity(status, max(0, borderWidth-reserve))
+				if status != "" {
+					label = "── " + status + " "
+				}
 			}
 			if above > 0 {
 				label += "↑ " + itoa(above) + " more "
@@ -290,11 +313,14 @@ func ComposeEditorView(width, height int, buf []rune, pos int, snapshot Presenta
 		row := StyledRow{Spans: []StyledSpan{{Text: text, Token: borderToken}}}
 		return row.Serialize(noColor), row.Width()
 	}
-	rows := make([]string, 0, borderCount+bodyBudget+footerCount)
+	rows := make([]string, 0, len(fragmentRows)+borderCount+bodyBudget+footerCount)
 	cells := make([]int, 0, cap(rows))
+	for _, row := range fragmentRows {
+		rows, cells = append(rows, row), append(cells, CellWidth(row))
+	}
 	top, topWidth := borderRow(true)
 	rows, cells = append(rows, top), append(cells, topWidth)
-	cursorRow := layout.CursorRow - start + 1
+	cursorRow := len(fragmentRows) + layout.CursorRow - start + 1
 	for i := start; i < end; i++ {
 		plain := SanitizeStatusRow(layout.Rows[i])
 		clipped := TruncateToWidth(plain, max(0, width-1))
@@ -311,6 +337,74 @@ func ComposeEditorView(width, height int, buf []rune, pos int, snapshot Presenta
 		cursorRow = min(len(rows)-1, max(0, cursorRow-(len(rows)-(height))))
 	}
 	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(layout.CursorCol, max(0, width-1))}
+}
+
+func compactActivity(status string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if CellWidth(status) <= maxWidth {
+		return status
+	}
+	if keyStart := strings.Index(status, "Esc/Ctrl+C"); keyStart >= 0 {
+		keyEnd := keyStart + len("Esc/Ctrl+C")
+		if CellWidth(status[:keyEnd]) <= maxWidth {
+			return TruncateToWidth(status, maxWidth)
+		}
+		if clusters := Graphemes(status); len(clusters) > 0 {
+			compact := clusters[0] + " Esc/Ctrl+C"
+			if CellWidth(compact) <= maxWidth {
+				return compact
+			}
+			return TruncateToWidth(clusters[0], maxWidth)
+		}
+	}
+	return TruncateToWidth(status, maxWidth)
+}
+
+func wrapAssistantFragment(text string, width int) []string {
+	const indent = "  "
+	limit := max(1, width-1)
+	cells := CellWidth(indent)
+	var rows []string
+	var line strings.Builder
+	line.WriteString(indent)
+	flush := func() {
+		rows = append(rows, line.String())
+		line.Reset()
+		line.WriteString(indent)
+		cells = CellWidth(indent)
+	}
+	gr := uniseg.NewGraphemes(text)
+	for gr.Next() {
+		cluster := gr.Str()
+		if cluster == "\n" {
+			flush()
+			continue
+		}
+		widthOf := GraphemeWidth(cluster)
+		if cluster == "\t" {
+			widthOf = 8 - cells%8
+		}
+		if cells > CellWidth(indent) && cells+widthOf > limit {
+			flush()
+			if cluster == "\t" {
+				widthOf = 8 - cells%8
+			}
+		}
+		if cluster == "\t" {
+			line.WriteString(strings.Repeat(" ", min(widthOf, max(0, limit-cells))))
+			cells += min(widthOf, max(0, limit-cells))
+		} else if widthOf > limit-CellWidth(indent) {
+			line.WriteByte('?')
+			cells++
+		} else {
+			line.WriteString(cluster)
+			cells += widthOf
+		}
+	}
+	rows = append(rows, line.String())
+	return rows
 }
 
 func itoa(n int) string {

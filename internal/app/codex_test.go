@@ -148,7 +148,10 @@ func TestCodexActualAppPTYToolRoundTrip(t *testing.T) {
 	wait("/ commands")
 	waitEditor()
 	master.WriteString("read fixture\r")
-	wait("read: done")
+	// Status state is styled as a separate Pi semantic token, so match its
+	// sanitized name and state around the generated SGR boundary.
+	wait("read")
+	wait("done")
 	wait("CODEX_APP_OK")
 	waitEditor()
 	master.WriteString("/quit\r")

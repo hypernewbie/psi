@@ -24,6 +24,7 @@ func TestContextLimitRecovery(t *testing.T) {
 			store.AppendMessage(userMsg("older request"))
 			store.AppendMessage(toSessionAssistant(&provider.Response{Text: "older answer"}, cfg))
 			requests, toolRuns := 0, 0
+			var phases []event.Event
 			limit := &provider.ProviderError{Kind: provider.ErrContextLimit, Status: 400, Message: "synthetic context limit"}
 			fake := reviewProvider(func(_ context.Context, req provider.Request, text func(string)) (*provider.Response, error) {
 				requests++
@@ -54,6 +55,9 @@ func TestContextLimitRecovery(t *testing.T) {
 				if e.Type == event.ToolStart {
 					toolRuns++
 				}
+				if e.Type == event.CompactionStart || e.Type == event.CompactionEnd {
+					phases = append(phases, e)
+				}
 			})
 			err = loop.Submit(context.Background(), "current task", cfg)
 			if (err != nil) != (mode != "success") {
@@ -78,6 +82,13 @@ func TestContextLimitRecovery(t *testing.T) {
 			}
 			if compactions != wantCompactions {
 				t.Fatalf("compactions=%d", compactions)
+			}
+			if wantCompactions == 1 {
+				if len(phases) != 2 || phases[0].Type != event.CompactionStart || phases[0].State != event.CompactionOverflow || phases[1].Type != event.CompactionEnd || phases[1].State != event.CompactionOverflow {
+					t.Fatalf("overflow phase sequence: %+v", phases)
+				}
+			} else if len(phases) != 0 {
+				t.Fatalf("partial stream entered compaction: %+v", phases)
 			}
 		})
 	}

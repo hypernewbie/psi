@@ -175,6 +175,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	home, ws := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, ".pi", "agent")
 	requests := make(chan map[string]any, 16)
+	slowRelease := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/v1/messages" || req.Header.Get("x-api-key") != "file-test-key" {
 			t.Errorf("endpoint/auth not used: %s", req.URL.Path)
@@ -193,6 +194,19 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 		if strings.Contains(string(encoded), "cancel-this") {
 			w.(http.Flusher).Flush()
 			<-req.Context().Done()
+			return
+		}
+		if strings.Contains(string(encoded), "slow-stream") {
+			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"SLOW_PARTIAL\"}}\n\n")
+			w.(http.Flusher).Flush()
+			select {
+			case <-slowRelease:
+			case <-req.Context().Done():
+				return
+			}
+			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"SLOW_DONE\"}}\n\n")
+			fmt.Fprint(w, "event: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {}\n\n")
 			return
 		}
 		fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
@@ -325,13 +339,26 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	if !bytes.Contains(encoded, []byte("SKILL_BODY")) || bytes.Contains(encoded, []byte("fresh-session")) {
 		t.Fatal("resume did not switch back to the selected history")
 	}
+	write("slow-stream\r")
+	select {
+	case <-requests:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow stream request not received")
+	}
+	wait("SLOW_PARTIAL")
+	if screen.CursorVisible || !strings.Contains(screen.Text(), "Working") || !strings.Contains(screen.Text(), "local-model") || !strings.Contains(screen.Text(), "─") {
+		t.Fatalf("active stream lost its indicator/footer/editor: cursor=%v screen=%q", screen.CursorVisible, screen.Text())
+	}
+	close(slowRelease)
+	wait("SLOW_DONE")
+	waitEditor()
 	write("cancel-this\r")
 	select {
 	case <-requests:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("cancel request not received; cursorVisible=%v screen=%q pending=%q", screen.CursorVisible, screen.Text(), pending)
 	}
-	write("\x03")
+	write("\x1b") // lone Escape is decoded after the bounded prefix timeout
 	wait("(cancelled)")
 	waitEditor()
 	write("/quit\r")

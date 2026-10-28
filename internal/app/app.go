@@ -526,7 +526,7 @@ func (r *runtime) draw(console *terminal.Console) {
 func (r *runtime) repl(console *terminal.Console) error {
 	out := terminal.RawOutput{W: console}
 	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
-	stream := terminal.NewStreamer(out, true)
+	stream := terminal.NewStreamer(terminal.StreamOutput{Console: console}, true)
 	status := terminal.NewStatusWriter(out)
 	events := make(chan event.Event, 64)
 	done := make(chan error, 1)
@@ -542,6 +542,30 @@ func (r *runtime) repl(console *terminal.Console) error {
 	frameTimer.Stop()
 	defer frameTimer.Stop()
 	var frameTick <-chan time.Time
+	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	spinnerIndex := 0
+	activityText := ""
+	lastSpinner := time.Time{}
+	activityFrame := func() string {
+		if activityText == "" {
+			return ""
+		}
+		return spinnerFrames[spinnerIndex] + " " + activityText
+	}
+	setActivity := func(text string) {
+		activityText = text
+		spinnerIndex = 0
+		lastSpinner = time.Now()
+		console.Status(activityFrame())
+	}
+	cancelActive := func() {
+		if !busy || cancel == nil {
+			return
+		}
+		r.state = StateCancelling
+		setActivity("Cancelling… (settling)")
+		cancel()
+	}
 	refreshRecall := func() {
 		if recall, err := r.store.Recall(); err == nil {
 			console.Editor.SetHistory(recall)
@@ -625,10 +649,29 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Close()
 			assistantOpen = false
 			r.state = StateRunningTool
-			console.Status(terminal.FormatStatus(ev.ToolName, terminal.ToolRunning))
+			setActivity(terminal.FormatStatus(ev.ToolName, terminal.ToolRunning) + " · Esc/Ctrl+C cancel, input paused")
 			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
 		case event.ToolEnd:
 			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
+			if r.state != StateCancelling {
+				r.state = StateWaiting
+				setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
+			}
+		case event.CompactionStart:
+			r.state = StateCompacting
+			message := "Compacting context… (Esc/Ctrl+C cancel)"
+			switch ev.State {
+			case event.CompactionThreshold:
+				message = "Auto-compacting context… (Esc/Ctrl+C cancel)"
+			case event.CompactionOverflow:
+				message = "Context overflow; compacting… (Esc/Ctrl+C cancel)"
+			}
+			setActivity(message)
+		case event.CompactionEnd:
+			if r.state != StateCancelling {
+				r.state = StateWaiting
+				setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
+			}
 		}
 	}
 	start := func(text, focus, invocation, source string, compact bool) {
@@ -647,10 +690,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cancel, busy, compacting = stop, true, compact
 		r.state = StateWaiting
 		console.ResetBusyNotice()
-		console.Status("Working. Ctrl+C cancels. Input disabled.")
+		setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
 		if compact {
 			r.state = StateCompacting
-			console.Status("Compacting. Ctrl+C cancels.")
+			setActivity("Compacting context… (Esc/Ctrl+C cancel)")
 		}
 		assistantOpen = false
 		gen, seq := r.generation, int64(0)
@@ -711,28 +754,35 @@ func (r *runtime) repl(console *terminal.Console) error {
 			outputErr, exiting = err, true
 			cancel()
 		}
-		if frameTick == nil && (stream.Pending() || console.NeedsDraw()) {
-			frameTimer.Reset(time.Second / 30)
+		if frameTick == nil && (stream.Pending() || console.NeedsDraw() || (busy && activityText != "")) {
+			delay := time.Second / 30
+			if busy && !stream.Pending() && !console.NeedsDraw() {
+				delay = 80 * time.Millisecond
+			}
+			frameTimer.Reset(delay)
 			frameTick = frameTimer.C
 		}
 		select {
 		case <-frameTick:
 			frameTick = nil
 			stream.Flush()
+			if busy && activityText != "" && time.Since(lastSpinner) >= 80*time.Millisecond {
+				spinnerIndex = (spinnerIndex + 1) % len(spinnerFrames)
+				lastSpinner = time.Now()
+				console.Status(activityFrame())
+			}
 			if !busy {
 				console.Flush()
 			}
 		case sig := <-signals:
 			if isResize(sig) {
-				if !busy {
-					r.draw(console)
-				}
+				r.draw(console)
 				continue
 			}
 			if isSuspend(sig) {
 				if busy {
 					suspendPending = true
-					cancel()
+					cancelActive()
 				} else if err := suspend(); err != nil {
 					return err
 				}
@@ -749,7 +799,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				exiting = true
 			}
 			if busy {
-				cancel()
+				cancelActive()
 			} else {
 				return nil
 			}
@@ -764,6 +814,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			cancel()
 			busy = false
 			stream.Close()
+			if !exiting {
+				setActivity("")
+			} else {
+				activityText = ""
+			}
 			if errors.Is(err, context.Canceled) {
 				print("(cancelled)")
 			} else if err != nil {
@@ -794,8 +849,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !ok {
 				inputs = nil
 				if busy {
-					cancel()
 					exiting = true
+					cancelActive()
 					continue
 				}
 				return nil
@@ -803,7 +858,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
 				if busy {
 					suspendPending = true
-					cancel()
+					cancelActive()
 				} else if err := suspend(); err != nil {
 					return err
 				}
@@ -818,12 +873,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			text, submitted, quit, abort := console.Handle(input, busy)
 			if abort && busy {
-				cancel()
+				cancelActive()
 			}
 			if quit {
 				if busy {
 					exiting = true
-					cancel()
+					cancelActive()
 					continue
 				}
 				return nil

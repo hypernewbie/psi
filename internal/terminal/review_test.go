@@ -266,6 +266,7 @@ func TestCleanupRestoresModesAfterFrameOutputFailure(t *testing.T) {
 }
 
 func TestToolStatusesCommitOneOutcomePerCall(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
 	var out bytes.Buffer
 	s := NewStatusWriter(&out)
 	for i := 0; i < 100; i++ {

@@ -32,6 +32,7 @@ func TestSanitizeMalicious(t *testing.T) {
 }
 
 func TestForbiddenAbsent(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
 	var sb strings.Builder
 	sw := NewStatusWriter(&sb)
 	sw.Update("read", "c1", ToolRunning)

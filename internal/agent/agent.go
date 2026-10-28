@@ -220,7 +220,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 		}
 		estimated := EstimatedContext(proj, cfg)
 		if ShouldCompact(estimated, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact) {
-			if err := l.compact(ctx, cfg, ""); err != nil {
+			if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil {
 				return fmt.Errorf("automatic compaction: %w", err)
 			}
 			proj, err = l.store.Projection()
@@ -243,7 +243,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 			var pe *provider.ProviderError
 			if ctx.Err() == nil && streamed.Len() == 0 && cfg.AutoCompact && errors.As(err, &pe) && pe.Kind == provider.ErrContextLimit && recovery.CanRetry() {
 				recovery.NoteAttempt()
-				if cerr := l.compact(ctx, cfg, ""); cerr != nil {
+				if cerr := l.compactWithReason(ctx, cfg, "", event.CompactionOverflow); cerr != nil {
 					return fmt.Errorf("context-limit recovery: %w", cerr)
 				}
 				continue // retry the projected request, never the completed tool batch

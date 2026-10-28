@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/tools"
@@ -78,6 +79,48 @@ func TestThinkingAndImportedImagesSurviveRequests(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("newly generated thinking signature was lost before replay")
+	}
+}
+
+func TestManualCompactionEmitsStartAndEndReason(t *testing.T) {
+	store, reg, fake, _, _ := testSetup(t)
+	if _, err := store.AppendMessage(userMsg("older request")); err != nil {
+		t.Fatal(err)
+	}
+	fake.Responses = []*provider.Response{{Text: "summary", StopReason: "stop"}}
+	var phases []event.Event
+	loop := New(store, reg, fake, func(e event.Event) {
+		if e.Type == event.CompactionStart || e.Type == event.CompactionEnd {
+			phases = append(phases, e)
+		}
+	})
+	if err := loop.Compact(context.Background(), Config{Model: modelMeta(), KeepRecentTokens: 0}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) != 2 || phases[0].Type != event.CompactionStart || phases[0].State != event.CompactionManual || phases[1].Type != event.CompactionEnd || phases[1].State != event.CompactionManual {
+		t.Fatalf("manual phase sequence: %+v", phases)
+	}
+}
+
+func TestAutomaticCompactionEmitsThresholdReason(t *testing.T) {
+	store, reg, fake, _, _ := testSetup(t)
+	old := strings.Repeat("older history ", 1000)
+	if _, err := store.AppendMessage(userMsg(old)); err != nil {
+		t.Fatal(err)
+	}
+	fake.Responses = []*provider.Response{{Text: "summary", StopReason: "stop"}, {Text: "answer", StopReason: "stop"}}
+	cfg := Config{Model: provider.ModelMeta{ID: "m", API: "anthropic-messages", ContextWindow: 10000, MaxTokens: 1000}, AutoCompact: true, ReserveTokens: 8000, KeepRecentTokens: 1}
+	var phases []event.Event
+	loop := New(store, reg, fake, func(e event.Event) {
+		if e.Type == event.CompactionStart || e.Type == event.CompactionEnd {
+			phases = append(phases, e)
+		}
+	})
+	if err := loop.Submit(context.Background(), "current task", cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) != 2 || phases[0].Type != event.CompactionStart || phases[0].State != event.CompactionThreshold || phases[1].Type != event.CompactionEnd || phases[1].State != event.CompactionThreshold {
+		t.Fatalf("threshold phase sequence: %+v", phases)
 	}
 }
 

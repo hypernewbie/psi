@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rivo/uniseg"
 	"golang.org/x/term"
 )
 
@@ -26,11 +27,16 @@ type Input struct {
 // All drawing occurs in the application's event-loop goroutine through one Writer.
 // Reference: temp/pi-mono/packages/tui/src/tui-main-screen.ts (differential,
 // append-only scrollback, no screen/scrollback clear) and editor-component.ts.
+const maxActiveFragmentBytes = 64 * 1024
+
 type Console struct {
 	In     *os.File
 	Out    io.Writer
 	Editor *Editor
 	Inputs <-chan Input
+	// SizeFunc is a deterministic layout seam for VT tests. Production consoles
+	// use the terminal descriptor size.
+	SizeFunc func() (int, int)
 
 	stop   context.CancelFunc
 	done   chan struct{}
@@ -46,15 +52,16 @@ type Console struct {
 	pasteNotice     bool
 	inputLimitShown bool
 
-	lastDraft    string
-	lastCursor   int
-	lastW, lastH int
-	visibleTail  []string
-	presentation PresentationSnapshot
-	activity     string
-	busyNoticed  bool
-	dirty        bool
-	lastDraw     time.Time
+	lastDraft      string
+	lastCursor     int
+	lastW, lastH   int
+	visibleTail    []string
+	presentation   PresentationSnapshot
+	activity       string
+	streamFragment []byte
+	busyNoticed    bool
+	dirty          bool
+	lastDraw       time.Time
 	// Completion sources (no exec/scan/provider).
 	Commands []string
 	Skills   []string
@@ -120,11 +127,82 @@ func (c *Console) emit(f Frame) error {
 // Write routes transcript, command, and status output through the same owner as
 // the editor. RawOutput performs newline conversion before this boundary.
 func (c *Console) Write(p []byte) (int, error) {
-	if err := c.emit(Frame{Append: string(p)}); err != nil {
+	if err := c.emitComposed(string(p)); err != nil {
 		return 0, err
 	}
-	c.visibleTail = nil
 	return len(p), nil
+}
+
+// StreamWrite keeps the final incomplete assistant line in the owned tail.
+// Complete lines move to native scrollback, while the editor/footer stay live.
+func (c *Console) StreamWrite(p []byte) (int, error) {
+	text := Sanitize(string(p))
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	width := c.currentWidth()
+	var stable strings.Builder
+	commitLine := func() {
+		if len(c.streamFragment) > 0 {
+			stable.WriteString("  ")
+			stable.Write(c.streamFragment)
+		}
+		stable.WriteString("\r\n")
+		c.streamFragment = c.streamFragment[:0]
+	}
+	for len(text) > 0 {
+		if newline := strings.IndexByte(text, '\n'); newline >= 0 {
+			c.streamFragment = append(c.streamFragment, text[:newline]...)
+			text = text[newline+1:]
+			commitLine()
+		} else {
+			c.streamFragment = append(c.streamFragment, text...)
+			text = ""
+		}
+		for len(c.streamFragment) > maxActiveFragmentBytes {
+			end := streamPrefixLen(c.streamFragment, width)
+			if end <= 0 || end > len(c.streamFragment) {
+				end = len(c.streamFragment)
+			}
+			stable.WriteString("  ")
+			stable.Write(c.streamFragment[:end])
+			stable.WriteString("\r\n")
+			c.streamFragment = c.streamFragment[end:]
+		}
+	}
+	var err error
+	if stable.Len() > 0 {
+		err = c.emitComposed(stable.String())
+	} else {
+		c.Draw()
+		err = c.err
+	}
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (c *Console) currentWidth() int {
+	width, _ := c.size()
+	return width
+}
+
+func streamPrefixLen(fragment []byte, width int) int {
+	text := string(fragment)
+	limit, cells, end := max(1, width-1), CellWidth("  "), 0
+	gr := uniseg.NewGraphemes(text)
+	for gr.Next() {
+		cluster := gr.Str()
+		clusterWidth := GraphemeWidth(cluster)
+		if cluster == "\t" {
+			clusterWidth = 8 - cells%8
+		}
+		if cells > CellWidth("  ") && cells+clusterWidth > limit {
+			break
+		}
+		cells += clusterWidth
+		_, end = gr.Positions()
+	}
+	return end
 }
 
 func (c *Console) Err() error { return c.err }
@@ -246,8 +324,8 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		return "", false, false, false
 	}
 	if busy {
-		// Cancellation only. Ctrl+C cancels; everything else ignored with one quiet notice per run.
-		if len(input.Key) == 1 && input.Key[0] == 3 {
+		// Cancellation only. Pi's Escape and psi's Ctrl+C cancel; all other input is ignored.
+		if len(input.Key) == 1 && (input.Key[0] == 3 || input.Key[0] == 27) {
 			return "", false, false, true
 		}
 		return "", false, false, false
@@ -423,7 +501,16 @@ func (c *Console) commitAccepted() {
 	c.dirty = false
 }
 
+func (c *Console) StatusWidth() int {
+	width, _ := c.size()
+	return width
+}
+
 func (c *Console) size() (int, int) {
+	if c.SizeFunc != nil {
+		width, height := c.SizeFunc()
+		return max(1, width), max(1, height)
+	}
 	width, height, err := term.GetSize(int(c.In.Fd()))
 	if err != nil || width <= 0 {
 		width = 80
@@ -451,22 +538,22 @@ func (c *Console) Status(text string) {
 
 func (c *Console) Draw() {
 	c.dirty = false
+	_ = c.emitComposed("")
+}
+
+func (c *Console) emitComposed(appendText string) error {
 	c.lastDraw = time.Now()
 	width, height := c.size()
-	view := ComposeEditorView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity)
-	f := Frame{Tail: view.Rows, TailCellWidth: view.CellWidth, CursorRow: view.CursorRow,
-		CursorCol: view.CursorCol, ShowCursor: c.hidden && c.activity == "", HideCursor: c.activity != ""}
-	_ = c.emit(f)
+	view := ComposeConsoleView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, string(c.streamFragment))
+	f := Frame{Append: appendText, Tail: view.Rows, TailCellWidth: view.CellWidth,
+		CursorRow: view.CursorRow, CursorCol: view.CursorCol,
+		ShowCursor: c.hidden && c.activity == "", HideCursor: c.activity != ""}
+	err := c.emit(f)
 	c.hidden = c.activity != ""
 	c.visibleTail = view.Rows
 	c.lastDraft, c.lastCursor = c.Editor.Text(), c.Editor.Pos()
 	c.lastW, c.lastH = width, height
-}
-
-func sanitizeRow(s string) string {
-	// Rows already contain "> " prefix and spaces; sanitize printable content.
-	// Sanitize strips ANSI/OSC/bidi but preserves our spaces.
-	return Sanitize(s)
+	return err
 }
 
 // ResetBusyNotice clears the one-notice flag at run start.
@@ -474,6 +561,13 @@ func (c *Console) ResetBusyNotice() { c.busyNoticed = false }
 
 // RawOutput retains terminal line endings while raw input disables OPOST.
 type RawOutput struct{ W io.Writer }
+
+func (w RawOutput) StatusWidth() int {
+	if sized, ok := w.W.(interface{ StatusWidth() int }); ok {
+		return sized.StatusWidth()
+	}
+	return 80
+}
 
 func (w RawOutput) Write(p []byte) (int, error) {
 	converted := bytes.ReplaceAll(p, []byte("\r\n"), []byte("\n"))

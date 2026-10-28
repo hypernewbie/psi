@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
 )
@@ -16,10 +17,16 @@ func (l *Loop) Compact(ctx context.Context, cfg Config, focus string) error {
 		return err
 	}
 	defer l.end()
-	return l.compact(ctx, cfg, focus)
+	return l.compactWithReason(ctx, cfg, focus, event.CompactionManual)
 }
 
-func (l *Loop) compact(ctx context.Context, cfg Config, focus string) error {
+func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason string) error {
+	l.sink(event.Event{Type: event.CompactionStart, State: reason})
+	defer l.sink(event.Event{Type: event.CompactionEnd, State: reason})
+	return l.compactImpl(ctx, cfg, focus)
+}
+
+func (l *Loop) compactImpl(ctx context.Context, cfg Config, focus string) error {
 	proj, err := l.store.Projection()
 	if err != nil {
 		return err

@@ -14,6 +14,7 @@ import (
 )
 
 func TestF10StatusRowAccounting(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
 	vt := testutil.NewVTModel(80, 24)
 	w := NewWriter(vtFeed{vt})
 	const sentinel = "COMMITTED_STATUS_SENTINEL"
@@ -52,7 +53,34 @@ func TestF10StatusRowAccounting(t *testing.T) {
 	}
 }
 
+func TestSettledToolStatusKeepsStateWithinPhysicalWidth(t *testing.T) {
+	var out strings.Builder
+	w := &fixedStatusWidthWriter{out: &out, width: 14}
+	sw := NewStatusWriter(w)
+	sw.Update("tool-very-long\nsecond", "call-1", ToolFailed)
+	plain := Sanitize(out.String())
+	line := strings.TrimSuffix(plain, "\n")
+	if strings.ContainsAny(line, "\r\n") || CellWidth(line) > w.width-1 {
+		t.Fatalf("settled row is multiline or too wide: %q (%d cells)", line, CellWidth(line))
+	}
+	if !strings.HasSuffix(line, ": failed") {
+		t.Fatalf("tool outcome lost to name clipping: %q", line)
+	}
+	if !strings.Contains(out.String(), "\x1b[31m") || !strings.HasSuffix(out.String(), "\x1b[0m\n") {
+		t.Fatalf("Pi error token or row reset missing: %q", out.String())
+	}
+}
+
+type fixedStatusWidthWriter struct {
+	out   *strings.Builder
+	width int
+}
+
+func (w *fixedStatusWidthWriter) Write(p []byte) (int, error) { return w.out.Write(p) }
+func (w *fixedStatusWidthWriter) StatusWidth() int            { return w.width }
+
 func TestF10UnsupportedNameThroughConsole(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
 	// Helper coverage only. This test does not run the provider or app loop.
 	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}, writer: NewWriter(&strings.Builder{}), decoder: NewDecoder()}
 	evil := "pwn\nsecond: running\x1b[2J"

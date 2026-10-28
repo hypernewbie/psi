@@ -37,6 +37,18 @@ func TestNoColorEnvironmentDisablesEveryToken(t *testing.T) {
 	}
 }
 
+func TestNarrowActivityBorderKeepsPiCancellationHint(t *testing.T) {
+	view := ComposeConsoleView(20, 6, nil, 0, PresentationSnapshot{NoColor: true}, "⠋ Working… (Esc/Ctrl+C cancel, input paused)", "")
+	if !strings.Contains(view.Rows[0], "Esc/Ctrl+C") {
+		t.Fatalf("narrow status discarded cancellation binding: %q", view.Rows[0])
+	}
+	for _, row := range view.Rows {
+		if CellWidth(Sanitize(row)) > 20 {
+			t.Fatalf("status row exceeded width: %q", row)
+		}
+	}
+}
+
 func TestComposeEditorViewShowsPiOverflowCounts(t *testing.T) {
 	draft := []rune(strings.Repeat("line\n", 30))
 	atEnd := ComposeEditorView(40, 12, draft, len(draft), PresentationSnapshot{NoColor: true}, "")

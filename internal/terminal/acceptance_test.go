@@ -41,6 +41,7 @@ func TestAcceptanceTinyDeltas(t *testing.T) {
 }
 
 func TestAcceptanceToolHeavy(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
 	var out bytes.Buffer
 	s := NewStatusWriter(&out)
 	for i := 0; i < 100; i++ {

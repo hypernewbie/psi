@@ -7,13 +7,15 @@ package event
 type Type string
 
 const (
-	TextDelta Type = "text_delta"
-	RunStart  Type = "run_start"
-	RunEnd    Type = "run_end"
-	ToolStart Type = "tool_start"
-	ToolEnd   Type = "tool_end"
-	Usage     Type = "usage"
-	Error     Type = "error"
+	TextDelta       Type = "text_delta"
+	RunStart        Type = "run_start"
+	RunEnd          Type = "run_end"
+	ToolStart       Type = "tool_start"
+	ToolEnd         Type = "tool_end"
+	CompactionStart Type = "compaction_start"
+	CompactionEnd   Type = "compaction_end"
+	Usage           Type = "usage"
+	Error           Type = "error"
 )
 
 // Event is one bounded, observable unit with explicit ordering.
@@ -38,6 +40,12 @@ type Event struct {
 	// Outcome class: transient, durable, interrupted, unsaved.
 	Outcome string
 }
+
+const (
+	CompactionManual    = "manual"
+	CompactionThreshold = "threshold"
+	CompactionOverflow  = "overflow"
+)
 
 const (
 	OutcomeTransient   = "transient"
