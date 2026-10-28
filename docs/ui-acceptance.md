@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote macOS/Windows tests, native Windows console execution, human terminal review, and the full actual-app resize matrix remain unavailable.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest measured source revision: `51a56e3ca822c529a3e06f59982391eb37701720` (`51a56e3`). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest measured source revision: `b79ecd9616cf76568b176cd4eca3a398a6e2b727` (`b79ecd9`; the UI profile suite is recorded at `51a56e3`, followed by a maintained-VT resize regression). The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -26,7 +26,7 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests | Automated pass |
 | A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; native console checks remain blocked |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests | Automated pass |
-| A4-18 | Component VT geometry and resize/tail tests; actual-app lifecycle and picker resize coverage | **Partial:** not every operation was exercised at every size in a single actual-app matrix |
+| A4-18 | Maintained VT test keeps an active draft and committed sentinel through 120×40, 80×24, 60×16, 40×12, 20×6, then back to 80×24; picker and tail geometry fixtures cover the same sizes | **Partial:** no actual-app matrix combines every operation (typing, stream, tool, picker) at every size |
 | A4-19 | `NO_COLOR`, semantic token, and no-generated-SGR fixtures | Automated pass; light/dark human checks blocked |
 | A4-20 | Unix PTY suspend/resume, EOF, shutdown, and termios restoration; comparison masks only macOS PENDIN | Linux pass; macOS/native Windows execution and human shell restoration blocked |
 | A4-21 | Malicious control, path, provider, Markdown, tool-body, and secret canaries across display tests | Automated pass for covered paths |
@@ -49,6 +49,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 | Long fenced code | 8,192 completed lines plus an over-limit single-line case | active source ≤64 KiB; completed code lines commit incrementally; output matches replay | Pass component bounds and shared formatting |
 | Large writes | Existing short-write and 64 KiB batching tests | no write unit exceeds 64 KiB; suffix bytes preserved | Pass |
 | Scheduled frame composition | One VT component frame | stable append + active tail + status use one `Writer.Emit` frame; runtime batches timer-flush and spinner updates | Pass |
+| Six-size resize | One maintained VT console journey | active draft and committed sentinel remain after each size change | Pass for component/emulator coverage; actual-app operation matrix remains partial |
 | Ten-second idle | One settled REPL session | zero new frames, writes, or bytes over 10 seconds | Pass for the measured idle path |
 | Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass |
 | 10,000 tiny output deltas | Actual-app PTY plus paced in-process REPL profile | PTY `1.095512757s`; REPL `1.145584044s`, 12 timer frames, 6 event frames, 26 writer frames, 24 writes, `20,736` bytes, max write `11,284` bytes | Pass: timer rate <30/s, categories counted separately, write units <64 KiB; PTY confirms ordered persistence and footer |
@@ -60,6 +61,7 @@ internal/app/app_test.go              3f2f4def8bbbe35ef38055d4657ec736010e7fd495
 internal/app/review_test.go            2e4c30ee82f217d84427d8bbf7fcaddf3c85a895689ad9a589c06afdfe0e9e9d
 internal/app/idle_profile_test.go       f0251fc7cbbed3339d16afd3e3cd2f66dbafd167f7c2be512399e82025117985
 internal/terminal/review_test.go        59c4ae810a9156b7acdcbb367a67be2bfd04e544df9a43939f92d99e32b4c6b3
+internal/terminal/maintained_test.go    7cfc51ad0a4119a6170d57efa248c7f9226c3f74ce44d30ba7c97de172a8f442
 internal/app/picker_perf_test.go       64e1e8bb98fe076a623bca933be25c192648405841748b0485686b6327d553f8
 internal/terminal/markdown_stream_test.go f045bef2f2a763154948a278ae6d0143894b0ad7549e7f57cdc18bbb3f886bbf
 internal/app/scale_test.go             9cbb18c8593ca28c0997040256ccee1911145feb719ce96f33773bb4c47362af
@@ -73,7 +75,7 @@ go test ./internal/app -run '^TestActualAppPTYWorkflow$' -count=1 -v
 go test ./internal/app -run '^TestRuntimeFrameMetricsForPacedText$' -count=1 -v
 go test -tags acceptance ./internal/app -run '^TestTenIdleSecondsProduceNoScheduledFrames$' -count=1 -v
 go test ./internal/app -tags acceptance -run 'TestScale10000MetadataFirstPage|TestScale512MiBActivation' -count=1 -v
-go test ./internal/terminal -run 'Test(EditorKeyToFrameLatencyP95|CancellationDispatchP95|256KiBPasteUpdatesWithinBudget|MarkdownStreamDeltaAllocationGrowthBounded|ScheduledFrameBatchCombinesAppendAndStatus)$' -count=1 -v
+go test ./internal/terminal -run 'Test(EditorKeyToFrameLatencyP95|CancellationDispatchP95|256KiBPasteUpdatesWithinBudget|MarkdownStreamDeltaAllocationGrowthBounded|ScheduledFrameBatchCombinesAppendAndStatus|MaintainedVTResizeKeepsActiveDraftAndCommittedHistory)$' -count=1 -v
 go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -benchtime=1x -benchmem
 ```
 
