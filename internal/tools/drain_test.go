@@ -24,7 +24,9 @@ func TestF07ActiveDescendantOutputCompletes(t *testing.T) {
 	reg := NewRegistry(dir)
 	start := time.Now()
 	res := reg.Dispatch(Invocation{ID: "b1", Name: "bash", Arguments: map[string]any{
-		"command": "for i in $(seq 1 16); do echo chunk-$i; sleep 0.04; done &",
+		// 10ms gaps leave ample margin under the 100ms idle grace on
+		// loaded CI hosts. 40ms gaps proved too tight on shared runners.
+		"command": "for i in $(seq 1 16); do echo chunk-$i; sleep 0.01; done &",
 	}})
 	elapsed := time.Since(start)
 	if res.IsError {

@@ -97,8 +97,10 @@ Unknown harmless UI prefs need no per-key warning.
 
 - Supported: Linux and WSL2 (WSLg not required; TUI is text-only).
 - Shell for `bash` tool: `bash` on PATH, run in workspace cwd, process-group cancellation.
-- macOS is a later portability check, not a first-release target.
-- Native Windows process behavior excluded unless explicitly requested.
+- macOS builds and runs the same suite as Linux.
+- Windows builds and runs the portable suite. Unix-only coverage stays out:
+  process-group cleanup, PTY harness tests, suspend/resume, and mode-bit tests.
+  Windows stops the shell leader only. Descendants outlive cancellation.
 
 ## Explicit exclusions
 

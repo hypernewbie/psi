@@ -128,7 +128,7 @@ func Run(args []string, version string) error {
 	if err != nil {
 		return err
 	}
-	if o.SessionPath != "" && filepath.Clean(store.Header().Cwd) != filepath.Clean(cwd) {
+	if o.SessionPath != "" && !sameDir(store.Header().Cwd, cwd) {
 		fmt.Printf("%s [y/N] ", terminal.Sanitize("Session workspace: "+store.Header().Cwd+". Run tools in current workspace "+cwd+"?"))
 		answer, err := readStartupLine(os.Stdin)
 		if err != nil {
@@ -307,6 +307,18 @@ func envMap() map[string]string {
 	return m
 }
 
+// sameDir reports whether two paths name one directory. Temporary directories
+// on macOS sit behind a /var to /private/var symlink, so a textual
+// comparison alone prompts to resume sessions unnecessarily.
+func sameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, ea := filepath.EvalSymlinks(a)
+	rb, eb := filepath.EvalSymlinks(b)
+	return ea == nil && eb == nil && ra == rb
+}
+
 func askProjectConsent(o Options, cwd string) bool {
 	if o.DenyProj {
 		return false
@@ -460,7 +472,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	events := make(chan event.Event, 64)
 	done := make(chan error, 1)
 	signals := make(chan os.Signal, 8)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGWINCH, syscall.SIGTSTP, syscall.SIGCONT, syscall.SIGHUP)
+	signal.Notify(signals, handledSignals()...)
 	defer signal.Stop(signals)
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
@@ -493,13 +505,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 						return false
 					}
 				case sig := <-signals:
-					switch sig {
-					case syscall.SIGINT:
+					switch {
+					case sig == syscall.SIGINT:
 						return false
-					case syscall.SIGTERM, syscall.SIGHUP:
+					case isShutdown(sig):
 						exiting = true
 						return false
-					case syscall.SIGTSTP:
+					case isSuspend(sig):
 						suspendPending = true
 						return false
 					}
@@ -605,12 +617,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		console.Pause()
 		r.tty.Restore()
-		// SIGSTOP cannot race a changed SIGTSTP disposition or be ignored by
-		// an orphaned process group. SIGCONT resumes exactly after this call.
 		continued := make(chan os.Signal, 1)
-		signal.Notify(continued, syscall.SIGCONT)
+		signal.Notify(continued, resumeSignal())
 		defer signal.Stop(continued)
-		if err := syscall.Kill(os.Getpid(), syscall.SIGSTOP); err != nil {
+		if err := stopSelf(); err != nil {
 			return err
 		}
 		// A process-directed stop can reach another Go runtime thread first.
@@ -654,13 +664,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Flush()
 			}
 		case sig := <-signals:
-			if sig == syscall.SIGWINCH {
+			if isResize(sig) {
 				if !busy {
 					console.Draw()
 				}
 				continue
 			}
-			if sig == syscall.SIGTSTP {
+			if isSuspend(sig) {
 				if busy {
 					suspendPending = true
 					cancel()
@@ -669,14 +679,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if sig == syscall.SIGCONT {
+			if isResume(sig) {
 				// Reacquire tail only, no full replay (3.3, P2-032).
 				if !busy {
 					console.Draw()
 				}
 				continue
 			}
-			if sig == syscall.SIGTERM || sig == syscall.SIGHUP {
+			if isShutdown(sig) {
 				exiting = true
 			}
 			if busy {

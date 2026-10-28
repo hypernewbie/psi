@@ -1,3 +1,5 @@
+//go:build unix
+
 package app
 
 import (
@@ -11,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -254,8 +257,10 @@ func TestActualSuspendRestoresTerminalAndResumesInput(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	stopped := false
 	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", q.cmd.Process.Pid))
-		if err == nil && strings.Contains(string(data), "\nState:\tT") {
+		// /proc exists on Linux only. ps reports the stopped (T) state
+		// on Linux and macOS alike.
+		out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(q.cmd.Process.Pid)).Output()
+		if err == nil && len(out) > 0 && out[0] == 'T' {
 			stopped = true
 			break
 		}
