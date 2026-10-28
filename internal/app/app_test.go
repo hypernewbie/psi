@@ -196,6 +196,18 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 			<-req.Context().Done()
 			return
 		}
+		if strings.Contains(string(encoded), "ten-thousand-deltas") {
+			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+			for i := 0; i < 10_000; i++ {
+				fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}\n\n")
+				if (i+1)%333 == 0 {
+					w.(http.Flusher).Flush()
+					time.Sleep(33 * time.Millisecond)
+				}
+			}
+			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"BURST_DONE\"}}\n\nevent: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":10001}}\n\nevent: message_stop\ndata: {}\n\n")
+			return
+		}
 		if strings.Contains(string(encoded), "slow-stream") {
 			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
 			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"**SLOW_PART\"}}\n\n")
@@ -354,6 +366,31 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	waitEditor()
 	if strings.Contains(screen.Text(), "**") || !strings.Contains(screen.Text(), "SLOW_PARTIAL") {
 		t.Fatalf("live Markdown delimiters were not reconciled after the split delta: %q", screen.Text())
+	}
+	burstStart := time.Now()
+	write("ten-thousand-deltas\r")
+	select {
+	case <-requests:
+	case <-time.After(5 * time.Second):
+		t.Fatal("10,000-delta request not received")
+	}
+	wait("BURST_DONE")
+	waitEditor()
+	burstElapsed := time.Since(burstStart)
+	t.Logf("actual-app 10k-delta stream over controlled ~1s: elapsed=%s", burstElapsed)
+	if burstElapsed < 750*time.Millisecond {
+		t.Fatalf("synthetic stream did not span a controlled second: %s", burstElapsed)
+	}
+	if !strings.Contains(screen.Text(), "local-model") {
+		t.Fatalf("footer disappeared after 10k deltas: %q", screen.Text())
+	}
+	burstSession, err := os.ReadFile(initialSessions[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	burstText := append(bytes.Repeat([]byte("a"), 10_000), []byte("BURST_DONE")...)
+	if !bytes.Contains(burstSession, burstText) {
+		t.Fatal("10k deltas were not saved in order")
 	}
 	write("cancel-this\r")
 	select {
