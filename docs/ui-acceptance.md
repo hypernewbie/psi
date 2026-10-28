@@ -92,7 +92,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `9b9cad9` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-9b9cad9 ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9b9cad9`; on Windows the console now reads viewport dimensions from the output handle, matching Pi's `process.stdout.columns/rows`. Later changes are tests and documentation. The final-tree rebuild was byte-identical.
+Built from repository tree revision `391139f` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/psi-plan4-final-391139f ./cmd/psi` on Linux amd64 using Go 1.26.4. Production Go sources last changed at `9b9cad9`; on Windows the console now reads viewport dimensions from the output handle, matching Pi's `process.stdout.columns/rows`. Later changes are tests and documentation. The documentation-only ledger update followed this build.
 
 ```text
 SHA-256  44e1db5bca2391d316cb91c7a80fa802bfa61acf7ea57b9dc79defe587215e34
