@@ -170,11 +170,15 @@ func Run(args []string, version string) error {
 			}
 		}
 		if r.authErr != nil {
-			fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error() + " (offline commands still work; /model to select, /session for status)"))
+			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error()+" (offline commands still work; /model to select, /session for status)", 80, false) {
+				fmt.Println(line)
+			}
 		}
 		fmt.Println("esc interrupt · ctrl+c/d clear/exit · / commands")
 	} else if r.authErr != nil {
-		fmt.Println(terminal.Sanitize("warning: " + r.authErr.Error()))
+		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error(), 80, false) {
+			fmt.Println(line)
+		}
 	}
 	tty, _, err := terminal.Acquire()
 	if err != nil {
@@ -526,6 +530,11 @@ func (r *runtime) draw(console *terminal.Console) {
 func (r *runtime) repl(console *terminal.Console) error {
 	out := terminal.RawOutput{W: console}
 	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	notice := func(kind terminal.NoticeKind, text string) {
+		for _, line := range terminal.FormatNotice(kind, text, console.StatusWidth(), false) {
+			fmt.Fprintln(out, line)
+		}
+	}
 	stream := terminal.NewStreamer(terminal.StreamOutput{Console: console}, true)
 	status := terminal.NewStatusWriter(out)
 	events := make(chan event.Event, 64)
@@ -536,6 +545,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
 	var outputErr error
+	var runOutcome string
+	var visibleRunText bool
 	var submittedDraft string
 	var submittedCursor int
 	var suspendPending bool
@@ -641,7 +652,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 		switch ev.Type {
 		case event.TextDelta:
 			r.state = StateStreaming
+			visibleRunText = visibleRunText || ev.Text != ""
 			stream.Delta(ev.Text)
+		case event.RunStart:
+			runOutcome, visibleRunText = "", false
+		case event.RunEnd:
+			runOutcome = ev.Outcome
 		case event.ToolStart:
 			stream.Close()
 			r.state = StateRunningTool
@@ -673,13 +689,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 	start := func(text, display, focus, invocation, source string, compact bool) {
 		if err := r.store.WriteError(); err != nil {
 			r.state = StateStorageBlocked
-			print("storage blocked: " + err.Error() + " (open a checked copy or /new)")
+			notice(terminal.NoticeError, "Storage is blocked: "+err.Error()+" (open a checked copy or /new)")
 			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 			r.draw(console)
 			return
 		}
 		if r.authErr != nil {
-			print("error: " + r.authErr.Error())
+			notice(terminal.NoticeError, r.authErr.Error())
 			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 			r.draw(console)
 			return
@@ -689,6 +705,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				fmt.Fprintln(out, line)
 			}
 		}
+		runOutcome, visibleRunText = "", false
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
 		r.state = StateWaiting
@@ -822,9 +839,28 @@ func (r *runtime) repl(console *terminal.Console) error {
 				activityText = ""
 			}
 			if errors.Is(err, context.Canceled) {
-				print("(cancelled)")
+				if runOutcome == event.OutcomeUnsaved {
+					r.state = StateStorageBlocked
+					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new.")
+				} else if visibleRunText && runOutcome == event.OutcomeInterrupted {
+					notice(terminal.NoticeWarning, "The run was interrupted. Any streamed partial response was saved with an interrupted outcome; review it before continuing.")
+				} else if visibleRunText {
+					notice(terminal.NoticeWarning, "Visible response text was saved, but the operation was cancelled.")
+				} else {
+					notice(terminal.NoticeWarning, "Request cancelled.")
+				}
 			} else if err != nil {
-				print("error: " + err.Error())
+				switch {
+				case runOutcome == event.OutcomeUnsaved:
+					r.state = StateStorageBlocked
+					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new. "+err.Error())
+				case runOutcome == event.OutcomeInterrupted && visibleRunText:
+					notice(terminal.NoticeWarning, "The run was interrupted. Any streamed partial response was saved with an interrupted outcome. Review it before continuing. "+err.Error())
+				case visibleRunText && runOutcome == event.OutcomeDurable:
+					notice(terminal.NoticeWarning, "The visible response was saved, but the operation did not complete. "+err.Error())
+				default:
+					notice(terminal.NoticeError, err.Error())
+				}
 			} else if compacting {
 				print("(compacted)")
 			}
@@ -834,7 +870,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			refreshRecall()
 			r.state = StateIdle
-			if r.store.WriteError() != nil {
+			if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
 				r.state = StateStorageBlocked
 			}
 			if suspendPending {

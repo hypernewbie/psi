@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 
 	"psi/internal/session"
 	"psi/internal/terminal"
@@ -72,7 +73,8 @@ func replayActivationAtWidth(emit func(string) bool, act *Activation, isNew bool
 		return false
 	}
 	if act.Offline && act.OfflineErr != nil {
-		if !emit(terminal.Sanitize("offline: " + act.OfflineErr.Error() + " (history readable, continuation blocked)")) {
+		notice := strings.Join(terminal.FormatNotice(terminal.NoticeWarning, "Offline: "+act.OfflineErr.Error()+" (history readable, continuation blocked)", width, false), "\n")
+		if !emit(notice) {
 			return false
 		}
 	}
@@ -82,7 +84,8 @@ func replayActivationAtWidth(emit func(string) bool, act *Activation, isNew bool
 		return renderTimelineAtWidth(emit, []session.TranscriptItem{it}, width)
 	})
 	if err != nil {
-		emit(terminal.Sanitize("History unavailable: " + err.Error()))
+		notice := strings.Join(terminal.FormatNotice(terminal.NoticeError, "History unavailable: "+err.Error(), width, false), "\n")
+		emit(notice)
 		return false
 	}
 	if !complete {

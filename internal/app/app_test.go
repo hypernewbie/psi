@@ -362,7 +362,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 		t.Fatalf("cancel request not received; cursorVisible=%v screen=%q pending=%q", screen.CursorVisible, screen.Text(), pending)
 	}
 	write("\x1b") // lone Escape is decoded after the bounded prefix timeout
-	wait("(cancelled)")
+	wait("Request cancelled.")
 	waitEditor()
 	write("/quit\r")
 	finished := make(chan error, 1)

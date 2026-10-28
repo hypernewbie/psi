@@ -15,6 +15,14 @@ import (
 
 const markdownIndent = "  "
 
+type NoticeKind string
+
+const (
+	NoticeSuccess NoticeKind = "success"
+	NoticeWarning NoticeKind = "warning"
+	NoticeError   NoticeKind = "error"
+)
+
 var markdownParserPool = sync.Pool{New: func() any { return goldmark.New() }}
 
 // FormatMessage applies the shared Pi-style message padding and separation.
@@ -35,6 +43,30 @@ func RenderMarkdown(source string, width int, noColor bool) []string {
 	stream := NewMarkdownStream(width, noColor)
 	stable, _ := stream.Feed(source)
 	return append(stable, stream.Finish()...)
+}
+
+// FormatNotice renders one Pi-style semantic status notice. User/provider text
+// stays untrusted; only the fixed semantic style is serialized as SGR.
+func FormatNotice(kind NoticeKind, text string, width int, noColor bool) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	prefix, token := "", TokenMuted
+	switch kind {
+	case NoticeSuccess:
+		prefix, token = "Success: ", TokenSuccess
+	case NoticeWarning:
+		prefix, token = "Warning: ", TokenWarning
+	case NoticeError:
+		prefix, token = "Error: ", TokenError
+	}
+	rows := wrapMarkdown([]StyledSpan{{Text: prefix + Sanitize(text), Token: token}}, max(1, width-1),
+		[]StyledSpan{{Text: " ", Token: TokenMuted}}, []StyledSpan{{Text: " ", Token: TokenMuted}})
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Serialize(colorDisabled(PresentationSnapshot{NoColor: noColor})))
+	}
+	return out
 }
 
 func renderMarkdownCore(source string, width int, noColor bool) []string {

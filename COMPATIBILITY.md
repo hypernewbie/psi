@@ -90,6 +90,7 @@ Unknown harmless UI prefs need no per-key warning.
 - No reasoning text by default.
 - Keyboard (fixed): `Enter` submit, `Ctrl+J` newline, `Ctrl+C` cancel run, `Ctrl+D`/`/quit` exit, `Up/Down` history, paste inserts literally.
 - Input during active run is cancellation only (no steering/follow-up queues).
+- Offline, interrupted, unsaved, and storage-blocked outcomes use semantic notices. Run settlement carries durable/interrupted/unsaved state; a visible response that fails persistence cannot return the app to a successful idle state.
 - Idle `Ctrl+C` clears draft first, second exits (documented); repeated interrupts never create overlapping runs.
 - Sanitize untrusted output (ANSI/OSC stripping); respect `NO_COLOR`.
 - No Kitty keyboard, no special terminal setup; PTY-tested on xterm-compatible.

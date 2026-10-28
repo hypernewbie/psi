@@ -199,13 +199,14 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 	return nil
 }
 
-func (l *Loop) run(ctx context.Context, cfg Config) error {
+func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 	maxTurns := cfg.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 25
 	}
+	outcome := event.OutcomeDurable
 	l.sink(event.Event{Type: event.RunStart})
-	defer l.sink(event.Event{Type: event.RunEnd})
+	defer func() { l.sink(event.Event{Type: event.RunEnd, Outcome: outcome, Err: runErr}) }()
 	recovery := &Recovery{}
 	for turn := 0; turn < maxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
@@ -240,6 +241,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 			l.emitText(s, event.OutcomeTransient)
 		})
 		if err != nil {
+			outcome = event.OutcomeInterrupted
 			var pe *provider.ProviderError
 			if ctx.Err() == nil && streamed.Len() == 0 && cfg.AutoCompact && errors.As(err, &pe) && pe.Kind == provider.ErrContextLimit && recovery.CanRetry() {
 				recovery.NoteAttempt()
@@ -253,9 +255,11 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 				stop = "aborted"
 			}
 			if perr := l.persistStreamUsage(cfg, err); perr != nil {
+				outcome = event.OutcomeUnsaved
 				return perr
 			}
 			if aerr := l.savePartial(streamed.String(), stop, cfg); aerr != nil {
+				outcome = event.OutcomeUnsaved
 				return aerr
 			}
 			if ctx.Err() != nil {
@@ -264,7 +268,9 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("provider: %w", err)
 		}
 		if resp == nil {
+			outcome = event.OutcomeInterrupted
 			if err := l.savePartial(streamed.String(), "error", cfg); err != nil {
+				outcome = event.OutcomeUnsaved
 				return err
 			}
 			return fmt.Errorf("provider returned no completed message")
@@ -284,12 +290,15 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 			resp.Text = text.String()
 		}
 		if !strings.HasPrefix(resp.Text, streamed.String()) {
+			outcome = event.OutcomeInterrupted
 			if err := l.savePartial(streamed.String(), "error", cfg); err != nil {
+				outcome = event.OutcomeUnsaved
 				return err
 			}
 			return fmt.Errorf("protocol failure: final text contradicts streamed text; partial response saved, tools not executed")
 		}
 		if _, err := l.store.AppendMessage(toSessionAssistant(resp, cfg)); err != nil {
+			outcome = event.OutcomeUnsaved
 			return fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
 		}
 		if suffix := resp.Text[streamed.Len():]; suffix != "" {
@@ -297,6 +306,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) error {
 		}
 		// Settlement barrier: persistence precedes RunEnd and the next prompt.
 		if resp.StopReason == "error" || resp.StopReason == "aborted" {
+			outcome = event.OutcomeInterrupted
 			return fmt.Errorf("provider stopped: %s", resp.StopReason)
 		}
 		// A length-limited response can contain unfinished tool requests. Never
