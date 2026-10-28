@@ -19,8 +19,13 @@ jobs:
           cache: true
       - name: git-bash-on-path
         if: runner.os == 'Windows'
-        # bash lives in Git\bin; sleep/seq live in Git\usr\bin.
-        run: Add-Content $env:GITHUB_PATH "C:\Program Files\Git\bin`nC:\Program Files\Git\usr\bin"
+        # bash, sleep, and seq live in Git\usr\bin (see the bash.EXE
+        # path in any shell step log). One entry per call: embedded
+        # newlines do not split GITHUB_PATH entries.
+        run: |
+          Add-Content $env:GITHUB_PATH 'C:\Program Files\Git\usr\bin'
+          Add-Content $env:GITHUB_PATH 'C:\Program Files\Git\bin'
+          where.exe bash
       - name: gofmt
         shell: bash
         run: |

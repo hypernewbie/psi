@@ -21,7 +21,7 @@ func TestDefaultSessionDirEncoding(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		cases = []struct{ cwd, wantSuffix string }{
 			{`C:\Users\u\proj`, "--C--Users-u-proj--"},
-			{`C:\`, "--C---"},
+			{`C:\`, "--C----"},
 			{`C:\tmp\a b`, "--C--tmp-a b--"},
 		}
 	}
