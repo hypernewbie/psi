@@ -198,14 +198,14 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 		}
 		if strings.Contains(string(encoded), "slow-stream") {
 			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"SLOW_PARTIAL\"}}\n\n")
+			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"**SLOW_PART\"}}\n\n")
 			w.(http.Flusher).Flush()
 			select {
 			case <-slowRelease:
 			case <-req.Context().Done():
 				return
 			}
-			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"SLOW_DONE\"}}\n\n")
+			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"IAL**\\n\\nSLOW_DONE\"}}\n\n")
 			fmt.Fprint(w, "event: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {}\n\n")
 			return
 		}
@@ -345,13 +345,16 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("slow stream request not received")
 	}
-	wait("SLOW_PARTIAL")
+	wait("SLOW_PART")
 	if screen.CursorVisible || !strings.Contains(screen.Text(), "Working") || !strings.Contains(screen.Text(), "local-model") || !strings.Contains(screen.Text(), "─") {
 		t.Fatalf("active stream lost its indicator/footer/editor: cursor=%v screen=%q", screen.CursorVisible, screen.Text())
 	}
 	close(slowRelease)
 	wait("SLOW_DONE")
 	waitEditor()
+	if strings.Contains(screen.Text(), "**") || !strings.Contains(screen.Text(), "SLOW_PARTIAL") {
+		t.Fatalf("live Markdown delimiters were not reconciled after the split delta: %q", screen.Text())
+	}
 	write("cancel-this\r")
 	select {
 	case <-requests:

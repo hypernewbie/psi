@@ -86,7 +86,7 @@ Unknown harmless UI prefs need no per-key warning.
 
 - Inline Pi regular-mode composition: native scrollback, horizontal editor borders, and a compact two-line folder/usage/model/thinking footer. No alternate screen, mouse, overlays, image protocol, or transcript viewport.
 - Retained components use Pi-derived semantic tokens with indexed terminal-palette fallbacks. This is an internal style table, not a theme engine; `NO_COLOR` disables all generated SGR.
-- User submissions and history replay share Pi-style padding and a retained CommonMark renderer (headings, emphasis, code, lists, quotes, rules, and visible link destinations). Live assistant deltas still use the bounded plain-source path; bounded incremental Markdown composition remains open in PLAN4. No syntax highlighter or OSC 8 links. Compact tool status (`read: done`, `bash: failed`) has no args, result bodies, diffs, or expand-details.
+- User submissions, live assistant streams, and history replay share Pi-style padding and a retained CommonMark renderer (headings, emphasis, code, lists, quotes, rules, and visible link destinations). Live output commits stable blocks and retains at most 64 KiB of unresolved source; oversized blocks use a sanitized source fallback shared with replay. No syntax highlighter or OSC 8 links. Compact tool status (`read: done`, `bash: failed`) has no args, result bodies, diffs, or expand-details.
 - No reasoning text by default.
 - Keyboard (fixed): `Enter` submit, `Ctrl+J` newline, `Ctrl+C` cancel run, `Ctrl+D`/`/quit` exit, `Up/Down` history, paste inserts literally.
 - Input during active run is cancellation only (no steering/follow-up queues).

@@ -270,6 +270,17 @@ func ComposeEditorView(width, height int, buf []rune, pos int, snapshot Presenta
 // ComposeConsoleView composes the active assistant fragment above the editor,
 // then the persistent footer. The fragment is bounded by the console owner.
 func ComposeConsoleView(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity, fragment string) EditorView {
+	width = max(1, width)
+	fragmentRows := []string{}
+	if fragment != "" && width > 3 {
+		fragmentRows = wrapAssistantFragment(fragment, width)
+	}
+	return ComposeConsoleViewWithRows(width, height, buf, pos, snapshot, activity, fragmentRows)
+}
+
+// ComposeConsoleViewWithRows composes already-rendered Markdown rows above the
+// editor and footer. Rows carry generated SGR only; their visible width is plain.
+func ComposeConsoleViewWithRows(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string, fragmentRows []string) EditorView {
 	width, height = max(1, width), max(1, height)
 	noColor := colorDisabled(snapshot)
 	layout := LayoutDraft(buf, pos, width)
@@ -294,10 +305,6 @@ func ComposeConsoleView(width, height int, buf []rune, pos int, snapshot Present
 	borderCount := 2
 	preferred := max(5, int(float64(height)*0.3))
 	preferred = min(preferred, len(layout.Rows))
-	fragmentRows := []string{}
-	if fragment != "" && width > 3 {
-		fragmentRows = wrapAssistantFragment(fragment, width)
-	}
 	fragmentBudget := max(0, height-footerCount-borderCount-max(1, preferred))
 	if len(fragmentRows) > fragmentBudget {
 		fragmentRows = fragmentRows[len(fragmentRows)-fragmentBudget:]
@@ -349,7 +356,7 @@ func ComposeConsoleView(width, height int, buf []rune, pos int, snapshot Present
 	rows := make([]string, 0, len(fragmentRows)+borderCount+bodyBudget+footerCount)
 	cells := make([]int, 0, cap(rows))
 	for _, row := range fragmentRows {
-		rows, cells = append(rows, row), append(cells, CellWidth(row))
+		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
 	}
 	top, topWidth := borderRow(true)
 	rows, cells = append(rows, top), append(cells, topWidth)

@@ -89,7 +89,14 @@ func (w StreamOutput) Write(p []byte) (int, error) {
 	if w.Console == nil {
 		return 0, fmt.Errorf("stream output has no console")
 	}
-	return w.Console.StreamWrite(p)
+	return w.Console.MarkdownWrite(p)
+}
+
+func (w StreamOutput) CloseStream() error {
+	if w.Console == nil {
+		return fmt.Errorf("stream output has no console")
+	}
+	return w.Console.CloseMarkdown()
 }
 
 // Streamer buffers deltas until the event loop's frame timer or an operation
@@ -143,5 +150,10 @@ func (s *Streamer) Close() {
 			s.err = WriteBounded(s.w, []byte("\n"))
 		}
 		s.needsNL = false
+	}
+	if closer, ok := s.w.(interface{ CloseStream() error }); ok {
+		if err := closer.CloseStream(); s.err == nil {
+			s.err = err
+		}
 	}
 }

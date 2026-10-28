@@ -3,6 +3,7 @@ package terminal
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -13,6 +14,8 @@ import (
 )
 
 const markdownIndent = "  "
+
+var markdownParserPool = sync.Pool{New: func() any { return goldmark.New() }}
 
 // FormatMessage applies the shared Pi-style message padding and separation.
 // It is used for both accepted live submissions and history replay.
@@ -29,12 +32,20 @@ func FormatMessage(source string, width int, noColor bool) []string {
 // the no-highlighter code path and visible link destinations (no OSC 8).
 // Unsupported block content remains readable source text.
 func RenderMarkdown(source string, width int, noColor bool) []string {
+	stream := NewMarkdownStream(width, noColor)
+	stable, _ := stream.Feed(source)
+	return append(stable, stream.Finish()...)
+}
+
+func renderMarkdownCore(source string, width int, noColor bool) []string {
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
 	width = max(1, width-1) // keep the final cell clear of terminal autowrap
 	input := []byte(source)
-	doc := goldmark.New().Parser().Parse(gmtext.NewReader(input))
+	parser := markdownParserPool.Get().(goldmark.Markdown)
+	doc := parser.Parser().Parse(gmtext.NewReader(input))
+	markdownParserPool.Put(parser)
 	rows := renderMarkdownBlocks(doc, input, width, mdStyle{token: TokenText})
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {

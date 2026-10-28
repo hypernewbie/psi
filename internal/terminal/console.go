@@ -59,6 +59,9 @@ type Console struct {
 	presentation   PresentationSnapshot
 	activity       string
 	streamFragment []byte
+	streamRows     []string
+	markdownStream *MarkdownStream
+	markdownWidth  int
 	busyNoticed    bool
 	dirty          bool
 	lastDraw       time.Time
@@ -211,6 +214,9 @@ func (c *Console) Err() error { return c.err }
 // session files, credentials, or provider state.
 func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
 	c.presentation = snapshot
+	if c.markdownStream != nil {
+		c.markdownStream.noColor = snapshot.NoColor
+	}
 }
 
 func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder) {
@@ -521,10 +527,59 @@ func (c *Console) Draw() {
 	_ = c.emitComposed("")
 }
 
+// MarkdownWrite streams assistant source through the bounded shared Markdown
+// renderer. Stable rows append to native scrollback; only its active block is
+// retained in the composed tail.
+func (c *Console) MarkdownWrite(p []byte) (int, error) {
+	if c.markdownStream == nil {
+		c.markdownStream = NewMarkdownStream(c.currentWidth(), c.presentation.NoColor)
+	}
+	stable, tail := c.markdownStream.Feed(string(p))
+	clear(c.streamRows)
+	c.streamRows = tail
+	appendText := markdownRowsAppend(stable)
+	if err := c.emitComposed(appendText); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// CloseMarkdown settles the current assistant message at a tool or run boundary.
+func (c *Console) CloseMarkdown() error {
+	if c.markdownStream == nil {
+		return c.err
+	}
+	hadOutput := c.markdownStream.HasOutput() || len(c.markdownStream.Tail()) > 0
+	rows := c.markdownStream.Finish()
+	clear(c.streamRows)
+	c.streamRows = nil
+	appendText := markdownRowsAppend(rows)
+	if hadOutput {
+		appendText += "\r\n" // Pi-style message padding before the next block.
+	}
+	return c.emitComposed(appendText)
+}
+
+func markdownRowsAppend(rows []string) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	return strings.Join(rows, "\r\n") + "\r\n"
+}
+
 func (c *Console) emitComposed(appendText string) error {
 	c.lastDraw = time.Now()
 	width, height := c.size()
-	view := ComposeConsoleView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, string(c.streamFragment))
+	var view EditorView
+	if c.markdownStream != nil && len(c.streamRows) > 0 {
+		if c.markdownWidth != width {
+			c.markdownWidth = width
+			c.streamRows = c.markdownStream.SetWidth(width)
+		}
+		view = ComposeConsoleViewWithRows(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, c.streamRows)
+	} else {
+		view = ComposeConsoleView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, string(c.streamFragment))
+	}
 	f := Frame{Append: appendText, Tail: view.Rows, TailCellWidth: view.CellWidth,
 		CursorRow: view.CursorRow, CursorCol: view.CursorCol,
 		ShowCursor: c.hidden && c.activity == "", HideCursor: c.activity != ""}
