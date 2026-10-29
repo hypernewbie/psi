@@ -45,11 +45,21 @@ func TestSessionNameUsesLatestEntryRegardlessOfBranch(t *testing.T) {
 }
 
 func TestSessionNameHonorsLatestClear(t *testing.T) {
-	store := openNamedSessionFixture(t,
-		`{"type":"session_info","id":"root","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","name":"root name"}`,
-		`{"type":"session_info","id":"clear","parentId":"root","timestamp":"2026-01-01T00:00:02.000Z","name":"  "}`,
-	)
-	if got := store.SessionName(); got != "" {
-		t.Fatalf("empty latest session name did not clear the footer: %q", got)
+	for _, tc := range []struct {
+		name  string
+		clear string
+	}{
+		{name: "whitespace", clear: `"  "`},
+		{name: "null", clear: "null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openNamedSessionFixture(t,
+				`{"type":"session_info","id":"root","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","name":"root name"}`,
+				`{"type":"session_info","id":"clear","parentId":"root","timestamp":"2026-01-01T00:00:02.000Z","name":`+tc.clear+`}`,
+			)
+			if got := store.SessionName(); got != "" {
+				t.Fatalf("%s latest session name did not clear the footer: %q", tc.name, got)
+			}
+		})
 	}
 }
