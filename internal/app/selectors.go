@@ -151,10 +151,14 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 		return nil
 	}
 	label := "Sessions"
+	// Pi's no-match treatment is component-specific: the model selector says
+	// "No matching models", the session list says "No sessions found", and the
+	// thinking selector inherits the shared SelectList wording.
+	noMatch := "  No sessions found"
 	if s.Models {
-		label = "Models"
+		label, noMatch = "Models", "  No matching models"
 	} else if s.Thinking {
-		label = "Thinking levels"
+		label, noMatch = "Thinking levels", "  No matching commands"
 	}
 	var rows []string
 	appendRow := func(text string, token terminal.ThemeToken) {
@@ -166,7 +170,7 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 		appendRow(fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), terminal.TokenMuted)
 	}
 	if len(s.Filtered) == 0 {
-		appendRow("No matches", terminal.TokenMuted)
+		appendRow(noMatch, terminal.TokenMuted)
 		if rowBudget-len(rows) > 0 {
 			appendRow("Type to search · Esc/Ctrl+C cancel", terminal.TokenMuted)
 		}
@@ -174,19 +178,31 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 	}
 	help := rowBudget >= 4
 	detail := s.Models && width >= 60 && rowBudget >= min(10, len(s.Filtered))+3
-	count := rowBudget - len(rows)
+	helpRows, detailRows := 0, 0
 	if help {
-		count--
+		helpRows = 1
 	}
 	if detail {
-		count--
+		detailRows = 1
 	}
-	count = min(10, count, len(s.Filtered))
+	count := min(10, max(1, rowBudget-len(rows)-helpRows-detailRows))
+	count = min(count, len(s.Filtered))
 	s.visibleCount = count
 	// Pi centers the selection in its bounded list. Use the actual visible
 	// count, so a short terminal never clips away the selected row.
 	start := max(0, min(s.Selected-count/2, len(s.Filtered)-count))
 	end := min(len(s.Filtered), start+count)
+	scrolled := start > 0 || end < len(s.Filtered)
+	if scrolled && len(rows)+count+1+helpRows+detailRows > rowBudget {
+		// Pi's scroll indicator needs a row. The optional selected detail goes
+		// first; the list entries stay.
+		if detailRows > 0 {
+			detail, detailRows = false, 0
+		}
+	}
+	if scrolled && len(rows)+count+1+helpRows+detailRows > rowBudget {
+		scrolled = false
+	}
 	now := time.Now()
 	for i := start; i < end; i++ {
 		item := s.Filtered[i]
@@ -194,8 +210,10 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 		marker, markerToken := "  ", terminal.TokenMuted
 		if selected {
 			marker, markerToken = "› ", terminal.TokenAccent
-			if s.Models {
-				marker = "→ " // Pi's model selector uses →; session lists use ›.
+			if s.Models || s.Thinking {
+				// Pi's model selector and its shared SelectList use →; only the
+				// session list uses ›.
+				marker = "→ "
 			}
 		}
 		spans := []terminal.StyledSpan{{Text: marker, Token: markerToken}}
@@ -234,6 +252,11 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 			spans = append(spans, terminal.StyledSpan{Text: strings.Repeat(" ", gap) + metadata, Token: terminal.TokenMuted})
 		}
 		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: spans}, width, noColor))
+	}
+	if scrolled {
+		// Pi shows the position inside the filtered list when the bounded
+		// window cannot show every item.
+		appendRow(fmt.Sprintf("  (%d/%d)", s.Selected+1, len(s.Filtered)), terminal.TokenMuted)
 	}
 	if detail {
 		appendRow("  "+s.Filtered[s.Selected].FirstMessage, terminal.TokenMuted)

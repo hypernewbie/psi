@@ -117,8 +117,11 @@ func TestModelPickerUsesPiRowsAndSelectedOnlyDetails(t *testing.T) {
 	s.Move(1)
 	rows := s.RenderPickerRows(120, 35, true)
 	text := strings.Join(rows, "\n")
-	if s.visibleCount != 10 || len(rows) != 13 {
-		t.Fatalf("Pi list should have ten entries plus title, selected detail, help: %q", rows)
+	if s.visibleCount != 10 || len(rows) != 14 {
+		t.Fatalf("Pi list should have ten entries plus title, scroll indicator, selected detail, and help: %q", rows)
+	}
+	if !strings.Contains(text, "  (14/26)") {
+		t.Fatalf("Pi scroll indicator is missing: %q", rows)
 	}
 	if !strings.Contains(text, "  ✓ model-12 [provider]") || !strings.Contains(text, "→   model-13 [provider]") {
 		t.Fatalf("Pi current/selected markers were conflated: %q", rows)
@@ -254,5 +257,34 @@ func TestPickerTailGeometryRetainsSelectionAcrossPlanSizes(t *testing.T) {
 		if !strings.Contains(strings.Join(view.Rows, "\n"), "→ ✓ gpt-model") {
 			t.Fatalf("picker hid the actual selected row at %dx%d: %q", width, height, view.Rows)
 		}
+	}
+}
+
+// Pi's no-match treatment and selection pointer are component-specific.
+func TestPickerNoMatchTreatmentAndPointerFollowPiComponents(t *testing.T) {
+	models := NewSelector(nil, "")
+	models.Models = true
+	if !strings.Contains(strings.Join(models.RenderPickerRows(80, 19, true), "\n"), "No matching models") {
+		t.Fatalf("model picker lost Pi's no-match treatment")
+	}
+	sessions := NewSelector(nil, "")
+	if !strings.Contains(strings.Join(sessions.RenderPickerRows(80, 19, true), "\n"), "No sessions found") {
+		t.Fatalf("session picker lost Pi's no-match treatment")
+	}
+	thinking := NewSelector(nil, "")
+	thinking.Thinking = true
+	if !strings.Contains(strings.Join(thinking.RenderPickerRows(80, 19, true), "\n"), "No matching commands") {
+		t.Fatalf("thinking picker lost Pi's no-match treatment")
+	}
+
+	levels := NewSelector([]session.SessionInfo{{ID: "off", FirstMessage: "provider default"}, {ID: "high", FirstMessage: "effective effort high"}}, "off")
+	levels.Thinking = true
+	rows := levels.RenderPickerRows(80, 19, true)
+	if !strings.Contains(strings.Join(rows, "\n"), "→ ✓ off") {
+		t.Fatalf("thinking picker must use Pi's SelectList pointer: %q", rows)
+	}
+	sessions = NewSelector([]session.SessionInfo{{ID: "s1", FirstMessage: "first prompt"}}, "s1")
+	if !strings.Contains(strings.Join(sessions.RenderPickerRows(80, 19, true), "\n"), "› ✓ first prompt") {
+		t.Fatalf("session picker must keep Pi's session-list pointer: %q", sessions.RenderPickerRows(80, 19, true))
 	}
 }
