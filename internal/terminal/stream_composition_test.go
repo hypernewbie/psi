@@ -172,3 +172,36 @@ func (w ioMultiWriter) Write(p []byte) (int, error) {
 	w.vt.Feed(p)
 	return w.raw.Write(p)
 }
+
+// Pi keeps the active tool row above the editor. The row stays in the owned
+// tail and never reaches native scrollback.
+func TestActiveToolRowStaysInTheOwnedTail(t *testing.T) {
+	vt := testutil.NewVTModel(80, 24)
+	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 80, 24 }}
+	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
+	c.Draw()
+	c.SetToolRow("bash: running")
+	rows := strings.Split(vt.Text(), "\n")
+	toolRow, borderRow := -1, -1
+	for i, row := range rows {
+		if toolRow < 0 && strings.Contains(row, "bash: running") {
+			toolRow = i
+		}
+		if borderRow < 0 && strings.Contains(row, "─") && strings.TrimSpace(row) != "" {
+			borderRow = i
+		}
+	}
+	if toolRow < 0 {
+		t.Fatalf("active tool row missing: %q", vt.Text())
+	}
+	if borderRow < 0 || toolRow > borderRow {
+		t.Fatalf("active tool row is not above the editor: %q", vt.Text())
+	}
+	if len(vt.Scrollback) != 0 {
+		t.Fatalf("active tool row reached native scrollback: %q", vt.Scrollback)
+	}
+	c.ClearToolRow()
+	if strings.Contains(vt.Text(), "bash: running") {
+		t.Fatalf("active tool row survived the settlement: %q", vt.Text())
+	}
+}

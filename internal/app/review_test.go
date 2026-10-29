@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -648,4 +650,64 @@ func TestActualCancelInsidePartialFenceKeepsTextAndNextPrompt(t *testing.T) {
 	if !strings.Contains(string(after), "partial fence") {
 		t.Fatalf("cancelled run did not persist the partial exchange: %s", after)
 	}
+}
+
+// Pi keeps the active tool row above the editor, and the settled line
+// replaces it without leaving a duplicate running row.
+func TestActualToolRowIsTransientAndSettlesOnce(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flush, _ := w.(http.Flusher)
+		emit := func(name string, data any) {
+			encoded, _ := json.Marshal(data)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, encoded)
+		}
+		if requests.Add(1) == 1 {
+			emit("message_start", map[string]any{"message": map[string]any{"id": "tool-1", "model": "m", "usage": map[string]any{"input_tokens": 1}}})
+			emit("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "tool_use", "id": "call-1", "name": "bash"}})
+			emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": `{"command":"sleep 5"}`}})
+			emit("content_block_stop", map[string]any{"index": 0})
+			emit("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "tool_use"}, "usage": map[string]any{"output_tokens": 2}})
+			emit("message_stop", map[string]any{})
+			flush.Flush()
+			return
+		}
+		emit("message_start", map[string]any{"message": map[string]any{"id": "tool-2", "model": "m", "usage": map[string]any{"input_tokens": 1}}})
+		emit("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+		emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": "TOOL_FINISHED"}})
+		emit("content_block_stop", map[string]any{"index": 0})
+		emit("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 2}})
+		emit("message_stop", map[string]any{})
+		flush.Flush()
+	}))
+	defer server.Close()
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":8192}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-tool-key"}}`)
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
+	q.prompt()
+	q.write("run a tool\r")
+	q.wait("bash: running")
+	screen := q.screen.Text()
+	if !strings.Contains(screen, "bash: running") {
+		t.Fatalf("active tool row is missing: %q", screen)
+	}
+	if !strings.Contains(screen, "Working…") {
+		t.Fatalf("tool run lost the working indicator: %q", screen)
+	}
+	q.wait("TOOL_FINISHED")
+	q.prompt()
+	final := q.screen.Text()
+	if strings.Contains(final, "bash: running") {
+		t.Fatalf("settled tool left a duplicate running row: %q", final)
+	}
+	if strings.Count(final, "bash: done") != 1 {
+		t.Fatalf("settled tool did not commit exactly one line: %q", final)
+	}
+	q.write("/quit\r")
+	q.finish()
 }

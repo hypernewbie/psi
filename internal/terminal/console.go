@@ -70,6 +70,7 @@ type Console struct {
 	completionSelected  int
 	completionDismissed bool
 	picker              *pickerRegion
+	toolRow             string
 	busyNoticed         bool
 	dirty               bool
 	frameDepth          int
@@ -689,9 +690,26 @@ func (c *Console) Flush() {
 
 // Status is the activity shown in Pi's editor top border. It remains owned by
 // the composed tail until the application clears or replaces it.
+// Status(text string) sets the transient activity shown in the editor's top
+// border.
 func (c *Console) Status(text string) {
 	c.activity = SanitizeStatusRow(text)
 	c.Draw()
+}
+
+// SetToolRow installs the active tool row above the editor, like Pi's
+// tool-execution component. The row stays in the owned tail until the call
+// settles.
+func (c *Console) SetToolRow(text string) {
+	c.toolRow = SanitizeStatusRow(text)
+	c.Draw()
+}
+
+// ClearToolRow removes the active tool row. The next frame drops it, so the
+// settled line and the removal share one frame and no duplicate running row
+// stays visible.
+func (c *Console) ClearToolRow() {
+	c.toolRow = ""
 }
 
 func (c *Console) Draw() {
@@ -781,20 +799,21 @@ func (c *Console) emitComposed(appendText string) error {
 		fragmentRows = c.streamRows
 		hasStream = true
 	}
+	if c.toolRow != "" {
+		// Pi keeps the active tool row above the editor and below the
+		// assistant fragment.
+		fragmentRows = append(append([]string(nil), fragmentRows...), c.toolRow)
+	}
 	switch {
 	case c.picker != nil:
 		// Pi replaces the editor component with the selector. The picker owns
 		// the region, so the editor block is not rendered underneath it.
 		view = ComposeConsoleViewPicker(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.picker.rows, c.picker.mode)
-	case len(c.completionRows) > 0:
-		if !hasStream {
+	default:
+		if !hasStream && len(c.streamFragment) > 0 && width > 3 {
 			fragmentRows = wrapAssistantFragment(string(c.streamFragment), width)
 		}
 		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.completionRows)
-	case hasStream:
-		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, nil)
-	default:
-		view = ComposeConsoleView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, string(c.streamFragment))
 	}
 	hideCursor := c.activity != "" || (c.picker != nil && c.picker.mode == PickerChoice)
 	f := Frame{Append: appendText, Tail: view.Rows, TailCellWidth: view.CellWidth,

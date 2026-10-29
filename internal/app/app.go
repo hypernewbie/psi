@@ -770,10 +770,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.ToolStart:
 			stream.Close()
 			r.state = StateRunningTool
-			setActivity(terminal.FormatStatus(ev.ToolName, terminal.ToolRunning) + " · Esc/Ctrl+C cancel, input paused")
+			console.SetToolRow(terminal.FormatStatus(ev.ToolName, terminal.ToolRunning))
+			setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
 			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
 		case event.ToolEnd:
+			console.ClearToolRow()
 			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
+			console.Draw()
 			if r.state != StateCancelling {
 				r.state = StateWaiting
 				setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
