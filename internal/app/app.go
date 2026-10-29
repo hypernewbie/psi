@@ -361,6 +361,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		authErr = err
 		anthropic := provider.NewClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		anthropic.Headers = headers
+		anthropic.SessionID = r.store.Header().ID
 		client = anthropic
 	default:
 		return fmt.Errorf("unsupported provider API %q", meta.API)

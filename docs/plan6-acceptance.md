@@ -14,7 +14,7 @@
 | Slice | Status | Evidence |
 |---|---|---|
 | 1. Registry, catalog, and auth | Complete locally | P6-001–012: explicit registry, seven public catalogs, model API/endpoint and compat metadata, Pi cache policy, truthful unavailable model options, and provider-specific API-key precedence. Evidence: `go test ./internal/modelmeta ./internal/providerregistry ./internal/config ./internal/provider ./internal/app -count=1`; generator check below. |
-| 2. MiniMax and OpenCode Anthropic | In progress | Shared Anthropic-compatible client construction and provider-specific key resolution are wired. Protocol parity, OpenCode session headers, and full stream/replay tests remain. |
+| 2. MiniMax and OpenCode Anthropic | Complete locally | P6-013–018: provider-specific keys/endpoints, `/anthropic/v1/messages` path, adaptive-thinking and `allowEmptySignature`, case-insensitive OpenCode session-header precedence, tool/image translation, text/thinking streams, partial-stream settlement, and restarted-session replay. Evidence below. |
 | 3. OpenAI Chat Completions | Not started | — |
 | 4. Google Generative AI | Not started | — |
 | 5. OpenCode Responses | Not started | — |
@@ -29,4 +29,12 @@
 - Credential tests cover stored key → `models.json` → exact provider environment variable for each new API-key provider, and fail-closed unsupported stored auth and command credentials.
 - `go test ./... -count=1` passed after the slice 1 changes.
 
-G6-01 is met by local synthetic evidence. Remaining gates stay open until their listed A6 cases have evidence. Local protocol mocks will not be described as live-provider acceptance.
+### Slice 2 evidence
+
+- `internal/provider/anthropic_compat_test.go` uses loopback HTTP only. It checks MiniMax and OpenCode path/key/API version, streamed text and signed thinking, OpenCode session header default and case-insensitive explicit override, images, grouped multiple tool results, and that incomplete tool streams are not retried or dispatched.
+- `internal/config/catalog_test.go` checks the pinned MiniMax adaptive-thinking and OpenCode `allowEmptySignature` fields, including an absent-field case. `TestAnthropicAdaptiveThinkingUsesModelEffortMap` checks effort mapping and `off: null` behavior.
+- `internal/app/provider_config_test.go` checks selected provider credentials and a synthetic newer Pi-cache OpenCode endpoint through runtime configuration.
+- `internal/agent/anthropic_replay_test.go` reopens synthetic v3 sessions for both providers, continues through the request builder, and checks thinking signatures and tool/result linkage.
+- `go test ./... -count=1` passed after slice 2. No live provider requests ran.
+
+G6-01 and G6-02 are met by local synthetic evidence. Remaining gates stay open until their listed A6 cases have evidence. Local protocol mocks will not be described as live-provider acceptance.

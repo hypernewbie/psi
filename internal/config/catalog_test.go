@@ -34,6 +34,30 @@ func TestP6BundledCatalogUsesPiProviderAPIsAndMetadata(t *testing.T) {
 			t.Errorf("Pi OpenCode catalog omitted API %q", api)
 		}
 	}
+	minimax, ok := bundledModel("minimax", "MiniMax-M3.1-Flash")
+	if !ok {
+		t.Fatal("public MiniMax model was not bundled")
+	}
+	adaptive, hasAdaptive, hasAdaptiveField := minimax.Compat.Bool("forceAdaptiveThinking")
+	offMapping, hasOffMapping := minimax.ThinkingLevelMap["off"]
+	if !hasAdaptiveField || !hasAdaptive || !adaptive || !hasOffMapping || offMapping != nil {
+		t.Fatalf("MiniMax adaptive metadata lost: %+v", minimax)
+	}
+	openCode, ok := bundledModel("opencode-go", "qwen3.8-flash")
+	if !ok {
+		t.Fatal("public OpenCode Anthropic model was not bundled")
+	}
+	allowEmpty, hasAllowEmpty, hasAllowEmptyField := openCode.Compat.Bool("allowEmptySignature")
+	if !hasAllowEmptyField || !hasAllowEmpty || !allowEmpty {
+		t.Fatalf("OpenCode allowEmptySignature metadata lost: %+v", openCode)
+	}
+	missingCompat, ok := bundledModel("opencode-go", "claude-haiku-5-5")
+	if !ok {
+		t.Fatal("public OpenCode adaptive model was not bundled")
+	}
+	if _, hasValue, present := missingCompat.Compat.Bool("allowEmptySignature"); hasValue || present {
+		t.Fatal("an absent allowEmptySignature field was converted to a value")
+	}
 	deepseek, ok := bundledModel("deepseek", "deepseek-v4-pro")
 	if !ok {
 		t.Fatal("public DeepSeek model was not bundled")

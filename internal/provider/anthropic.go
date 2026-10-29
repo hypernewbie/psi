@@ -20,6 +20,7 @@ type Client struct {
 	HTTP          *http.Client
 	BaseURL       string
 	APIKey        string
+	SessionID     string
 	Headers       map[string]string
 	MaxRetry      int
 	IdleTimeout   time.Duration
@@ -144,6 +145,9 @@ func (c *Client) doOnce(ctx context.Context, raw []byte, onText func(string), re
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.APIKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	if req.Model.ProviderID() == "opencode-go" && c.SessionID != "" && !hasHeader(c.Headers, "x-opencode-session") {
+		httpReq.Header.Set("x-opencode-session", c.SessionID)
+	}
 	for name, value := range c.Headers {
 		httpReq.Header.Set(name, value)
 	}
@@ -184,6 +188,15 @@ func (c *Client) redact(s string) string {
 		}
 	}
 	return s
+}
+
+func hasHeader(headers map[string]string, name string) bool {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func headerValues(headers map[string]string) []string {
