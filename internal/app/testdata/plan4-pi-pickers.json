@@ -1,0 +1,30 @@
+{
+  "reference": "Pi model-selector.ts and session-selector.ts at d5b3de22d0e24a3e9c38a9410d3329b099717283",
+  "size": "80x24",
+  "width": 80,
+  "modelRows": [
+    "Models · 3 matches",
+    "    claude-sonnet-5 [anthropic]",
+    "→ ✓ m [anthropic]",
+    "    gpt-5.6-luna [openai-codex]",
+    "  credential available; anthropic-messages, context 1000000, output 64000",
+    "↑/↓ select · PageUp/PageDown move · Enter apply · Esc cancel"
+  ],
+  "sessionRows": [
+    "Sessions · 2 matches",
+    "    named session                                           4 3h · 01a18585-222",
+    "› ✓ second prompt                                          2 1mo · 01a18585-888",
+    "↑/↓ select · PageUp/PageDown move · Enter apply · Esc cancel"
+  ],
+  "sourceComponents": [
+    "Pi model selector: → pointer, ✓ current marker, provider badge, selected-only detail",
+    "Pi session selector: › pointer, name or first-message label, message count and age on the right",
+    "Pi SelectList: bounded visible window and the (position/total) scroll indicator"
+  ],
+  "omissions": [
+    "No numeric-response protocol",
+    "No model rename, delete, tree, fork, or export actions",
+    "No session path or working-folder toggle",
+    "No scope toggle and no set-as-default key in the picker"
+  ]
+}

@@ -105,3 +105,50 @@ func TestPlan4PiEditorAndFooterFixture(t *testing.T) {
 		t.Fatal("expected component fixture lacks pinned Pi reference")
 	}
 }
+
+// P4-002: the completion list is compared with a Pi-derived expected fixture.
+func TestPlan4PiCompletionFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/plan4-pi-completion.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Reference       string   `json:"reference"`
+		Size            string   `json:"size"`
+		Width           int      `json:"width"`
+		Draft           string   `json:"draft"`
+		PlainRows       []string `json:"plainRows"`
+		SourceComponent []string `json:"sourceComponents"`
+		Omissions       []string `json:"omissions"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fixture.Reference, "d5b3de22d0e24a3e9c38a9410d3329b099717283") {
+		t.Fatal("completion fixture must identify the pinned Pi reference")
+	}
+	if len(fixture.SourceComponent) == 0 || len(fixture.Omissions) == 0 {
+		t.Fatal("completion fixture must record the source components and the omissions")
+	}
+	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}, writer: NewWriter(&strings.Builder{}), SizeFunc: func() (int, int) { return fixture.Width, 24 }}
+	c.SetPresentation(PresentationSnapshot{NoColor: true})
+	c.CompletionDescriptions = map[string]string{
+		"/help":     "show commands, keys, limits, examples",
+		"/new":      "new session (keeps scrollback, resets recall)",
+		"/resume":   "select session (search, arrows, Enter, Esc)",
+		"/model":    "select or set a session-local model",
+		"/thinking": "select or set thinking level",
+	}
+	if !c.Editor.Insert(fixture.Draft) {
+		t.Fatal("draft insertion failed")
+	}
+	c.refreshCompletion()
+	if len(c.completionRows) != len(fixture.PlainRows) {
+		t.Fatalf("completion rows=%q want=%q", c.completionRows, fixture.PlainRows)
+	}
+	for i, row := range c.completionRows {
+		if got := Sanitize(row); got != fixture.PlainRows[i] {
+			t.Errorf("completion row %d: got %q want %q", i, got, fixture.PlainRows[i])
+		}
+	}
+}

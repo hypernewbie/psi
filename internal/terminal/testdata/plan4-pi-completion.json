@@ -1,0 +1,22 @@
+{
+  "reference": "Pi completion SelectList at d5b3de22d0e24a3e9c38a9410d3329b099717283",
+  "size": "80x24",
+  "width": 80,
+  "draft": "/",
+  "plainRows": [
+    "→ /help  show commands, keys, limits, examples",
+    "  /new  new session (keeps scrollback, resets recall)",
+    "  /resume  select session (search, arrows, Enter, Esc)",
+    "  /model  select or set a session-local model",
+    "  /thinking  select or set thinking level"
+  ],
+  "sourceComponents": [
+    "Pi SelectList pointer for the selected row",
+    "Pi editor-owned completion list below the input row",
+    "Five visible rows at most"
+  ],
+  "omissions": [
+    "No candidate count line and no transcript notice",
+    "No fuzzy scoring and no numeric candidate response"
+  ]
+}
