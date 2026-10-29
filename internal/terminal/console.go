@@ -565,7 +565,9 @@ func (c *Console) renderCompletionRows() {
 		selected := i == c.completionSelected
 		marker, token := "  ", TokenMuted
 		if selected {
-			marker, token = "› ", TokenAccent
+			// Pi's completion list is a SelectList, so the selected row uses
+			// the same pointer as the model picker.
+			marker, token = "→ ", TokenAccent
 		}
 		item := c.completionItems[i]
 		spans := []StyledSpan{{Text: marker, Token: token}, {Text: item, Token: token}}

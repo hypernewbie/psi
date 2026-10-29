@@ -9,7 +9,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+P` / `Ctrl+N` browse history directly
 - `Home/End`, `Ctrl+A`/`Ctrl+E` logical line; `Ctrl+Home`/`Ctrl+End` document
 - `Backspace/Delete` one grapheme; `Ctrl+W` previous word; `Ctrl+U`/`Ctrl+K` line
-- `/command` and `/skill:name` completion stays in the editor tail (at most five rows); `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
+- `/command` and `/skill:name` completion stays in the editor tail (at most five rows) with Pi's `→` selection pointer; `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
 - Search pickers replace the editor region, as Pi's `showSelector` does. The picker owns its border, its `> ` query row, and its bounded list. Search uses case-insensitive substring matching in the editor query; `Up/Down` select, `PageUp/PageDown` move by the visible list size (at most ten), `Enter` applies, `Esc` or `Ctrl+C` cancels and restores the prior draft
 - `Ctrl+L` opens the model picker; `Shift+Tab` cycles the selected model's supported thinking levels
 - Completion and picker search never scan files or call a provider; picker queries are not conversation messages
@@ -25,7 +25,7 @@ Commands (bounded inline, searchable editor pickers, no fullscreen):
 - `/new` — new session (keeps scrollback, resets recall)
 - `/resume [filter]` — search workspace sessions, use arrows/PageUp/PageDown and Enter; same-session no-op
 - `/model` — searchable model picker with Pi's `→` selection pointer, `✓` current marker, provider badges, and selected-model credential details; `/model [provider/]model` applies a direct session-local choice
-- `/thinking` — searchable supported-level picker; `/thinking [level]` applies a direct session-local choice
+- `/thinking` — searchable supported-level picker with Pi's `→` pointer; `/thinking [level]` applies a direct session-local choice
 - `/compact [focus]` — real cancellable summary, start/settled outcome
 - `/session` — identity, workspace, provider/API/model, thinking, continuation, usage (no secrets, no invented $0.00)
 - `/history [N|all]` — last N user spans (default 20) or full history, display-only, no mutation
