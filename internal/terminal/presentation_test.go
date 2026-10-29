@@ -119,3 +119,22 @@ func TestNoColorEnvStillLeavesStateText(t *testing.T) {
 		t.Fatalf("colorless state lost or SGR leaked: %q", plain)
 	}
 }
+
+// Pi's editor border puts the working status at the left of the top border and
+// centers the overflow count, like createScrollBorder and the custom editor.
+func TestEditorBorderFollowsPiLayout(t *testing.T) {
+	draft := []rune("line\nline\nline\nline\nline\nline\nline\nline")
+	view := ComposeConsoleView(80, 24, draft, 0, PresentationSnapshot{NoColor: true}, "⠋ Working… (Esc/Ctrl+C cancel, input paused)", "")
+	if !strings.HasPrefix(view.Rows[0], "── ⠋ Working…") {
+		t.Fatalf("working status is not at the left of the top border: %q", view.Rows[0])
+	}
+	bottom := view.Rows[8]
+	if !strings.Contains(bottom, "↓ 1 more") {
+		t.Fatalf("bottom border lost the overflow count: %q", bottom)
+	}
+	leading := CellWidth(bottom) - CellWidth(strings.TrimLeft(bottom, "─"))
+	trailing := CellWidth(bottom) - CellWidth(strings.TrimRight(bottom, "─"))
+	if leading > trailing+1 || trailing > leading+1 {
+		t.Fatalf("overflow count is not centered in the bottom border: %q", bottom)
+	}
+}

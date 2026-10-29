@@ -352,35 +352,23 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	borderToken := thinkingToken(snapshot.Thinking)
 	borderRow := func(top bool) (string, int) {
 		borderWidth := max(1, width-1)
-		label := ""
+		overflow := ""
+		status := ""
 		if top {
 			if activity != "" {
-				status := SanitizeStatusRow(activity)
 				reserve := 4
 				if above > 0 {
-					reserve += CellWidth("↑ " + itoa(above) + " more ")
+					reserve += CellWidth(" ↑ " + itoa(above) + " more ")
 				}
-				status = compactActivity(status, max(0, borderWidth-reserve))
-				if status != "" {
-					label = "── " + status + " "
-				}
+				status = compactActivity(SanitizeStatusRow(activity), max(1, borderWidth-reserve))
 			}
 			if above > 0 {
-				label += "↑ " + itoa(above) + " more "
+				overflow = " ↑ " + itoa(above) + " more "
 			}
 		} else if below > 0 {
-			label = "↓ " + itoa(below) + " more "
+			overflow = " ↓ " + itoa(below) + " more "
 		}
-		plain := label
-		if CellWidth(plain) >= borderWidth {
-			plain = TruncateToWidth(plain, max(0, borderWidth-1))
-		}
-		fill := max(0, borderWidth-CellWidth(plain))
-		left := fill
-		if !top {
-			left = fill / 2
-		}
-		text := strings.Repeat("─", left) + plain + strings.Repeat("─", fill-left)
+		text := piBorderRow(borderWidth, status, overflow)
 		row := StyledRow{Spans: []StyledSpan{{Text: text, Token: borderToken}}}
 		return row.Serialize(noColor), row.Width()
 	}
@@ -536,6 +524,34 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 		cursorRow = min(len(rows)-1, max(0, cursorRow-(len(rows)-(height))))
 	}
 	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(cursorCol, max(0, width-1))}
+}
+
+// piBorderRow builds Pi's editor border row. The working status sits at the
+// left of the top border, the overflow count is centered like Pi's
+// createScrollBorder, and the rest is horizontal fill.
+func piBorderRow(width int, status string, overflow string) string {
+	if width <= 0 {
+		return ""
+	}
+	status = TruncateToWidth(status, width)
+	overflowWidth := CellWidth(overflow)
+	overflowStart := max(0, (width-overflowWidth)/2)
+	statusWidth := CellWidth(status)
+	canFitOverflow := overflow != "" && overflowWidth+2 <= width && overflowStart-(3+statusWidth+1) >= 1
+	switch {
+	case statusWidth > 0 && canFitOverflow:
+		left := 3 + statusWidth + 1
+		return "── " + status + " " + strings.Repeat("─", max(0, overflowStart-left)) + overflow + strings.Repeat("─", max(0, width-overflowStart-overflowWidth))
+	case statusWidth > 0:
+		if width >= statusWidth+5 {
+			return "── " + status + " " + strings.Repeat("─", max(0, width-statusWidth-4))
+		}
+		return TruncateToWidth(status, width)
+	case overflow != "" && overflowWidth+2 <= width:
+		return strings.Repeat("─", overflowStart) + overflow + strings.Repeat("─", max(0, width-overflowStart-overflowWidth))
+	default:
+		return strings.Repeat("─", width)
+	}
 }
 
 // pickerQueryRow renders Pi's selector search input: the "> " prompt, the
