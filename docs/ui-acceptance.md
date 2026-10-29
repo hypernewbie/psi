@@ -90,10 +90,10 @@ internal/app/conpty_windows_test.go    071b677bf05e11a8ae80fb4900cf14123713eed13
 internal/terminal/maintained_test.go    cae637bec61339370782861eb3a7cda73f0fbb345541fbeb3028fc8a4e55e912
 internal/terminal/picker_region_test.go fbb25a8fd18b5fa5945158932737c7282aeb44e451f4d6743641bc742c69669e
 internal/terminal/presentation.go      9d56956a66f61c29bd4d7ac5c09d5b31d1a202e127b14205746cc6a022b6372d
-internal/terminal/console.go            6c31f86e8fae358e3252f752ebc918c955f4c98656b865c335af5b495ad5af59
+internal/terminal/console.go            ac2228bb185e31dfabc6804a8d499159f62c1e7339c6e54129b997e24f8b85c9
 internal/terminal/picker.go             08a2b90d7615533e572e673a5aa51b2ef6f07975300a0d87bfc2d6dbe8a67f23
-internal/app/selectors.go              2da90de31d75ad3e3e1f987e07523ef96990b44785cef57dfcec68b6fe4e489d
-internal/app/app.go                    b6d343f9101f11a7b862667b9b6138480ea49e2442b2c9ac86dd80820ee2235e
+internal/app/selectors.go              346e55e8724e815a1f043078d6e0e0f45987fa7654a28bc8815f68d7791546db
+internal/app/app.go                    8928e6458d972592251ac23492441870e84720c45971d0a20091e997d6cbee1b
 internal/app/helpers.go                dbc8d1be8e91b08ff4a3270d7b109ac8d189b2878d75ca104356e3c7d39b82de
 ```
 
