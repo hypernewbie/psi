@@ -111,6 +111,19 @@ func TestHomeAbbreviationRespectsDirectoryBoundary(t *testing.T) {
 	}
 }
 
+func TestFooterSessionNameSanitizesTerminalControls(t *testing.T) {
+	view := ComposeEditorView(80, 10, nil, 0, PresentationSnapshot{
+		WorkingDirectory: "/work", SessionName: "safe\x1b[2J\nname", NoColor: true,
+	}, "")
+	plain := strings.Join(view.Rows, "\n")
+	if strings.Contains(plain, "\x1b") || strings.Contains(plain, "\x1b[2J") {
+		t.Fatalf("session name injected terminal control: %q", plain)
+	}
+	if !strings.Contains(plain, "safe name") {
+		t.Fatalf("session name was not kept as harmless footer text: %q", plain)
+	}
+}
+
 func TestFooterOmitsProviderWhenOnlyOneProviderIsAvailable(t *testing.T) {
 	rows, _ := formatFooter(PresentationSnapshot{
 		Provider: "anthropic", ProviderCount: 1, Model: "m", Thinking: "high", NoColor: true,
