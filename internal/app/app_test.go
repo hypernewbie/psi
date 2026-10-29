@@ -527,8 +527,8 @@ func TestFooterSnapshotShowsActiveSessionNameAndTracksLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.refreshPresentation(console)
-	if r.footerKey == oldKey || r.footerSnapshot.SessionName != "root name" {
-		t.Fatalf("footer cache did not follow the changed leaf: key=%q name=%q", r.footerKey, r.footerSnapshot.SessionName)
+	if r.footerKey == oldKey || r.footerSnapshot.SessionName != "branch A" {
+		t.Fatalf("footer cache did not follow the changed leaf while preserving the latest session name: key=%q name=%q", r.footerKey, r.footerSnapshot.SessionName)
 	}
 }
 

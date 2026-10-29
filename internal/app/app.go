@@ -529,7 +529,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		if home == "" {
 			home = os.Getenv("USERPROFILE")
 		}
-		sessionName, _ := r.store.SessionName()
+		sessionName := r.store.SessionName()
 		snapshot := terminal.PresentationSnapshot{
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName,
 			Provider: r.ov.Provider, ProviderCount: footerProviderCount(r.models), Model: r.ov.Model,
