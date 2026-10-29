@@ -568,3 +568,19 @@ func TestReplayCancellationStopsTheActualTimelineWalk(t *testing.T) {
 		t.Fatalf("cancelled walk kept printing: complete=%v calls=%d", complete, calls)
 	}
 }
+
+// The startup header follows Pi's compact hint structure with psi's name.
+func TestStartupHeaderUsesPiCompactHints(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
+	q.wait("psi v")
+	q.wait("esc interrupt · ctrl+c/ctrl+d clear/exit · / commands")
+	q.prompt()
+	if strings.Contains(q.screen.Text(), "Pi can explain its own features") {
+		t.Fatalf("startup kept Pi's onboarding paragraphs: %q", q.screen.Text())
+	}
+	q.write("/quit\r")
+	q.finish()
+}

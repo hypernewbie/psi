@@ -190,7 +190,7 @@ func Run(args []string, version string) error {
 				fmt.Fprintln(startupOut, line)
 			}
 		}
-		fmt.Fprintln(startupOut, "esc interrupt · ctrl+c/d clear/exit · / commands")
+		fmt.Fprintln(startupOut, "esc interrupt · ctrl+c/ctrl+d clear/exit · / commands")
 	} else if r.authErr != nil {
 		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error(), 80, false) {
 			fmt.Fprintln(startupOut, line)
