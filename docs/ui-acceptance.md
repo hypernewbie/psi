@@ -83,6 +83,7 @@ New coverage added with those changes:
 ### Platform and delivery evidence at `3219438`
 
 - Native Windows: all nine package test binaries passed on Windows 11 `10.0.26200.8875` through native PowerShell with Git for Windows on `PATH`. `TestActualWindowsConPTYInteraction` passed three consecutive runs with its six-size matrix after the footer/session-name changes.
+- Native Windows fixture update: after adding the Pi-derived session-name footer row, a fresh `internal/terminal` Windows test binary passed with the updated fixture at `8443db9`.
 - Cross-builds: `GOOS=windows go vet ./...`, `GOOS=windows go build ./...`, the Darwin amd64/arm64 package builds, and Darwin app/terminal test-binary compilation passed. macOS binaries were not executed.
 - CI: the workflow now runs the race suite and the acceptance-tagged idle, metadata, and compacted-session profiles on Linux and macOS. The Windows race step stays out because that runner has no cgo. The workflow itself was not executed by a remote runner.
 
