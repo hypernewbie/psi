@@ -82,7 +82,7 @@ New coverage added with those changes:
 
 ### Platform and delivery evidence at `7e2c1d0`
 
-- Native Windows: the `internal/app` and `internal/terminal` package binaries passed on Windows 11 `10.0.26200.8875` through WSL2 interop after the footer provider-visibility change. The three-run `TestActualWindowsConPTYInteraction` six-size matrix was last verified at `c9002e3`; it was not rerun for these footer-only changes.
+- Native Windows: the `internal/app` and `internal/terminal` package binaries passed on Windows 11 `10.0.26200.8875` through WSL2 interop after the footer provider-visibility change. `TestActualWindowsConPTYInteraction` passed three consecutive runs with its six-size matrix after the change.
 - Cross-builds: `GOOS=windows go vet ./...`, `GOOS=windows go build ./...`, the Darwin amd64/arm64 package builds, and Darwin app/terminal test-binary compilation passed. macOS binaries were not executed.
 - CI: the workflow now runs the race suite and the acceptance-tagged idle, metadata, and compacted-session profiles on Linux and macOS. The Windows race step stays out because that runner has no cgo. The workflow itself was not executed by a remote runner.
 
