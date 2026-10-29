@@ -13,6 +13,49 @@ import (
 	pitheme "psi/internal/theme"
 )
 
+func TestActualStartupUsesUnmodifiedPiDarkAndLightThemes(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false},"terminal":{"trueColor":false}}`)
+	for _, name := range []string{"dark", "light"} {
+		data, err := pitheme.BuiltinJSON(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc, err := pitheme.Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		palette, err := doc.Compile(pitheme.ColorMode256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreground, err := palette.ForegroundANSI("userMessageText")
+		if err != nil {
+			t.Fatal(err)
+		}
+		background, err := palette.BackgroundANSI("userMessageBg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AppendMessage(agentMessageUser("unmodified " + name + " surface")); err != nil {
+			t.Fatal(err)
+		}
+		q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File(), "--use-theme", name)
+		q.prompt()
+		if !strings.Contains(q.screen.Text(), "› unmodified "+name+" surface") || !strings.Contains(q.raw.String(), foreground) || !strings.Contains(q.raw.String(), background) {
+			t.Fatalf("unmodified Pi %s theme did not render its user surface: fg=%q bg=%q screen=%q raw=%q", name, foreground, background, q.screen.Text(), q.raw.String())
+		}
+		q.write("\x04")
+		q.finish()
+	}
+}
+
 func TestActualStartupUsesTwoDistinctPiUserSurfaces(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")

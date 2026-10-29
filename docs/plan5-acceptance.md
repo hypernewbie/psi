@@ -20,7 +20,7 @@ Manual `/compact` performs read-only preparation before showing a spinner or req
 |---|---|---|
 | Component | `TestPrepareCompactionReportsNoWorkOutcomes`, `TestPrepareCompactionSplitsLongAssistantSpanAtPiCutPoint`, `TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget` | Pass; the long-span fixture uses the ordinary 20,000-token retention budget. |
 | Agent/storage | Two-stage split summary, previous-summary update, aggregate usage, failure/incomplete/cancelled-summary usage, failed-checkpoint append, no-checkpoint, threshold no-op, overflow no-op, retain-none, projected replacement, omitted recovery suffix, and tool-call/result boundary regressions | Pass with fake providers and storage fault injection. |
-| Actual app | Empty and persistent short-session `/compact` offline no-ops; the short-session case preserves exact file bytes. A real-PTY ordinary-budget long-span summary runs through a loopback Anthropic server, is cancelled in a separate actual-app journey without changing session bytes, then is reopened in a second process with compact default replay and explicit `/history all`. | Pass; the summary request and saved `firstKeptEntryId` are checked. |
+| Actual app | Empty, offline short-session, authenticated short-session, and already-compacted `/compact` no-ops; authenticated no-ops make zero loopback requests and both persisted-session cases preserve exact bytes. A real-PTY ordinary-budget long-span summary runs through a loopback Anthropic server, is cancelled in a separate actual-app journey without changing session bytes, then is reopened in a second process with compact default replay and explicit `/history all`. | Pass; the summary request and saved `firstKeptEntryId` are checked. |
 | Reference | Pinned Pi `prepareCompaction`/`findCutPoint` compared against Go for a default-budget long-assistant span, a prior summary with adjacent metadata, and a tool-call/result boundary; Pi `compact()` split-summary calls run with an injected synthetic stream; the unmodified Pi session reader compares Anthropic and Codex continuation/projection fixtures | Pass through the pinned Node 24 adapter. Pi source revision and hashes are recorded in `docs/reference-manifest.md`; the `completeSimple` stub prevents provider requests. |
 | Human | Visual review, selection/copy, flicker, macOS and Windows Terminal acceptance | Not performed. |
 
@@ -42,7 +42,7 @@ Role-aware output now covers user surfaces, assistant Markdown, metadata, notice
 |---|---|---|
 | Component | Theme parser/color/system/catalog tests; display, surface, picker, Markdown, and reply fixtures | Pass. |
 | Visual fixtures | `plan5-color-matrix.json` pairs indexed fallback and selected pinned dark-theme user, assistant, read-preview, and metadata rows at 120x40, 80x24, 60x16, 40x12, and 20x6 | Pass as colored component snapshots; this is not a human visual review. |
-| Actual app | Two distinct custom-theme user surfaces, late appearance reply, atomic-save completion reload, explicit `/reload`, open model-picker query/current selection/cursor, invalid-save last-good retention and one warning, theme save while suspended with picker focus retained on resume, and a mid-stream theme change that preserves the committed sentinel while restyling the active tail | Pass in isolated Unix PTYs. |
+| Actual app | Unmodified Pi dark/light startup surfaces, two distinct custom-theme user surfaces, late appearance reply, atomic-save completion reload, explicit `/reload`, open model-picker query/current selection/cursor, invalid-save last-good retention and one warning, theme save while suspended with picker focus retained on resume, and a mid-stream theme change that preserves the committed sentinel while restyling the active tail | Pass in isolated Unix PTYs. |
 | Watch lifecycle | Eight atomic saves coalesce to one notification; directory creation, unselected-file filtering, debounce, close, suspend/resume with a pending selected-theme save, and 100-cycle goroutine/file-descriptor checks | Pass locally. |
 | No-color | Theme serializer and replay tests assert no generated SGR while retaining text/geometry | Pass locally; human readability remains open. |
 | Human/platform | Native selection/copy, perceived flicker, native macOS, and Windows Terminal review | Not performed. |
@@ -84,4 +84,17 @@ Still open:
 - Run remote CI only if an authorized existing VCI coordinator destination is provided. Do not configure or create a coordinator.
 - The pinned Pi `completeSimple` provider adapter and full interactive Pi app were not invoked. The pinned `compact()` flow used an injected synthetic stream. No live provider request ran.
 
-G5-01 through G5-07 remain open or partial until their remaining evidence is collected. G5-08's local documentation and tested-binary evidence is complete; external acceptance is not implied. Local tests, cross-builds, and PTY fixtures do not close blocked remote, native-platform, or human gates.
+Gate status below refers only to evidence in this ledger. It does not claim remote CI, native macOS runtime, or human acceptance.
+
+| Gate | Ledger status | Remaining evidence |
+|---|---|---|
+| G5-01 | Met locally | A5-02–10 have local parser, selection, trust, appearance, reply, and reload coverage. |
+| G5-02 | Partial | Human light/dark/no-color hierarchy and readability review. |
+| G5-03 | Met locally | No local A5-11–16 gap identified. |
+| G5-04 | Met locally | Pinned prep and compact flow use synthetic streams; no live Pi/provider request. |
+| G5-05 | Partial | Human shell/lifecycle review and unavailable native-platform cases. |
+| G5-06 | Met locally on WSL2 Linux/amd64 | Resource profiles are not evidence for other platforms. |
+| G5-07 | Blocked/partial | Native macOS runtime, remaining Windows console/human checks, SSH/tmux review, and authorized remote CI. |
+| G5-08 | Met locally | Documentation and tested executable match source revision `211df061f6488ed8d41bd54526bc6840c94d52d0`; external acceptance is not implied. |
+
+Local tests, cross-builds, fixtures, and PTYs do not close blocked remote, native-platform, or human gates.

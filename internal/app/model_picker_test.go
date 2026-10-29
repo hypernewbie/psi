@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -246,6 +247,95 @@ func TestActualShortCompactIsOfflineNoOpAndPreservesSessionBytes(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatal("short-session no-op changed persisted session bytes")
+	}
+}
+
+func TestActualAuthenticatedShortCompactMakesNoRequestAndPreservesBytes(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected summary request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	reviewSettings(t, agentDir, server.URL)
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false,"keepRecentTokens":20000}}`)
+	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("short authenticated request")); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
+	q.prompt()
+	q.write("/compact\r")
+	q.wait("Nothing to compact yet. Recent conversation is already within")
+	q.wait("budget.")
+	q.prompt()
+	if strings.Contains(q.raw.String(), "Compacting context") {
+		t.Fatalf("authenticated no-op showed a compaction indicator: %q", q.raw.String())
+	}
+	q.write("/quit\r")
+	q.finish()
+	after, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 0 || string(after) != string(before) {
+		t.Fatalf("authenticated no-op had side effects: requests=%d bytes=%d -> %d", requests.Load(), len(before), len(after))
+	}
+}
+
+func TestActualAlreadyCompactedCommandMakesNoRequestOrCheckpoint(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected summary request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	reviewSettings(t, agentDir, server.URL)
+	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("already summarized request")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "stored summary context"}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendCompaction("stored checkpoint", path[len(path)-1].ID(), 100, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
+	q.prompt()
+	q.write("/compact\r")
+	q.wait("Nothing to compact yet. This session is already compacted.")
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+	after, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 0 || string(after) != string(before) {
+		t.Fatalf("already-compacted no-op had side effects: requests=%d bytes=%d -> %d", requests.Load(), len(before), len(after))
 	}
 }
 
