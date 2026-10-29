@@ -711,3 +711,64 @@ func TestActualToolRowIsTransientAndSettlesOnce(t *testing.T) {
 	q.write("/quit\r")
 	q.finish()
 }
+
+// A4-15: Escape during a running tool cancels the run, keeps the cancellation
+// visible until settlement, and leaves the next prompt usable.
+func TestActualCancelDuringToolKeepsCancellationVisibleAndSettles(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flush, _ := w.(http.Flusher)
+		emit := func(name string, data any) {
+			encoded, _ := json.Marshal(data)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, encoded)
+		}
+		if requests.Add(1) == 1 {
+			emit("message_start", map[string]any{"message": map[string]any{"id": "cancel-1", "model": "m", "usage": map[string]any{"input_tokens": 1}}})
+			emit("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "tool_use", "id": "call-1", "name": "bash"}})
+			emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": `{"command":"sleep 30"}`}})
+			emit("content_block_stop", map[string]any{"index": 0})
+			emit("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "tool_use"}, "usage": map[string]any{"output_tokens": 2}})
+			emit("message_stop", map[string]any{})
+			flush.Flush()
+			return
+		}
+		emit("message_start", map[string]any{"message": map[string]any{"id": "cancel-2", "model": "m", "usage": map[string]any{"input_tokens": 1}}})
+		emit("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+		emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": "SECOND_TURN"}})
+		emit("content_block_stop", map[string]any{"index": 0})
+		emit("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 2}})
+		emit("message_stop", map[string]any{})
+		flush.Flush()
+	}))
+	defer server.Close()
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":8192}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-cancel-key"}}`)
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
+	q.prompt()
+	q.write("run a long tool\r")
+	q.wait("bash: running")
+	q.write("\x1b")
+	q.wait("Cancelling")
+	q.wait(": cancelled")
+	q.prompt()
+	screen := q.screen.Text()
+	if strings.Contains(screen, "bash: running") {
+		t.Fatalf("cancelled tool left a running row: %q", screen)
+	}
+	if !strings.Contains(screen, "bash: cancelled") {
+		t.Fatalf("cancelled tool did not settle with a cancelled state: %q", screen)
+	}
+	// The next prompt is usable after the cancellation settles.
+	q.write("after cancel\r")
+	q.prompt()
+	if !strings.Contains(q.screen.Text(), "after cancel") {
+		t.Fatalf("the editor is not usable after a cancellation: %q", q.screen.Text())
+	}
+	q.write("/quit\r")
+	q.finish()
+}
