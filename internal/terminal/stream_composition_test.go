@@ -201,6 +201,7 @@ func TestActiveToolRowStaysInTheOwnedTail(t *testing.T) {
 		t.Fatalf("active tool row reached native scrollback: %q", vt.Scrollback)
 	}
 	c.ClearToolRow()
+	c.Draw()
 	if strings.Contains(vt.Text(), "bash: running") {
 		t.Fatalf("active tool row survived the settlement: %q", vt.Text())
 	}
