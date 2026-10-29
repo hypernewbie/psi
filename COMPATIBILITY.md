@@ -104,16 +104,14 @@ Unknown harmless UI prefs need no per-key warning.
 
 ## Platform
 
-- Supported: Linux and WSL2 (WSLg not required; TUI is text-only).
+- Linux and WSL2 have local runtime and PTY evidence (WSLg is not required; the TUI is text-only).
 - Shell for `bash` tool: `bash` on PATH, run in workspace cwd, process-group cancellation.
-- macOS builds and runs the same suite as Linux.
-- Windows builds and runs the portable suite. Unix-only coverage stays out:
-  process-group cleanup, PTY harness tests, suspend/resume, and mode-bit tests.
-  Windows stops the shell leader only. Descendants outlive cancellation.
+- macOS is a build target. PLAN5 cross-build and app test-binary compilation passed for amd64 and arm64; native runtime acceptance remains open.
+- Windows portable and ConPTY evidence is recorded in `docs/ui-acceptance.md`. PLAN5 cross-build and app test-binary compilation passed. Unix-only coverage stays out: process-group cleanup, PTY harness tests, suspend/resume, and mode-bit tests. Windows stops the shell leader only. Descendants outlive cancellation.
 
 ## Explicit exclusions
 
-TypeScript extensions, JS runtime, npm packages, MCP, codemode, tool search,
+TypeScript extensions, JS runtime, npm package installation/execution, MCP, codemode, tool search,
 subagents, public SDK, RPC server, JSON event mode, print mode, fullscreen mode,
 custom widgets, Pi TUI API, session tree/branch/fork/clone UI, HTML export,
 sharing, bug uploads, hosted services, update checks, self-update, catalog
