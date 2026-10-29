@@ -584,3 +584,68 @@ func TestStartupHeaderUsesPiCompactHints(t *testing.T) {
 	q.write("/quit\r")
 	q.finish()
 }
+
+// A4-06: cancelling inside a partial code fence keeps the partial text, ends
+// the styles, and leaves the next prompt usable.
+func TestActualCancelInsidePartialFenceKeepsTextAndNextPrompt(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"synthetic\",\"model\":\"m\",\"usage\":{\"input_tokens\":1}}}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"```go\\nfunc main() {\\n  println(\\\"partial\\\")\\n\"}}\n\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+	}))
+	defer server.Close()
+	reviewSettings(t, agentDir, server.URL)
+	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("synthetic partial fence fixture")); err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
+	q.prompt()
+	q.write("partial fence\r")
+	q.wait("func main()")
+	q.write("\x1b") // Pi's Escape binding cancels the active run.
+	q.wait("interrupted")
+	q.prompt()
+	screen := q.screen.Text()
+	if !strings.Contains(screen, "func main()") {
+		t.Fatalf("cancelling inside a partial fence lost the visible text: %q", screen)
+	}
+	if !strings.Contains(screen, "interrupted") {
+		t.Fatalf("cancelled run did not state its interrupted outcome: %q", screen)
+	}
+	if strings.Contains(screen, "\x1b[") {
+		t.Fatalf("cancelled run leaked a style escape into the screen: %q", screen)
+	}
+	// The next prompt stays usable.
+	q.write("/quit\r")
+	q.finish()
+	released = true
+	after, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "partial fence") {
+		t.Fatalf("cancelled run did not persist the partial exchange: %s", after)
+	}
+}
