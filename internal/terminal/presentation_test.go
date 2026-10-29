@@ -157,6 +157,12 @@ func TestFooterUsesPiEllipsisForLongPathAndStats(t *testing.T) {
 	if got, want := Sanitize(pathRows[0]), filepath.FromSlash("/very/lo..."); got != want {
 		t.Fatalf("long path footer row=%q; want Pi-style ellipsis", got)
 	}
+	widePathRows, _ := formatFooter(PresentationSnapshot{
+		WorkingDirectory: filepath.FromSlash("/界界界界"), SessionName: "release audit", NoColor: true,
+	}, 12, 3, true)
+	if got, want := Sanitize(widePathRows[0]), filepath.FromSlash("/界界界..."); got != want || CellWidth(got) > 11 {
+		t.Fatalf("wide path footer row=%q width=%d; want grapheme-safe Pi-style ellipsis %q", got, CellWidth(got), want)
+	}
 
 	statsRows, _ := formatFooter(PresentationSnapshot{
 		Usage: "↑1234567890", ContextEstimate: "~10%/100k", Model: "m", NoColor: true,
