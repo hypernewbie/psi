@@ -41,7 +41,7 @@ func (l *terminalLifecycle) Suspend() error {
 }
 
 func (l *terminalLifecycle) redrawPicker(rows func(width int) []string) {
-	l.console.SetPickerRows(rows(l.console.StatusWidth()))
+	l.console.SetPickerChoiceRows(rows(l.console.StatusWidth()))
 	l.console.Draw()
 }
 
@@ -62,7 +62,7 @@ func handleBootstrapSignal(lifecycle *terminalLifecycle, sig os.Signal, redraw f
 	return false, nil
 }
 
-// runChoicePicker displays a fixed decision in the editor tail. Cancellation
+// runChoicePicker displays a fixed decision in the picker region. Cancellation
 // returns no selection; callers must apply their explicit deny/default policy.
 func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, picker *terminal.ChoicePicker) (index int, cancelled bool, err error) {
 	draw := func() { lifecycle.redrawPicker(func(width int) []string { return picker.Rows(width, false) }) }

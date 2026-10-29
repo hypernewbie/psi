@@ -417,6 +417,155 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(layout.CursorCol, max(0, width-1))}
 }
 
+// ComposeConsoleViewPicker renders an application-owned picker in place of the
+// editor region. Pi's showSelector clears the editor container and installs a
+// bordered selector that owns its search query, so psi renders the picker
+// border, the query row, the bounded list, and the closing border instead of
+// the editor block. The committed transcript above stays untouched.
+func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string, fragmentRows, pickerRows []string, mode PickerMode) EditorView {
+	width, height = max(1, width), max(1, height)
+	noColor := colorDisabled(snapshot)
+	footerRows, footerWidths := formatFooter(snapshot, width, height, noColor)
+	footerCount := len(footerRows)
+	if height < 8 && footerCount > 0 {
+		// Preserve model/status line before the optional folder line.
+		footerRows, footerWidths = footerRows[len(footerRows)-1:], footerWidths[len(footerWidths)-1:]
+		footerCount = 1
+	}
+	withQuery := mode == PickerSearch
+	queryRows := 0
+	if withQuery {
+		queryRows = 1
+	}
+
+	// At the smallest sizes keep the focused query usable before chrome.
+	if height <= 2 {
+		row, col := "", 0
+		if withQuery {
+			row, col = pickerQueryRow(buf, pos, width)
+		} else if len(pickerRows) > 0 {
+			row = TruncateToWidth(Sanitize(pickerRows[0]), max(0, width-1))
+		}
+		return EditorView{Rows: []string{row}, CellWidth: []int{CellWidth(row)}, CursorRow: 0, CursorCol: col}
+	}
+
+	// The picker owns its top border, the optional search input, and its
+	// bottom border. The query and one list row outrank the chrome on a very
+	// short terminal, so the footer and borders give way first.
+	minBody := 0
+	if len(pickerRows) > 0 {
+		minBody = 1
+	}
+	keepTop, keepBottom := true, true
+	if height < queryRows+minBody+2+footerCount {
+		// The footer is the first thing to give way.
+		footerRows, footerWidths = nil, nil
+		footerCount = 0
+	}
+	if height < queryRows+minBody+2 {
+		keepBottom = false
+	}
+	if height < queryRows+minBody+1 {
+		keepTop = false
+	}
+	chromeRows := 0
+	if keepTop {
+		chromeRows++
+	}
+	if keepBottom {
+		chromeRows++
+	}
+	bodySpace := max(0, height-queryRows-chromeRows-footerCount)
+	bodyCount := min(len(pickerRows), bodySpace)
+
+	fragment := fragmentRows
+	fragmentCount := max(0, bodySpace-bodyCount)
+	if len(fragment) > fragmentCount {
+		fragment = fragment[len(fragment)-fragmentCount:]
+	}
+
+	border := StyledRow{Spans: []StyledSpan{{Text: strings.Repeat("─", max(1, width-1)), Token: thinkingToken(snapshot.Thinking)}}}
+	if activity != "" && keepTop {
+		// The busy indicator stays visible even when a picker owns the region.
+		status := compactActivity(SanitizeStatusRow(activity), max(1, width-1-4))
+		if status != "" {
+			label := "── " + status + " "
+			fill := max(0, max(1, width-1)-CellWidth(label))
+			border = StyledRow{Spans: []StyledSpan{
+				{Text: "── ", Token: thinkingToken(snapshot.Thinking)},
+				{Text: status, Token: TokenMuted},
+				{Text: " ", Token: TokenMuted},
+				{Text: strings.Repeat("─", fill), Token: thinkingToken(snapshot.Thinking)},
+			}}
+		}
+	}
+	border = ClipStyledRow(border, max(1, width-1))
+	borderText := border.Serialize(noColor)
+	borderCells := border.Width()
+
+	rows := make([]string, 0, len(fragment)+queryRows+chromeRows+bodyCount+footerCount)
+	cells := make([]int, 0, cap(rows))
+	for _, row := range fragment {
+		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
+	}
+	cursorRow, cursorCol := len(rows), 0
+	if keepTop {
+		rows, cells = append(rows, borderText), append(cells, borderCells)
+	}
+	if withQuery {
+		queryRow, col := pickerQueryRow(buf, pos, width)
+		rows, cells = append(rows, queryRow), append(cells, CellWidth(queryRow))
+		cursorRow, cursorCol = len(rows)-1, col
+	}
+	for _, row := range pickerRows[:bodyCount] {
+		plain := Sanitize(row)
+		if CellWidth(plain) > width-1 {
+			row = TruncateToWidth(plain, max(0, width-1))
+		}
+		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
+	}
+	if keepBottom {
+		rows, cells = append(rows, borderText), append(cells, borderCells)
+	}
+	rows = append(rows, footerRows...)
+	cells = append(cells, footerWidths...)
+	if len(rows) > height {
+		// Height fallback must not discard the focused row or cancellation signal.
+		rows = rows[len(rows)-height:]
+		cells = cells[len(cells)-height:]
+		cursorRow = min(len(rows)-1, max(0, cursorRow-(len(rows)-(height))))
+	}
+	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(cursorCol, max(0, width-1))}
+}
+
+// pickerQueryRow renders Pi's selector search input: the "> " prompt, the
+// bounded query text, and the cursor column of the query inside that row.
+func pickerQueryRow(buf []rune, pos int, width int) (string, int) {
+	const prompt = "> "
+	promptCells := CellWidth(prompt)
+	available := max(1, width-1-promptCells)
+	pos = max(0, min(pos, len(buf)))
+	query := SanitizeStatusRow(string(buf))
+	cursorCells := CellWidth(SanitizeStatusRow(string(buf[:pos])))
+	total := CellWidth(query)
+	start := 0
+	if total > available {
+		half := available / 2
+		switch {
+		case cursorCells <= half:
+			start = 0
+		case cursorCells >= total-half:
+			start = max(0, total-available)
+		default:
+			start = cursorCells - half
+		}
+		start = max(0, min(start, max(0, total-available)))
+	}
+	visible := SliceCells(query, start, available)
+	cursorCol := promptCells + cursorCells - start
+	return prompt + visible, max(0, min(cursorCol, width-1))
+}
+
 func compactActivity(status string, maxWidth int) string {
 	if maxWidth <= 0 {
 		return ""

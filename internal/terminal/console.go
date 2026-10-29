@@ -69,7 +69,7 @@ type Console struct {
 	completionRows      []string
 	completionSelected  int
 	completionDismissed bool
-	pickerRows          []string
+	picker              *pickerRegion
 	busyNoticed         bool
 	dirty               bool
 	frameDepth          int
@@ -249,23 +249,39 @@ func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
 	}
 }
 
-// PickerSize returns the width and row budget available below the focused
-// input. This is the same budget used by the inline compositor.
+// PickerSize returns the width and row budget available to the picker list.
+// The budget matches the region that the picker replaces.
 func (c *Console) PickerSize() (width, rows int) {
 	width, height := c.size()
 	return width, EditorComponentRowBudget(height)
 }
 
-// SetPickerRows installs the app-owned inline picker in the mutable tail.
-func (c *Console) SetPickerRows(rows []string) {
-	c.pickerRows = append(c.pickerRows[:0], rows...)
-	if len(rows) > 0 {
-		c.clearCompletion(false)
-	}
+// pickerRegion is the application-owned picker that replaces the editor
+// region, matching Pi's showSelector behavior.
+type pickerRegion struct {
+	rows []string
+	mode PickerMode
 }
 
+// SetPicker installs the app-owned picker in place of the editor region.
+// The picker owns its borders, and a search picker also owns the query row.
+func (c *Console) SetPicker(rows []string, mode PickerMode) {
+	if len(rows) == 0 {
+		c.picker = nil
+		return
+	}
+	c.picker = &pickerRegion{rows: append([]string(nil), rows...), mode: mode}
+	c.clearCompletion(false)
+}
+
+// SetPickerRows installs the searchable picker that owns a query row.
+func (c *Console) SetPickerRows(rows []string) { c.SetPicker(rows, PickerSearch) }
+
+// SetPickerChoiceRows installs the startup choice picker, which has no query.
+func (c *Console) SetPickerChoiceRows(rows []string) { c.SetPicker(rows, PickerChoice) }
+
 func (c *Console) ClearPickerRows() {
-	c.pickerRows = nil
+	c.picker = nil
 }
 
 // RefreshCompletion recomputes suggestions after an application-owned draft restore.
@@ -514,7 +530,7 @@ func (c *Console) refreshCompletion() {
 	if c.Commands == nil {
 		c.Commands = CommandNames()
 	}
-	if c.completionDismissed || len(c.pickerRows) > 0 {
+	if c.completionDismissed || c.picker != nil {
 		c.clearCompletion(false)
 		return
 	}
@@ -721,13 +737,6 @@ func markdownRowsAppend(rows []string) string {
 	return strings.Join(rows, "\r\n") + "\r\n"
 }
 
-func (c *Console) pickerOrCompletionRows() []string {
-	if len(c.pickerRows) > 0 {
-		return c.pickerRows
-	}
-	return c.completionRows
-}
-
 func (c *Console) BeginFrame() { c.frameDepth++ }
 
 // EndFrame emits one combined append-and-tail update for the current batch.
@@ -759,26 +768,41 @@ func (c *Console) emitComposed(appendText string) error {
 	c.lastDraw = time.Now()
 	width, height := c.size()
 	var view EditorView
+	var fragmentRows []string
+	hasStream := false
 	if c.markdownStream != nil && len(c.streamRows) > 0 {
 		if c.markdownWidth != width {
 			c.markdownWidth = width
 			c.markdownStream.SetWidth(width)
 			c.streamRows = c.markdownStream.DisplayTail()
 		}
-		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, c.streamRows, c.pickerOrCompletionRows())
-	} else if len(c.pickerRows)+len(c.completionRows) > 0 {
-		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, wrapAssistantFragment(string(c.streamFragment), width), c.pickerOrCompletionRows())
-	} else {
+		fragmentRows = c.streamRows
+		hasStream = true
+	}
+	switch {
+	case c.picker != nil:
+		// Pi replaces the editor component with the selector. The picker owns
+		// the region, so the editor block is not rendered underneath it.
+		view = ComposeConsoleViewPicker(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.picker.rows, c.picker.mode)
+	case len(c.completionRows) > 0:
+		if !hasStream {
+			fragmentRows = wrapAssistantFragment(string(c.streamFragment), width)
+		}
+		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.completionRows)
+	case hasStream:
+		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, nil)
+	default:
 		view = ComposeConsoleView(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, string(c.streamFragment))
 	}
+	hideCursor := c.activity != "" || (c.picker != nil && c.picker.mode == PickerChoice)
 	f := Frame{Append: appendText, Tail: view.Rows, TailCellWidth: view.CellWidth,
 		CursorRow: view.CursorRow, CursorCol: view.CursorCol,
-		ShowCursor: c.hidden && c.activity == "", HideCursor: c.activity != ""}
+		ShowCursor: c.hidden && !hideCursor, HideCursor: hideCursor}
 	if c.lastW > 0 && (c.lastW != width || c.lastH != height) {
 		c.writer.InvalidateTail()
 	}
 	err := c.emit(f)
-	c.hidden = c.activity != ""
+	c.hidden = hideCursor
 	c.visibleTail = view.Rows
 	c.lastDraft, c.lastCursor = c.Editor.Text(), c.Editor.Pos()
 	c.lastW, c.lastH = width, height

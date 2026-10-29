@@ -1,5 +1,16 @@
 package terminal
 
+// PickerMode selects how the picker region is composed.
+type PickerMode uint8
+
+const (
+	// PickerSearch renders a search query row above the list, like Pi's
+	// selector search input.
+	PickerSearch PickerMode = iota
+	// PickerChoice renders only the supplied rows, like Pi's startup selector.
+	PickerChoice
+)
+
 // ChoiceOption is one bounded option in an editor-tail choice picker.
 type ChoiceOption struct {
 	Label       string

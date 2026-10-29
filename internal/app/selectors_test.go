@@ -242,7 +242,7 @@ func TestPickerTailGeometryRetainsSelectionAcrossPlanSizes(t *testing.T) {
 	selector.Models = true
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}} {
 		width, height := size[0], size[1]
-		view := terminal.ComposeConsoleViewComponents(width, height, nil, 0, terminal.PresentationSnapshot{NoColor: true}, "", nil, selector.RenderPickerRows(width, terminal.EditorComponentRowBudget(height), true))
+		view := terminal.ComposeConsoleViewPicker(width, height, nil, 0, terminal.PresentationSnapshot{NoColor: true}, "", nil, selector.RenderPickerRows(width, terminal.EditorComponentRowBudget(height), true), terminal.PickerSearch)
 		if len(view.Rows) > height || view.CursorRow < 0 || view.CursorRow >= len(view.Rows) {
 			t.Fatalf("geometry %dx%d: rows=%d cursor=%d", width, height, len(view.Rows), view.CursorRow)
 		}
