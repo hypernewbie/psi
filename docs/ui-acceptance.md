@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `543eaa3e551c8bf4c1397e808ba34f72a4c3ad75` (`543eaa3`; original quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below). The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `ce7b56b` (`test(app): prove the picker replaces the editor without flooding scrollback`), following the picker-region change in `1608df7` (`feat(ui): replace the editor region with the Pi picker`); the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -24,7 +24,7 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | A4-01–02 | Inline startup/editor, grapheme editing, literal paste, recall, cursor, overflow, and responsive geometry tests; actual-app PTY coverage | Human readability and copy check blocked |
 | A4-03 | Slow-stream and actual-app PTY tests preserve the indicator, footer, editor, and partial text. A loopback provider sends 10,000 one-character deltas in 30 paced batches; order and persistence are checked. The REPL profile separately counts timer and event-boundary frames, writer frames/writes, and maximum write size. | Automated pass; human perception/flicker check remains blocked |
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests | Automated pass |
-| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests | Automated pass on Linux PTY; Windows ConPTY opens/cancels and navigates the model picker at all six sizes |
+| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests. The picker replaces the editor region with its own border and `> ` query row; navigation and filtering do not append a result page to native scrollback. | Automated pass on Linux PTY; Windows ConPTY opens/cancels and navigates the model picker at all six sizes |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests | Automated pass |
 | A4-18 | Maintained VT keeps an active draft and committed sentinel through all six sizes. Native Windows ConPTY exercises the actual app at those sizes while typing, streaming from a local SSE provider, running a five-second Git Bash tool, and navigating the model picker. | Automated pass for the resize matrix; human flicker/readability checks remain blocked |
 | A4-19 | `NO_COLOR`, semantic token, and no-generated-SGR fixtures | Automated pass; light/dark human checks blocked |
@@ -37,12 +37,20 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 The audit found implementation gaps, not just missing external evidence:
 
 - **P4-023:** Removed the unplanned fuzzy search. Queries use case-insensitive substrings and source ordering. A matching selection keeps its identity; otherwise the first match is selected, not the active item elsewhere in the results.
+- **P4-023 editor replacement:** The picker now replaces the editor region, as Pi's `showSelector` does. `interactive-mode.ts` clears the editor container, installs the selector component, and moves focus to the selector; the selector owns its top `DynamicBorder`, its `> ` search input, and its list. psi previously rendered the picker rows below the editor's bottom border, in the same slot as the slash-command completion list. The picker region now owns its top border, the `> ` query row, the bounded list, and the closing border, and the editor block is not rendered underneath it. The committed transcript above and the footer below are unchanged. Startup trust and workspace confirmation use the same region without a query row.
 - **P4-024:** Matched Pi's `model-selector.ts` rows: `→` pointer, separate `✓` current marker, model ID before `[provider]`, and selected-only credential/API/context details. No full metadata paragraph repeats on every row.
 - **P4-025:** Matched `session-selector.ts` primary name/prompt and compact age treatment. An active session's own lock no longer hides its preview behind an unavailable warning.
 - **P4-027:** Lists use up to ten entries and the actual available height. Page keys move by the visible count. Tiny views retain a real selected row instead of a duplicate selected-item header.
 - **P4-009/P4-031:** Native ConPTY exposed stale differential row assumptions when the old picker exceeded the resized viewport. Resize invalidates only the owned tail and reallocates its rows with CRLF. There is no screen clear or committed transcript replay. Windows now posts changed-size events to the application owner, corresponding to Pi's `ProcessTerminal.start` resize callback. Its 100 ms size watcher produces no events for an unchanged size and stops with console input ownership.
 
 Validation: `./scripts/check.sh`, Windows vet/build, and Darwin amd64/arm64 builds plus app/terminal test-binary compilation passed. The full native Windows app and terminal packages passed. Five repeated ConPTY journeys checked all six sizes, including draft and picker redraws without a new key. Tests wait for the selected row **and** editor cursor, not a partial output chunk. Three synthetic PTY journeys also passed against the rebuilt `./psi` executable: streaming/tools, model/thinking/restart, and resume/recall.
+
+### Picker-region evidence at `1608df7` and `ce7b56b`
+
+- Component: `internal/terminal/picker_region_test.go` asserts that the picker owns exactly one border pair, renders the `> ` query row, places the cursor on that row, keeps the query scrolling horizontally, stays inside the terminal height at 120×40, 80×24, 60×16, 40×12, 20×6, 20×4, and 20×3, emits no SGR under `NO_COLOR`, and gives the choice picker no query row. `internal/app/selectors_test.go` re-runs the plan-size geometry matrix against the picker composition.
+- Actual app: `TestActualPickerReplacesTheEditorWithoutFloodingScrollback` opens the model picker in a real PTY, asserts one border pair and a query row, filters and navigates, and proves that native scrollback gained no result rows. Cancelling restores the submitted `/model` draft.
+- Delivered binary: the rebuilt `./psi` executable was driven in a PTY. The startup header and editor border appear, `/model` opens a picker with a query row and a selection pointer, filtering appends no second result page, and `Ctrl+C` restores the draft.
+- Native Windows: the `internal/app` and `internal/terminal` package binaries passed on Windows 11 `10.0.26200.8875` through WSL2 interop after the picker-region change, including `TestActualWindowsConPTYInteraction` with the six-size picker resize matrix.
 
 On the same Linux/amd64 host, 100 edits over 10,000 picker entries measured p50 `2.80682ms`, p95 `3.854093ms`, max `4.112572ms`. All remained below the 50 ms p95 budget. Audit fixture hashes:
 
@@ -113,10 +121,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `543eaa3` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The synthetic PTY checks above ran against this executable. The documentation-only ledger update followed this build.
+Built from repository tree revision `ce7b56b` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
 
 ```text
-SHA-256  a6f937c180d49bed0b48d028eb96f40a5321bf14cefec18d1eb66e52b113adf5
+SHA-256  6eecee4e1e619eabaddc98f08c9972a2e39324f2aafa3eb6b54f3254547d0686
 ```
 
 ## Gate disposition
@@ -126,7 +134,7 @@ SHA-256  a6f937c180d49bed0b48d028eb96f40a5321bf14cefec18d1eb66e52b113adf5
 | G4-01 Pi subset / no unrelated UI | Partial | Source mapping and omission list exist; pinned Pi side-by-side human review was not run |
 | G4-02 editor/footer/scrollback | Automated pass; human partial | VT and PTY evidence passes; human flicker/selection check unavailable |
 | G4-03 messages/Markdown/tools/restart | Automated pass | Shared formatter and synthetic replay/settlement tests pass |
-| G4-04 completion and pickers | Automated pass | Search, keyboard precedence, persistence, and lifecycle tests pass |
+| G4-04 completion and pickers | Automated pass | Search, keyboard precedence, persistence, lifecycle, and editor-replacement picker-region tests pass |
 | G4-05 startup/cancellation/lifecycle | Linux and Windows automated pass; platform partial | Windows package suites and ConPTY draft/clear/quit plus the six-size interaction matrix pass; macOS execution and human terminal lifecycle remain unverified |
 | G4-06 supported platforms/delivery | Blocked | Final Linux binary provenance and native Windows test evidence are recorded. Remote CI, macOS runtime, and Windows Terminal/human checks remain outstanding |
 
