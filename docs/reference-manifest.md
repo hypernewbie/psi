@@ -39,7 +39,7 @@ Build the adapter:
 node scripts/build-reference.mjs temp/pi-mono temp/pi-reference.mjs
 ```
 
-Run the session and word-navigation checks:
+Run the session, compaction, and word-navigation reference checks:
 
 ```sh
 PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
