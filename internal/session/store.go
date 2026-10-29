@@ -16,22 +16,23 @@ import (
 // Store owns mutation of one active session. One goroutine owns mutation;
 // provider/process goroutines report results to that owner (enforced by mutex + settled checks).
 type Store struct {
-	mu        sync.Mutex
-	header    *SessionHeader
-	entries   []*Entry
-	byID      map[string]*Entry
-	leafID    string
-	file      string
-	dir       string
-	cwd       string
-	persist   bool
-	flushed   bool
-	lock      *sessionLock
-	knownSize int64
-	knownInfo os.FileInfo
-	writeErr  error
-	records   map[string]RecordMeta // disk-backed payloads; entries contains small metadata only
-	storage   *storageOps
+	mu               sync.Mutex
+	header           *SessionHeader
+	entries          []*Entry
+	byID             map[string]*Entry
+	leafID           string
+	file             string
+	dir              string
+	cwd              string
+	persist          bool
+	flushed          bool
+	lock             *sessionLock
+	knownSize        int64
+	knownInfo        os.FileInfo
+	writeErr         error
+	sessionInfoCount int
+	records          map[string]RecordMeta // disk-backed payloads; entries contains small metadata only
+	storage          *storageOps
 	// LoadHook fires before each lazy payload read (nil in production).
 	// Deterministic fault schedules use it to rewrite the session mid-walk.
 	LoadHook func(RecordMeta)
@@ -121,11 +122,15 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	header := idx.Header
 	var entries []*Entry
 	records := map[string]RecordMeta{}
+	sessionInfoCount := 0
 	for _, m := range idx.Records {
 		if m.Type == "session" {
 			continue
 		}
 		entries = append(entries, m.entry)
+		if m.entry.SessionInfo != nil {
+			sessionInfoCount++
+		}
 		if _, exists := records[m.ID]; exists {
 			return nil, fmt.Errorf("duplicate entry id %q", m.ID)
 		}
@@ -142,7 +147,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	} else if incomplete {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
-	s := &Store{header: header, entries: entries, records: records, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true}
+	s := &Store{header: header, entries: entries, records: records, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
 	s.rebuildIndex()
 	s.knownInfo, err = os.Stat(path)
 	if err != nil {
@@ -217,6 +222,9 @@ func (s *Store) Entries() []*Entry {
 func (s *Store) SessionName() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sessionInfoCount == 0 {
+		return "", nil
+	}
 	id := s.leafID
 	for steps := 0; id != ""; steps++ {
 		if steps >= len(s.byID) {
@@ -598,6 +606,9 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	}
 	s.entries = append(s.entries, e)
 	s.byID[e.ID()] = e
+	if thin.SessionInfo != nil {
+		s.sessionInfoCount++
+	}
 	s.leafID = e.ID()
 	if st != nil {
 		if s.records == nil {
