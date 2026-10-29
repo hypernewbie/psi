@@ -5,6 +5,7 @@
     "workingDirectory": "/home/operator/work",
     "homeDirectory": "/home/operator",
     "provider": "anthropic",
+    "providerCount": 2,
     "model": "m",
     "thinking": "high"
   },

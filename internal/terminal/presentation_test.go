@@ -68,7 +68,7 @@ func TestComposeEditorViewGeometryAndDraftPreservation(t *testing.T) {
 		draft := []rune(strings.Repeat("界e\u0301🌍", 40) + "\nlast line")
 		view := ComposeEditorView(width, height, draft, len(draft), PresentationSnapshot{
 			WorkingDirectory: "/home/operator/work", HomeDirectory: "/home/operator",
-			Usage: "↑1.2k ↓320", ContextEstimate: "~8%/100k", Provider: "anthropic", Model: "example-model", Thinking: "high",
+			Usage: "↑1.2k ↓320", ContextEstimate: "~8%/100k", Provider: "anthropic", ProviderCount: 2, Model: "example-model", Thinking: "high",
 		}, "Working… (Esc/Ctrl+C cancel, input paused)")
 		if len(view.Rows) == 0 || len(view.Rows) > height {
 			t.Fatalf("%dx%d row count=%d", width, height, len(view.Rows))
@@ -111,9 +111,19 @@ func TestHomeAbbreviationRespectsDirectoryBoundary(t *testing.T) {
 	}
 }
 
+func TestFooterOmitsProviderWhenOnlyOneProviderIsAvailable(t *testing.T) {
+	rows, _ := formatFooter(PresentationSnapshot{
+		Provider: "anthropic", ProviderCount: 1, Model: "m", Thinking: "high", NoColor: true,
+	}, 80, 3, true)
+	line := Sanitize(rows[1])
+	if strings.Contains(line, "anthropic") || !strings.Contains(line, "m • high") {
+		t.Fatalf("single-provider footer should omit the provider label: %q", line)
+	}
+}
+
 func TestFooterOmitsProviderWhenPiWouldNeedMoreRoom(t *testing.T) {
 	rows, _ := formatFooter(PresentationSnapshot{
-		Usage: "↑12k", ContextEstimate: "~8%/100k", Provider: "anthropic", Model: "m", Thinking: "high", NoColor: true,
+		Usage: "↑12k", ContextEstimate: "~8%/100k", Provider: "anthropic", ProviderCount: 2, Model: "m", Thinking: "high", NoColor: true,
 	}, 25, 3, true)
 	if len(rows) != 2 {
 		t.Fatalf("footer rows=%q", rows)

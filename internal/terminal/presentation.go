@@ -192,6 +192,7 @@ type PresentationSnapshot struct {
 	Usage            string // only locally stored counters; empty means unavailable
 	ContextEstimate  string // explicitly marked approximation, e.g. ~8%/100k
 	Provider         string
+	ProviderCount    int
 	Model            string
 	Thinking         string
 	NoColor          bool
@@ -238,7 +239,7 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 		modelSide += " • " + SanitizeStatusRow(snapshot.Thinking)
 	}
 	right := modelSide
-	if snapshot.Provider != "" && snapshot.Model != "" {
+	if snapshot.ProviderCount > 1 && snapshot.Provider != "" && snapshot.Model != "" {
 		withProvider := "(" + SanitizeStatusRow(snapshot.Provider) + ") " + modelSide
 		// Pi includes the provider only when the complete label fits alongside
 		// the existing stats and its minimum two-cell separator.

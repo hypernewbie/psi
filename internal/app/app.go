@@ -481,6 +481,34 @@ func (r *runtime) installConfiguration(candidate *runtime) {
 // footerThinkingLabel follows Pi's footer. The thinking level appears only for
 // a model that supports reasoning, and the disabled state is spelled out so it
 // cannot be mistaken for a model name.
+func footerProviderCount(models *config.ModelsFile) int {
+	if models == nil {
+		return 0
+	}
+	count := 0
+	for _, family := range []string{"anthropic", "openai-codex"} {
+		available := false
+		for _, candidate := range config.BundledModels(family) {
+			if _, err := models.SelectModel(family, candidate.ID); err == nil {
+				available = true
+				break
+			}
+		}
+		if !available {
+			for _, candidate := range models.Providers[family].Models {
+				if _, err := models.SelectModel(family, candidate.ID); err == nil {
+					available = true
+					break
+				}
+			}
+		}
+		if available {
+			count++
+		}
+	}
+	return count
+}
+
 func footerThinkingLabel(model provider.ModelMeta, level string) string {
 	if !model.Reasoning {
 		return ""
@@ -503,7 +531,8 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		}
 		snapshot := terminal.PresentationSnapshot{
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home,
-			Provider: r.ov.Provider, Model: r.ov.Model, Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking),
+			Provider: r.ov.Provider, ProviderCount: footerProviderCount(r.models), Model: r.ov.Model,
+			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking),
 		}
 		if accounting, err := r.store.Accounting(); err == nil {
 			if accounting.Usage.Input > 0 {

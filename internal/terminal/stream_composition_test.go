@@ -15,7 +15,7 @@ func TestStreamFragmentKeepsEditorFooterAndStableScrollback(t *testing.T) {
 	c := &Console{Editor: NewEditor(), Out: out, writer: NewWriter(out), decoder: NewDecoder()}
 	c.SetPresentation(PresentationSnapshot{
 		WorkingDirectory: filepath.FromSlash("/home/operator/work"), HomeDirectory: filepath.FromSlash("/home/operator"),
-		Provider: "anthropic", Model: "example-model", Thinking: "high", NoColor: true,
+		Provider: "anthropic", ProviderCount: 2, Model: "example-model", Thinking: "high", NoColor: true,
 	})
 	c.Status("⠋ Working… (Esc/Ctrl+C cancel, input paused)")
 	if n, err := c.StreamWrite([]byte("A partial answer")); err != nil || n == 0 {

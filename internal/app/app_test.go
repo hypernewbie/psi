@@ -501,6 +501,15 @@ func waitForEditorScreen(t *testing.T, chunks <-chan string, screen *testutil.VT
 
 // Pi's footer names the thinking level only for a model that supports
 // reasoning, and it spells out the disabled state.
+func TestFooterProviderCountUsesAvailableCatalogs(t *testing.T) {
+	if got := footerProviderCount(&config.ModelsFile{}); got != 2 {
+		t.Fatalf("available provider count=%d, want both embedded provider catalogs", got)
+	}
+	if got := footerProviderCount(nil); got != 0 {
+		t.Fatalf("nil model catalog has provider count %d", got)
+	}
+}
+
 func TestFooterThinkingLabelFollowsPi(t *testing.T) {
 	if got := footerThinkingLabel(provider.ModelMeta{ID: "m"}, "high"); got != "" {
 		t.Fatalf("non-reasoning model shows a thinking level: %q", got)
