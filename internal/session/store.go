@@ -212,6 +212,35 @@ func (s *Store) Entries() []*Entry {
 	return entries
 }
 
+// SessionName returns the latest session_info name on the active path. It
+// walks only indexed metadata and does not load message payloads.
+func (s *Store) SessionName() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.leafID
+	for steps := 0; id != ""; steps++ {
+		if steps >= len(s.byID) {
+			return "", fmt.Errorf("session parent cycle while finding session name")
+		}
+		entry, ok := s.byID[id]
+		if !ok {
+			return "", fmt.Errorf("session parent %q not found while finding session name", id)
+		}
+		if entry.SessionInfo != nil {
+			if entry.SessionInfo.Name == nil {
+				return "", nil
+			}
+			return *entry.SessionInfo.Name, nil
+		}
+		parent := entry.ParentID()
+		if parent == nil {
+			return "", nil
+		}
+		id = *parent
+	}
+	return "", nil
+}
+
 // LeafID returns the current leaf.
 func (s *Store) LeafID() string {
 	s.mu.Lock()

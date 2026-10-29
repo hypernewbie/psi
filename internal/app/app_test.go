@@ -501,6 +501,37 @@ func waitForEditorScreen(t *testing.T, chunks <-chan string, screen *testutil.VT
 
 // Pi's footer names the thinking level only for a model that supports
 // reasoning, and it spells out the disabled state.
+func TestFooterSnapshotShowsActiveSessionNameAndTracksLeaf(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "named.jsonl")
+	lines := []string{
+		`{"type":"session","version":3,"id":"named","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/work"}`,
+		`{"type":"session_info","id":"root","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","name":"root name"}`,
+		`{"type":"session_info","id":"branch-a","parentId":"root","timestamp":"2026-01-01T00:00:02.000Z","name":"branch A"}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := session.OpenFile(path, "/work", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &runtime{store: store, models: &config.ModelsFile{}, ov: config.StartupOverrides{Provider: "anthropic", Model: "m"}}
+	console := &terminal.Console{}
+	r.refreshPresentation(console)
+	view := terminal.ComposeEditorView(80, 10, nil, 0, r.footerSnapshot, "")
+	if !strings.Contains(strings.Join(view.Rows, "\n"), "branch A") {
+		t.Fatalf("footer omitted the active session name: %q", view.Rows)
+	}
+	oldKey := r.footerKey
+	if err := store.Branch("root"); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if r.footerKey == oldKey || r.footerSnapshot.SessionName != "root name" {
+		t.Fatalf("footer cache did not follow the changed leaf: key=%q name=%q", r.footerKey, r.footerSnapshot.SessionName)
+	}
+}
+
 func TestFooterProviderCountUsesAvailableCatalogs(t *testing.T) {
 	if got := footerProviderCount(&config.ModelsFile{}); got != 2 {
 		t.Fatalf("available provider count=%d, want both embedded provider catalogs", got)

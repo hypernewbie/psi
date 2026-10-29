@@ -523,14 +523,15 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	if console == nil || r.store == nil {
 		return
 	}
-	key := fmt.Sprintf("%s/%d/%s/%s/%s/%s", r.store.Header().ID, r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd())
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd())
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
 			home = os.Getenv("USERPROFILE")
 		}
+		sessionName, _ := r.store.SessionName()
 		snapshot := terminal.PresentationSnapshot{
-			WorkingDirectory: r.store.Cwd(), HomeDirectory: home,
+			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName,
 			Provider: r.ov.Provider, ProviderCount: footerProviderCount(r.models), Model: r.ov.Model,
 			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking),
 		}
