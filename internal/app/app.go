@@ -24,6 +24,7 @@ import (
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/provider"
+	"psi/internal/providerregistry"
 	"psi/internal/session"
 	"psi/internal/skills"
 	"psi/internal/terminal"
@@ -48,7 +49,7 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.Continue, "continue", false, "continue most recent session")
 	fs.BoolVar(&o.Resume, "resume", false, "resume with selection")
 	fs.StringVar(&o.SessionPath, "session", "", "open explicit session path")
-	fs.StringVar(&o.Provider, "provider", "", "provider (anthropic, openai-codex)")
+	fs.StringVar(&o.Provider, "provider", "", "provider ("+strings.Join(providerregistry.IDs(), ", ")+")")
 	fs.StringVar(&o.Model, "model", "", "model ID")
 	fs.StringVar(&o.Thinking, "thinking", "", "thinking level")
 	fs.StringVar(&o.SessionDir, "session-dir", "", "session directory")
@@ -163,8 +164,10 @@ func Run(args []string, version string) error {
 	}
 	sk, diagnostics := skills.Discover(cwd, agentDir, st.Skills, consent)
 	prompt := config.AssemblePrompt(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools)
-	if o.Provider != "" && o.Provider != "anthropic" && o.Provider != "openai-codex" {
-		return fmt.Errorf("unsupported provider %q (available: anthropic, openai-codex)", o.Provider)
+	if o.Provider != "" {
+		if _, ok := providerregistry.Lookup(o.Provider); !ok {
+			return fmt.Errorf("unsupported provider %q (available: %s)", o.Provider, strings.Join(providerregistry.IDs(), ", "))
+		}
 	}
 	ov := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	store, err := openSession(o, cwd, agentDir, st, ov, console, lifecycle)
@@ -310,6 +313,13 @@ func (r *runtime) restore() error {
 	return nil
 }
 
+func providerModel(providerID string, meta config.ModelMeta) provider.ModelMeta {
+	forceAdaptive, _, _ := meta.Compat.Bool("forceAdaptiveThinking")
+	midConvoEffort, _, _ := meta.Compat.Bool("supportsMidConvoEffort")
+	allowEmptySignature, _, _ := meta.Compat.Bool("allowEmptySignature")
+	return provider.ModelMeta{ID: meta.ID, API: meta.API, Provider: providerID, BaseURL: meta.BaseURL, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap, AdaptiveThinking: forceAdaptive, MidConvoEffort: midConvoEffort, AllowEmptySignature: allowEmptySignature, Compat: meta.Compat}
+}
+
 func (r *runtime) configure(ov config.StartupOverrides) error {
 	meta, err := r.models.SelectModel(ov.Provider, ov.Model)
 	if err != nil {
@@ -319,7 +329,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	if ov.Thinking == "" {
 		ov.Thinking = "off"
 	}
-	pm := provider.ModelMeta{ID: meta.ID, API: meta.API, Provider: ov.Provider, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap, AdaptiveThinking: meta.Compat.ForceAdaptiveThinking, MidConvoEffort: meta.Compat.SupportsMidConvoEffort}
+	pm := providerModel(ov.Provider, meta)
 	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt,
 		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveTokens, KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
 	if _, err := provider.BuildRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
@@ -347,15 +357,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		authErr = codex.Auth.Check()
 		client = codex
 	case "anthropic-messages":
-		env := envMap()
-		if meta.APIKey != "" {
-			key, err := config.ResolveCredential(meta.APIKey)
-			if err != nil {
-				return err
-			}
-			env["ANTHROPIC_API_KEY"] = key
-		}
-		key, _, err := provider.SelectAPIKey(env, authPath)
+		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
 		authErr = err
 		anthropic := provider.NewClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		anthropic.Headers = headers
@@ -500,7 +502,7 @@ func containsUnsupported(err error) bool {
 }
 
 func containsNoModel(err error) bool {
-	return err != nil && containsStr(err.Error(), "needs explicit metadata")
+	return err != nil && (containsStr(err.Error(), "needs explicit metadata") || containsStr(err.Error(), "needs an explicit model selection"))
 }
 
 func containsStr(hay, needle string) bool {
@@ -541,7 +543,7 @@ func footerProviderCount(models *config.ModelsFile) int {
 		return 0
 	}
 	count := 0
-	for _, family := range []string{"anthropic", "openai-codex"} {
+	for _, family := range providerregistry.IDs() {
 		available := false
 		for _, candidate := range config.BundledModels(family) {
 			if _, err := models.SelectModel(family, candidate.ID); err == nil {

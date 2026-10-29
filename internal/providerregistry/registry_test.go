@@ -13,15 +13,40 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 	for _, tc := range []struct {
 		provider, api, environment, endpoint string
 	}{
+		{"anthropic", "anthropic-messages", "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
+		{"openai-codex", "openai-codex-responses", "", "https://chatgpt.com/backend-api"},
 		{"minimax", "anthropic-messages", "MINIMAX_API_KEY", "https://api.minimax.io/anthropic"},
+		{"opencode-go", "anthropic-messages", "OPENCODE_API_KEY", "https://opencode.ai/inference/go"},
+		{"opencode-go", "google-generative-ai", "OPENCODE_API_KEY", "https://opencode.ai/inference/go/v1"},
+		{"opencode-go", "openai-completions", "OPENCODE_API_KEY", "https://opencode.ai/inference/go/v1"},
+		{"opencode-go", "openai-responses", "OPENCODE_API_KEY", "https://opencode.ai/inference/go/v1"},
 		{"deepseek", "openai-completions", "DEEPSEEK_API_KEY", "https://api.deepseek.com"},
 		{"zai", "openai-completions", "ZAI_API_KEY", "https://api.z.ai/api/coding/paas/v4"},
 		{"google", "google-generative-ai", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"},
-		{"opencode-go", "openai-responses", "OPENCODE_API_KEY", "https://opencode.ai/inference/go/v1"},
 	} {
 		spec, ok := Lookup(tc.provider)
 		if !ok || !SupportsAPI(tc.provider, tc.api) || spec.Environment != tc.environment || DefaultEndpoint(tc.provider, tc.api) != tc.endpoint {
 			t.Fatalf("registry entry %q = %+v", tc.provider, spec)
+		}
+	}
+	wantAPIs := map[string][]string{
+		"anthropic":    {"anthropic-messages"},
+		"openai-codex": {"openai-codex-responses"},
+		"minimax":      {"anthropic-messages"},
+		"opencode-go":  {"anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"},
+		"deepseek":     {"openai-completions"},
+		"zai":          {"openai-completions"},
+		"google":       {"google-generative-ai"},
+	}
+	for _, providerID := range want {
+		spec, _ := Lookup(providerID)
+		if len(spec.Endpoints) != len(wantAPIs[providerID]) {
+			t.Fatalf("registry API count for %s = %d, want %v", providerID, len(spec.Endpoints), wantAPIs[providerID])
+		}
+		for _, api := range wantAPIs[providerID] {
+			if !SupportsAPI(providerID, api) {
+				t.Errorf("registry omitted %s/%s", providerID, api)
+			}
 		}
 	}
 	if SupportsAPI("opencode-go", "openai-codex-responses") || SupportsAPI("not-a-provider", "anthropic-messages") {

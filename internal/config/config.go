@@ -17,6 +17,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"psi/internal/modelmeta"
+	"psi/internal/providerregistry"
 )
 
 // Thinking levels in the supported mapping.
@@ -694,24 +697,24 @@ func RedactCredential(s string) string {
 }
 
 // ModelMeta follows Pi's provider.models[] shape, not a private top-level catalog.
-type ModelCompat struct {
-	ForceAdaptiveThinking  bool `json:"forceAdaptiveThinking"`
-	SupportsMidConvoEffort bool `json:"supportsMidConvoEffort"`
-}
+type ModelCompat = modelmeta.Compat
 
 type ModelMeta struct {
-	Compat           ModelCompat        `json:"compat"`
-	ID               string             `json:"id"`
-	API              string             `json:"api"`
-	BaseURL          string             `json:"baseUrl"`
-	ContextWindow    int                `json:"contextWindow"`
-	MaxTokens        int                `json:"maxTokens"`
-	Reasoning        bool               `json:"reasoning"`
-	Input            []string           `json:"input"`
-	Headers          map[string]string  `json:"headers"`
-	InputImage       bool               `json:"-"`
-	APIKey           string             `json:"-"`
-	ThinkingLevelMap map[string]*string `json:"thinkingLevelMap"`
+	Compat                modelmeta.Compat   `json:"compat"`
+	ID                    string             `json:"id"`
+	Name                  string             `json:"name,omitempty"`
+	API                   string             `json:"api"`
+	BaseURL               string             `json:"baseUrl"`
+	ContextWindow         int                `json:"contextWindow"`
+	MaxTokens             int                `json:"maxTokens"`
+	Reasoning             bool               `json:"reasoning"`
+	Input                 []string           `json:"input"`
+	Headers               map[string]string  `json:"headers"`
+	InputImage            bool               `json:"-"`
+	APIKey                string             `json:"-"`
+	UnavailableReason     string             `json:"-"`
+	CacheEndpointRejected bool               `json:"-"`
+	ThinkingLevelMap      map[string]*string `json:"thinkingLevelMap"`
 }
 
 type ModelsFile struct {
@@ -724,6 +727,7 @@ type ProviderMeta struct {
 	BaseURL        string                     `json:"baseUrl"`
 	APIKey         string                     `json:"apiKey"`
 	Headers        map[string]string          `json:"headers"`
+	Compat         modelmeta.Compat           `json:"compat"`
 	Models         []ModelMeta                `json:"models"`
 	ModelOverrides map[string]json.RawMessage `json:"modelOverrides"`
 }
@@ -745,57 +749,86 @@ func LoadModels(path string) (*ModelsFile, error) {
 
 // SelectModel resolves only the active provider. Unrelated Pi provider entries
 // can remain in the shared file without preventing supported providers' use.
-func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
-	var m ModelMeta
-	var known bool
-	switch provider {
-	case "anthropic":
-		if id == "" {
-			id = "claude-sonnet-4-5"
-		}
-		m, known = bundledModel(provider, id)
-		if !known {
-			m = ModelMeta{ID: id, API: "anthropic-messages", ContextWindow: 200000, MaxTokens: 16384, Reasoning: true, InputImage: true}
-			known = id == "claude-opus-4-1" || id == "claude-sonnet-4-0" || id == "claude-opus-4-0"
-		}
-	case "openai-codex":
-		m, known = codexModel(id)
-		id = m.ID
-	default:
-		return ModelMeta{}, fmt.Errorf("unsupported provider %q: available providers are anthropic and openai-codex", provider)
+func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
+	spec, ok := providerregistry.Lookup(providerID)
+	if !ok {
+		return ModelMeta{}, fmt.Errorf("unsupported provider %q: available providers are %s", providerID, strings.Join(providerregistry.IDs(), ", "))
 	}
-	expectedAPI := m.API
-	if cached, ok := mf.cachedModels[provider][id]; ok {
+	if id == "" {
+		switch providerID {
+		case "anthropic":
+			id = "claude-sonnet-4-5"
+		case "openai-codex":
+			id = "gpt-5.6-luna"
+		default:
+			return ModelMeta{}, fmt.Errorf("provider %q needs an explicit model selection", providerID)
+		}
+	}
+
+	m, known := bundledModel(providerID, id)
+	if providerID == "anthropic" && !known {
+		m = ModelMeta{ID: id, API: "anthropic-messages", ContextWindow: 200000, MaxTokens: 16384, Reasoning: true, Input: []string{"text", "image"}, InputImage: true}
+		known = id == "claude-opus-4-1" || id == "claude-sonnet-4-0" || id == "claude-opus-4-0"
+	}
+	if providerID == "openai-codex" && !known {
+		m = ModelMeta{ID: id, API: "openai-codex-responses"}
+	}
+	if cached, ok := mf.cachedModels[providerID][id]; ok {
 		m, known = cached, true
 	}
-	p := mf.Providers[provider]
+
+	p := mf.Providers[providerID]
+	configuredModelBase := ""
 	for _, configured := range p.Models {
-		if configured.ID == id {
-			m = configured
-			known = true
-			m.InputImage = containsString(configured.Input, "image")
-			break
+		if configured.ID != id {
+			continue
 		}
+		m, known = configured, true
+		m.InputImage = containsString(configured.Input, "image")
+		configuredModelBase = configured.BaseURL
+		break
 	}
 	if !known {
-		return ModelMeta{}, fmt.Errorf("model %q needs explicit metadata in models.json providers.%s.models", id, provider)
+		return ModelMeta{}, fmt.Errorf("model %q needs explicit metadata in models.json providers.%s.models", id, providerID)
 	}
-	if override, ok := p.ModelOverrides[id]; ok {
+	cacheEndpointRejected := m.CacheEndpointRejected
+	catalogBaseURL := m.BaseURL
+	modelCompat := m.Compat
+	if override, exists := p.ModelOverrides[id]; exists {
+		var overrideObject map[string]json.RawMessage
+		if err := json.Unmarshal(override, &overrideObject); err != nil || overrideObject == nil {
+			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
+		}
+		var overrideCompat modelmeta.Compat
+		if raw, hasCompat := overrideObject["compat"]; hasCompat {
+			if err := json.Unmarshal(raw, &overrideCompat); err != nil {
+				return ModelMeta{}, fmt.Errorf("invalid compatibility override for model %q", id)
+			}
+		}
 		if err := json.Unmarshal(override, &m); err != nil {
 			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
 		}
+		m.Compat = mergeCompat(modelCompat, overrideCompat)
 		if m.Input != nil {
 			m.InputImage = containsString(m.Input, "image")
 		}
 	}
+	m.Compat = mergeCompat(p.Compat, m.Compat)
 	if m.API == "" {
 		m.API = p.API
 	}
 	if m.API == "" {
-		m.API = expectedAPI
+		m.API = spec.DefaultAPI
 	}
-	if p.API != "" && p.API != expectedAPI || m.API != expectedAPI {
-		return ModelMeta{}, fmt.Errorf("provider %q requires API %q", provider, expectedAPI)
+	if !providerregistry.SupportsAPI(providerID, m.API) {
+		return ModelMeta{}, fmt.Errorf("model %q unavailable: provider %q does not support API %q", id, providerID, m.API)
+	}
+	if m.UnavailableReason != "" {
+		if !cacheEndpointRejected || (p.BaseURL == "" && configuredModelBase == "" && m.BaseURL == catalogBaseURL) {
+			return ModelMeta{}, fmt.Errorf("model %q unavailable: %s", id, m.UnavailableReason)
+		}
+		m.UnavailableReason = ""
+		m.CacheEndpointRejected = false
 	}
 	if m.ContextWindow <= 0 {
 		m.ContextWindow = 128000
@@ -803,8 +836,40 @@ func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
 	if m.MaxTokens <= 0 {
 		m.MaxTokens = 16384
 	}
-	if m.BaseURL == "" {
+	m.ID = id
+	if m.Name == "" {
+		m.Name = id
+	}
+
+	m.BaseURL = catalogBaseURL
+	explicitModelOverrideBase := false
+	if p.BaseURL != "" {
 		m.BaseURL = p.BaseURL
+	}
+	if configuredModelBase != "" {
+		m.BaseURL = configuredModelBase
+	}
+	if override, exists := p.ModelOverrides[id]; exists {
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(override, &fields)
+		if raw, present := fields["baseUrl"]; present {
+			var explicit string
+			if err := json.Unmarshal(raw, &explicit); err != nil {
+				return ModelMeta{}, fmt.Errorf("invalid baseUrl override for model %q", id)
+			}
+			if explicit != "" {
+				m.BaseURL = explicit
+				explicitModelOverrideBase = true
+			}
+		}
+	}
+	if m.BaseURL == "" {
+		m.BaseURL = spec.Endpoints[m.API]
+	}
+	if providerID == "opencode-go" && p.BaseURL == "" && configuredModelBase == "" && !explicitModelOverrideBase {
+		if !providerregistry.TrustedCachedEndpoint(providerID, m.API, m.BaseURL) {
+			return ModelMeta{}, fmt.Errorf("model %q unavailable: public OpenCode endpoint is not in the reviewed API path allowlist", id)
+		}
 	}
 	m.APIKey = p.APIKey
 	headers := make(map[string]string)
@@ -816,6 +881,20 @@ func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
 	}
 	m.Headers = headers
 	return m, nil
+}
+
+func mergeCompat(base, override modelmeta.Compat) modelmeta.Compat {
+	if len(base)+len(override) == 0 {
+		return nil
+	}
+	merged := make(modelmeta.Compat, len(base)+len(override))
+	for key, value := range base {
+		merged[key] = append(json.RawMessage(nil), value...)
+	}
+	for key, value := range override {
+		merged[key] = append(json.RawMessage(nil), value...)
+	}
+	return merged
 }
 
 func containsString(list []string, want string) bool {

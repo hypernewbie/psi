@@ -4,9 +4,23 @@
   "generatedAt": "2026-10-21T22:33:24.994Z",
   "sha256": {
     "anthropic": "91f5da01452c7746645d3405bc91e09f849e4e4687c7c7ff22d8976eafe64b87",
-    "openai-codex": "533e0ddd7d212fa8433b974b19613301b093f171541e4f4e1fea1962e68928ad"
+    "openai-codex": "533e0ddd7d212fa8433b974b19613301b093f171541e4f4e1fea1962e68928ad",
+    "minimax": "1e0459dda3858ea24151182106fc4179b95f43a0a8dffc1c3d2e7db4c2d9206e",
+    "opencode-go": "e3cb85944bdbc7fb369204dac3001c683e422ca44f305112e77fb1c5dbfbb79e",
+    "deepseek": "10a296fb3e898f7715c80890c8af0af4f5fd58f22dbcd6612fdc5d762157ccdc",
+    "zai": "58e6642fdfb736f0b9a4a277c760c536a3cea66a030abbfb2615f7b2851d5c6f",
+    "google": "b61fb0e27da5be60e1112e46955c5923656cb4d62bb221f834a9463d764ef5de"
   },
   "protocolReference": "d5b3de22d0e24a3e9c38a9410d3329b099717283",
-  "generator": "snapshot-models-v1",
-  "scope": "all chat models in the two public provider catalogs; no credentials, endpoints, headers, or private configuration"
+  "generator": "snapshot-models-v2",
+  "providers": [
+    "anthropic",
+    "openai-codex",
+    "minimax",
+    "opencode-go",
+    "deepseek",
+    "zai",
+    "google"
+  ],
+  "scope": "chat model IDs, APIs, public endpoints, input/reasoning metadata, thinking maps, and compatibility metadata only; no credentials or headers"
 }

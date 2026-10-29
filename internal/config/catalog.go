@@ -29,25 +29,65 @@ func bundledModel(provider, id string) (ModelMeta, bool) {
 	return ModelMeta{}, false
 }
 
-// LocalModels applies the same overrides as actual selection, including custom
-// model declarations. Unsupported APIs stay out of the executable catalog.
-func (mf *ModelsFile) LocalModels(provider string) []ModelMeta {
+type ModelOption struct {
+	Model     ModelMeta
+	Available bool
+	Reason    string
+}
+
+// ModelOptions resolves every bundled, cached, and explicitly configured model
+// through the same path used by activation. Invalid entries stay visible with
+// their reason; LocalModels is the available-only compatibility view.
+func (mf *ModelsFile) ModelOptions(provider string) []ModelOption {
 	ids := map[string]bool{}
-	for _, m := range BundledModels(provider) {
-		ids[m.ID] = true
+	for _, model := range BundledModels(provider) {
+		ids[model.ID] = true
 	}
 	for id := range mf.cachedModels[provider] {
 		ids[id] = true
 	}
-	for _, m := range mf.Providers[provider].Models {
-		ids[m.ID] = true
+	p := mf.Providers[provider]
+	for _, model := range p.Models {
+		ids[model.ID] = true
 	}
-	var out []ModelMeta
+	for id := range p.ModelOverrides {
+		ids[id] = true
+	}
+	var out []ModelOption
 	for id := range ids {
-		if m, err := mf.SelectModel(provider, id); err == nil {
-			out = append(out, m)
+		model, err := mf.SelectModel(provider, id)
+		if err == nil {
+			out = append(out, ModelOption{Model: model, Available: true})
+			continue
+		}
+		candidate, ok := mf.cachedModels[provider][id]
+		if !ok {
+			candidate, ok = bundledModel(provider, id)
+		}
+		if !ok {
+			for _, configured := range p.Models {
+				if configured.ID == id {
+					candidate, ok = configured, true
+					break
+				}
+			}
+		}
+		if !ok {
+			candidate.ID = id
+		}
+		candidate.UnavailableReason = err.Error()
+		out = append(out, ModelOption{Model: candidate, Reason: err.Error()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Model.ID < out[j].Model.ID })
+	return out
+}
+
+func (mf *ModelsFile) LocalModels(provider string) []ModelMeta {
+	var out []ModelMeta
+	for _, option := range mf.ModelOptions(provider) {
+		if option.Available {
+			out = append(out, option.Model)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }

@@ -9,17 +9,29 @@ import (
 
 	"psi/internal/event"
 	"psi/internal/provider"
+	"psi/internal/providerregistry"
 	"psi/internal/session"
 )
 
 func modelSelector(r *runtime) *Selector {
 	var items []session.SessionInfo
-	for _, family := range []string{"anthropic", "openai-codex"} {
-		availability := r.credentialAvailability(family)
-		for _, m := range r.models.LocalModels(family) {
-			item := session.SessionInfo{ID: family + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", availability, m.API, m.ContextWindow, m.MaxTokens)}
-			if strings.Contains(availability, "unavailable") {
-				item.Unavailable = availability
+	for _, family := range providerregistry.IDs() {
+		credential := r.credentialAvailability(family)
+		for _, option := range r.models.ModelOptions(family) {
+			m := option.Model
+			item := session.SessionInfo{ID: family + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", credential, m.API, m.ContextWindow, m.MaxTokens)}
+			reason := option.Reason
+			if reason == "" {
+				if _, err := provider.BuildRequest(provider.Request{Model: providerModel(family, m), Thinking: "off"}); err != nil {
+					reason = "API unavailable: " + err.Error()
+				}
+			}
+			if reason == "" && strings.Contains(credential, "unavailable") {
+				reason = credential
+			}
+			if reason != "" {
+				item.Unavailable = reason
+				item.FirstMessage += "; unavailable: " + reason
 			}
 			items = append(items, item)
 		}
@@ -42,20 +54,27 @@ func thinkingSelector(r *runtime) *Selector {
 
 func (r *runtime) credentialAvailability(family string) string {
 	path := filepath.Join(r.agentDir, "auth.json")
-	switch family {
-	case "anthropic":
-		if _, _, err := provider.SelectAPIKey(envMap(), path); err == nil {
-			return "credential available"
-		}
-		return "credential unavailable (environment or auth.json)"
-	case "openai-codex":
+	spec, ok := providerregistry.Lookup(family)
+	if !ok {
+		return "credential status unavailable: unknown provider"
+	}
+	switch spec.Auth {
+	case providerregistry.AuthCodexOAuth:
 		auth := provider.CodexAuth{Path: path}
 		if err := auth.Check(); err == nil {
 			return "OAuth login present (access checked on request)"
 		}
 		return "OAuth login unavailable (run Pi /login)"
+	case providerregistry.AuthAPIKey:
+		configured := r.models.Providers[family].APIKey
+		_, source, err := provider.SelectProviderAPIKey(envMap(), path, family, configured)
+		if err != nil {
+			return "credential unavailable: " + err.Error()
+		}
+		return "credential available (" + source + ")"
+	default:
+		return "credential status unavailable: unsupported auth kind"
 	}
-	return "credential status unknown"
 }
 
 func continuable(proj *session.Projection) string {

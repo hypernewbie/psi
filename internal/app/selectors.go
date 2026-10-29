@@ -295,7 +295,11 @@ func (s *Selector) pickerText(item session.SessionInfo, now time.Time) (string, 
 	if s.Models {
 		provider, model, found := strings.Cut(item.ID, "/")
 		if found {
-			return model, "[" + provider + "]"
+			metadata := "[" + provider + "]"
+			if item.Unavailable != "" {
+				metadata += " unavailable"
+			}
+			return model, metadata
 		}
 		return item.ID, ""
 	}

@@ -9,12 +9,24 @@ import (
 	"time"
 
 	"psi/internal/config"
+	"psi/internal/providerregistry"
 )
 
-// SelectAPIKey matches Pi's supported precedence: stored Anthropic credential,
-// then the environment. Unsupported subscription credentials never silently
-// fall back to a separately billed API key. No credential commands are run.
+// SelectAPIKey preserves the Anthropic-compatible caller and its no-fallback
+// behavior. New API-key providers use SelectProviderAPIKey.
 func SelectAPIKey(env map[string]string, authPath string) (key, source string, err error) {
+	return SelectProviderAPIKey(env, authPath, "anthropic", "")
+}
+
+// SelectProviderAPIKey matches Pi's supported precedence: provider-specific
+// auth.json key, models.json key, then the provider's exact environment
+// variable. It never executes credential commands and never crosses billing
+// sources after an unsupported stored credential is found.
+func SelectProviderAPIKey(env map[string]string, authPath, providerID, configuredKey string) (key, source string, err error) {
+	spec, ok := providerregistry.Lookup(providerID)
+	if !ok || spec.Auth != providerregistry.AuthAPIKey {
+		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
+	}
 	if authPath == "" {
 		agentDir := env["PI_CODING_AGENT_DIR"]
 		if agentDir == "" {
@@ -25,9 +37,6 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 	}
 	data, readErr := readAuthShared(authPath)
 	if readErr != nil && !os.IsNotExist(readErr) {
-		// A missing auth file is not an error: environment credentials
-		// remain available. Lease failures are reported, except when the
-		// file never existed (no writer to coordinate with).
 		if _, statErr := os.Lstat(authPath); os.IsNotExist(statErr) {
 			readErr = os.ErrNotExist
 		} else {
@@ -39,37 +48,78 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 		if err := json.Unmarshal(data, &entries); err != nil {
 			return "", "", fmt.Errorf("auth.json is malformed")
 		}
-		if raw, ok := entries["anthropic"]; ok {
+		if raw, present := entries[providerID]; present {
 			var entry struct {
 				Type string `json:"type"`
 				Key  string `json:"key"`
 			}
 			if err := json.Unmarshal(raw, &entry); err != nil {
-				return "", "", fmt.Errorf("auth.json Anthropic credential must be an API-key object")
+				if providerID == "anthropic" {
+					return "", "", fmt.Errorf("auth.json Anthropic credential must be an API-key object")
+				}
+				return "", "", fmt.Errorf("auth.json credential for %s must be an API-key object", providerID)
 			}
 			if entry.Type == "oauth" || entry.Type == "oauth_token" {
-				return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no API-key fallback (select API-key access explicitly in auth.json)")
+				if providerID == "anthropic" {
+					return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no API-key fallback (select API-key access explicitly in auth.json)")
+				}
+				return "", "", fmt.Errorf("%s OAuth credentials are unsupported for API-key access; no fallback", providerID)
 			}
 			if entry.Type != "" && entry.Type != "api_key" {
-				return "", "", fmt.Errorf("unsupported Anthropic credential type")
+				if providerID == "anthropic" {
+					return "", "", fmt.Errorf("unsupported Anthropic credential type")
+				}
+				return "", "", fmt.Errorf("unsupported %s credential type", providerID)
 			}
 			if entry.Key == "" {
-				return "", "", fmt.Errorf("auth.json Anthropic API key is empty")
+				if providerID == "anthropic" {
+					return "", "", fmt.Errorf("auth.json Anthropic API key is empty")
+				}
+				return "", "", fmt.Errorf("auth.json %s API key is empty", providerID)
 			}
-			key, err := config.ResolveCredentialWithEnv(entry.Key, func(name string) (string, bool) { v, ok := env[name]; return v, ok })
+			key, err := config.ResolveCredentialWithEnv(entry.Key, envLookup(env))
 			if err != nil {
-				return "", "", fmt.Errorf("Anthropic credential: %w", err)
+				return "", "", credentialError(providerID, err)
 			}
-			return key, "auth.json:anthropic", nil
+			return key, "auth.json:" + providerID, nil
 		}
-		if _, ok := entries["anthropic-oauth"]; ok {
-			return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no silent API-key fallback")
+		if providerID == "anthropic" {
+			if _, present := entries["anthropic-oauth"]; present {
+				return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no silent API-key fallback")
+			}
 		}
 	}
-	if key := env["ANTHROPIC_API_KEY"]; key != "" {
-		return key, "ANTHROPIC_API_KEY", nil
+	if configuredKey != "" {
+		key, err := config.ResolveCredentialWithEnv(configuredKey, envLookup(env))
+		if err != nil {
+			return "", "", credentialError(providerID, err)
+		}
+		if key == "" {
+			return "", "", fmt.Errorf("models.json %s API key is empty", providerID)
+		}
+		return key, "models.json:" + providerID, nil
 	}
-	return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)
+	if key := env[spec.Environment]; key != "" {
+		return key, spec.Environment, nil
+	}
+	if providerID == "anthropic" {
+		return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)
+	}
+	return "", "", fmt.Errorf("no %s credential: set %s, add an API-key entry to auth.json, or configure providers.%s.apiKey in models.json", spec.Name, spec.Environment, providerID)
+}
+
+func credentialError(providerID string, err error) error {
+	if providerID == "anthropic" {
+		return fmt.Errorf("Anthropic credential: %w", err)
+	}
+	return fmt.Errorf("%s credential: %w", providerID, err)
+}
+
+func envLookup(env map[string]string) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		value, ok := env[name]
+		return value, ok
+	}
 }
 
 // readAuthShared reads auth.json through the shared lease so a reader never

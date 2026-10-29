@@ -12,6 +12,7 @@ import (
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/provider"
+	"psi/internal/providerregistry"
 	"psi/internal/session"
 	"psi/internal/terminal"
 )
@@ -51,7 +52,8 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 				if family == "anthropic" {
 					thinking := body["thinking"].(map[string]any)
 					expected := "enabled"
-					if meta.Compat.ForceAdaptiveThinking {
+					forceAdaptive, _, _ := meta.Compat.Bool("forceAdaptiveThinking")
+					if forceAdaptive {
 						expected = "adaptive"
 					}
 					if thinking["type"] != expected {
@@ -70,7 +72,8 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 					if !grouped {
 						t.Fatal("consecutive results were not grouped")
 					}
-					if meta.Compat.SupportsMidConvoEffort {
+					midConvoEffort, _, _ := meta.Compat.Bool("supportsMidConvoEffort")
+					if midConvoEffort {
 						last := messages[len(messages)-1]
 						if last["role"] != "system" || last["output_config"].(map[string]any)["effort"] != "high" {
 							t.Fatal("active effort marker missing")
@@ -99,12 +102,18 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 	if count != 24 {
 		t.Fatalf("public snapshot model count changed: %d", count)
 	}
-	selector := modelSelector(r)
-	if !selector.Models || len(selector.Items) != 24 || len(selector.PageItems()) != 20 {
-		t.Fatalf("model picker did not page the complete local catalog: models=%v items=%d page=%d size=%d selected=%d", selector.Models, len(selector.Items), selector.Page, len(selector.PageItems()), selector.Selected)
+	wantPickerItems := 0
+	for _, providerID := range providerregistry.IDs() {
+		wantPickerItems += len(r.models.ModelOptions(providerID))
 	}
-	selector.NextPage()
-	if len(selector.PageItems()) != 4 {
+	selector := modelSelector(r)
+	if !selector.Models || len(selector.Items) != wantPickerItems || len(selector.PageItems()) != 20 {
+		t.Fatalf("model picker did not page the complete local catalog: models=%v items=%d want=%d page=%d size=%d selected=%d", selector.Models, len(selector.Items), wantPickerItems, selector.Page, len(selector.PageItems()), selector.Selected)
+	}
+	for selector.Page < (wantPickerItems-1)/selector.PageSize {
+		selector.NextPage()
+	}
+	if len(selector.PageItems()) != wantPickerItems-selector.Page*selector.PageSize {
 		t.Fatal("last catalog page missing")
 	}
 	selector.SetFilter("claude-opus-4-6")

@@ -4,6 +4,8 @@ package provider
 import (
 	"context"
 	"fmt"
+
+	"psi/internal/modelmeta"
 )
 
 // Thinking levels supported in the first release.
@@ -34,16 +36,19 @@ func ThinkingBudget(level string) (int, error) {
 
 // Metadata for the selected model (from models.json subset).
 type ModelMeta struct {
-	AdaptiveThinking bool
-	MidConvoEffort   bool
-	ID               string
-	API              string // anthropic-messages or openai-codex-responses
-	Provider         string
-	ContextWindow    int
-	MaxTokens        int
-	Reasoning        bool
-	InputImage       bool
-	ThinkingLevelMap map[string]*string
+	AdaptiveThinking    bool
+	MidConvoEffort      bool
+	AllowEmptySignature bool
+	Compat              modelmeta.Compat
+	ID                  string
+	API                 string
+	Provider            string
+	BaseURL             string
+	ContextWindow       int
+	MaxTokens           int
+	Reasoning           bool
+	InputImage          bool
+	ThinkingLevelMap    map[string]*string
 }
 
 // Request is the normalized provider request (Pi context + active tools).
