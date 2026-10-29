@@ -7,6 +7,7 @@ import (
 
 	"psi/internal/session"
 	"psi/internal/terminal"
+	pitheme "psi/internal/theme"
 )
 
 // Selector owns a stable, searchable collection. The regular-mode picker uses
@@ -145,7 +146,11 @@ func (s *Selector) PageItems() []session.SessionInfo {
 
 // RenderPickerRows returns a bounded, searchable picker for the inline editor.
 // It never opens a transcript or reads session contents beyond supplied metadata.
-func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string {
+func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette ...*pitheme.Theme) []string {
+	var selectedTheme *pitheme.Theme
+	if len(palette) > 0 {
+		selectedTheme = palette[0]
+	}
 	s.visibleCount = 0
 	if rowBudget <= 0 {
 		return nil
@@ -162,7 +167,7 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 	}
 	var rows []string
 	appendRow := func(text string, token terminal.ThemeToken) {
-		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: text, Token: token}}}, width, noColor))
+		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: text, Token: token}}}, width, noColor, selectedTheme))
 	}
 	// At short heights retain real selectable rows, not a duplicate selected
 	// label in a header. Optional metadata disappears before list entries.
@@ -251,7 +256,11 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 			}
 			spans = append(spans, terminal.StyledSpan{Text: strings.Repeat(" ", gap) + metadata, Token: terminal.TokenMuted})
 		}
-		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: spans}, width, noColor))
+		row := terminal.StyledRow{Spans: spans}
+		if selected {
+			row.Surface = terminal.TokenSelectedBg
+		}
+		rows = append(rows, terminal.FormatStyledRow(row, width, noColor, selectedTheme))
 	}
 	if scrolled {
 		// Pi shows the position inside the filtered list when the bounded

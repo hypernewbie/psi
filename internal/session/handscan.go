@@ -416,6 +416,7 @@ func handScanRecord(data []byte) (*Entry, *SessionHeader, error) {
 		e.ThinkingLevelChange = &ThinkingLevelChangeEntry{ThinkingLevel: metadataString(obj, "thinkingLevel")}
 	case "compaction":
 		e.Compaction = &CompactionEntry{FirstKeptEntryID: metadataString(obj, "firstKeptEntryId")}
+		_ = json.Unmarshal(obj["tokensBefore"], &e.Compaction.TokensBefore)
 		if usage := obj["usage"]; len(usage) != 0 && !metadataNull(usage) {
 			u := metadataUsage(usage)
 			e.Compaction.Usage = &u
@@ -445,6 +446,9 @@ func handScanRecord(data []byte) (*Entry, *SessionHeader, error) {
 	case "session_info":
 		e.SessionInfo = &SessionInfoEntry{}
 		_ = json.Unmarshal(obj["name"], &e.SessionInfo.Name)
+	}
+	if kind == "message" {
+		e.toolSummaries = metadataToolSummaries(data)
 	}
 	return e, nil, nil
 }

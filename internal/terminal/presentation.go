@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/rivo/uniseg"
+
+	pitheme "psi/internal/theme"
 )
 
 // ThemeToken is the small semantic style vocabulary used by psi's Pi-derived
@@ -13,25 +15,42 @@ import (
 type ThemeToken string
 
 const (
-	TokenText            ThemeToken = "text"
-	TokenMuted           ThemeToken = "muted"
-	TokenBorder          ThemeToken = "border"
-	TokenAccent          ThemeToken = "accent"
-	TokenSuccess         ThemeToken = "success"
-	TokenWarning         ThemeToken = "warning"
-	TokenError           ThemeToken = "error"
-	TokenHeading         ThemeToken = "mdHeading"
-	TokenCode            ThemeToken = "mdCode"
-	TokenCodeBlock       ThemeToken = "mdCodeBlock"
-	TokenLink            ThemeToken = "mdLink"
-	TokenQuote           ThemeToken = "mdQuote"
-	TokenThinkingOff     ThemeToken = "thinkingOff"
-	TokenThinkingMinimal ThemeToken = "thinkingMinimal"
-	TokenThinkingLow     ThemeToken = "thinkingLow"
-	TokenThinkingMedium  ThemeToken = "thinkingMedium"
-	TokenThinkingHigh    ThemeToken = "thinkingHigh"
-	TokenThinkingXhigh   ThemeToken = "thinkingXhigh"
-	TokenThinkingMax     ThemeToken = "thinkingMax"
+	TokenText               ThemeToken = "text"
+	TokenMuted              ThemeToken = "muted"
+	TokenBorder             ThemeToken = "border"
+	TokenAccent             ThemeToken = "accent"
+	TokenSuccess            ThemeToken = "success"
+	TokenWarning            ThemeToken = "warning"
+	TokenError              ThemeToken = "error"
+	TokenHeading            ThemeToken = "mdHeading"
+	TokenCode               ThemeToken = "mdCode"
+	TokenCodeBlock          ThemeToken = "mdCodeBlock"
+	TokenLink               ThemeToken = "mdLink"
+	TokenQuote              ThemeToken = "mdQuote"
+	TokenQuoteBorder        ThemeToken = "mdQuoteBorder"
+	TokenLinkURL            ThemeToken = "mdLinkUrl"
+	TokenCodeFence          ThemeToken = "mdCodeBlockBorder"
+	TokenHorizontalRule     ThemeToken = "mdHr"
+	TokenListBullet         ThemeToken = "mdListBullet"
+	TokenUserMessageText    ThemeToken = "userMessageText"
+	TokenUserMessageBg      ThemeToken = "userMessageBg"
+	TokenToolTitle          ThemeToken = "toolTitle"
+	TokenToolOutput         ThemeToken = "toolOutput"
+	TokenToolPendingBg      ThemeToken = "toolPendingBg"
+	TokenToolSuccessBg      ThemeToken = "toolSuccessBg"
+	TokenToolErrorBg        ThemeToken = "toolErrorBg"
+	TokenCustomMessageBg    ThemeToken = "customMessageBg"
+	TokenCustomMessageLabel ThemeToken = "customMessageLabel"
+	TokenCustomMessageText  ThemeToken = "customMessageText"
+	TokenDim                ThemeToken = "dim"
+	TokenSelectedBg         ThemeToken = "selectedBg"
+	TokenThinkingOff        ThemeToken = "thinkingOff"
+	TokenThinkingMinimal    ThemeToken = "thinkingMinimal"
+	TokenThinkingLow        ThemeToken = "thinkingLow"
+	TokenThinkingMedium     ThemeToken = "thinkingMedium"
+	TokenThinkingHigh       ThemeToken = "thinkingHigh"
+	TokenThinkingXhigh      ThemeToken = "thinkingXhigh"
+	TokenThinkingMax        ThemeToken = "thinkingMax"
 )
 
 // Pi's indexed fallback maps semantic families to terminal palette slots. The
@@ -39,11 +58,11 @@ const (
 // Thinking levels use Pi's indexed slate/blue/periwinkle/violet/magenta/red map.
 func tokenSGR(token ThemeToken) string {
 	switch token {
-	case TokenMuted, TokenQuote:
+	case TokenMuted, TokenDim, TokenCustomMessageLabel, TokenQuote, TokenQuoteBorder, TokenCodeFence, TokenHorizontalRule:
 		return "2"
-	case TokenBorder, TokenThinkingMinimal, TokenThinkingLow:
+	case TokenBorder, TokenThinkingMinimal, TokenThinkingLow, TokenLinkURL:
 		return "34" // palette slot 4, blue
-	case TokenAccent, TokenCode, TokenThinkingHigh:
+	case TokenAccent, TokenCode, TokenThinkingHigh, TokenListBullet, TokenToolTitle:
 		return "35" // palette slot 5, violet
 	case TokenCodeBlock, TokenSuccess:
 		return "32" // palette slot 2, green
@@ -84,16 +103,20 @@ func thinkingToken(level string) ThemeToken {
 }
 
 type StyledSpan struct {
-	Text      string
-	Token     ThemeToken
-	Bold      bool
-	Italic    bool
-	Underline bool
+	Text       string
+	Token      ThemeToken
+	Background ThemeToken
+	Bold       bool
+	Italic     bool
+	Underline  bool
 }
 
 // StyledRow contains untrusted, plain-text spans. Only Serialize generates
 // SGR. Cell width is always measured from Plain, never from ANSI bytes.
-type StyledRow struct{ Spans []StyledSpan }
+type StyledRow struct {
+	Spans   []StyledSpan
+	Surface ThemeToken
+}
 
 func (r StyledRow) Plain() string {
 	var b strings.Builder
@@ -105,7 +128,10 @@ func (r StyledRow) Plain() string {
 
 func (r StyledRow) Width() int { return CellWidth(r.Plain()) }
 
-func (r StyledRow) Serialize(noColor bool) string {
+func (r StyledRow) Serialize(noColor bool) string { return r.SerializeWithTheme(nil, noColor) }
+
+// SerializeWithTheme serializes trusted semantic roles through a resolved Pi theme.
+func (r StyledRow) SerializeWithTheme(palette *pitheme.Theme, noColor bool) string {
 	var b strings.Builder
 	var text strings.Builder
 	var active StyledSpan
@@ -114,29 +140,39 @@ func (r StyledRow) Serialize(noColor bool) string {
 		if text.Len() == 0 {
 			return
 		}
-		var codes []string
-		if !noColor {
-			if sgr := tokenSGR(active.Token); sgr != "" {
-				codes = append(codes, sgr)
+		if palette != nil && !noColor {
+			attributes := pitheme.TextStyle{Bold: active.Bold, Italic: active.Italic, Underline: active.Underline}
+			styled, err := palette.Style(text.String(), string(active.Token), string(active.Background), attributes)
+			if err == nil {
+				b.WriteString(styled)
+			} else {
+				b.WriteString(text.String())
 			}
-			if active.Bold {
-				codes = append(codes, "1")
+		} else {
+			var codes []string
+			if !noColor {
+				if sgr := tokenSGR(active.Token); sgr != "" {
+					codes = append(codes, sgr)
+				}
+				if active.Bold {
+					codes = append(codes, "1")
+				}
+				if active.Italic {
+					codes = append(codes, "3")
+				}
+				if active.Underline {
+					codes = append(codes, "4")
+				}
 			}
-			if active.Italic {
-				codes = append(codes, "3")
+			if len(codes) > 0 {
+				b.WriteString("\x1b[")
+				b.WriteString(strings.Join(codes, ";"))
+				b.WriteByte('m')
 			}
-			if active.Underline {
-				codes = append(codes, "4")
+			b.WriteString(text.String())
+			if len(codes) > 0 {
+				b.WriteString("\x1b[0m")
 			}
-		}
-		if len(codes) > 0 {
-			b.WriteString("\x1b[")
-			b.WriteString(strings.Join(codes, ";"))
-			b.WriteByte('m')
-		}
-		b.WriteString(text.String())
-		if len(codes) > 0 {
-			b.WriteString("\x1b[0m")
 		}
 		text.Reset()
 	}
@@ -145,7 +181,10 @@ func (r StyledRow) Serialize(noColor bool) string {
 		if plain == "" {
 			continue
 		}
-		if activeSet && (active.Token != span.Token || active.Bold != span.Bold || active.Italic != span.Italic || active.Underline != span.Underline) {
+		if span.Background == "" {
+			span.Background = r.Surface
+		}
+		if activeSet && (active.Token != span.Token || active.Background != span.Background || active.Bold != span.Bold || active.Italic != span.Italic || active.Underline != span.Underline) {
 			flush()
 			activeSet = false
 		}
@@ -161,8 +200,29 @@ func (r StyledRow) Serialize(noColor bool) string {
 // ClipStyledRow clips at grapheme boundaries using the plain-cell width policy.
 // FormatStyledRow applies the plain-cell width boundary, sanitizes text, and
 // serializes only the small semantic token vocabulary.
-func FormatStyledRow(row StyledRow, width int, noColor bool) string {
-	return ClipStyledRow(row, max(0, width-1)).Serialize(colorDisabled(PresentationSnapshot{NoColor: noColor}))
+func FormatStyledRow(row StyledRow, width int, noColor bool, palette ...*pitheme.Theme) string {
+	var selected *pitheme.Theme
+	if len(palette) > 0 {
+		selected = palette[0]
+	}
+	limit := max(0, width-1)
+	disabled := colorDisabled(PresentationSnapshot{NoColor: noColor})
+	if row.Surface != "" && !disabled {
+		for i := range row.Spans {
+			if row.Spans[i].Background == "" {
+				row.Spans[i].Background = row.Surface
+			}
+		}
+	}
+	clipped := ClipStyledRow(row, limit)
+	if row.Surface != "" && !disabled {
+		fill := max(0, limit-clipped.Width())
+		if fill > 0 {
+			clipped.Spans = append(clipped.Spans, StyledSpan{Text: strings.Repeat(" ", fill), Token: TokenText, Background: row.Surface})
+		}
+		clipped.Surface = row.Surface
+	}
+	return clipped.SerializeWithTheme(selected, colorDisabled(PresentationSnapshot{NoColor: noColor}))
 }
 
 func ClipStyledRow(row StyledRow, maxCells int) StyledRow {
@@ -173,19 +233,52 @@ func ClipStyledRow(row StyledRow, maxCells int) StyledRow {
 		text := SanitizeStatusRow(span.Text)
 		clipped := TruncateToWidth(text, left)
 		if clipped != "" {
-			out.Spans = append(out.Spans, StyledSpan{Text: clipped, Token: span.Token, Bold: span.Bold, Italic: span.Italic, Underline: span.Underline})
+			out.Spans = append(out.Spans, StyledSpan{Text: clipped, Token: span.Token, Background: span.Background, Bold: span.Bold, Italic: span.Italic, Underline: span.Underline})
 			left -= CellWidth(clipped)
 		}
 		if CellWidth(clipped) < CellWidth(text) || left == 0 {
 			break
 		}
 	}
+	out.Surface = row.Surface
 	return out
 }
 
 // PresentationSnapshot is computed by the application at state boundaries.
 // Rendering it never reads files, credentials, history, or provider state.
+type DisplaySettings struct {
+	OutputPad              int
+	EditorPaddingX         int
+	AutocompleteMaxVisible int
+	CodeBlockIndent        string
+}
+
+func DefaultDisplaySettings() DisplaySettings {
+	return DisplaySettings{OutputPad: 1, AutocompleteMaxVisible: 5, CodeBlockIndent: "  "}
+}
+
+func (s DisplaySettings) normalized() DisplaySettings {
+	defaults := DefaultDisplaySettings()
+	if s == (DisplaySettings{}) {
+		return defaults
+	}
+	s.OutputPad = max(0, min(1, s.OutputPad))
+	s.EditorPaddingX = max(0, min(3, s.EditorPaddingX))
+	if s.AutocompleteMaxVisible == 0 {
+		s.AutocompleteMaxVisible = defaults.AutocompleteMaxVisible
+	}
+	s.AutocompleteMaxVisible = max(3, min(20, s.AutocompleteMaxVisible))
+	s.CodeBlockIndent = SanitizeStatusRow(s.CodeBlockIndent)
+	return s
+}
+
+func (s DisplaySettings) transcriptIndent() string {
+	s = s.normalized()
+	return strings.Repeat(" ", 1+s.OutputPad)
+}
+
 type PresentationSnapshot struct {
+	Display          DisplaySettings
 	WorkingDirectory string
 	HomeDirectory    string
 	SessionName      string
@@ -197,6 +290,7 @@ type PresentationSnapshot struct {
 	Model            string
 	Thinking         string
 	NoColor          bool
+	Theme            *pitheme.Theme
 }
 
 type EditorView struct {
@@ -287,7 +381,7 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 	}
 	second := StyledRow{Spans: append(append([]StyledSpan(nil), leftRow.Spans...), StyledSpan{Text: strings.Repeat(" ", gap), Token: TokenText}, StyledSpan{Text: right, Token: TokenText})}
 	second = ClipStyledRow(second, width)
-	rows := []string{pathRow.Serialize(noColor), second.Serialize(noColor)}
+	rows := []string{pathRow.SerializeWithTheme(snapshot.Theme, noColor), second.SerializeWithTheme(snapshot.Theme, noColor)}
 	cells := []int{pathRow.Width(), second.Width()}
 	if height == 1 {
 		return rows[:0], cells[:0]
@@ -346,16 +440,18 @@ func EditorComponentRowBudget(height int) int {
 func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string, fragmentRows, completionRows []string) EditorView {
 	width, height = max(1, width), max(1, height)
 	noColor := colorDisabled(snapshot)
-	layout := LayoutDraft(buf, pos, width)
+	display := snapshot.Display.normalized()
+	editorPad := min(display.EditorPaddingX, max(0, (width-1)/2))
+	layout := LayoutDraft(buf, pos, max(1, width-2*editorPad))
 	footerRows, footerWidths := formatFooter(snapshot, width, height, noColor)
 
 	// At the smallest sizes keep the focused input usable before chrome.
 	if height <= 2 {
-		row := ""
+		row := strings.Repeat(" ", editorPad)
 		if len(layout.Rows) > 0 {
-			row = TruncateToWidth(layout.Rows[layout.CursorRow], max(1, width-1))
+			row += TruncateToWidth(layout.Rows[layout.CursorRow], max(0, width-1-editorPad))
 		}
-		col := min(layout.CursorCol, max(0, width-1))
+		col := min(layout.CursorCol+editorPad, max(0, width-1))
 		return EditorView{Rows: []string{row}, CellWidth: []int{CellWidth(row)}, CursorCol: col}
 	}
 
@@ -420,7 +516,7 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 				row.Spans = append(row.Spans, StyledSpan{Text: status, Token: TokenMuted}, StyledSpan{Text: text[end:], Token: borderToken})
 			}
 		}
-		return row.Serialize(noColor), row.Width()
+		return row.SerializeWithTheme(snapshot.Theme, noColor), row.Width()
 	}
 	rows := make([]string, 0, len(fragmentRows)+borderCount+bodyBudget+footerCount)
 	cells := make([]int, 0, cap(rows))
@@ -432,7 +528,7 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	cursorRow := len(fragmentRows) + layout.CursorRow - start + 1
 	for i := start; i < end; i++ {
 		plain := SanitizeStatusRow(layout.Rows[i])
-		clipped := TruncateToWidth(plain, max(0, width-1))
+		clipped := strings.Repeat(" ", editorPad) + TruncateToWidth(plain, max(0, width-1-editorPad))
 		rows, cells = append(rows, clipped), append(cells, CellWidth(clipped))
 	}
 	bottom, bottomWidth := borderRow(false)
@@ -452,7 +548,7 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 		cells = cells[len(cells)-height:]
 		cursorRow = min(len(rows)-1, max(0, cursorRow-(len(rows)-(height))))
 	}
-	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(layout.CursorCol, max(0, width-1))}
+	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(layout.CursorCol+editorPad, max(0, width-1))}
 }
 
 // ComposeConsoleViewPicker renders an application-owned picker in place of the
@@ -538,7 +634,7 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 		}
 	}
 	border = ClipStyledRow(border, max(1, width-1))
-	borderText := border.Serialize(noColor)
+	borderText := border.SerializeWithTheme(snapshot.Theme, noColor)
 	borderCells := border.Width()
 
 	rows := make([]string, 0, len(fragment)+queryRows+chromeRows+bodyCount+footerCount)

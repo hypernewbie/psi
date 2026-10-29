@@ -11,11 +11,14 @@ import (
 
 	"github.com/rivo/uniseg"
 	"golang.org/x/term"
+
+	pitheme "psi/internal/theme"
 )
 
 type Input struct {
-	Key []byte
-	Err error
+	Key   []byte
+	Reply []byte // bounded terminal reply, never interpreted as editor input
+	Err   error
 	// Resize is a viewport change, never an editor key or pasted content.
 	Resize bool
 	// Paste transaction markers from the bounded decoder.
@@ -41,11 +44,14 @@ type Console struct {
 	// use the terminal descriptor size.
 	SizeFunc func() (int, int)
 
-	stop   context.CancelFunc
-	done   chan struct{}
-	closed bool
-	err    error
-	hidden bool
+	stop               context.CancelFunc
+	done               chan struct{}
+	closed             bool
+	err                error
+	hidden             bool
+	deferDraw          bool
+	themeNotifications bool
+	heldInputs         []Input
 
 	writer  *Writer
 	decoder *Decoder
@@ -101,6 +107,9 @@ func (c *Console) Pause() {
 	c.visibleTail = nil
 	// Cleanup bypasses the sticky frame error. A recovered output descriptor
 	// still needs cursor and paste restoration even when tail state is unknown.
+	if c.themeNotifications {
+		c.mode("\x1b[?2031l")
+	}
 	c.mode("\x1b[?25h\x1b[?2004l")
 }
 
@@ -115,6 +124,9 @@ func (c *Console) Resume() {
 	c.pasteActive = false
 	c.pasteBuf.Reset()
 	c.mode("\x1b[?2004h")
+	if c.themeNotifications {
+		c.mode("\x1b[?2031h")
+	}
 	resizeDone := make(chan struct{})
 	if runtime.GOOS == "windows" {
 		fd := c.In.Fd()
@@ -243,10 +255,47 @@ func (c *Console) Err() error { return c.err }
 
 // SetPresentation installs an application-computed snapshot. Draw never reads
 // session files, credentials, or provider state.
+func (c *Console) GetPresentation() PresentationSnapshot { return c.presentation }
+
+func (c *Console) SetDeferDraw(deferDraw bool) { c.deferDraw = deferDraw }
+
+func (c *Console) SetTerminalColorSchemeNotifications(enabled bool) {
+	if c.themeNotifications == enabled {
+		return
+	}
+	c.themeNotifications = enabled
+	if c.stop != nil {
+		if enabled {
+			c.mode("\x1b[?2031h")
+		} else {
+			c.mode("\x1b[?2031l")
+		}
+	}
+}
+
+func (c *Console) QueryTerminalColors() error {
+	return WriteBounded(c.Out, pitheme.ColorQuery())
+}
+
+func (c *Console) HoldInput(input Input) { c.heldInputs = append(c.heldInputs, input) }
+
+func (c *Console) TakeHeldInputs() []Input {
+	inputs := append([]Input(nil), c.heldInputs...)
+	c.heldInputs = nil
+	return inputs
+}
+
 func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
+	snapshot.Display = snapshot.Display.normalized()
 	c.presentation = snapshot
 	if c.markdownStream != nil {
 		c.markdownStream.noColor = snapshot.NoColor
+		c.markdownStream.SetTheme(snapshot.Theme)
+		c.markdownStream.SetDisplay(snapshot.Display)
+		c.streamRows = c.markdownStream.DisplayTail()
+	}
+	if len(c.completionItems) > 0 {
+		c.renderCompletionRows()
 	}
 }
 
@@ -311,6 +360,9 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 			// Timeout tick: flush incomplete Escape prefix (50ms rule).
 			for _, d := range dec.Feed(nil) {
 				if d.Reply {
+					if !send(Input{Reply: append([]byte(nil), d.Key...)}) {
+						return
+					}
 					continue
 				}
 				if !send(Input{Key: d.Key}) {
@@ -330,6 +382,9 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 		}
 		for _, d := range dec.Feed(buf[:n]) {
 			if d.Reply {
+				if !send(Input{Reply: append([]byte(nil), d.Key...)}) {
+					return
+				}
 				continue
 			}
 			if d.PasteStart {
@@ -363,6 +418,9 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, cancel bool) {
 	if input.Err != nil {
 		return "", false, true, busy
+	}
+	if len(input.Reply) > 0 {
+		return "", false, false, false
 	}
 	// Bracketed paste transaction: buffer separately, single insert+draw on end marker.
 	if input.PasteStart {
@@ -558,7 +616,7 @@ func (c *Console) refreshCompletion() {
 }
 
 func (c *Console) renderCompletionRows() {
-	const visible = 5
+	visible := c.presentation.Display.normalized().AutocompleteMaxVisible
 	c.completionRows = c.completionRows[:0]
 	start := max(0, min(c.completionSelected-visible/2, len(c.completionItems)-visible))
 	end := min(len(c.completionItems), start+visible)
@@ -576,7 +634,10 @@ func (c *Console) renderCompletionRows() {
 			spans = append(spans, StyledSpan{Text: "  " + description, Token: TokenMuted})
 		}
 		row := StyledRow{Spans: spans}
-		c.completionRows = append(c.completionRows, FormatStyledRow(row, c.currentWidth(), c.presentation.NoColor))
+		if selected {
+			row.Surface = TokenSelectedBg
+		}
+		c.completionRows = append(c.completionRows, FormatStyledRow(row, c.currentWidth(), c.presentation.NoColor, c.presentation.Theme))
 	}
 }
 
@@ -702,9 +763,17 @@ func (c *Console) Status(text string) {
 // settles. It keeps the shared message margin and stays on one physical line
 // at the emission width.
 func (c *Console) SetToolRow(text string) {
-	row := MessageIndent + SanitizeStatusRow(text)
-	c.toolRow = TruncateToWidth(row, max(1, c.currentWidth()-1))
+	c.SetToolRowNoDraw(text)
 	c.Draw()
+}
+
+// SetToolRowNoDraw updates the owned row for a frame assembled by the caller.
+func (c *Console) SetToolRowNoDraw(text string) {
+	row := SanitizeStatusRow(text)
+	if !strings.HasPrefix(row, MessageIndent) {
+		row = MessageIndent + row
+	}
+	c.toolRow = TruncateToWidth(row, max(1, c.currentWidth()-1))
 }
 
 // ClearToolRow removes the active tool row. The next frame drops it, so the
@@ -726,6 +795,7 @@ func (c *Console) MarkdownWrite(p []byte) (int, error) {
 	if c.markdownStream == nil {
 		c.markdownWidth = c.currentWidth()
 		c.markdownStream = NewMarkdownStream(c.markdownWidth, c.presentation.NoColor)
+		c.markdownStream.SetTheme(c.presentation.Theme)
 	}
 	stable, _ := c.markdownStream.Feed(string(p))
 	c.streamRows = c.markdownStream.DisplayTail()
@@ -780,6 +850,13 @@ func (c *Console) EndFrame() error {
 }
 
 func (c *Console) emitComposed(appendText string) error {
+	if c.deferDraw {
+		if appendText == "" {
+			return c.err
+		}
+		c.lastDraw = time.Now()
+		return c.emit(Frame{Append: appendText})
+	}
 	if c.frameDepth > 0 {
 		if appendText != "" {
 			c.pendingAppend.WriteString(appendText)

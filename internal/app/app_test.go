@@ -26,8 +26,8 @@ import (
 )
 
 func TestParseBoundary(t *testing.T) {
-	o, _, err := Parse([]string{"--provider", "anthropic", "--model", "m", "--thinking", "high", "--session-dir", "/tmp", "--tools", "read,bash", "--no-session"})
-	if err != nil || o.Model != "m" || !o.NoSession {
+	o, _, err := Parse([]string{"--provider", "anthropic", "--model", "m", "--thinking", "high", "--session-dir", "/tmp", "--tools", "read,bash", "--no-session", "--use-theme", "light/dark", "--theme", "./themes/a.json", "--theme", "./themes/b.json", "--no-themes"})
+	if err != nil || o.Model != "m" || !o.NoSession || o.UseTheme != "light/dark" || !o.NoThemes || len(o.ThemePaths) != 2 {
 		t.Fatalf("%+v %v", o, err)
 	}
 	for _, args := range [][]string{{"positional"}, {"--continue", "--resume"}, {"--allow-project", "--deny-project"}} {

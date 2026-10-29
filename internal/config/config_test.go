@@ -33,6 +33,9 @@ func TestThemeSettingsMergeAndResourceBases(t *testing.T) {
 	if loaded.Settings.Theme != "project-light/project-dark" || loaded.Settings.TerminalTrueColor != "auto" {
 		t.Fatalf("project scalar precedence: %+v", loaded.Settings)
 	}
+	if len(loaded.Settings.UserThemePaths) != 3 || len(loaded.Settings.ProjectThemePaths) != 1 {
+		t.Fatalf("theme path scopes user=%q project=%q", loaded.Settings.UserThemePaths, loaded.Settings.ProjectThemePaths)
+	}
 	wantPaths := []string{
 		filepath.Join(userDir, "themes", "*.json"),
 		"!" + filepath.Join(userDir, "themes", "disabled.json"),
@@ -54,8 +57,35 @@ func TestThemeSettingsMergeAndResourceBases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if untrusted.Settings.Theme != "user-light/user-dark" || len(untrusted.Settings.ThemePaths) != 3 || untrusted.Settings.TerminalTrueColor != "false" {
+	if untrusted.Settings.Theme != "user-light/user-dark" || len(untrusted.Settings.ThemePaths) != 3 || len(untrusted.Settings.ProjectThemePaths) != 0 || untrusted.Settings.TerminalTrueColor != "false" {
 		t.Fatalf("untrusted project settings leaked: %+v", untrusted.Settings)
+	}
+}
+
+func TestPiDisplaySettingsUseSourcePrecedenceAndClamp(t *testing.T) {
+	dir := t.TempDir()
+	user, project := filepath.Join(dir, "user.json"), filepath.Join(dir, ".pi", "settings.json")
+	writeJSON(t, user, `{"editorPaddingX":2,"outputPad":0,"autocompleteMaxVisible":7,"markdown":{"codeBlockIndent":"··"}}`)
+	writeJSON(t, project, `{"editorPaddingX":9,"autocompleteMaxVisible":100,"markdown":{"codeBlockIndent":"  > "}}`)
+	trusted, err := LoadSettings(user, project, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted.Settings.EditorPaddingX != 3 || trusted.Settings.OutputPad != 0 || trusted.Settings.AutocompleteMaxVisible != 20 || trusted.Settings.MarkdownCodeBlockIndent != "  > " {
+		t.Fatalf("trusted display settings=%+v", trusted.Settings)
+	}
+	if trusted.Sources["editorPaddingX"] != "project:"+project || trusted.Sources["outputPad"] != "user:"+user || trusted.Sources["markdown.codeBlockIndent"] != "project:"+project {
+		t.Fatalf("display setting sources=%v", trusted.Sources)
+	}
+	untrusted, err := LoadSettings(user, project, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if untrusted.Settings.EditorPaddingX != 2 || untrusted.Settings.OutputPad != 0 || untrusted.Settings.AutocompleteMaxVisible != 7 || untrusted.Settings.MarkdownCodeBlockIndent != "··" {
+		t.Fatalf("untrusted project display settings leaked: %+v", untrusted.Settings)
+	}
+	if defaults := defaultSettings(); defaults.AutocompleteMaxVisible != 5 || defaults.MarkdownCodeBlockIndent != "  " {
+		t.Fatalf("Pi display defaults=%+v", defaults)
 	}
 }
 
@@ -64,7 +94,7 @@ func TestThemeSettingDefaultsAndRejectsInvalidShapes(t *testing.T) {
 	if defaults.Theme != "system" || defaults.TerminalTrueColor != "auto" {
 		t.Fatalf("theme defaults=%+v", defaults)
 	}
-	for _, value := range []string{`{"theme":null}`, `{"themes":null}`, `{"terminal":null}`, `{"terminal":{"trueColor":null}}`, `{"terminal":{"trueColor":1}}`, `{"terminal":{"trueColor":"yes"}}`} {
+	for _, value := range []string{`{"theme":null}`, `{"themes":null}`, `{"terminal":null}`, `{"terminal":{"trueColor":null}}`, `{"terminal":{"trueColor":1}}`, `{"terminal":{"trueColor":"yes"}}`, `{"editorPaddingX":"two"}`, `{"outputPad":null}`, `{"autocompleteMaxVisible":[]}`, `{"markdown":null}`, `{"markdown":{"codeBlockIndent":null}}`} {
 		path := filepath.Join(t.TempDir(), "settings.json")
 		writeJSON(t, path, value)
 		if _, err := LoadSettings(path, "", false); err == nil {

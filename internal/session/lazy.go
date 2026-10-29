@@ -176,6 +176,7 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 		records[k] = v
 	}
 	snap := snapIdentity{path: s.file, knownInfo: s.knownInfo, knownSize: s.knownSize}
+	cwd := s.cwd
 	hook := s.LoadHook
 	filePath := s.file
 	s.mu.Unlock()
@@ -217,6 +218,7 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 		}
 		return e, nil
 	}
+	home, _ := os.UserHomeDir()
 	tools := displayTools(entries)
 	provenance := provenanceEntries(path)
 	inputs := map[string]string{}
@@ -225,7 +227,7 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 	}
 	for _, e := range entries {
 		full := e
-		needs := e.Kind == "compaction" || e.Kind == "branch_summary" || e.Kind == "custom_message"
+		needs := e.Kind == "branch_summary" || e.Kind == "custom_message" || e.Kind == "compaction" && all
 		if e.Message != nil {
 			m := e.Message.Message
 			needs = m.User != nil
@@ -261,11 +263,13 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 				return false, err
 			}
 		}
+		addToolSummaries(tools, full, cwd, home)
 		for _, item := range timelineEntry(full, tools, inputs, all) {
 			if !emit(item) {
 				return false, nil
 			}
 		}
+		clearToolSummaries(tools, full)
 	}
 	if f != nil && !snap.unchanged() {
 		return false, externalChangeError(filePath)

@@ -27,7 +27,7 @@ type Decoded struct {
 	PasteStart bool
 	PasteEnd   bool
 	Rejected   bool // oversized paste rejected as whole edit
-	Reply      bool // terminal reply (ignored, not consumed as input)
+	Reply      bool // terminal reply, routed separately from editor keys
 	Timeout    bool // escape prefix timed out
 }
 
@@ -39,6 +39,8 @@ type Decoder struct {
 	pasteOver     bool // oversized paste: draining through end marker
 	pasteSize     int  // bytes accepted before over-limit
 	discardEscape bool
+	discardOSC    bool
+	discardOSCEsc bool
 	now           func() time.Time
 }
 
@@ -57,6 +59,11 @@ func (d *Decoder) Feed(data []byte) []Decoded {
 		d.discardEscape = false
 	}
 	if len(d.pending) > 0 && d.pending[0] == 27 && d.now().Sub(d.pendingAt) >= escapeTimeout {
+		if len(d.pending) >= 2 && d.pending[1] == ']' {
+			d.pending = nil
+			d.discardOSC = true
+			return out
+		}
 		// Emit pending as individual bytes (lone Escape first).
 		if len(d.pending) == 1 && d.pending[0] == 27 {
 			out = append(out, Decoded{Key: []byte{27}, Timeout: true})
@@ -120,6 +127,14 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 		}
 		return nil
 	}
+	if d.discardOSC {
+		if d.discardOSCEsc && b == 92 || b == 0x07 {
+			d.discardOSC, d.discardOSCEsc = false, false
+		} else {
+			d.discardOSCEsc = b == 27
+		}
+		return nil
+	}
 	if d.discardEscape {
 		d.pendingAt = d.now()
 		if b >= 0x40 && b <= 0x7e {
@@ -147,8 +162,15 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 	}
 	// Bound pending escape.
 	if len(d.pending) > maxPendingEscape {
+		osc := len(d.pending) >= 2 && d.pending[0] == 27 && d.pending[1] == ']'
+		terminatedOSC := osc && (b == 0x07 || len(d.pending) >= 2 && d.pending[len(d.pending)-2] == 27 && b == 92)
 		d.pending = nil
-		d.discardEscape = true
+		if osc {
+			d.discardOSC = !terminatedOSC
+			d.discardOSCEsc = false
+		} else {
+			d.discardEscape = true
+		}
 		return nil
 	}
 	// Try to emit complete units.
@@ -207,6 +229,17 @@ func splitUnit(p []byte) ([]byte, int) {
 		if len(p) < 2 {
 			return nil, 0
 		}
+		if p[1] == ']' {
+			for size := 2; size < len(p); size++ {
+				if p[size] == 0x07 {
+					return p[:size+1], size + 1
+				}
+				if p[size] == 27 && size+1 < len(p) && p[size+1] == 92 {
+					return p[:size+2], size + 2
+				}
+			}
+			return nil, 0
+		}
 		if p[1] == '[' || p[1] == 'O' {
 			size := 2
 			for size < len(p) && !(p[size] >= 0x40 && p[size] <= 0x7E) {
@@ -238,8 +271,11 @@ func isReply(u []byte) bool {
 	if len(s) >= 3 && s[0] == 27 && s[1] == '[' && s[len(s)-1] == 'R' {
 		return true
 	}
-	if len(s) >= 3 && s[0] == 27 && s[1] == '[' && s[len(s)-1] == 'c' {
+	if len(s) >= 3 && s[0] == 27 && s[1] == '[' && (s[len(s)-1] == 'c' || s[len(s)-1] == 'n') {
 		return true
+	}
+	if len(s) >= 3 && s[0] == 27 && s[1] == ']' {
+		return true // Valid and malformed OSC frames are replies, never editor text.
 	}
 	return false
 }

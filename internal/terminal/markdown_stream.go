@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"unicode/utf8"
+
+	pitheme "psi/internal/theme"
 )
 
 const maxMarkdownActiveSource = 64 * 1024
@@ -14,6 +16,8 @@ const maxMarkdownActiveSource = 64 * 1024
 type MarkdownStream struct {
 	width   int
 	noColor bool
+	palette *pitheme.Theme
+	display DisplaySettings
 	filter  Sanitizer
 
 	pending          []byte
@@ -45,7 +49,7 @@ type MarkdownStream struct {
 }
 
 func NewMarkdownStream(width int, noColor bool) *MarkdownStream {
-	return &MarkdownStream{width: max(1, width), noColor: noColor, listBase: -1, candidateStart: -1}
+	return &MarkdownStream{width: max(1, width), noColor: noColor, display: DefaultDisplaySettings(), listBase: -1, candidateStart: -1}
 }
 
 // Feed returns stable rows and a borrowed active-tail slice. The tail remains
@@ -82,7 +86,7 @@ func (m *MarkdownStream) Finish() []string {
 			rows = append(rows, "")
 			m.needsSeparator = false
 		}
-		rows = append(rows, renderMarkdownCore(string(m.pending), m.width, m.noColor)...)
+		rows = append(rows, renderMarkdownCoreWithDisplay(string(m.pending), m.width, m.noColor, m.display, m.palette)...)
 		m.seenOutput = m.seenOutput || len(rows) > 0
 	}
 	if m.fallback && m.fenceByte != 0 {
@@ -94,6 +98,23 @@ func (m *MarkdownStream) Finish() []string {
 
 // SetWidth re-renders only the bounded active source region. Stable scrollback
 // rows are left to the terminal's native resize/reflow behavior.
+func (m *MarkdownStream) SetTheme(palette *pitheme.Theme) {
+	if m.palette == palette {
+		return
+	}
+	m.palette = palette
+	m.renderTail()
+}
+
+func (m *MarkdownStream) SetDisplay(display DisplaySettings) {
+	display = display.normalized()
+	if m.display == display {
+		return
+	}
+	m.display = display
+	m.renderTail()
+}
+
 func (m *MarkdownStream) SetWidth(width int) []string {
 	m.width = max(1, width)
 	m.renderTail()
@@ -121,9 +142,9 @@ func (m *MarkdownStream) DisplayTail() []string {
 	case m.fallback:
 		rows = wrapAssistantFragment(Sanitize(string(source)), m.width)
 	case m.fenceByte != 0:
-		rows = renderCodeRows(source, m.width, m.noColor)
+		rows = renderCodeRows(source, m.width, m.noColor, m.palette, m.display)
 	default:
-		rows = renderMarkdownCore(string(source), m.width, m.noColor)
+		rows = renderMarkdownCoreWithDisplay(string(source), m.width, m.noColor, m.display, m.palette)
 	}
 	if m.needsSeparator && len(rows) > 0 {
 		rows = append([]string{""}, rows...)
@@ -319,24 +340,25 @@ func (m *MarkdownStream) commitFenceStart(stable *[]string) {
 		m.needsSeparator = false
 	}
 	label := "```" + SanitizeStatusRow(m.fenceLanguage)
-	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth(label, max(0, m.width-1)), Token: TokenMuted}}}
-	*stable = append(*stable, row.Serialize(colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
+	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth(label, max(0, m.width-1)), Token: TokenCodeFence}}}
+	*stable = append(*stable, row.SerializeWithTheme(m.palette, colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
 	m.seenOutput = true
 }
 
 func (m *MarkdownStream) commitCodeLine(line []byte, stable *[]string) {
 	m.fenceHasLine = true
-	*stable = append(*stable, renderCodeRows(line, m.width, m.noColor)...)
+	*stable = append(*stable, renderCodeRows(line, m.width, m.noColor, m.palette, m.display)...)
 	m.seenOutput = true
 }
 
-func renderCodeRows(line []byte, width int, noColor bool) []string {
+func renderCodeRows(line []byte, width int, noColor bool, palette *pitheme.Theme, display DisplaySettings) []string {
 	text := strings.TrimSuffix(string(line), "\r")
 	spans := []StyledSpan{{Text: Sanitize(text), Token: TokenCodeBlock}}
-	rows := wrapMarkdown(spans, max(1, width-1), mdIndent(markdownIndent), mdIndent(markdownIndent))
+	display = display.normalized()
+	rows := wrapMarkdown(spans, max(1, width-1), mdIndent(display.CodeBlockIndent), mdIndent(display.CodeBlockIndent))
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, row.Serialize(colorDisabled(PresentationSnapshot{NoColor: noColor})))
+		out = append(out, row.SerializeWithTheme(palette, colorDisabled(PresentationSnapshot{NoColor: noColor})))
 	}
 	return out
 }
@@ -345,8 +367,8 @@ func (m *MarkdownStream) commitFenceEnd(stable *[]string) {
 	if !m.fenceHasLine {
 		m.commitCodeLine(nil, stable)
 	}
-	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth("```", max(0, m.width-1)), Token: TokenMuted}}}
-	*stable = append(*stable, row.Serialize(colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
+	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth("```", max(0, m.width-1)), Token: TokenCodeFence}}}
+	*stable = append(*stable, row.SerializeWithTheme(m.palette, colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
 	m.seenOutput = true
 }
 
@@ -354,7 +376,7 @@ func (m *MarkdownStream) commitBlock(source []byte, stable *[]string) {
 	if strings.TrimSpace(string(source)) == "" {
 		return
 	}
-	rows := renderMarkdownCore(string(source), m.width, m.noColor)
+	rows := renderMarkdownCoreWithDisplay(string(source), m.width, m.noColor, m.display, m.palette)
 	if len(rows) == 0 {
 		return
 	}

@@ -39,7 +39,7 @@ func (c *CodexClient) Send(ctx context.Context, req Request, onText func(string)
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode Codex request")
 	}
-	return sendWithRetry(ctx, c.MaxRetry, func() (*Response, error) {
+	return sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) {
 		token, account, err := c.Auth.Get(ctx)
 		if err != nil {
 			return nil, err

@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"psi/internal/event"
+	pitheme "psi/internal/theme"
 )
 
 type ToolState string
@@ -61,6 +64,29 @@ type StatusWriter struct {
 
 func NewStatusWriter(w io.Writer) *StatusWriter {
 	return &StatusWriter{w: w, last: map[string]ToolState{}}
+}
+
+func (s *StatusWriter) UpdateSummary(name, callID string, summary event.ToolSummary, state string, display DisplaySettings, palette *pitheme.Theme, noColor bool) {
+	st := toolOutcomeState(state)
+	key := name + "\x00" + callID
+	if s.last[key] == st {
+		return
+	}
+	if len(s.last) >= 1024 {
+		clear(s.last)
+	}
+	s.last[key] = st
+	if st == ToolRunning {
+		return
+	}
+	width := 80
+	if sized, ok := s.w.(interface{ StatusWidth() int }); ok {
+		width = sized.StatusWidth()
+	}
+	line := FormatToolRowWithDisplay(summary, name, state, width, noColor, display, palette)
+	if line != "" {
+		fmt.Fprintln(s.w, line)
+	}
 }
 
 func (s *StatusWriter) Update(name, callID string, st ToolState) {

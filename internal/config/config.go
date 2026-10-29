@@ -11,6 +11,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,21 @@ import (
 
 // Thinking levels in the supported mapping.
 var ValidThinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+func numericSetting(value any) (float64, bool) {
+	f, ok := value.(float64)
+	return f, ok && !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+func clampDisplaySetting(value float64, minValue, maxValue int) int {
+	if value <= float64(minValue) {
+		return minValue
+	}
+	if value >= float64(maxValue) {
+		return maxValue
+	}
+	return int(math.Floor(value))
+}
 
 func validThinking(s string) bool {
 	for _, v := range ValidThinkingLevels {
@@ -39,37 +55,46 @@ type CompactionConfig struct {
 
 // Settings is the supported configuration subset with resolution bases.
 type Settings struct {
-	Theme             string
-	ThemePaths        []string
-	TerminalTrueColor string // "auto", "true", or "false"
-	DefaultProvider   string
-	DefaultModel      string
-	DefaultThinking   string
-	SessionDir        string
-	SessionDirSource  string // "cli"|"env"|"settings"|"default"
-	DefaultTools      []string
-	Skills            []string
-	EnableSkills      bool
-	Compaction        CompactionConfig
-	ShellPath         string
-	ShellPrefix       string
-	HTTPIdleTimeoutMs int64 // milliseconds; 0 or -1 disables the idle timer
-	MaxRetries        int
-	QuietStartup      bool
+	Theme                   string
+	ThemePaths              []string
+	UserThemePaths          []string
+	ProjectThemePaths       []string
+	TerminalTrueColor       string // "auto", "true", or "false"
+	EditorPaddingX          int
+	OutputPad               int
+	AutocompleteMaxVisible  int
+	MarkdownCodeBlockIndent string
+	DefaultProvider         string
+	DefaultModel            string
+	DefaultThinking         string
+	SessionDir              string
+	SessionDirSource        string // "cli"|"env"|"settings"|"default"
+	DefaultTools            []string
+	Skills                  []string
+	EnableSkills            bool
+	Compaction              CompactionConfig
+	ShellPath               string
+	ShellPrefix             string
+	HTTPIdleTimeoutMs       int64 // milliseconds; 0 or -1 disables the idle timer
+	MaxRetries              int
+	QuietStartup            bool
 	// Diagnostics for skipped unsupported resources.
 	Warnings []string
 }
 
 func defaultSettings() Settings {
 	return Settings{
-		Theme:             "system",
-		TerminalTrueColor: "auto",
-		DefaultThinking:   "off",
-		DefaultTools:      []string{"read", "bash", "edit", "write"},
-		EnableSkills:      true,
-		Compaction:        CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
-		MaxRetries:        3,
-		HTTPIdleTimeoutMs: 300000,
+		Theme:                   "system",
+		TerminalTrueColor:       "auto",
+		OutputPad:               1,
+		AutocompleteMaxVisible:  5,
+		MarkdownCodeBlockIndent: "  ",
+		DefaultThinking:         "off",
+		DefaultTools:            []string{"read", "bash", "edit", "write"},
+		EnableSkills:            true,
+		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
+		MaxRetries:              3,
+		HTTPIdleTimeoutMs:       300000,
 	}
 }
 
@@ -80,6 +105,12 @@ type rawSettings struct {
 	Terminal *struct {
 		TrueColor any `json:"trueColor"`
 	} `json:"terminal"`
+	EditorPaddingX         any `json:"editorPaddingX"`
+	OutputPad              any `json:"outputPad"`
+	AutocompleteMaxVisible any `json:"autocompleteMaxVisible"`
+	Markdown               *struct {
+		CodeBlockIndent *string `json:"codeBlockIndent"`
+	} `json:"markdown"`
 	DefaultProvider     *string  `json:"defaultProvider"`
 	DefaultModel        *string  `json:"defaultModel"`
 	DefaultThinking     *string  `json:"defaultThinkingLevel"`
@@ -204,7 +235,13 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 			if strings.TrimSpace(path) == "" {
 				return fmt.Errorf("themes entries must not be empty")
 			}
-			out.ThemePaths = append(out.ThemePaths, resolveConfiguredResourcePath(base, path))
+			resolved := resolveConfiguredResourcePath(base, path)
+			out.ThemePaths = append(out.ThemePaths, resolved)
+			if strings.HasPrefix(src, "project:") {
+				out.ProjectThemePaths = append(out.ProjectThemePaths, resolved)
+			} else {
+				out.UserThemePaths = append(out.UserThemePaths, resolved)
+			}
 		}
 		sources["themes"] = src
 	}
@@ -231,6 +268,46 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 			return fmt.Errorf("terminal.trueColor must be boolean or \"auto\"")
 		}
 		sources["terminal.trueColor"] = src
+	}
+	if _, present := data["editorPaddingX"]; present {
+		value, ok := numericSetting(raw.EditorPaddingX)
+		if !ok {
+			return fmt.Errorf("editorPaddingX must be a number")
+		}
+		out.EditorPaddingX = clampDisplaySetting(value, 0, 3)
+		sources["editorPaddingX"] = src
+	}
+	if _, present := data["outputPad"]; present {
+		value, ok := numericSetting(raw.OutputPad)
+		if !ok {
+			return fmt.Errorf("outputPad must be a number")
+		}
+		out.OutputPad = 1
+		if value == 0 {
+			out.OutputPad = 0
+		}
+		sources["outputPad"] = src
+	}
+	if _, present := data["autocompleteMaxVisible"]; present {
+		value, ok := numericSetting(raw.AutocompleteMaxVisible)
+		if !ok {
+			return fmt.Errorf("autocompleteMaxVisible must be a number")
+		}
+		out.AutocompleteMaxVisible = clampDisplaySetting(value, 3, 20)
+		sources["autocompleteMaxVisible"] = src
+	}
+	if _, present := data["markdown"]; present && raw.Markdown == nil {
+		return fmt.Errorf("markdown must be an object")
+	}
+	if raw.Markdown != nil {
+		markdownSettings, _ := data["markdown"].(map[string]any)
+		if _, present := markdownSettings["codeBlockIndent"]; present && raw.Markdown.CodeBlockIndent == nil {
+			return fmt.Errorf("markdown.codeBlockIndent must be a string")
+		}
+		if raw.Markdown.CodeBlockIndent != nil {
+			out.MarkdownCodeBlockIndent = *raw.Markdown.CodeBlockIndent
+			sources["markdown.codeBlockIndent"] = src
+		}
 	}
 	if raw.DefaultProvider != nil {
 		out.DefaultProvider = *raw.DefaultProvider

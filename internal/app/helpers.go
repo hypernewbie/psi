@@ -2,8 +2,10 @@ package app
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"psi/internal/event"
 	"psi/internal/provider"
@@ -69,6 +71,18 @@ func continuable(proj *session.Projection) string {
 // compactionActivity returns Pi's compaction indicator text for a compaction
 // phase. Pi distinguishes a manual compaction from an automatic one and names
 // the overflow reason.
+func formatRetryActivity(attempt, maximum int, delay time.Duration) string {
+	duration := "unknown delay"
+	if delay > 0 {
+		if delay >= time.Second {
+			duration = fmt.Sprintf("%.0fs", math.Ceil(delay.Seconds()))
+		} else {
+			duration = fmt.Sprintf("%dms", max(1, delay.Milliseconds()))
+		}
+	}
+	return fmt.Sprintf("Retrying %d/%d · %s (Esc/Ctrl+C cancel)", attempt, maximum, duration)
+}
+
 func compactionActivity(state string) string {
 	switch state {
 	case event.CompactionThreshold:

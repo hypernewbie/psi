@@ -77,6 +77,36 @@ func passThrough(t *testing.T) func(string, int, os.FileMode) (durableFile, erro
 	}
 }
 
+func TestCompactionAppendFaultDoesNotExposeCheckpoint(t *testing.T) {
+	s := faultStore(t, func(path string, flags int, mode os.FileMode) (durableFile, error) {
+		f, err := os.OpenFile(path, flags, mode)
+		if err != nil {
+			return nil, err
+		}
+		return &faultFile{File: f, writeN: 4}, nil
+	}, nil)
+	before, err := os.ReadFile(s.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := s.LeafID()
+	if _, err := s.AppendCompaction("synthetic checkpoint", parent, 100, nil); err == nil {
+		t.Fatal("compaction append fault was accepted")
+	}
+	after, err := os.ReadFile(s.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(after, before) || s.WriteError() == nil {
+		t.Fatal("failed compaction changed the durable prefix or did not block storage")
+	}
+	for _, entry := range s.Entries() {
+		if entry.Kind == "compaction" {
+			t.Fatal("failed append exposed a compaction checkpoint in memory")
+		}
+	}
+}
+
 func TestF53FaultMatrix(t *testing.T) {
 	mkFault := func(t *testing.T, wrap func(*os.File) *faultFile) func(string, int, os.FileMode) (durableFile, error) {
 		return func(path string, flags int, mode os.FileMode) (durableFile, error) {

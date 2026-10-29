@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"psi/internal/event"
+	toolsummary "psi/internal/tools"
 )
 
 type TranscriptKind string
@@ -21,12 +24,15 @@ const (
 
 // TranscriptItem contains visible content and provenance, never hidden tool data.
 type TranscriptItem struct {
-	Kind       TranscriptKind
-	Text       string
-	SourceID   string
-	BlockIDs   []string
-	Historical bool
-	Note       string
+	Kind        TranscriptKind
+	Text        string
+	ToolName    string
+	ToolState   string
+	ToolSummary event.ToolSummary
+	SourceID    string
+	BlockIDs    []string
+	Historical  bool
+	Note        string
 }
 
 func CurrentView(path []*Entry) []TranscriptItem {
@@ -41,6 +47,7 @@ func AllHistoryView(path []*Entry) []TranscriptItem {
 type displayTool struct {
 	name, state, note string
 	call              bool
+	summary           event.ToolSummary
 }
 
 // Join once across the whole selected view. A per-entry projection loses the
@@ -92,6 +99,37 @@ func displayTools(entries []*Entry) map[string]*displayTool {
 		}
 	}
 	return out
+}
+
+func clearToolSummaries(display map[string]*displayTool, e *Entry) {
+	if e == nil || e.Message == nil || e.Message.Message.Assistant == nil {
+		return
+	}
+	for _, block := range e.Message.Message.Assistant.Content {
+		if block.Call != nil {
+			if t := display[block.Call.ID]; t != nil {
+				t.summary = event.ToolSummary{}
+			}
+		}
+	}
+}
+
+func addToolSummaries(display map[string]*displayTool, e *Entry, cwd, home string) {
+	if e == nil || e.Message == nil || e.Message.Message.Assistant == nil {
+		return
+	}
+	for _, block := range e.Message.Message.Assistant.Content {
+		if block.Call == nil {
+			continue
+		}
+		if t := display[block.Call.ID]; t != nil {
+			if summary, ok := e.toolSummaries[block.Call.ID]; ok {
+				t.summary = toolsummary.RebaseSummaryPath(summary, cwd, home)
+			} else if block.Call.Arguments != nil {
+				t.summary = toolsummary.SummarizeArguments(block.Call.Name, block.Call.Arguments, cwd, home)
+			}
+		}
+	}
 }
 
 func provenanceEntries(path []*Entry) map[string]*Entry {
@@ -148,7 +186,9 @@ func timeline(entries, path []*Entry, historical bool) []TranscriptItem {
 	tools, inputs := displayTools(entries), inputProvenance(path)
 	var out []TranscriptItem
 	for _, e := range entries {
+		addToolSummaries(tools, e, "", "")
 		out = append(out, timelineEntry(e, tools, inputs, historical)...)
+		clearToolSummaries(tools, e)
 	}
 	return out
 }
@@ -183,7 +223,7 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 				if b.Call != nil {
 					flush()
 					t := tools[b.Call.ID]
-					out = append(out, TranscriptItem{Kind: KindTool, Text: t.name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{b.Call.ID}, Note: t.note, Historical: historical})
+					out = append(out, TranscriptItem{Kind: KindTool, Text: t.name + ": " + t.state, ToolName: t.name, ToolState: t.state, ToolSummary: t.summary, SourceID: e.ID(), BlockIDs: []string{b.Call.ID}, Note: t.note, Historical: historical})
 				}
 			}
 			flush()
@@ -194,13 +234,39 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 				if name == "" {
 					name = "tool"
 				}
-				out = append(out, TranscriptItem{Kind: KindTool, Text: name + ": " + t.state, SourceID: e.ID(), BlockIDs: []string{m.ToolResult.ToolCallID}, Note: "historical result without retained call", Historical: historical})
+				out = append(out, TranscriptItem{Kind: KindTool, Text: name + ": " + t.state, ToolName: name, ToolState: t.state, ToolSummary: event.ToolSummary{Kind: name, Note: "historical result without retained call"}, SourceID: e.ID(), BlockIDs: []string{m.ToolResult.ToolCallID}, Note: "historical result without retained call", Historical: historical})
 			}
 		case m.BashExecution != nil:
-			add(e, KindTool, "bash: "+bashOutcome(m.BashExecution))
+			b := m.BashExecution
+			state := "done"
+			if b.Cancelled {
+				state = "cancelled"
+			} else if b.ExitCode == nil {
+				state = "interrupted"
+			} else if *b.ExitCode != 0 {
+				state = "failed"
+			}
+			summary, ok := e.toolSummaries[e.ID()]
+			if ok {
+				summary = toolsummary.RebaseSummaryPath(summary, "", "")
+			} else {
+				summary = toolsummary.SummarizeArguments("bash", map[string]any{"command": b.Command}, "", "")
+			}
+			if b.ExitCode != nil {
+				code := *b.ExitCode
+				summary.ExitCode = &code
+			}
+			out = append(out, TranscriptItem{Kind: KindTool, Text: "bash: " + bashOutcome(b), ToolName: "bash", ToolState: state, ToolSummary: summary, SourceID: e.ID(), Historical: historical})
 		}
 	case "compaction":
-		add(e, KindCompaction, e.Compaction.Summary)
+		text := e.Compaction.Summary
+		if !historical {
+			text = "Context compacted"
+			if e.Compaction.TokensBefore > 0 {
+				text += fmt.Sprintf(" · ~%.0f tokens before", e.Compaction.TokensBefore)
+			}
+		}
+		add(e, KindCompaction, text)
 	case "branch_summary":
 		add(e, KindBranchSummary, "Branch: "+e.BranchSummary.Summary)
 	case "custom_message":

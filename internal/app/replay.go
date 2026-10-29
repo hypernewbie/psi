@@ -6,6 +6,7 @@ import (
 
 	"psi/internal/session"
 	"psi/internal/terminal"
+	pitheme "psi/internal/theme"
 )
 
 func renderTimeline(print func(string), items []session.TranscriptItem) {
@@ -18,39 +19,51 @@ func renderTimelineChecked(emit func(string) bool, items []session.TranscriptIte
 	return renderTimelineAtWidth(emit, items, 80)
 }
 
-func renderTimelineAtWidth(emit func(string) bool, items []session.TranscriptItem, width int) bool {
+func renderTimelineAtWidth(emit func(string) bool, items []session.TranscriptItem, width int, palette ...*pitheme.Theme) bool {
+	return renderTimelineAtWidthWithDisplay(emit, items, width, terminal.DefaultDisplaySettings(), palette...)
+}
+
+func renderTimelineAtWidthWithDisplay(emit func(string) bool, items []session.TranscriptItem, width int, display terminal.DisplaySettings, palette ...*pitheme.Theme) bool {
+	return renderTimelineAtWidthWithDisplayAndColor(emit, items, width, display, false, palette...)
+}
+
+func renderTimelineAtWidthWithDisplayAndColor(emit func(string) bool, items []session.TranscriptItem, width int, display terminal.DisplaySettings, noColor bool, palette ...*pitheme.Theme) bool {
 	for _, it := range items {
 		var lines []string
 		switch it.Kind {
-		case session.KindUser, session.KindAssistant:
-			lines = terminal.FormatMessage(it.Text, width, false)
+		case session.KindUser:
+			lines = terminal.FormatUserMessageWithDisplay(it.Text, width, noColor, display, palette...)
+		case session.KindAssistant:
+			lines = terminal.FormatAssistantMessageWithDisplay(it.Text, width, noColor, display, palette...)
 		case session.KindTool:
-			text := it.Text
-			if it.Note != "" {
-				text += " (" + it.Note + ")"
+			name, state := it.ToolName, it.ToolState
+			if name == "" {
+				name, state, _ = strings.Cut(it.Text, ": ")
 			}
-			// The replayed tool row keeps the same margin as the live
-			// settled row, so a resumed session looks like the live one.
-			lines = []string{terminal.MessageIndent + text}
+			summary := it.ToolSummary
+			if summary.Kind == "" {
+				summary.Kind = name
+			}
+			if it.Note != "" && !summary.Available {
+				summary.Note = it.Note
+			}
+			lines = []string{terminal.FormatToolRowWithDisplay(summary, name, state, width, noColor, display, palette...)}
 		case session.KindCompaction:
-			label := "Context compacted: "
+			label := "[compaction] "
 			if it.Historical {
-				label = "Historical compaction: "
+				label = "[historical compaction] "
 			}
-			lines = []string{label + it.Text, ""}
+			lines = terminal.FormatMetadataMessage(label, it.Text, width, noColor, display, palette...)
 		case session.KindBranchSummary:
-			lines = []string{it.Text, ""}
+			lines = terminal.FormatMetadataMessage("[branch] ", it.Text, width, noColor, display, palette...)
 		case session.KindSystemMarker:
-			lines = []string{"[" + it.Text + "]"}
+			lines = terminal.FormatMetadataMessage("[session] ", it.Text, width, noColor, display, palette...)
 		case session.KindHistoryBoundary:
-			lines = []string{"--- " + it.Text + " ---"}
+			lines = []string{"--- " + terminal.Sanitize(it.Text) + " ---"}
 		case session.KindNotice:
-			lines = []string{it.Text}
+			lines = []string{terminal.Sanitize(it.Text)}
 		}
 		for _, line := range lines {
-			if it.Kind != session.KindUser && it.Kind != session.KindAssistant {
-				line = terminal.Sanitize(line)
-			}
 			if !emit(line) {
 				return false
 			}
@@ -67,7 +80,15 @@ func replayActivationChecked(emit func(string) bool, act *Activation, isNew bool
 	return replayActivationAtWidth(emit, act, isNew, activeID, 80)
 }
 
-func replayActivationAtWidth(emit func(string) bool, act *Activation, isNew bool, activeID string, width int) bool {
+func replayActivationAtWidth(emit func(string) bool, act *Activation, isNew bool, activeID string, width int, palette ...*pitheme.Theme) bool {
+	return replayActivationAtWidthWithDisplay(emit, act, isNew, activeID, width, terminal.DefaultDisplaySettings(), palette...)
+}
+
+func replayActivationAtWidthWithDisplay(emit func(string) bool, act *Activation, isNew bool, activeID string, width int, display terminal.DisplaySettings, palette ...*pitheme.Theme) bool {
+	return replayActivationAtWidthWithDisplayAndColor(emit, act, isNew, activeID, width, display, false, palette...)
+}
+
+func replayActivationAtWidthWithDisplayAndColor(emit func(string) bool, act *Activation, isNew bool, activeID string, width int, display terminal.DisplaySettings, noColor bool, palette ...*pitheme.Theme) bool {
 	if act.Store.Header().ID == activeID && !isNew {
 		return true
 	}
@@ -75,7 +96,7 @@ func replayActivationAtWidth(emit func(string) bool, act *Activation, isNew bool
 		return false
 	}
 	if act.Offline && act.OfflineErr != nil {
-		notice := strings.Join(terminal.FormatNotice(terminal.NoticeWarning, "Offline: "+act.OfflineErr.Error()+" (history readable, continuation blocked)", width, false), "\n")
+		notice := strings.Join(terminal.FormatNotice(terminal.NoticeWarning, "Offline: "+act.OfflineErr.Error()+" (history readable, continuation blocked)", width, noColor, palette...), "\n")
 		if !emit(notice) {
 			return false
 		}
@@ -83,10 +104,10 @@ func replayActivationAtWidth(emit func(string) bool, act *Activation, isNew bool
 	visible := map[string]bool{}
 	complete, err := act.Store.Timeline(false, 0, func(it session.TranscriptItem) bool {
 		visible[it.SourceID] = true
-		return renderTimelineAtWidth(emit, []session.TranscriptItem{it}, width)
+		return renderTimelineAtWidthWithDisplayAndColor(emit, []session.TranscriptItem{it}, width, display, noColor, palette...)
 	})
 	if err != nil {
-		notice := strings.Join(terminal.FormatNotice(terminal.NoticeError, "History unavailable: "+err.Error(), width, false), "\n")
+		notice := strings.Join(terminal.FormatNotice(terminal.NoticeError, "History unavailable: "+err.Error(), width, noColor, palette...), "\n")
 		emit(notice)
 		return false
 	}

@@ -474,7 +474,7 @@ func TestActualResumeScreenBackspaceAndNewSessionRecall(t *testing.T) {
 	}
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
 	q.prompt()
-	if !strings.Contains(q.screen.Text(), "  old question\n\n  old answer") {
+	if !strings.Contains(q.screen.Text(), "  › old question\n\n  old answer") {
 		t.Fatal("resumed history missing from screen: " + q.screen.Text())
 	}
 	q.write("abc\x7fd\r")
@@ -486,7 +486,7 @@ func TestActualResumeScreenBackspaceAndNewSessionRecall(t *testing.T) {
 	if !bytes.Contains(last, []byte(`"abd"`)) || bytes.Contains(last, []byte("abcd")) {
 		t.Fatalf("backspace not reflected in request: %s", last)
 	}
-	if strings.Count(q.screen.Text(), "  abd") != 1 {
+	if strings.Count(q.screen.Text(), "  › abd") != 1 {
 		t.Fatal("accepted input duplicated: " + q.screen.Text())
 	}
 	q.write("/history all\r")
@@ -691,9 +691,9 @@ func TestActualToolRowIsTransientAndSettlesOnce(t *testing.T) {
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
 	q.prompt()
 	q.write("run a tool\r")
-	q.wait("bash: running")
+	q.wait("◌ $  sleep 5")
 	screen := q.screen.Text()
-	if !strings.Contains(screen, "  bash: running") {
+	if !strings.Contains(screen, "  ◌ $  sleep 5") {
 		t.Fatalf("active tool row is missing or lost the message margin: %q", screen)
 	}
 	if !strings.Contains(screen, "Working…") {
@@ -702,11 +702,11 @@ func TestActualToolRowIsTransientAndSettlesOnce(t *testing.T) {
 	q.wait("TOOL_FINISHED")
 	q.prompt()
 	final := q.screen.Text()
-	if strings.Contains(final, "bash: running") {
+	if strings.Contains(final, "◌ $  sleep 5") {
 		t.Fatalf("settled tool left a duplicate running row: %q", final)
 	}
-	if strings.Count(final, "  bash: done") != 1 {
-		t.Fatalf("settled tool did not commit exactly one indented line: %q", final)
+	if strings.Count(final, "• $  sleep 5") != 1 {
+		t.Fatalf("settled tool did not commit exactly one compact row: %q", final)
 	}
 	q.write("/quit\r")
 	q.finish()
@@ -751,16 +751,16 @@ func TestActualCancelDuringToolKeepsCancellationVisibleAndSettles(t *testing.T) 
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
 	q.prompt()
 	q.write("run a long tool\r")
-	q.wait("bash: running")
+	q.wait("◌ $  sleep 30")
 	q.write("\x1b")
 	q.wait("Cancelling")
-	q.wait(": cancelled")
+	q.wait("· cancelled")
 	q.prompt()
 	screen := q.screen.Text()
-	if strings.Contains(screen, "bash: running") {
+	if strings.Contains(screen, "◌ $  sleep 30") {
 		t.Fatalf("cancelled tool left a running row: %q", screen)
 	}
-	if !strings.Contains(screen, "bash: cancelled") {
+	if !strings.Contains(screen, "cancelled") {
 		t.Fatalf("cancelled tool did not settle with a cancelled state: %q", screen)
 	}
 	// The next prompt is usable after the cancellation settles.

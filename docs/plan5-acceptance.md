@@ -2,15 +2,9 @@
 
 ## Status
 
-PLAN5 implementation is in progress. This ledger records the compaction checkpoint and theme-core checkpoint; it does not mark any PLAN5 gate complete. Theme application/discovery, terminal query routing, message/tool hierarchy, tool summaries, replay, and remaining platform and human checks are still open.
+PLAN5 implementation is in progress. The compaction and theme-core checkpoints are complete. Theme application, terminal color replies, discovery/reload, role-aware output, bounded tool summaries, replay, and retry status now have local tests. All PLAN5 gates remain open until the required acceptance evidence is complete.
 
-Reference revisions:
-
-- psi starting point: `e88b504`.
-- Pi: `d5b3de22d0e24a3e9c38a9410d3329b099717283`.
-- Codex: `23934d31b15b1127c83535f84854e5009f7cd51d`.
-
-No live provider request was made for this checkpoint. Tests use fake providers and isolated PTYs.
+No live provider request ran. Provider tests use synthetic data and loopback servers. The pinned references remain Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` and Codex `23934d31b15b1127c83535f84854e5009f7cd51d`.
 
 ## Compaction checkpoint
 
@@ -18,48 +12,69 @@ Ported Pi's projected cut-point policy for psi's retained session roles from `pa
 
 A split turn is summarized in two stages, following Pi's history and turn-prefix model and the pinned prompts. Previous summaries are sent through Pi's update-summary prompt path. Usage from completed summary calls is aggregated in the compaction entry; known usage is separately persisted if a required later summary is incomplete or fails. No checkpoint is appended unless every required summary completes. Preparation also follows Pi's recovery-omission suffix adjustment, projects context replacements before selecting summary input, and never cuts between a tool call and its trailing result.
 
-Manual `/compact` now performs read-only preparation before showing a spinner or requiring credentials. Expected no-work results use a muted informational notice and make no provider request or session change. Threshold no-work continues the pending request; overflow no-work returns the original context-limit failure without retrying.
+Manual `/compact` performs read-only preparation before showing a spinner or requiring credentials. Expected no-work results use a muted informational notice and make no provider request or session change. Threshold no-work continues the pending request; overflow no-work returns the original context-limit failure without retrying. Successful compaction uses a compact metadata marker.
 
 ### Evidence
 
 | Level | Evidence | Result |
 |---|---|---|
 | Component | `TestPrepareCompactionReportsNoWorkOutcomes`, `TestPrepareCompactionSplitsLongAssistantSpanAtPiCutPoint`, `TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget` | Pass; the long-span fixture uses the ordinary 20,000-token retention budget. |
-| Agent | Two-stage split summary, previous-summary update, aggregate usage, failure/incomplete-summary usage, no-checkpoint, threshold no-op, overflow no-op, retain-none, projected replacement, omitted recovery suffix, and tool-call/result boundary regressions | Pass with fake providers. |
-| Actual app | `TestActualEmptyCompactIsOfflineNoOpWithoutIndicator`; `TestActualCompactionShowsPiIndicatorAndSettles` uses a real PTY, loopback Anthropic server, and ordinary 20,000-token retention | Pass. The actual app request includes the selected prefix and excludes the retained continuation; the saved `firstKeptEntryId` is checked. |
-| Reference | Pi source reviewed at the pinned revision for cut points, split prompts, and usage combination | Source comparison only; no full Pi runtime session. |
-| Human | Visual review, selection/copy, flicker, and macOS/Windows Terminal acceptance | Not performed. |
+| Agent/storage | Two-stage split summary, previous-summary update, aggregate usage, failure/incomplete/cancelled-summary usage, failed-checkpoint append, no-checkpoint, threshold no-op, overflow no-op, retain-none, projected replacement, omitted recovery suffix, and tool-call/result boundary regressions | Pass with fake providers and storage fault injection. |
+| Actual app | Empty `/compact` offline no-op and a real-PTY ordinary-budget long-span summary through a loopback Anthropic server | Pass; the request and saved `firstKeptEntryId` are checked. |
+| Reference | Pinned Pi cut-point and split-summary source reviewed | Source comparison only; no full Pi runtime session. |
+| Human | Visual review, selection/copy, flicker, macOS and Windows Terminal acceptance | Not performed. |
 
-Validation at this checkpoint: `./scripts/check.sh` passed, including the full race run. The actual-app long-span PTY passed under the race detector after keeping its fixture to two 80,000-character assistant updates; it uses the ordinary 20,000-token retention setting.
+## Theme and presentation implementation checkpoint
 
-## Theme-core checkpoint
+Implemented strict Pi theme JSON parsing for all 56 pinned tokens, their foreground/background slots, five missing-only fallbacks, chained variable references, inert `$schema`, exact names, BOM handling, and strict top-level/color/export fields. Added unmodified Pi dark/light built-ins with hashes and resolved-color checks. Color support includes RGB, indexed/default, OKLCH, OKHSL, gamut mapping, and 256-color/truecolor output. The port retains the OKHSL/OKLab MIT notice.
 
-Implemented strict Pi theme JSON parsing for the 56 pinned tokens, their foreground/background slots, the five missing-only fallbacks, chained variable references, inert `$schema`, exact names, BOM handling, and strict top-level/color/export fields. Added both unmodified Pi built-ins and verified their SHA-256 hashes and resolved colors. Pi color parsing and conversion cover RGB, indexed/default, OKLCH, OKHSL, sRGB gamut mapping, 256-color quantization, and truecolor output. The port retains the OKHSL/OKLab MIT notice.
+Ported Pi's adaptive `system` theme, including appearance detection, contrast rules, three fallback tiers, panel surfaces, and dim-role behavior. Seven complete 56-token fixtures generated from the pinned `system-theme.ts` match token by token. These fixtures establish a local source comparison, not terminal or actual-app acceptance.
 
-Ported Pi's `system` family map, contrast curves, role rules, three fallback tiers, appearance detection, panel limits, dim fallbacks, and default-foreground handling. Seven complete 56-token fixtures under `internal/theme/testdata/pi-system-theme.jsonl` are generated from the pinned `system-theme.ts` and compared token by token: dark, light, mid-gray, complete palette, no replies, light appearance hint, and pending grayscale. All fixtures match exactly. WCAG checks verify generated text against representative message/tool surfaces. These results establish a local implementation/reference comparison, not terminal or actual-app theme acceptance.
+Theme and display settings load with user/project precedence and project-trust gating. CLI theme overrides, local resource paths, built-ins, project/user theme discovery, package theme data discovery, collision diagnostics, and terminal color-mode settings are connected to startup. The app applies the user theme before project consent, then loads trusted project resources after consent. `/reload` installs a resolved theme/display snapshot transactionally; `/session` reports selected theme diagnostics. A selected user theme file has a debounced `fsnotify` watch with last-good retention. File events are handled by the app loop, not by the watcher goroutine.
 
-Added config loading for `theme`, `themes`, and `terminal.trueColor`, with user/project scalar precedence, source bases, project-consent gating, and focused tests. These settings are not yet wired to startup or a CLI override.
+Terminal color and appearance replies use the existing input owner. Tests cover bounded OSC parsing, split and late replies, held keystrokes, appearance pairs, and replies not becoming editor input. No-color mode avoids generated color styles and color queries.
 
-Pi reference source hashes for this checkpoint:
+Role-aware output now covers user surfaces, assistant Markdown, metadata, notices, tool rows, completion, pickers, editor, and footer. Display settings include `outputPad`, `editorPaddingX`, `autocompleteMaxVisible`, and `markdown.codeBlockIndent`. Theme reload redraws the active tail and open picker/completion without replaying native scrollback or replacing the provider/session.
 
-| Source | SHA-256 |
-|---|---|
-| `system-theme.ts` | `877a3dc24fd194f2dc5ee9efe8f1699acdcdac6defa197009bc7b39920bbb729` |
-| `theme-tokens.ts` | `6c38a169da4f85ee04bc31980a13ef6a498b6be68e63faceda4f5a1e5c632ecf` |
-| `theme-schema.ts` | `6440ccc6aa0576f0f9447584b707b3bf09f2b77aed64687f4598db261588474b` |
-| `tui/src/colors.ts` | `d4fe729c424d2c07bc64cf0c3edfdbf5642865cba395dfb37234c6c88d65f468` |
-| `tui/src/oklab.ts` | `45b067e6e3605b385f595adecd7c0216f1c6b6686800d5c73f661286de736be6` |
+### Evidence
 
-Validation at this checkpoint: `go test ./internal/theme ./internal/config -count=1 -race` and `git diff --check` passed.
+| Level | Evidence | Result |
+|---|---|---|
+| Component | Theme parser/color/system/catalog tests; display, surface, picker, Markdown, and reply fixtures | Pass. |
+| Actual app | Two distinct custom-theme user surfaces, late appearance reply, atomic-save completion reload, explicit `/reload`, open model-picker query/current selection/cursor, invalid-save last-good retention and one warning, and a mid-stream theme change that preserves the committed sentinel while restyling the active tail | Pass in isolated Unix PTYs. |
+| Watch lifecycle | Eight atomic saves coalesce to one notification; directory creation, unselected-file filtering, debounce, close, and 100-cycle goroutine/file-descriptor checks | Pass locally. |
+| No-color | Theme serializer and replay tests assert no generated SGR while retaining text/geometry | Pass locally; human readability remains open. |
+| Human/platform | Native selection/copy, perceived flicker, native macOS, and Windows Terminal review | Not performed. |
 
-## Remaining PLAN5 work
+## Tool summary, replay, and retry checkpoint
 
-- Complete compaction preparation acceptance: cancellation between summary calls, append-failure/restart cases, and pinned Pi session-reader acceptance. Continue differential tests for cut-point edge cases.
-- Wire the theme core into startup, `--use-theme`, `--theme`, `/reload`, `/session`, project trust discovery, configured/local/package resource discovery, collisions, and the user's early bootstrap UI.
-- Add bounded OSC color and appearance reply decoding to the existing input owner, query/late-reply lifecycle, automatic pairs, user-theme watching, and clean suspend/resume/shutdown behavior.
-- Replace terminal `tokenSGR` use with immutable theme snapshots; add cell-aware foreground/background styling to user, assistant, metadata, notices, Markdown, tool rows, pickers, editor, and footer.
-- Implement role-aware surfaces and bounded live/lazy-replay tool summaries with separate hidden-body and credential canaries.
-- Complete retry/status, metadata, navigation, lifecycle, resource, platform, and human acceptance cases.
-- Update compatibility and user documentation, then build and checksum the executable from the final clean commit.
+Live tool rows display bounded, allowlisted invocation summaries: read path/range, write/edit target, or `$` plus a redacted command preview. Results, file bodies, edit text, shell output, and arbitrary argument maps remain hidden. Rows use distinct pending/success/error surfaces and retain explicit non-success outcomes. Replay uses the same formatter and structured timeline fields.
 
-G5-01 through G5-08 remain open. Missing native/platform and human evidence must remain blocked, not passed.
+For historical tool calls, the session index extracts only bounded display summaries while it already scans the record. It does not retain argument maps or decode hidden body strings. Lazy replay does not load a tool-only assistant record merely to recover its summary; a `LoadHook` regression checks this. This is a bounded-summary index rather than on-demand raw-record parsing. The summary count is capped per record, and each retained path/range or command field is bounded.
+
+Default replay displays a compact compaction marker. `/history` explicitly loads and displays the saved compaction summary with a metadata role. Trusted theme styles are not stripped after formatting. Retry observers report attempt, maximum, delay, and error class at the existing wait boundary for Anthropic and Codex; they do not alter retry policy or settlement.
+
+### Evidence
+
+| Level | Evidence | Result |
+|---|---|---|
+| Component | Summary allowlists, 512-byte bounds, path/range, Unicode suffix, command redaction, tool states, retry status formatting | Pass. |
+| Lazy session | Large hidden-body canaries, bounded timeline items, no full tool-call load for summary, compact/default versus explicit compaction history | Pass locally. |
+| Provider protocol | Loopback Anthropic and Codex retry tests verify a real retry and observed backoff metadata | Pass. |
+| Actual app | Codex tool round trip, atomic user-theme reload with completion query retained, open-picker theme reload, mid-stream theme reload, and Anthropic backoff status | Pass in isolated Unix PTYs. |
+| Resource profile | 512 MiB compacted-history fixture; summary bounds; 10k metadata/picker; 10k deltas; paste and key latency; idle frames; 100 watcher lifecycles | Pass locally. On WSL2 Linux/amd64 (Go 1.26.4): 512 MiB activation 2,323 ms / 44,680 KiB peak RSS; 10k metadata first page 675 ms; 10k picker query/render p95 4.17 ms; actual 10k deltas 1.095 s; 1k/10k single-character allocations 108,864/896,000 bytes (8.23×); key-to-frame p95 207 μs; cancellation dispatch p95 40 ns; 256 KiB paste 81.6 ms; 10 idle seconds emitted no frames; 100 watcher create/close cycles added no goroutine or file descriptor. |
+
+## Validation and open acceptance
+
+`./scripts/check.sh` passes on the current working tree, including the race suite. It covers the existing packages and new local regressions. This is local evidence only.
+
+Still open:
+
+- Finish remaining compaction differential and pinned-reader comparisons, plus app-level restart/cancellation journeys. The local agent/storage failure, cancellation, and append-fault regressions pass.
+- Capture the scheduled-frame-count and large-argument-allocation profiles. The measured latency, idle, history, picker, paste, delta-allocation, theme-burst, and watcher-lifecycle profiles listed above pass locally.
+- Complete the documented Linux/macOS/Windows platform matrix and native console journeys.
+- Complete human light/dark/no-color readability, selection/copy, SSH/tmux, and flicker review.
+- Run remote CI only if an authorized existing VCI coordinator destination is provided. Do not configure or create a coordinator.
+- Build and checksum the final delivered executable from the final source commit.
+
+G5-01 through G5-08 remain open. Local tests, cross-builds, and PTY fixtures do not close blocked remote, native-platform, or human gates.

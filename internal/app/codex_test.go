@@ -148,12 +148,12 @@ func TestCodexActualAppPTYToolRoundTrip(t *testing.T) {
 	wait("/ commands")
 	waitEditor()
 	master.WriteString("read fixture\r")
-	// Status state is styled as a separate Pi semantic token, so match its
-	// sanitized name and state around the generated SGR boundary.
-	wait("read")
-	wait("done")
+	// The compact success row omits redundant "done" text but keeps target identity.
 	wait("CODEX_APP_OK")
 	waitEditor()
+	if !strings.Contains(screen.Text(), "• read") || !strings.Contains(screen.Text(), "fixture.txt") {
+		t.Fatalf("settled Codex tool row is missing its action summary: %s", screen.Text())
+	}
 	master.WriteString("/quit\r")
 	finished := make(chan error, 1)
 	go func() { finished <- cmd.Wait() }()

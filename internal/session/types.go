@@ -8,6 +8,8 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+
+	"psi/internal/event"
 )
 
 // CurrentSessionVersion matches Pi CURRENT_SESSION_VERSION at the pinned revision.
@@ -487,8 +489,9 @@ type entryBase struct {
 
 // Entry is the union of all v3 session entries.
 type Entry struct {
-	provenanceTarget string // metadata only, never serialized
-	Kind             string // type discriminator
+	provenanceTarget string                       // metadata only, never serialized
+	toolSummaries    map[string]event.ToolSummary // bounded display data extracted during indexing
+	Kind             string                       // type discriminator
 	Base             entryBase
 	// Exactly one payload set (except header handled separately).
 	Message             *SessionMessageEntry

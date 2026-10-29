@@ -116,6 +116,24 @@ func (m *VTModel) Feed(b []byte) {
 			if len(p) < 2 {
 				return
 			}
+			if p[1] == ']' {
+				end := -1
+				for i := 2; i < len(p); i++ {
+					if p[i] == 0x07 {
+						end = i + 1
+						break
+					}
+					if p[i] == 27 && i+1 < len(p) && p[i+1] == '\\' {
+						end = i + 2
+						break
+					}
+				}
+				if end < 0 {
+					return
+				}
+				m.pending = p[end:]
+				continue
+			}
 			if p[1] != '[' {
 				m.pending = p[2:]
 				continue

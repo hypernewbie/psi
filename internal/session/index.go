@@ -136,6 +136,9 @@ func loadRecord(f *os.File, meta RecordMeta) (*Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	if meta.entry != nil {
+		loaded.toolSummaries = meta.entry.toolSummaries
+	}
 	if meta.ID != "" && loaded.ID() != meta.ID {
 		return nil, fmt.Errorf("session file changed externally: record identity changed")
 	}

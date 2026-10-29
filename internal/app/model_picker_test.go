@@ -308,9 +308,9 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	}
 	close(release)
 	released = true
-	q.wait("(compacted)")
+	q.wait("Context compacted")
 	q.prompt()
-	if !strings.Contains(q.screen.Text(), "(compacted)") {
+	if !strings.Contains(q.screen.Text(), "[compaction]") || !strings.Contains(q.screen.Text(), "Context compacted") {
 		t.Fatalf("compaction did not settle: %q", q.screen.Text())
 	}
 	after, err := os.ReadFile(store.File())

@@ -27,6 +27,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "thinking", Syntax: "/thinking [level]", Description: "select or set thinking level"},
 	{Name: "compact", Syntax: "/compact [focus]", Description: "real cancellable summary with settled outcome"},
 	{Name: "session", Syntax: "/session", Description: "identity, workspace, provider/model, thinking, usage"},
+	{Name: "reload", Syntax: "/reload", Description: "reload theme and terminal display data"},
 	{Name: "history", Syntax: "/history [N|all]", Description: "last N user spans or display full history"},
 	{Name: "quit", Syntax: "/quit", Description: "settle work, restore terminal"},
 }

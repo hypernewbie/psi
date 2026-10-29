@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -516,6 +517,8 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 		enabled[d.Name] = true
 	}
 	for i, tc := range calls {
+		home, _ := os.UserHomeDir()
+		summary := tools.SummarizeArguments(tc.Name, tc.Arguments, l.store.Cwd(), home)
 		if err := ctx.Err(); err != nil {
 			for _, pending := range calls[i:] {
 				msg := session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{
@@ -526,11 +529,12 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 				if _, aerr := l.store.AppendMessage(msg); aerr != nil {
 					return fmt.Errorf("storage failure, stopping: %w", aerr)
 				}
-				l.sink(event.Event{Type: event.ToolEnd, ToolName: pending.Name, ToolCallID: pending.ID, State: "not started"})
+				pendingSummary := tools.SummarizeArguments(pending.Name, pending.Arguments, l.store.Cwd(), home)
+				l.sink(event.Event{Type: event.ToolEnd, ToolName: pending.Name, ToolCallID: pending.ID, State: "not started", Summary: pendingSummary})
 			}
 			return err
 		}
-		l.sink(event.Event{Type: event.ToolStart, ToolName: tc.Name, ToolCallID: tc.ID, State: "running"})
+		l.sink(event.Event{Type: event.ToolStart, ToolName: tc.Name, ToolCallID: tc.ID, State: "running", Summary: summary})
 		res := tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: "Tool is not enabled in this session"}}}
 		if enabled[tc.Name] {
 			res = l.reg.DispatchCtx(ctx, tools.Invocation{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
@@ -569,7 +573,8 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 		if _, err := l.store.AppendMessage(msg); err != nil {
 			return fmt.Errorf("storage failure, stopping: %w", err)
 		}
-		l.sink(event.Event{Type: event.ToolEnd, ToolName: tc.Name, ToolCallID: tc.ID, State: state})
+		tools.SetExitCode(&summary, res.Details)
+		l.sink(event.Event{Type: event.ToolEnd, ToolName: tc.Name, ToolCallID: tc.ID, State: state, Summary: summary})
 	}
 	return nil
 }

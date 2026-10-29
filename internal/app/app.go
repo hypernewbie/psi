@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,6 +27,7 @@ import (
 	"psi/internal/session"
 	"psi/internal/skills"
 	"psi/internal/terminal"
+	pitheme "psi/internal/theme"
 	"psi/internal/tools"
 )
 
@@ -33,6 +35,9 @@ type Options struct {
 	Help, Version, Continue, Resume                           bool
 	SessionPath, Provider, Model, Thinking, SessionDir, Tools string
 	NoTools, NoSession, AllowProj, DenyProj                   bool
+	NoThemes                                                  bool
+	UseTheme                                                  string
+	ThemePaths                                                []string
 }
 
 func Parse(args []string) (Options, *flag.FlagSet, error) {
@@ -52,6 +57,15 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.DenyProj, "deny-project", false, "deny protected project resources")
+	fs.BoolVar(&o.NoThemes, "no-themes", false, "disable configured and discovered theme resources")
+	fs.StringVar(&o.UseTheme, "use-theme", "", "select a Pi theme for this invocation")
+	fs.Func("theme", "load an additional local theme file or directory (repeatable)", func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("--theme path must not be empty")
+		}
+		o.ThemePaths = append(o.ThemePaths, value)
+		return nil
+	})
 	if err := fs.Parse(args); err != nil {
 		return o, fs, err
 	}
@@ -107,7 +121,16 @@ func Run(args []string, version string) error {
 		return err
 	}
 	agentDir := session.AgentDir()
-	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME")})
+	userSettings, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), "", false)
+	if err != nil {
+		return err
+	}
+	themeMode := pitheme.DetectColorMode(userSettings.Settings.TerminalTrueColor, envMap(), goruntime.GOOS)
+	colorAppearance := pitheme.DetectTerminalAppearance(pitheme.TerminalColors{}, "", os.Getenv("COLORFGBG"))
+	userCatalog := pitheme.LoadCatalog(themeCatalogOptions(userSettings.Settings, o, agentDir, cwd, false, themeMode))
+	userTheme, _, _ := resolveThemeSnapshot(userCatalog, selectedThemeSetting(userSettings.Settings, o), colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
+	_, noColor := os.LookupEnv("NO_COLOR")
+	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: userTheme, NoColor: noColor, Display: presentationDisplay(userSettings.Settings)})
 	consent, err := askProjectConsent(o, cwd, console, lifecycle)
 	if err != nil {
 		return err
@@ -117,6 +140,11 @@ func Run(args []string, version string) error {
 		return err
 	}
 	st := loaded.Settings
+	themeMode = pitheme.DetectColorMode(st.TerminalTrueColor, envMap(), goruntime.GOOS)
+	themeCatalog := pitheme.LoadCatalog(themeCatalogOptions(st, o, agentDir, cwd, consent, themeMode))
+	themeSetting := selectedThemeSetting(st, o)
+	activeTheme, activeThemeName, themeFallback := resolveThemeSnapshot(themeCatalog, themeSetting, colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
+	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: activeTheme, NoColor: noColor, Display: presentationDisplay(st)})
 	if o.NoTools {
 		st.DefaultTools = []string{}
 	} else if o.Tools != "" {
@@ -158,7 +186,12 @@ func Run(args []string, version string) error {
 	if err := store.TryLock(); err != nil {
 		return err
 	}
-	r := &runtime{store: store, options: o, settings: st, models: models, skills: sk, prompt: prompt, agentDir: agentDir}
+	r := &runtime{
+		store: store, options: o, settings: st, models: models, skills: sk, prompt: prompt, agentDir: agentDir,
+		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
+		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
+		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
+	}
 	defer func() {
 		r.store.Unlock()
 		if r.prov != nil {
@@ -169,7 +202,10 @@ func Run(args []string, version string) error {
 		return err
 	}
 	r.tty, r.lifecycle, r.signals = tty, lifecycle, signals
+	r.queryTerminalColors(console, 100*time.Millisecond)
+	console.SetDeferDraw(true)
 	startupOut := terminal.RawOutput{W: console}
+	writeThemeDiagnostics(startupOut, r.themeDiagnostics, r.themeFallback)
 	grouped := map[string]int{}
 	for _, d := range diagnostics {
 		grouped[d.Message]++
@@ -189,13 +225,13 @@ func Run(args []string, version string) error {
 			}
 		}
 		if r.authErr != nil {
-			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error()+" (offline commands still work; /model to select, /session for status)", 80, false) {
+			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error()+" (offline commands still work; /model to select, /session for status)", 80, noColorEnvironment(), r.theme) {
 				fmt.Fprintln(startupOut, line)
 			}
 		}
 		fmt.Fprintln(startupOut, "esc interrupt · ctrl+c/ctrl+d clear/exit · / commands")
 	} else if r.authErr != nil {
-		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error(), 80, false) {
+		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error(), 80, noColorEnvironment(), r.theme) {
 			fmt.Fprintln(startupOut, line)
 		}
 	}
@@ -226,6 +262,21 @@ type runtime struct {
 	signals                  chan os.Signal
 	footerKey                string
 	footerSnapshot           terminal.PresentationSnapshot
+	themeCatalog             *pitheme.Catalog
+	theme                    *pitheme.Theme
+	themeSetting             string
+	themeName                string
+	themeMode                pitheme.ColorMode
+	themeColors              pitheme.TerminalColors
+	themeColorsReceived      bool
+	themeColorCollector      *terminalColorCollector
+	themeAppearance          string
+	themeFallback            string
+	themeDiagnostics         []pitheme.Diagnostic
+	projectTrusted           bool
+	reportedColorScheme      string
+	activeToolName           string
+	activeToolSummary        event.ToolSummary
 	timerFrames              int
 	eventFrames              int
 }
@@ -352,7 +403,7 @@ func askProjectConsent(o Options, cwd string, console *terminal.Console, lifecyc
 		return true, nil
 	}
 	hasProject := false
-	for _, p := range []string{".pi/settings.json", ".pi/skills", ".pi/SYSTEM.md", ".pi/APPEND_SYSTEM.md", ".agents/skills"} {
+	for _, p := range []string{".pi/settings.json", ".pi/skills", ".pi/themes", ".pi/packages", ".pi/SYSTEM.md", ".pi/APPEND_SYSTEM.md", ".agents/skills"} {
 		if _, err := os.Stat(filepath.Join(cwd, p)); err == nil {
 			hasProject = true
 			break
@@ -526,7 +577,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	if console == nil || r.store == nil {
 		return
 	}
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact)
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
@@ -534,9 +585,11 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		}
 		sessionName := r.store.SessionName()
 		snapshot := terminal.PresentationSnapshot{
+			Display:          presentationDisplay(r.settings),
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName,
 			Provider: r.ov.Provider, ProviderCount: footerProviderCount(r.models), Model: r.ov.Model,
-			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking), AutoCompact: r.cfg.AutoCompact,
+			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking), AutoCompact: r.cfg.AutoCompact, Theme: r.theme,
+			NoColor: noColorEnvironment(),
 		}
 		if accounting, err := r.store.Accounting(); err == nil {
 			if accounting.Usage.Input > 0 {
@@ -556,6 +609,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		}
 		r.footerKey, r.footerSnapshot = key, snapshot
 	}
+	r.footerSnapshot.Theme = r.theme
 	console.SetPresentation(r.footerSnapshot)
 }
 
@@ -623,9 +677,12 @@ func (r *runtime) replace(next *session.Store) error {
 
 func (r *runtime) draw(console *terminal.Console) {
 	r.refreshPresentation(console)
+	if r.activeToolName != "" {
+		console.SetToolRowNoDraw(terminal.FormatToolRowWithDisplay(r.activeToolSummary, r.activeToolName, "running", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme))
+	}
 	if r.selector != nil {
 		width, rows := console.PickerSize()
-		console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor))
+		console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else {
 		console.ClearPickerRows()
 	}
@@ -636,9 +693,19 @@ func (r *runtime) repl(console *terminal.Console) error {
 	out := terminal.RawOutput{W: console}
 	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
 	notice := func(kind terminal.NoticeKind, text string) {
-		for _, line := range terminal.FormatNotice(kind, text, console.StatusWidth(), false) {
+		for _, line := range terminal.FormatNotice(kind, text, console.StatusWidth(), noColorEnvironment(), r.theme) {
 			fmt.Fprintln(out, line)
 		}
+	}
+	var themeChanges <-chan struct{}
+	var watch *themeWatch
+	var lastThemeWatchError string
+	if created, err := newThemeWatch(r.agentDir, r.selectedUserThemePath()); err == nil {
+		watch = created
+		themeChanges = watch.changes
+		defer watch.Close()
+	} else {
+		notice(terminal.NoticeWarning, "Theme file watching is unavailable; use /reload to apply theme changes.")
 	}
 	stream := terminal.NewStreamer(terminal.StreamOutput{Console: console}, true)
 	status := terminal.NewStatusWriter(out)
@@ -662,8 +729,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var submittedCursor int
 	var suspendPending bool
 	inputs := console.Inputs
-	var pendingInputs []terminal.Input
+	pendingInputs := console.TakeHeldInputs()
 	var pendingInputBytes int
+	for _, input := range pendingInputs {
+		pendingInputBytes += len(input.Key) + len(input.Reply)
+	}
 	frameTimer := time.NewTimer(time.Hour)
 	frameTimer.Stop()
 	defer frameTimer.Stop()
@@ -761,6 +831,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 						exiting = true
 						return false
 					}
+					if len(input.Reply) > 0 {
+						r.handleTerminalReply(console, input.Reply)
+						continue
+					}
 					if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
 						return false
 					}
@@ -803,7 +877,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// Startup activation: display current view before the next editable prompt (P2-035).
 	// Same projector + replay engine as /resume (P2-036).
 	if act, err := PrepareActivation(r.store); err == nil {
-		if !replayActivationAtWidth(emitReplay, act, true, "", console.StatusWidth()) {
+		if !replayActivationAtWidthWithDisplayAndColor(emitReplay, act, true, "", console.StatusWidth(), presentationDisplay(r.settings), noColorEnvironment(), r.theme) {
 			stoppedReplay()
 		}
 		console.Editor.SetHistory(act.Recall)
@@ -835,16 +909,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 			runOutcome, visibleRunText = "", false
 		case event.RunEnd:
 			runOutcome = ev.Outcome
+		case event.Retry:
+			if r.state != StateCancelling {
+				r.state = StateWaiting
+				setActivity(formatRetryActivity(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond))
+			}
 		case event.ToolStart:
 			stream.Close()
 			r.state = StateRunningTool
-			console.SetToolRow(terminal.FormatStatus(ev.ToolName, terminal.ToolRunning))
+			r.activeToolName, r.activeToolSummary = ev.ToolName, ev.Summary
+			display := presentationDisplay(r.settings)
+			console.SetToolRow(terminal.FormatToolRowWithDisplay(ev.Summary, ev.ToolName, "running", console.StatusWidth(), noColorEnvironment(), display, r.theme))
 			setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
-			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolRunning)
+			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, "running", display, r.theme, noColorEnvironment())
 		case event.ToolEnd:
 			console.ClearToolRow()
-			status.Update(ev.ToolName, ev.ToolCallID, terminal.ToolState(ev.State))
-			console.Draw()
+			r.activeToolName, r.activeToolSummary = "", event.ToolSummary{}
+			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, ev.State, presentationDisplay(r.settings), r.theme, noColorEnvironment())
 			if r.state != StateCancelling {
 				r.state = StateWaiting
 				setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
@@ -876,7 +957,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		if strings.TrimSpace(display) != "" {
-			for _, line := range terminal.FormatMessage(display, console.StatusWidth(), false) {
+			for _, line := range terminal.FormatUserMessageWithDisplay(display, console.StatusWidth(), false, presentationDisplay(r.settings), r.theme) {
 				fmt.Fprintln(out, line)
 			}
 		}
@@ -892,6 +973,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
+		if observable, ok := r.prov.(interface {
+			SetRetryObserver(func(provider.RetryInfo))
+		}); ok {
+			observable.SetRetryObserver(func(info provider.RetryInfo) {
+				seq++
+				events <- event.Event{Type: event.Retry, Generation: gen, Seq: seq, SessionID: r.store.Header().ID,
+					RetryAttempt: info.Attempt, RetryMaximum: info.Maximum, RetryDelayMs: int64(info.Delay / time.Millisecond), RetryClass: info.Class}
+			})
+		}
 		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
 			seq++
 			e.Generation, e.Seq, e.SessionID = gen, seq, r.store.Header().ID
@@ -912,9 +1002,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return err
 		}
 		inputs = console.Inputs
+		r.beginTerminalColorQuery(console)
 		r.draw(console)
 		return console.Err()
 	}
+	console.SetDeferDraw(false)
 	r.draw(console)
 	for {
 		if exiting && !busy {
@@ -950,6 +1042,19 @@ func (r *runtime) repl(console *terminal.Console) error {
 			frameTick = frameTimer.C
 		}
 		select {
+		case <-themeChanges:
+			if err := r.reloadTheme(); err != nil {
+				if err.Error() != lastThemeWatchError {
+					notice(terminal.NoticeWarning, "Theme reload failed; the last valid theme remains active. "+err.Error())
+					lastThemeWatchError = err.Error()
+				}
+				continue
+			}
+			lastThemeWatchError = ""
+			if watch != nil {
+				watch.SetSelected(r.selectedUserThemePath())
+			}
+			r.draw(console)
 		case <-frameTick:
 			frameTick = nil
 			_, beforeFrames, _, _ := console.FrameStats()
@@ -998,6 +1103,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case ev := <-events:
 			recordEventFrames(func() { applyEvent(ev) })
 		case err := <-done:
+			if observable, ok := r.prov.(interface {
+				SetRetryObserver(func(provider.RetryInfo))
+			}); ok {
+				observable.SetRetryObserver(nil)
+			}
+			r.activeToolName, r.activeToolSummary = "", event.ToolSummary{}
+			console.ClearToolRow()
 			_, doneFramesBefore, _, _ := console.FrameStats()
 			// Drain events before drawing the next prompt. A completed run can
 			// otherwise race its final text delta through this select.
@@ -1008,6 +1120,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			cancel()
 			busy = false
 			stream.Close()
+			console.ClearToolRow()
 			if !exiting {
 				setActivity("")
 			} else {
@@ -1037,7 +1150,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 					notice(terminal.NoticeError, err.Error())
 				}
 			} else if compacting {
-				print("(compacted)")
+				for _, line := range terminal.FormatMetadataMessage("[compaction] ", "Context compacted", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
+					fmt.Fprintln(out, line)
+				}
 			}
 			compacting = false
 			if exiting {
@@ -1077,6 +1192,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				return nil
+			}
+			if len(input.Reply) > 0 {
+				if r.handleTerminalReply(console, input.Reply) {
+					if watch != nil {
+						watch.SetSelected(r.selectedUserThemePath())
+					}
+					r.draw(console)
+				}
+				continue
 			}
 			if input.Resize {
 				r.draw(console)
@@ -1162,7 +1286,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						print("resumed " + r.store.Header().ID)
 						r.generation++
-						if !replayActivationAtWidth(emitReplay, act, false, oldID, console.StatusWidth()) {
+						if !replayActivationAtWidthWithDisplayAndColor(emitReplay, act, false, oldID, console.StatusWidth(), presentationDisplay(r.settings), noColorEnvironment(), r.theme) {
 							stoppedReplay()
 						}
 						console.Editor.SetHistory(act.Recall)
@@ -1239,7 +1363,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if cmd.Name == "history" {
-					complete, err := renderStoreHistoryAtWidth(r.store, cmd.Arg, emitReplay, console.StatusWidth())
+					complete, err := renderStoreHistoryAtWidthWithDisplayAndColor(r.store, cmd.Arg, emitReplay, console.StatusWidth(), presentationDisplay(r.settings), noColorEnvironment(), r.theme)
 					if err != nil {
 						print("error: " + err.Error())
 					} else if !complete {
@@ -1305,6 +1429,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				quit, err := r.command(cmd, out)
+				if cmd.Name == "reload" && err == nil && watch != nil {
+					watch.SetSelected(r.selectedUserThemePath())
+				}
 				refreshRecall()
 				if err != nil {
 					print("error: " + err.Error())
@@ -1367,6 +1494,25 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 			returned = "unknown (no stored response)"
 		}
 		print(fmt.Sprintf("session %s\nfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.EstimatedContext(proj, r.cfg), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
+		themeSource := "built-in"
+		if r.theme != nil && r.theme.SourcePath != "" {
+			themeSource = r.theme.SourcePath
+		}
+		print(fmt.Sprintf("theme %s (%s, %s, %s; %s)", r.themeName, r.themeAppearance, r.themeMode, themeSource, r.themeSetting))
+		if r.themeFallback != "" {
+			print("theme fallback: " + r.themeFallback)
+		}
+	case "reload":
+		if strings.TrimSpace(cmd.Arg) != "" {
+			return false, fmt.Errorf("use /reload")
+		}
+		if err := r.reloadTheme(); err != nil {
+			return false, err
+		}
+		if r.lifecycle != nil && r.lifecycle.console != nil {
+			r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
+		}
+		print(fmt.Sprintf("theme reloaded: %s (%s, %s)", r.themeName, r.themeAppearance, r.themeMode))
 	case "new":
 		next, err := session.New(session.OpenOptions{Cwd: r.store.Cwd(), SessionDir: r.store.Dir(), AgentDir: r.agentDir, Persist: r.store.Persistent()})
 		if err != nil {
@@ -1382,7 +1528,7 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 	case "history":
 		// /history [N|all]: append last N user spans or full active-branch history (P2-041).
 		// Display-only: no model request, no file change.
-		_, err := renderStoreHistory(r.store, cmd.Arg, func(s string) bool { print(s); return true })
+		_, err := renderStoreHistory(r.store, cmd.Arg, func(s string) bool { fmt.Fprintln(out, s); return true }, r.theme)
 		if err != nil {
 			return false, err
 		}

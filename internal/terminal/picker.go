@@ -1,5 +1,7 @@
 package terminal
 
+import pitheme "psi/internal/theme"
+
 // PickerMode selects how the picker region is composed.
 type PickerMode uint8
 
@@ -56,13 +58,17 @@ func (p *ChoicePicker) SelectedOption() (ChoiceOption, bool) {
 	return p.Options[p.Selected], true
 }
 
-func (p *ChoicePicker) Rows(width int, noColor bool) []string {
+func (p *ChoicePicker) Rows(width int, noColor bool, palette ...*pitheme.Theme) []string {
+	var selectedTheme *pitheme.Theme
+	if len(palette) > 0 {
+		selectedTheme = palette[0]
+	}
 	if p == nil {
 		return nil
 	}
 	var rows []string
 	appendRow := func(spans []StyledSpan) {
-		rows = append(rows, FormatStyledRow(StyledRow{Spans: spans}, width, noColor))
+		rows = append(rows, FormatStyledRow(StyledRow{Spans: spans}, width, noColor, selectedTheme))
 	}
 	// Pi's trust selector shows a title, the visible folder, and the options
 	// with a selection pointer and a current marker. psi keeps its reduced
@@ -83,7 +89,11 @@ func (p *ChoicePicker) Rows(width int, noColor bool) []string {
 		if option.Description != "" && width >= 48 {
 			spans = append(spans, StyledSpan{Text: "  " + option.Description, Token: TokenMuted})
 		}
-		appendRow(spans)
+		row := StyledRow{Spans: spans}
+		if i == p.Selected {
+			row.Surface = TokenSelectedBg
+		}
+		rows = append(rows, FormatStyledRow(row, width, noColor, selectedTheme))
 	}
 	if p.Context != "" {
 		appendRow([]StyledSpan{{Text: p.Context, Token: TokenMuted}})

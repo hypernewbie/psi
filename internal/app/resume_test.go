@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"psi/internal/event"
 	"psi/internal/session"
 	"psi/internal/terminal"
 	"psi/internal/testutil"
@@ -76,16 +77,16 @@ func TestResumeDisplaysHistory(t *testing.T) {
 	}
 }
 
-// The replayed tool row keeps the same margin as the live settled row, so a
-// resumed session looks like the live one.
+// Replayed tool calls use the same compact, inset row as live settlements.
 func TestReplayedToolRowKeepsTheLiveMargin(t *testing.T) {
 	var lines []string
 	items := []session.TranscriptItem{{Kind: session.KindTool, Text: "read: done"}}
-	renderTimelineAtWidth(func(s string) bool {
+	renderTimelineAtWidthWithDisplayAndColor(func(s string) bool {
 		lines = append(lines, s)
 		return true
-	}, items, 80)
-	if len(lines) != 1 || lines[0] != terminal.MessageIndent+"read: done" {
-		t.Fatalf("replayed tool row lost the live margin: %q", lines)
+	}, items, 80, terminal.DefaultDisplaySettings(), true)
+	want := terminal.FormatToolRow(event.ToolSummary{Kind: "read", Note: "summary unavailable"}, "read", "done", 80, true)
+	if len(lines) != 1 || lines[0] != want {
+		t.Fatalf("replayed tool row differs from the live format: got %q want %q", lines, want)
 	}
 }

@@ -65,7 +65,10 @@ func handleBootstrapSignal(lifecycle *terminalLifecycle, sig os.Signal, redraw f
 // runChoicePicker displays a fixed decision in the picker region. Cancellation
 // returns no selection; callers must apply their explicit deny/default policy.
 func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, picker *terminal.ChoicePicker) (index int, cancelled bool, err error) {
-	draw := func() { lifecycle.redrawPicker(func(width int) []string { return picker.Rows(width, false) }) }
+	draw := func() {
+		snapshot := console.GetPresentation()
+		lifecycle.redrawPicker(func(width int) []string { return picker.Rows(width, snapshot.NoColor, snapshot.Theme) })
+	}
 	console.Editor.Clear()
 	draw()
 	if err := console.Err(); err != nil {
@@ -84,6 +87,9 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 			}
 			if input.Err != nil {
 				return -1, true, input.Err
+			}
+			if len(input.Reply) > 0 {
+				continue
 			}
 			if input.Resize {
 				draw()
@@ -133,7 +139,8 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, selector *Selector) (*session.SessionInfo, bool, error) {
 	draw := func() {
 		width, rows := console.PickerSize()
-		console.SetPickerRows(selector.RenderPickerRows(width, rows, false))
+		snapshot := console.GetPresentation()
+		console.SetPickerRows(selector.RenderPickerRows(width, rows, snapshot.NoColor, snapshot.Theme))
 		console.Draw()
 	}
 	console.Editor.Clear()
@@ -154,6 +161,9 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 			}
 			if input.Err != nil {
 				return nil, true, input.Err
+			}
+			if len(input.Reply) > 0 {
+				continue
 			}
 			if input.Resize {
 				draw()

@@ -17,12 +17,13 @@ import (
 )
 
 type Client struct {
-	HTTP        *http.Client
-	BaseURL     string
-	APIKey      string
-	Headers     map[string]string
-	MaxRetry    int
-	IdleTimeout time.Duration
+	HTTP          *http.Client
+	BaseURL       string
+	APIKey        string
+	Headers       map[string]string
+	MaxRetry      int
+	IdleTimeout   time.Duration
+	RetryObserver func(RetryInfo)
 }
 
 func NewClient(baseURL, apiKey string, maxRetry int, idle time.Duration) *Client {
@@ -38,6 +39,8 @@ func NewClient(baseURL, apiKey string, maxRetry int, idle time.Duration) *Client
 }
 
 func (c *Client) CloseIdle() { c.HTTP.CloseIdleConnections() }
+
+func (c *Client) SetRetryObserver(observer func(RetryInfo)) { c.RetryObserver = observer }
 
 type ErrorKind string
 
@@ -69,7 +72,7 @@ func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*R
 	if err != nil {
 		return nil, err
 	}
-	result, err := sendWithRetry(ctx, c.MaxRetry, func() (*Response, error) { return c.doOnce(ctx, raw, onText, req) })
+	result, err := sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) { return c.doOnce(ctx, raw, onText, req) })
 	if err == nil && result != nil {
 		result.ThinkingLevel = ""
 		if req.Model.AdaptiveThinking && req.Model.MidConvoEffort {
@@ -79,7 +82,18 @@ func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*R
 	return result, err
 }
 
+type RetryInfo struct {
+	Attempt int
+	Maximum int
+	Delay   time.Duration
+	Class   string
+}
+
 func sendWithRetry(ctx context.Context, maxRetry int, send func() (*Response, error)) (*Response, error) {
+	return sendWithRetryObserved(ctx, maxRetry, nil, send)
+}
+
+func sendWithRetryObserved(ctx context.Context, maxRetry int, observer func(RetryInfo), send func() (*Response, error)) (*Response, error) {
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -109,6 +123,9 @@ func sendWithRetry(ctx context.Context, maxRetry int, send func() (*Response, er
 			delay = time.Duration(1<<min(attempt, 6)) * 500 * time.Millisecond
 		}
 		delay = min(delay, 60*time.Second)
+		if observer != nil {
+			observer(RetryInfo{Attempt: attempt + 1, Maximum: maxRetry, Delay: delay, Class: string(pe.Kind)})
+		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

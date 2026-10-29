@@ -12,6 +12,7 @@ const (
 	RunEnd          Type = "run_end"
 	ToolStart       Type = "tool_start"
 	ToolEnd         Type = "tool_end"
+	Retry           Type = "retry"
 	CompactionStart Type = "compaction_start"
 	CompactionEnd   Type = "compaction_end"
 	Usage           Type = "usage"
@@ -23,12 +24,17 @@ const (
 // RunID + AttemptID + Seq order provider/tool actions.
 // ProvisionalID vs CommittedID distinguish transient deltas from durable completion.
 type Event struct {
-	Type       Type
-	Text       string
-	ToolName   string
-	ToolCallID string
-	State      string
-	Err        error
+	Type         Type
+	Text         string
+	ToolName     string
+	ToolCallID   string
+	State        string
+	Summary      ToolSummary
+	RetryAttempt int
+	RetryMaximum int
+	RetryDelayMs int64
+	RetryClass   string
+	Err          error
 
 	SessionID     string
 	Generation    int64

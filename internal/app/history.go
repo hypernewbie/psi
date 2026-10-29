@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"psi/internal/session"
+	"psi/internal/terminal"
+	pitheme "psi/internal/theme"
 )
 
 func historySelection(arg string) (bool, int, error) {
@@ -46,11 +48,19 @@ func historyItems(path []*session.Entry, arg string) ([]session.TranscriptItem, 
 	return append(out, items[start:]...), nil
 }
 
-func renderStoreHistory(store *session.Store, arg string, emit func(string) bool) (bool, error) {
-	return renderStoreHistoryAtWidth(store, arg, emit, 80)
+func renderStoreHistory(store *session.Store, arg string, emit func(string) bool, palette ...*pitheme.Theme) (bool, error) {
+	return renderStoreHistoryAtWidth(store, arg, emit, 80, palette...)
 }
 
-func renderStoreHistoryAtWidth(store *session.Store, arg string, emit func(string) bool, width int) (bool, error) {
+func renderStoreHistoryAtWidth(store *session.Store, arg string, emit func(string) bool, width int, palette ...*pitheme.Theme) (bool, error) {
+	return renderStoreHistoryAtWidthWithDisplay(store, arg, emit, width, terminal.DefaultDisplaySettings(), palette...)
+}
+
+func renderStoreHistoryAtWidthWithDisplay(store *session.Store, arg string, emit func(string) bool, width int, display terminal.DisplaySettings, palette ...*pitheme.Theme) (bool, error) {
+	return renderStoreHistoryAtWidthWithDisplayAndColor(store, arg, emit, width, display, false, palette...)
+}
+
+func renderStoreHistoryAtWidthWithDisplayAndColor(store *session.Store, arg string, emit func(string) bool, width int, display terminal.DisplaySettings, noColor bool, palette ...*pitheme.Theme) (bool, error) {
 	all, n, err := historySelection(arg)
 	if err != nil {
 		return false, err
@@ -59,6 +69,6 @@ func renderStoreHistoryAtWidth(store *session.Store, arg string, emit func(strin
 		return false, nil
 	}
 	return store.Timeline(all, n, func(it session.TranscriptItem) bool {
-		return renderTimelineAtWidth(emit, []session.TranscriptItem{it}, width)
+		return renderTimelineAtWidthWithDisplayAndColor(emit, []session.TranscriptItem{it}, width, display, noColor, palette...)
 	})
 }
