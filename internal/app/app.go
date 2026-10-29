@@ -552,7 +552,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		if projection, err := r.store.Projection(); err == nil && r.cfg.Model.ContextWindow > 0 {
 			estimated := agent.EstimatedContext(projection, r.cfg)
 			percent := 100 * float64(estimated) / float64(r.cfg.Model.ContextWindow)
-			snapshot.ContextEstimate = fmt.Sprintf("~%.1f%%/%s", percent, formatFooterTokens(float64(r.cfg.Model.ContextWindow)))
+			snapshot.ContextEstimate = "~" + formatFooterFixedOneDecimal(percent, "%") + "/" + formatFooterTokens(float64(r.cfg.Model.ContextWindow))
 		}
 		r.footerKey, r.footerSnapshot = key, snapshot
 	}

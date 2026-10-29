@@ -60,6 +60,19 @@ func TestFooterSnapshotUsesPiTokenFormatting(t *testing.T) {
 	}
 }
 
+func TestFooterPercentFormattingMatchesPi(t *testing.T) {
+	for _, tc := range []struct {
+		percent float64
+		want    string
+	}{
+		{10.15, "10.2%"}, {10.25, "10.3%"}, {10.35, "10.3%"}, {99.95, "100.0%"},
+	} {
+		if got := formatFooterFixedOneDecimal(tc.percent, "%"); got != tc.want {
+			t.Errorf("footer percent %v=%q; want Pi toFixed output %q", tc.percent, got, tc.want)
+		}
+	}
+}
+
 func TestFooterTokenFormattingMatchesPi(t *testing.T) {
 	for _, tc := range []struct {
 		tokens float64
