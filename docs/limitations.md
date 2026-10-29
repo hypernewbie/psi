@@ -73,6 +73,6 @@ Context-limit recovery permits at most one compaction and retry before visible p
 Synthetic loop/provider tests cover that path.
 Full compaction, provider, storage-fault, and actual-binary journeys remain incomplete acceptance requirements.
 
-The required measurements remain in [the acceptance ledger](acceptance.md), [the UI acceptance ledger](ui-acceptance.md), and [the robustness ledger](robustness.md).
+PLAN6 delivered-binary provider journeys passed, but live-provider service acceptance remains unrun. The broader requirements remain in [the acceptance ledger](acceptance.md), [the UI acceptance ledger](ui-acceptance.md), and [the robustness ledger](robustness.md).
 PLAN3 acceptance remains incomplete.
 These requirements are not new permanent exclusions.
