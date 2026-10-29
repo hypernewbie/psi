@@ -60,6 +60,7 @@ func (d *Decoder) Feed(data []byte) []Decoded {
 	}
 	if len(d.pending) > 0 && d.pending[0] == 27 && d.now().Sub(d.pendingAt) >= escapeTimeout {
 		if len(d.pending) >= 2 && d.pending[1] == ']' {
+			d.discardOSCEsc = d.pending[len(d.pending)-1] == 27
 			d.pending = nil
 			d.discardOSC = true
 			return out
@@ -167,7 +168,7 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 		d.pending = nil
 		if osc {
 			d.discardOSC = !terminatedOSC
-			d.discardOSCEsc = false
+			d.discardOSCEsc = !terminatedOSC && b == 27
 		} else {
 			d.discardEscape = true
 		}

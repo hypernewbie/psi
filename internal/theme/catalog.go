@@ -82,7 +82,7 @@ func LoadCatalog(options CatalogOptions) *Catalog {
 	if !options.NoThemes {
 		catalog.addSpecs(options.UserPaths, "user-settings", options.Mode)
 	}
-	if options.AgentDir != "" {
+	if options.AgentDir != "" && !options.NoThemes {
 		catalog.addDirectory(filepath.Join(options.AgentDir, "themes"), "user-auto", options.Mode, false)
 	}
 	if !options.NoThemes {
@@ -279,8 +279,12 @@ func (c *Catalog) addFile(path, source string, mode ColorMode) {
 		return
 	}
 	if existing, ok := c.themes[doc.Name]; ok {
+		winner := existing.path
+		if winner == "" {
+			winner = "built-in " + doc.Name
+		}
 		c.diagnostics = append(c.diagnostics, Diagnostic{
-			Level: "warning", Message: fmt.Sprintf("theme name %q collision (%s wins)", doc.Name, source),
+			Level: "warning", Message: fmt.Sprintf("theme name %q collision (keeping %s)", doc.Name, winner),
 			Name: doc.Name, Path: path, WinnerPath: existing.path, LoserPath: path,
 		})
 		return
@@ -356,6 +360,13 @@ func (c *Catalog) Get(name string) (*Theme, bool) {
 }
 
 func (c *Catalog) Resolve(setting, terminalTheme string, input SystemThemeInput, mode ColorMode) (*Theme, string, error) {
+	if first, second, pair := strings.Cut(setting, "/"); pair && (strings.Contains(second, "/") || strings.TrimSpace(first) == "" || strings.TrimSpace(second) == "") {
+		fallback, err := NewSystemTheme(input, mode)
+		if err == nil {
+			err = fmt.Errorf("invalid theme selection %q; use a name or light/dark pair", setting)
+		}
+		return fallback, "system", err
+	}
 	name := ResolveThemeSetting(setting, terminalTheme)
 	if name == "" || name == "system" {
 		resolved, err := NewSystemTheme(input, mode)

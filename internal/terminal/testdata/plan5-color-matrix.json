@@ -13,7 +13,7 @@
         "  \u001b[35m- \u001b[0mPreserve the current task.",
         "",
         "-- tool --",
-        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0msrc/main.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "   \u001b[32m•\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0m\u001b[35minternal/presentation/src/main.go:4-8\u001b[0m                                                                       ",
         "-- metadata --",
         "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted                                                                                       ",
         ""
@@ -28,7 +28,7 @@
         "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
         "",
         "-- tool --",
-        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145msrc/main.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "   \u001b[38;5;72m\u001b[48;5;23m•\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m \u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m\u001b[1mread\u001b[22m\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;23minternal/presentation/src/main.go:4-8\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m                                                                       \u001b[49m\u001b[39m",
         "-- metadata --",
         "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m                                                                                       \u001b[49m\u001b[39m",
         ""
@@ -46,7 +46,7 @@
         "  \u001b[35m- \u001b[0mPreserve the current task.",
         "",
         "-- tool --",
-        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0msrc/main.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "   \u001b[32m•\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0m\u001b[35minternal/presentation/src/main.go:4-8\u001b[0m                               ",
         "-- metadata --",
         "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted                                               ",
         ""
@@ -61,7 +61,7 @@
         "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
         "",
         "-- tool --",
-        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145msrc/main.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "   \u001b[38;5;72m\u001b[48;5;23m•\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m \u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m\u001b[1mread\u001b[22m\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;23minternal/presentation/src/main.go:4-8\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m                               \u001b[49m\u001b[39m",
         "-- metadata --",
         "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m                                               \u001b[49m\u001b[39m",
         ""
@@ -79,7 +79,7 @@
         "  \u001b[35m- \u001b[0mPreserve the current task.",
         "",
         "-- tool --",
-        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0msrc/main.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "   \u001b[32m•\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0m\u001b[35minternal/presentation/src/main.go:4-8\u001b[0m           ",
         "-- metadata --",
         "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted                           ",
         ""
@@ -94,7 +94,7 @@
         "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
         "",
         "-- tool --",
-        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145msrc/main.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "   \u001b[38;5;72m\u001b[48;5;23m•\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m \u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m\u001b[1mread\u001b[22m\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;23minternal/presentation/src/main.go:4-8\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m           \u001b[49m\u001b[39m",
         "-- metadata --",
         "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m                           \u001b[49m\u001b[39m",
         ""
@@ -112,7 +112,7 @@
         "  \u001b[35m- \u001b[0mPreserve the current task.",
         "",
         "-- tool --",
-        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0m…n.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "   \u001b[32m•\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0m\u001b[35m…resentation/src/main.go:4-8\u001b[0m",
         "-- metadata --",
         "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted       ",
         ""
@@ -127,7 +127,7 @@
         "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
         "",
         "-- tool --",
-        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145m…n.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "   \u001b[38;5;72m\u001b[48;5;23m•\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m \u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m\u001b[1mread\u001b[22m\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;23m…resentation/src/main.go:4-8\u001b[49m\u001b[39m",
         "-- metadata --",
         "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m       \u001b[49m\u001b[39m",
         ""
@@ -137,8 +137,8 @@
       "size": "20x6",
       "beforeTheme": [
         "-- user --",
-        "  › Create a concis",
-        "  report.          ",
+        "  › Create a       ",
+        "    concise report.",
         "",
         "-- assistant --",
         "  \u001b[33;1mProgress\u001b[0m",
@@ -147,7 +147,7 @@
         "    current task.",
         "",
         "-- tool --",
-        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[33m · outcome unk\u001b[0m",
+        "   \u001b[32m•\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0m\u001b[35m….go:4-8\u001b[0m",
         "-- metadata --",
         "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mCont",
         "  ext compacted    ",
@@ -155,8 +155,8 @@
       ],
       "selectedDarkTheme": [
         "-- user --",
-        "\u001b[38;5;254m\u001b[48;5;23m  › Create a concis\u001b[49m\u001b[39m",
-        "\u001b[38;5;254m\u001b[48;5;23m  report.\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m          \u001b[49m\u001b[39m",
+        "\u001b[38;5;254m\u001b[48;5;23m  › Create a\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m       \u001b[49m\u001b[39m",
+        "\u001b[38;5;254m\u001b[48;5;23m    concise report.\u001b[49m\u001b[39m",
         "",
         "-- assistant --",
         "\u001b[38;5;254m  \u001b[39m\u001b[38;5;172m\u001b[1mProgress\u001b[22m\u001b[39m",
@@ -165,7 +165,7 @@
         "\u001b[38;5;254m    current task.\u001b[39m",
         "",
         "-- tool --",
-        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;172m · outcome unk\u001b[39m",
+        "   \u001b[38;5;72m\u001b[48;5;23m•\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m \u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m\u001b[1mread\u001b[22m\u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;23m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;23m….go:4-8\u001b[49m\u001b[39m",
         "-- metadata --",
         "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mCont\u001b[49m\u001b[39m",
         "\u001b[38;5;145m\u001b[48;5;59m  ext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m    \u001b[49m\u001b[39m",

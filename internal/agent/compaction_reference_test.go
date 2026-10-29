@@ -14,6 +14,7 @@ import (
 
 	"psi/internal/provider"
 	"psi/internal/session"
+	"psi/internal/testutil"
 )
 
 // Capture the opt-in module before TestMain installs the isolated environment.
@@ -35,8 +36,8 @@ const preparation=m.prepareCompaction(entries,{enabled:true,reserveTokens:16384,
 const requests=[];
 const usage={input:20,output:5,cacheRead:0,cacheWrite:0,totalTokens:25,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}};
 const stream=async(_model,context)=>{requests.push(context);const n=requests.length;return {result:async()=>({role:'assistant',content:[{type:'text',text:n===1?'SYNTHETIC_HISTORY':'SYNTHETIC_TURN'}],stopReason:'stop',usage})}};
-const result=await m.compact(preparation,{id:'synthetic-model',api:'anthropic-messages',reasoning:false},undefined,undefined,undefined,undefined,undefined,stream);
-const prompts=requests.map(context=>{const message=context.messages.filter(m=>m.role==='user').at(-1);const content=message.content;const text=typeof content==='string'?content:content.filter(b=>b.type==='text').map(b=>b.text).join('\\n');return {hasPreviousSummary:text.includes('previous checkpoint'),hasRetainedBoundary:text.includes('retained boundary request'),hasAncient:text.includes('ancient discarded request'),hasCurrentTask:text.includes('ongoing current task')}});
+const result=await m.compact(preparation,{id:'synthetic-model',api:'anthropic-messages',reasoning:false},undefined,undefined,process.argv[3],undefined,undefined,stream);
+const prompts=requests.map(context=>{const message=context.messages.filter(m=>m.role==='user').at(-1);const content=message.content;const text=typeof content==='string'?content:content.filter(b=>b.type==='text').map(b=>b.text).join('\\n');return {hasPreviousSummary:text.includes('previous checkpoint'),hasRetainedBoundary:text.includes('retained boundary request'),hasAncient:text.includes('ancient discarded request'),hasCurrentTask:text.includes('ongoing current task'),hasFocus:text.includes('Additional focus: '+process.argv[3])}});
 console.log(JSON.stringify({firstKeptEntryId:preparation.firstKeptEntryId,isSplitTurn:preparation.isSplitTurn,prompts,summary:result.summary,totalTokens:result.usage.totalTokens}));
 `
 
@@ -46,8 +47,9 @@ func TestPiCompactionSummaryUsesInjectedStream(t *testing.T) {
 		t.Skip("set PSI_PI_SESSION_MODULE to the pinned Pi reference adapter")
 	}
 	if piReferenceNodePath == "" {
-		t.Skip("Node is required for the opt-in pinned Pi reference")
+		t.Fatal("Node is required for the requested pinned Pi reference")
 	}
+	const focus = "Preserve the deployment constraints."
 	store, _, fake, loop, _ := testSetup(t)
 	if _, err := store.AppendMessage(userMsg("ancient discarded request")); err != nil {
 		t.Fatal(err)
@@ -83,9 +85,9 @@ func TestPiCompactionSummaryUsesInjectedStream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	home := t.TempDir()
-	cmd := exec.CommandContext(ctx, piReferenceNodePath, "--no-warnings", "--input-type=module", "-e", piCompactionSummaryReferenceScript, module, store.File())
+	cmd := exec.CommandContext(ctx, piReferenceNodePath, "--no-warnings", "--input-type=module", "-e", piCompactionSummaryReferenceScript, module, store.File(), focus)
 	cmd.Dir = home
-	cmd.Env = []string{"HOME=" + home, "PATH=/usr/local/bin:/usr/bin:/bin", "PI_CODING_AGENT_DIR=" + filepath.Join(home, "agent"), "PI_CODING_AGENT_SESSION_DIR=" + filepath.Join(home, "sessions")}
+	cmd.Env = testutil.ChildEnv(home, map[string]string{"PI_CODING_AGENT_DIR": filepath.Join(home, "agent"), "PI_CODING_AGENT_SESSION_DIR": filepath.Join(home, "sessions")})
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("pinned Pi synthetic compaction: %v: %s", err, out)
@@ -98,6 +100,7 @@ func TestPiCompactionSummaryUsesInjectedStream(t *testing.T) {
 			HasRetainedBoundary bool `json:"hasRetainedBoundary"`
 			HasAncient          bool `json:"hasAncient"`
 			HasCurrentTask      bool `json:"hasCurrentTask"`
+			HasFocus            bool `json:"hasFocus"`
 		} `json:"prompts"`
 		Summary     string `json:"summary"`
 		TotalTokens int    `json:"totalTokens"`
@@ -115,15 +118,18 @@ func TestPiCompactionSummaryUsesInjectedStream(t *testing.T) {
 		{Text: "SYNTHETIC_HISTORY", StopReason: "stop", Usage: provider.Usage{Input: 20, Output: 5, TotalTokens: 25}},
 		{Text: "SYNTHETIC_TURN", StopReason: "stop", Usage: provider.Usage{Input: 20, Output: 5, TotalTokens: 25}},
 	}
-	if err := loop.Compact(t.Context(), Config{Model: modelMeta(), KeepRecentTokens: 20_000}, ""); err != nil {
+	if err := loop.Compact(t.Context(), Config{Model: modelMeta(), KeepRecentTokens: 20_000}, focus); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.Calls) != len(pi.Prompts) {
 		t.Fatalf("summary requests differ: psi=%d Pi=%d", len(fake.Calls), len(pi.Prompts))
 	}
-	for _, call := range fake.Calls {
+	for i, call := range fake.Calls {
 		if len(call.Messages) != 1 || call.Messages[0].Role != "user" {
 			t.Fatalf("psi summary request has unexpected transcript: %+v", call)
+		}
+		if !pi.Prompts[i].HasFocus || !strings.Contains(call.Messages[0].Content[0].Text, "Additional focus: "+focus) {
+			t.Fatalf("summary request %d lost operator focus (Pi=%+v)", i, pi.Prompts[i])
 		}
 	}
 	compacted := store.Entries()[len(store.Entries())-1].Compaction
@@ -138,7 +144,7 @@ func TestPiCompactionCutPointDifferential(t *testing.T) {
 		t.Skip("set PSI_PI_SESSION_MODULE to the pinned Pi reference adapter")
 	}
 	if piReferenceNodePath == "" {
-		t.Skip("Node is required for the opt-in pinned Pi reference")
+		t.Fatal("Node is required for the requested pinned Pi reference")
 	}
 	t.Run("ordinary-budget-long-assistant-span", func(t *testing.T) {
 		store, _, _, _, _ := testSetup(t)
@@ -214,7 +220,7 @@ func assertPiCompactionCutPoint(t *testing.T, module string, store *session.Stor
 	home := t.TempDir()
 	cmd := exec.CommandContext(ctx, piReferenceNodePath, "--no-warnings", "--input-type=module", "-e", piCompactionReferenceScript, module, store.File(), strconv.Itoa(keepRecentTokens))
 	cmd.Dir = home
-	cmd.Env = []string{"HOME=" + home, "PATH=/usr/local/bin:/usr/bin:/bin", "PI_CODING_AGENT_DIR=" + filepath.Join(home, "agent"), "PI_CODING_AGENT_SESSION_DIR=" + filepath.Join(home, "sessions")}
+	cmd.Env = testutil.ChildEnv(home, map[string]string{"PI_CODING_AGENT_DIR": filepath.Join(home, "agent"), "PI_CODING_AGENT_SESSION_DIR": filepath.Join(home, "sessions")})
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("pinned Pi compaction preparation: %v: %s", err, out)

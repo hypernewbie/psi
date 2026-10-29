@@ -233,6 +233,9 @@ func (l *Loop) requestSummary(ctx context.Context, cfg Config, focus, transcript
 	var prompt string
 	if turnPrefix {
 		prompt = "# Conversation\n" + transcript + "\n\n# Instructions\n" + turnPrefixSummaryPrompt
+		if focus != "" {
+			prompt += "\n\nAdditional focus: " + focus
+		}
 	} else {
 		base := initialSummaryPrompt
 		if previous != "" {

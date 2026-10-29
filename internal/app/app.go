@@ -276,6 +276,7 @@ type runtime struct {
 	projectTrusted           bool
 	reportedColorScheme      string
 	activeToolName           string
+	activeToolCallID         string
 	activeToolSummary        event.ToolSummary
 	timerFrames              int
 	eventFrames              int
@@ -917,14 +918,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.ToolStart:
 			stream.Close()
 			r.state = StateRunningTool
-			r.activeToolName, r.activeToolSummary = ev.ToolName, ev.Summary
+			r.activeToolName, r.activeToolCallID, r.activeToolSummary = ev.ToolName, ev.ToolCallID, ev.Summary
 			display := presentationDisplay(r.settings)
 			console.SetToolRow(terminal.FormatToolRowWithDisplay(ev.Summary, ev.ToolName, "running", console.StatusWidth(), noColorEnvironment(), display, r.theme))
 			setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, "running", display, r.theme, noColorEnvironment())
 		case event.ToolEnd:
 			console.ClearToolRow()
-			r.activeToolName, r.activeToolSummary = "", event.ToolSummary{}
+			r.activeToolName, r.activeToolCallID, r.activeToolSummary = "", "", event.ToolSummary{}
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, ev.State, presentationDisplay(r.settings), r.theme, noColorEnvironment())
 			if r.state != StateCancelling {
 				r.state = StateWaiting
@@ -1108,8 +1109,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}); ok {
 				observable.SetRetryObserver(nil)
 			}
-			r.activeToolName, r.activeToolSummary = "", event.ToolSummary{}
-			console.ClearToolRow()
 			_, doneFramesBefore, _, _ := console.FrameStats()
 			// Drain events before drawing the next prompt. A completed run can
 			// otherwise race its final text delta through this select.
@@ -1121,6 +1120,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 			busy = false
 			stream.Close()
 			console.ClearToolRow()
+			if r.activeToolName != "" {
+				// A result append can fail after execution. Keep its identity,
+				// but never claim success or leave a queued start running.
+				status.UpdateSummary(r.activeToolName, r.activeToolCallID, r.activeToolSummary, "interrupted", presentationDisplay(r.settings), r.theme, noColorEnvironment())
+			}
+			r.activeToolName, r.activeToolCallID, r.activeToolSummary = "", "", event.ToolSummary{}
 			if !exiting {
 				setActivity("")
 			} else {

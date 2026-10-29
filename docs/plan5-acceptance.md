@@ -2,7 +2,7 @@
 
 ## Status
 
-PLAN5 implementation is in progress. The compaction and theme-core checkpoints are complete. Theme application, terminal color replies, discovery/reload, role-aware output, bounded tool summaries, replay, and retry status now have local tests. All PLAN5 gates remain open until the required acceptance evidence is complete.
+PLAN5 has local implementation and acceptance evidence. Human and native-platform acceptance remains incomplete. The gate table separates local results from the remaining acceptance gaps.
 
 No live provider request ran. Provider tests use synthetic data and loopback servers. The pinned references remain Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` and Codex `23934d31b15b1127c83535f84854e5009f7cd51d`.
 
@@ -65,11 +65,40 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 | Actual app | Codex tool round trip, atomic user-theme reload with completion query retained, open-picker theme reload, mid-stream theme reload, and Anthropic backoff status | Pass in isolated Unix PTYs. |
 | Resource profile | 512 MiB compacted-history fixture; summary bounds; 10k metadata/picker/deltas; paste and key latency; idle frames; 100 watcher lifecycles | Pass locally. On WSL2 Linux/amd64 (Go 1.26.4): 512 MiB activation 2,323 ms / 44,680 KiB peak RSS; 10k metadata first page 675 ms; 10k picker query/render p95 4.17 ms; actual 10k deltas 1.095 s; paced 10k delta profile 1.257 s, 14 timer frames, 5 event frames, 27 writer frames / 25 writes, 20,882 bytes, 11,301-byte max write; 1k/10k single-character allocations 108,864/896,000 bytes (8.23×); a 1 MiB answer theme refresh re-rendered the 23-byte active tail with 104 bytes allocated; 1 KiB/512 KiB hidden write bodies allocated 5,110/5,106 bytes per summary; key-to-frame p95 207 μs; cancellation dispatch p95 40 ns; 256 KiB paste 81.6 ms; 10 idle seconds emitted no frames; 100 watcher create/close cycles added no goroutine or file descriptor. |
 
+## Post-implementation review
+
+The review starts from `74d0f6a`. It reproduced baseline failures for 14 new regression tests.
+
+Corrections:
+
+- Reserve user-marker cells before wrapping. Keep continuation text aligned and preserve leading code fences and quote markers.
+- Keep tool backgrounds outside the indentation. Use Pi's path and shell-title roles for the visible preview.
+- Preserve split OSC terminators after overflow or timeout. Following keyboard input remains usable.
+- Pass compaction focus to split-prefix requests, matching the pinned Pi flow.
+- Redact Basic authorization credentials in both live and indexed command previews.
+- Display legacy `file_path` arguments without adding an execution alias or exposing hidden bodies.
+- Expand a bare `~` correctly in configured and CLI theme paths.
+- Honor `--no-themes` for automatic user discovery. Explicit CLI paths remain available.
+- Report malformed theme pairs and identify the actual winner in collision diagnostics.
+- Drain run events before clearing active tool identity. A failed result append produces one unknown-outcome row, not a stale running row.
+- Serialize storage-fault injection with the store lock. This test-only helper no longer races a concurrent append.
+
+The stale-tool regression failed on 4 of 10 baseline runs. It dispatches no tool and runs no shell command.
+The new regression group passed ten repeated race runs. The full local check also passed, including all package and race tests.
+Pinned Pi compaction, session continuation, and word-navigation comparisons passed twice. Both compaction stages retain the requested focus.
+An explicitly requested reference check now fails when Node is absent. Ordinary tests still skip optional references without the opt-in.
+
+The candidate executable passed the full app suite with `-psi-test-binary`, including isolated loopback-provider PTYs.
+Decoder and indexed-session fuzz runs passed with 41,048 and 18,834 executions.
+Cross-builds and app-test compilation passed for Windows/amd64, macOS/amd64, and macOS/arm64. These are not native runtime results.
+Remote CI did not run. Vci has no client configuration.
+No live provider request ran. Existing human and native-platform gaps remain open.
+
 ## Validation and open acceptance
 
 `./scripts/check.sh` passes on the current working tree, including the race suite. It covers the existing packages and new local regressions. Seven session, provider-SSE, editor, and terminal-decoder fuzz targets also passed local mutation runs (including 65,809 `FuzzExactKeysDifferential` executions after its seed corpus loaded). This is local evidence only.
 
-### Final executable
+### Original PLAN5 executable
 
 Built `./psi` from clean source revision `58a8d6ba6a003b169f1b76eb3061acf6deb71260` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
 
@@ -95,6 +124,6 @@ Gate status below refers only to evidence in this ledger. It does not claim remo
 | G5-05 | Partial | Human shell/lifecycle review and unavailable native-platform cases. |
 | G5-06 | Met locally on WSL2 Linux/amd64 | Resource profiles are not evidence for other platforms. |
 | G5-07 | Blocked/partial | Native macOS runtime, remaining Windows console/human checks, SSH/tmux review, and authorized remote CI. |
-| G5-08 | Met locally | Documentation and tested executable match source revision `58a8d6ba6a003b169f1b76eb3061acf6deb71260`; external acceptance is not implied. |
+| G5-08 | Original delivery met locally. Review delivery pending. | Rebuild the reviewed source and repeat the copied-executable journeys. External acceptance is not implied. |
 
 Local tests, cross-builds, fixtures, and PTYs do not close blocked remote, native-platform, or human gates.

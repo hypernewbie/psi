@@ -198,7 +198,11 @@ func resolveConfiguredResourcePath(base, input string) string {
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+			if path == "~" {
+				path = home
+			} else {
+				path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+			}
 		}
 	}
 	if !filepath.IsAbs(path) {

@@ -64,20 +64,27 @@ func FormatUserMessageWithDisplay(source string, width int, noColor bool, displa
 	}
 	display = display.normalized()
 	indent := display.transcriptIndent()
-	rows := renderMarkdownRowsWithDisplay(source, width, mdStyle{token: TokenUserMessageText}, display)
-	limit := max(1, width-1)
-	marked := false
+	// Reserve the marker cells before wrapping, not by clipping an already
+	// full first row. Continuations use the same content column.
+	contentIndent := indent + "  "
+	rows := renderMarkdownRowsWithIndent(source, width, mdStyle{token: TokenUserMessageText}, display, contentIndent)
+	for i := range rows {
+		if rows[i].Width() == 0 {
+			continue
+		}
+		marker := StyledSpan{Text: indent + "› ", Token: TokenUserMessageText}
+		if strings.HasPrefix(rows[i].Plain(), contentIndent) {
+			removeMarkdownPrefix(&rows[i], contentIndent)
+			rows[i].Spans = append([]StyledSpan{marker}, rows[i].Spans...)
+		} else {
+			// Fences, quotes, rules, and tiny-width fallbacks need their own
+			// intact first row. Never remove bytes that are not indentation.
+			rows = append(rows[:i], append([]StyledRow{{Spans: []StyledSpan{marker}}}, rows[i:]...)...)
+		}
+		break
+	}
 	for i := range rows {
 		rows[i].Surface = TokenUserMessageBg
-		if !marked && rows[i].Width() > 0 {
-			removeMarkdownPrefix(&rows[i], indent)
-			rows[i].Spans = append([]StyledSpan{{Text: indent + "› ", Token: TokenUserMessageText}}, rows[i].Spans...)
-			marked = true
-		}
-		rows[i] = ClipStyledRow(rows[i], limit)
-	}
-	if !marked {
-		return nil
 	}
 	var selected *pitheme.Theme
 	if len(palette) > 0 {
@@ -179,6 +186,10 @@ func renderMarkdownRows(source string, width int, style mdStyle) []StyledRow {
 }
 
 func renderMarkdownRowsWithDisplay(source string, width int, style mdStyle, display DisplaySettings) []StyledRow {
+	return renderMarkdownRowsWithIndent(source, width, style, display, display.transcriptIndent())
+}
+
+func renderMarkdownRowsWithIndent(source string, width int, style mdStyle, display DisplaySettings, indent string) []StyledRow {
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
@@ -188,7 +199,7 @@ func renderMarkdownRowsWithDisplay(source string, width int, style mdStyle, disp
 	doc := parser.Parser().Parse(gmtext.NewReader(input))
 	markdownParserPool.Put(parser)
 	display = display.normalized()
-	return renderMarkdownBlocks(doc, input, width, style, display.transcriptIndent(), display.CodeBlockIndent)
+	return renderMarkdownBlocks(doc, input, width, style, indent, display.CodeBlockIndent)
 }
 
 type mdStyle struct {

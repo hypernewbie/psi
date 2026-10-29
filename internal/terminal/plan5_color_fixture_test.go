@@ -75,8 +75,8 @@ func TestPlan5ColoredHierarchyFixtures(t *testing.T) {
 			if !strings.Contains(tool, "n.go") || !strings.Contains(tool, "…") {
 				t.Errorf("%s tool preview did not show bounded path truncation: %q", size.Size, tool)
 			}
-		} else if strings.Contains(tool, "src/main.go") || !strings.Contains(tool, "outcome unk") {
-			t.Errorf("%s must bound the tool row when the terminal is too narrow: %q", size.Size, tool)
+		} else if strings.Contains(tool, "src/main.go") || !strings.Contains(tool, "• read") || !strings.Contains(tool, "…") {
+			t.Errorf("%s must retain a completed tool marker and clip its path: %q", size.Size, tool)
 		}
 		if !strings.Contains(strings.Join(size.After, "\n"), "\x1b[38;5;") || strings.Contains(strings.Join(size.Before, "\n"), "\x1b[38;2;") {
 			t.Errorf("%s must pair indexed fallback rows with selected-theme color rows", size.Size)
@@ -116,7 +116,7 @@ func plan5ColorRows(width int, theme *pitheme.Theme) []string {
 	rows = append(rows, "-- assistant --")
 	rows = append(rows, FormatAssistantMessageWithDisplay("## Progress\n\n- Preserve the current task.", width, false, display, theme)...)
 	rows = append(rows, "-- tool --")
-	rows = append(rows, FormatToolRowWithDisplay(event.ToolSummary{Kind: "read", Path: "src/main.go", LineRange: "L4-L8", Available: true}, "read", "success", width, false, display, theme))
+	rows = append(rows, FormatToolRowWithDisplay(event.ToolSummary{Kind: "read", Path: "internal/presentation/src/main.go", LineRange: ":4-8", Available: true}, "read", "done", width, false, display, theme))
 	rows = append(rows, "-- metadata --")
 	rows = append(rows, FormatMetadataMessage("[compaction] ", "Context compacted", width, false, display, theme)...)
 	return rows

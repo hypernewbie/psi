@@ -50,6 +50,8 @@ func writeDurable(f durableFile, data []byte) error {
 // FailWritesForTest forces subsequent durable opens to fail (deterministic
 // storage-refusal schedules). Production code never calls it.
 func (s *Store) FailWritesForTest(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.storage == nil {
 		s.storage = &storageOps{}
 	}

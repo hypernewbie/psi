@@ -20,7 +20,7 @@ var (
 	secretAssignment = regexp.MustCompile(`(?i)\b([a-z0-9_]*(api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|authorization)[a-z0-9_]*)\s*=\s*("[^"]*"?|'[^']*'?|[^\s;,]+)`)
 	secretFlag       = regexp.MustCompile(`(?i)(--(api[-_]?key|token|password|secret|authorization)\s*(=|\s+))("[^"]*"?|'[^']*'?|[^\s;,]+)`)
 	urlCredentials   = regexp.MustCompile(`(?i)(https?://)[^/@\s]+@`)
-	authorization    = regexp.MustCompile(`(?i)(authorization\s*:\s*)(bearer\s+)?[^\s,;]+`)
+	authorization    = regexp.MustCompile(`(?i)(authorization\s*:\s*)((?:bearer|basic)\s+)?[^\s,;]+`)
 )
 
 // SummarizeArguments extracts only the display fields for psi's four tools.
@@ -43,7 +43,13 @@ func SummarizeArguments(name string, args map[string]any, cwd, home string) even
 		}
 		return out
 	}
-	if path, ok := args["path"].(string); ok && path != "" {
+	path, _ := args["path"].(string)
+	if path == "" {
+		// Legacy Pi calls can use file_path. This is presentation-only: tool
+		// execution still validates its existing path argument unchanged.
+		path, _ = args["file_path"].(string)
+	}
+	if path != "" {
 		displayed := displayPath(path, cwd, home)
 		out.Path, out.Truncated = boundDisplay(displayed)
 	}
@@ -100,7 +106,7 @@ func SummarizeArgumentsJSON(name string, data []byte, cwd, home string) event.To
 		out.Available = false
 		return out
 	}
-	fields := []string{"path"}
+	fields := []string{"path", "file_path"}
 	if name == "bash" {
 		fields = []string{"command"}
 	} else if name == "read" {
@@ -120,7 +126,11 @@ func SummarizeArgumentsJSON(name string, data []byte, cwd, home string) event.To
 	}
 	args := make(map[string]any, 3)
 	pathTruncated := false
-	if raw := selected["path"]; len(raw) > 0 && !bytes.Equal(raw, []byte("null")) {
+	pathRaw := selected["path"]
+	if len(pathRaw) < 2 || pathRaw[0] != '"' || bytes.Equal(pathRaw, []byte(`""`)) {
+		pathRaw = selected["file_path"]
+	}
+	if raw := pathRaw; len(raw) > 0 && !bytes.Equal(raw, []byte("null")) {
 		var path string
 		var truncated, valid bool
 		if len(raw) > 4098 {

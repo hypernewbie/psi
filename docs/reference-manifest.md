@@ -46,7 +46,7 @@ PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
   go test ./internal/session -run '^TestReferencePi' -count=2
 
 PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
-  go test ./internal/agent -run '^TestPiCompactionCutPointDifferential$' -count=1
+  go test ./internal/agent -run '^TestPiCompaction(CutPointDifferential|SummaryUsesInjectedStream)$' -count=1
 
 go test ./internal/terminal -run '^TestF09WordParityWithPi$' -count=3 \
   -args -psi-test-pi-word-module="file://$PWD/temp/pi-reference.mjs"

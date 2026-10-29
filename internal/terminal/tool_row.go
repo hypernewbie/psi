@@ -17,7 +17,7 @@ func FormatToolRow(summary event.ToolSummary, name, state string, width int, noC
 
 func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) string {
 	display = display.normalized()
-	baseIndent := display.transcriptIndent()
+	gutter := TruncateToWidth(display.transcriptIndent()+" ", max(0, width-1))
 	name = SanitizeStatusRow(name)
 	if name == "" {
 		name = "tool"
@@ -47,11 +47,11 @@ func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, wid
 	if summary.Available {
 		switch summary.Kind {
 		case "bash":
-			body = firstCommandDisplayLine(summary.Command)
+			body, bodyToken = firstCommandDisplayLine(summary.Command), TokenToolTitle
 		case "read":
-			body = summary.Path + summary.LineRange
+			body, bodyToken = summary.Path+summary.LineRange, TokenAccent
 		case "write", "edit":
-			body = summary.Path
+			body, bodyToken = summary.Path, TokenAccent
 		}
 		if summary.Truncated && body != "" && !strings.Contains(body, "…") {
 			body += "…"
@@ -66,7 +66,7 @@ func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, wid
 	}
 	body = SanitizeStatusRow(body)
 
-	fixed := baseIndent + " " + marker + " "
+	fixed := gutter + marker + " "
 	nameToken := TokenToolTitle
 	if summary.Kind == "bash" {
 		name, nameToken = "$", TokenToolTitle
@@ -114,7 +114,6 @@ func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, wid
 	}
 
 	spans := []StyledSpan{
-		{Text: baseIndent + " ", Token: TokenMuted},
 		{Text: marker, Token: markerToken, Bold: state == "failed"},
 		{Text: " ", Token: TokenMuted},
 		{Text: name, Token: nameToken, Bold: true},
@@ -125,7 +124,9 @@ func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, wid
 	if suffix != "" {
 		spans = append(spans, StyledSpan{Text: suffix, Token: outcomeToken})
 	}
-	return FormatStyledRow(StyledRow{Spans: spans, Surface: surface}, width, noColor, palette...)
+	// Keep the inset outside the surface. Style resets close the strip before
+	// the next row, and width still reserves the terminal's autowrap cell.
+	return gutter + FormatStyledRow(StyledRow{Spans: spans, Surface: surface}, width-CellWidth(gutter), noColor, palette...)
 }
 
 func truncatePrefixPreview(text string, maxCells int) string {

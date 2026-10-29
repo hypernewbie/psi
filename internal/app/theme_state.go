@@ -20,7 +20,11 @@ func resolveCLIThemePaths(cwd string, paths []string) []string {
 		path = strings.TrimSpace(path)
 		if path == "~" || strings.HasPrefix(path, "~/") {
 			if home, err := os.UserHomeDir(); err == nil {
-				path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+				if path == "~" {
+					path = home
+				} else {
+					path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+				}
 			}
 		}
 		if !filepath.IsAbs(path) {
