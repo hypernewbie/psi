@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -38,6 +39,9 @@ type CompactionConfig struct {
 
 // Settings is the supported configuration subset with resolution bases.
 type Settings struct {
+	Theme             string
+	ThemePaths        []string
+	TerminalTrueColor string // "auto", "true", or "false"
 	DefaultProvider   string
 	DefaultModel      string
 	DefaultThinking   string
@@ -58,6 +62,8 @@ type Settings struct {
 
 func defaultSettings() Settings {
 	return Settings{
+		Theme:             "system",
+		TerminalTrueColor: "auto",
 		DefaultThinking:   "off",
 		DefaultTools:      []string{"read", "bash", "edit", "write"},
 		EnableSkills:      true,
@@ -69,6 +75,11 @@ func defaultSettings() Settings {
 
 // rawSettings mirrors the JSON shape for supported keys; unknown keys are ignored.
 type rawSettings struct {
+	Theme    *string  `json:"theme"`
+	Themes   []string `json:"themes"`
+	Terminal *struct {
+		TrueColor any `json:"trueColor"`
+	} `json:"terminal"`
 	DefaultProvider     *string  `json:"defaultProvider"`
 	DefaultModel        *string  `json:"defaultModel"`
 	DefaultThinking     *string  `json:"defaultThinkingLevel"`
@@ -149,6 +160,22 @@ func readJSONFile(path string) (map[string]any, error) {
 	return v, nil
 }
 
+func resolveConfiguredResourcePath(base, input string) string {
+	prefix, path := "", input
+	if len(path) > 0 && strings.ContainsRune("!+-", rune(path[0])) {
+		prefix, path = path[:1], path[1:]
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	return prefix + filepath.Clean(path)
+}
+
 func applyRaw(data map[string]any, out *Settings, sources map[string]string, src string) error {
 	// Re-marshal through rawSettings for typed validation of supported keys.
 	b, _ := json.Marshal(data)
@@ -160,6 +187,50 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		if val != "" {
 			sources[key] = src
 		}
+	}
+	if _, present := data["theme"]; present && raw.Theme == nil {
+		return fmt.Errorf("theme must be a string")
+	}
+	if raw.Theme != nil {
+		out.Theme = *raw.Theme
+		sources["theme"] = src
+	}
+	if _, present := data["themes"]; present && raw.Themes == nil {
+		return fmt.Errorf("themes must be an array of paths")
+	}
+	if raw.Themes != nil {
+		base := filepath.Dir(strings.SplitN(src, ":", 2)[1])
+		for _, path := range raw.Themes {
+			if strings.TrimSpace(path) == "" {
+				return fmt.Errorf("themes entries must not be empty")
+			}
+			out.ThemePaths = append(out.ThemePaths, resolveConfiguredResourcePath(base, path))
+		}
+		sources["themes"] = src
+	}
+	if _, present := data["terminal"]; present && raw.Terminal == nil {
+		return fmt.Errorf("terminal must be an object")
+	}
+	if raw.Terminal != nil {
+		terminalSettings, _ := data["terminal"].(map[string]any)
+		_, hasTrueColor := terminalSettings["trueColor"]
+		if hasTrueColor && raw.Terminal.TrueColor == nil {
+			return fmt.Errorf("terminal.trueColor must be boolean or \"auto\"")
+		}
+	}
+	if raw.Terminal != nil && raw.Terminal.TrueColor != nil {
+		switch value := raw.Terminal.TrueColor.(type) {
+		case bool:
+			out.TerminalTrueColor = strconv.FormatBool(value)
+		case string:
+			if value != "auto" {
+				return fmt.Errorf("terminal.trueColor must be boolean or \"auto\"")
+			}
+			out.TerminalTrueColor = value
+		default:
+			return fmt.Errorf("terminal.trueColor must be boolean or \"auto\"")
+		}
+		sources["terminal.trueColor"] = src
 	}
 	if raw.DefaultProvider != nil {
 		out.DefaultProvider = *raw.DefaultProvider

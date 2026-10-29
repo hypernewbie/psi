@@ -16,6 +16,63 @@ func writeJSON(t *testing.T, path, content string) {
 	}
 }
 
+func TestThemeSettingsMergeAndResourceBases(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	userDir := filepath.Join(home, ".pi", "agent")
+	projectDir := filepath.Join(root, "workspace", ".pi")
+	user := filepath.Join(userDir, "settings.json")
+	project := filepath.Join(projectDir, "settings.json")
+	writeJSON(t, user, `{"theme":"user-light/user-dark","themes":["themes/*.json","!themes/disabled.json","+~/shared.json"],"terminal":{"trueColor":false}}`)
+	writeJSON(t, project, `{"theme":"project-light/project-dark","themes":["+local/theme.json"],"terminal":{"trueColor":"auto"}}`)
+	loaded, err := LoadSettings(user, project, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Settings.Theme != "project-light/project-dark" || loaded.Settings.TerminalTrueColor != "auto" {
+		t.Fatalf("project scalar precedence: %+v", loaded.Settings)
+	}
+	wantPaths := []string{
+		filepath.Join(userDir, "themes", "*.json"),
+		"!" + filepath.Join(userDir, "themes", "disabled.json"),
+		"+" + filepath.Join(home, "shared.json"),
+		"+" + filepath.Join(projectDir, "local", "theme.json"),
+	}
+	if len(loaded.Settings.ThemePaths) != len(wantPaths) {
+		t.Fatalf("theme paths=%q", loaded.Settings.ThemePaths)
+	}
+	for i := range wantPaths {
+		if loaded.Settings.ThemePaths[i] != wantPaths[i] {
+			t.Errorf("theme path %d=%q, want %q", i, loaded.Settings.ThemePaths[i], wantPaths[i])
+		}
+	}
+	if loaded.Sources["theme"] != "project:"+project || loaded.Sources["terminal.trueColor"] != "project:"+project {
+		t.Fatalf("theme setting sources=%v", loaded.Sources)
+	}
+	untrusted, err := LoadSettings(user, project, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if untrusted.Settings.Theme != "user-light/user-dark" || len(untrusted.Settings.ThemePaths) != 3 || untrusted.Settings.TerminalTrueColor != "false" {
+		t.Fatalf("untrusted project settings leaked: %+v", untrusted.Settings)
+	}
+}
+
+func TestThemeSettingDefaultsAndRejectsInvalidShapes(t *testing.T) {
+	defaults := defaultSettings()
+	if defaults.Theme != "system" || defaults.TerminalTrueColor != "auto" {
+		t.Fatalf("theme defaults=%+v", defaults)
+	}
+	for _, value := range []string{`{"theme":null}`, `{"themes":null}`, `{"terminal":null}`, `{"terminal":{"trueColor":null}}`, `{"terminal":{"trueColor":1}}`, `{"terminal":{"trueColor":"yes"}}`} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		writeJSON(t, path, value)
+		if _, err := LoadSettings(path, "", false); err == nil {
+			t.Errorf("accepted invalid theme settings %s", value)
+		}
+	}
+}
+
 func TestLoadMergePrecedence(t *testing.T) {
 	dir := t.TempDir()
 	user := filepath.Join(dir, "user.json")

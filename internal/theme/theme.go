@@ -13,6 +13,7 @@ type Theme struct {
 	Appearance string
 	Mode       ColorMode
 	colors     map[string]ResolvedColor
+	dimTokens  map[string]bool
 }
 
 // Compile resolves token fallbacks and variable chains, then validates and
@@ -22,20 +23,19 @@ func (d *Document) Compile(mode ColorMode) (*Theme, error) {
 	if err != nil {
 		return nil, err
 	}
-	colors := make(map[string]ResolvedColor, len(resolved))
-	for name, tokenColor := range resolved {
-		color, err := ParseValue(tokenColor.Value)
-		if err != nil {
-			return nil, fmt.Errorf("colors.%s: %w", name, err)
-		}
-		tokenColor.Color = color
-		colors[name] = tokenColor
+	values := make(map[string]ColorValue, len(resolved))
+	for name, color := range resolved {
+		values[name] = color.Value
 	}
-	appearance := d.Appearance
-	if appearance == "" {
-		appearance = detectAppearance(colors)
+	theme, err := NewResolvedTheme(d.Name, d.Appearance, values, mode, nil)
+	if err != nil {
+		return nil, err
 	}
-	return &Theme{Name: d.Name, Appearance: appearance, Mode: mode, colors: colors}, nil
+	theme.Appearance = d.Appearance
+	if theme.Appearance == "" {
+		theme.Appearance = detectAppearance(theme.colors)
+	}
+	return theme, nil
 }
 
 // ThemeColor pairs the exact token descriptor with its parsed color.
@@ -69,6 +69,34 @@ func (t *Theme) Colors() map[string]ThemeColor {
 	return out
 }
 
+// NewResolvedTheme compiles a complete token map such as Pi's generated system theme.
+func NewResolvedTheme(name, appearance string, values map[string]ColorValue, mode ColorMode, dimTokens []string) (*Theme, error) {
+	colors := make(map[string]ResolvedColor, len(tokenRegistry))
+	for _, token := range tokenRegistry {
+		value, ok := values[token.Name]
+		if !ok {
+			return nil, fmt.Errorf("missing required color token %q", token.Name)
+		}
+		color, err := ParseValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("colors.%s: %w", token.Name, err)
+		}
+		colors[token.Name] = ResolvedColor{Token: token, Value: value, Color: color}
+	}
+	if mode == "" {
+		mode = ColorMode256
+	}
+	dim := make(map[string]bool, len(dimTokens))
+	for _, token := range dimTokens {
+		if descriptor, ok := tokenByName(token); ok && descriptor.Slot == Foreground {
+			dim[token] = true
+		}
+	}
+	return &Theme{Name: name, Appearance: appearance, Mode: mode, colors: colors, dimTokens: dim}, nil
+}
+
+func (t *Theme) IsDimForeground(name string) bool { return t != nil && t.dimTokens[name] }
+
 func (t *Theme) ForegroundANSI(name string) (string, error) {
 	color, err := t.ColorFor(name, Foreground)
 	if err != nil {
@@ -92,6 +120,9 @@ type TextStyle struct {
 // Style emits one styled segment with reset codes in reverse opening order,
 // matching Pi's styleTextWithAnsi behavior.
 func (t *Theme) Style(text, fgToken, bgToken string, style TextStyle) (string, error) {
+	if t.IsDimForeground(fgToken) {
+		style.Dim = true
+	}
 	var fgANSI, bgANSI string
 	var err error
 	if fgToken != "" {

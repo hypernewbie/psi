@@ -2,7 +2,7 @@
 
 ## Status
 
-PLAN5 implementation is in progress. This ledger records the first compaction checkpoint only; it does not mark any PLAN5 gate complete. Theme compatibility, message/tool hierarchy, tool summaries, replay, and the remaining platform and human checks are still open.
+PLAN5 implementation is in progress. This ledger records the compaction checkpoint and theme-core checkpoint; it does not mark any PLAN5 gate complete. Theme application/discovery, terminal query routing, message/tool hierarchy, tool summaries, replay, and remaining platform and human checks are still open.
 
 Reference revisions:
 
@@ -32,11 +32,33 @@ Manual `/compact` now performs read-only preparation before showing a spinner or
 
 Validation at this checkpoint: `./scripts/check.sh` passed, including the full race run. The actual-app long-span PTY passed under the race detector after keeping its fixture to two 80,000-character assistant updates; it uses the ordinary 20,000-token retention setting.
 
+## Theme-core checkpoint
+
+Implemented strict Pi theme JSON parsing for the 56 pinned tokens, their foreground/background slots, the five missing-only fallbacks, chained variable references, inert `$schema`, exact names, BOM handling, and strict top-level/color/export fields. Added both unmodified Pi built-ins and verified their SHA-256 hashes and resolved colors. Pi color parsing and conversion cover RGB, indexed/default, OKLCH, OKHSL, sRGB gamut mapping, 256-color quantization, and truecolor output. The port retains the OKHSL/OKLab MIT notice.
+
+Ported Pi's `system` family map, contrast curves, role rules, three fallback tiers, appearance detection, panel limits, dim fallbacks, and default-foreground handling. Seven complete 56-token fixtures under `internal/theme/testdata/pi-system-theme.jsonl` are generated from the pinned `system-theme.ts` and compared token by token: dark, light, mid-gray, complete palette, no replies, light appearance hint, and pending grayscale. All fixtures match exactly. WCAG checks verify generated text against representative message/tool surfaces. These results establish a local implementation/reference comparison, not terminal or actual-app theme acceptance.
+
+Added config loading for `theme`, `themes`, and `terminal.trueColor`, with user/project scalar precedence, source bases, project-consent gating, and focused tests. These settings are not yet wired to startup or a CLI override.
+
+Pi reference source hashes for this checkpoint:
+
+| Source | SHA-256 |
+|---|---|
+| `system-theme.ts` | `877a3dc24fd194f2dc5ee9efe8f1699acdcdac6defa197009bc7b39920bbb729` |
+| `theme-tokens.ts` | `6c38a169da4f85ee04bc31980a13ef6a498b6be68e63faceda4f5a1e5c632ecf` |
+| `theme-schema.ts` | `6440ccc6aa0576f0f9447584b707b3bf09f2b77aed64687f4598db261588474b` |
+| `tui/src/colors.ts` | `d4fe729c424d2c07bc64cf0c3edfdbf5642865cba395dfb37234c6c88d65f468` |
+| `tui/src/oklab.ts` | `45b067e6e3605b385f595adecd7c0216f1c6b6686800d5c73f661286de736be6` |
+
+Validation at this checkpoint: `go test ./internal/theme ./internal/config -count=1 -race` and `git diff --check` passed.
+
 ## Remaining PLAN5 work
 
 - Complete compaction preparation acceptance: cancellation between summary calls, append-failure/restart cases, and pinned Pi session-reader acceptance. Continue differential tests for cut-point edge cases.
-- Integrate theme settings, built-ins, discovery/trust, terminal replies, reload, and theme-aware styling. The strict 56-role parser, missing-only fallbacks, Pi variable resolution, OKLCH/OKHSL/sRGB conversion, gamut mapping, indexed color handling, and ANSI quantization are implemented. Color fixtures were compared with the pinned Pi TUI source; runtime theme parity remains open.
-- Implement role-aware message surfaces and bounded live/lazy-replay tool summaries with separate hidden-body and credential canaries.
+- Wire the theme core into startup, `--use-theme`, `--theme`, `/reload`, `/session`, project trust discovery, configured/local/package resource discovery, collisions, and the user's early bootstrap UI.
+- Add bounded OSC color and appearance reply decoding to the existing input owner, query/late-reply lifecycle, automatic pairs, user-theme watching, and clean suspend/resume/shutdown behavior.
+- Replace terminal `tokenSGR` use with immutable theme snapshots; add cell-aware foreground/background styling to user, assistant, metadata, notices, Markdown, tool rows, pickers, editor, and footer.
+- Implement role-aware surfaces and bounded live/lazy-replay tool summaries with separate hidden-body and credential canaries.
 - Complete retry/status, metadata, navigation, lifecycle, resource, platform, and human acceptance cases.
 - Update compatibility and user documentation, then build and checksum the executable from the final clean commit.
 
