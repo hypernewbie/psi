@@ -148,6 +148,12 @@ func TestActualPickerReplacesTheEditorWithoutFloodingScrollback(t *testing.T) {
 	q.wait("Models ·")
 	q.prompt()
 	screen := q.screen.Text()
+	if strings.Contains(screen, "m • off") {
+		t.Fatalf("footer shows a thinking level for a model without reasoning support: %q", screen)
+	}
+	if !strings.Contains(screen, "(anthropic) m") {
+		t.Fatalf("footer lost the selected model identity: %q", screen)
+	}
 	if !hasQueryRow(screen) {
 		t.Fatalf("picker did not own a search query row: %q", screen)
 	}
