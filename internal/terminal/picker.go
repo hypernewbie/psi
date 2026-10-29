@@ -45,37 +45,34 @@ func (p *ChoicePicker) Rows(width int, noColor bool) []string {
 	if p == nil {
 		return nil
 	}
-	selected, hasSelected := p.SelectedOption()
-	header := StyledRow{Spans: []StyledSpan{{Text: p.Title, Token: TokenMuted}}}
-	if hasSelected {
-		if width < 32 {
-			header = StyledRow{Spans: []StyledSpan{{Text: "› " + selected.Label, Token: TokenAccent}}}
-		} else {
-			header.Spans = append(header.Spans, StyledSpan{Text: " · selected ", Token: TokenMuted}, StyledSpan{Text: selected.Label, Token: TokenAccent})
-		}
+	var rows []string
+	appendRow := func(spans []StyledSpan) {
+		rows = append(rows, FormatStyledRow(StyledRow{Spans: spans}, width, noColor))
 	}
-	rows := []string{FormatStyledRow(header, width, noColor)}
-	// Put alternatives before optional context and help so a short terminal
-	// still shows the current decision and at least one other choice.
+	// Pi's trust selector shows a title, the visible folder, and the options
+	// with a selection pointer and a current marker. psi keeps its reduced
+	// allow/deny set and its explicit cancel action.
+	appendRow([]StyledSpan{{Text: p.Title, Token: TokenAccent, Bold: true}})
 	for i, option := range p.Options {
+		prefix, prefixToken, labelToken := "  ", TokenMuted, TokenText
 		if i == p.Selected {
-			continue
+			prefix, prefixToken, labelToken = "→ ", TokenAccent, TokenAccent
 		}
-		spans := []StyledSpan{{Text: "  ", Token: TokenMuted}}
+		spans := []StyledSpan{{Text: prefix, Token: prefixToken}}
 		if option.Current {
 			spans = append(spans, StyledSpan{Text: "✓ ", Token: TokenSuccess})
 		} else {
 			spans = append(spans, StyledSpan{Text: "  ", Token: TokenMuted})
 		}
-		spans = append(spans, StyledSpan{Text: option.Label, Token: TokenText})
-		if option.Description != "" {
+		spans = append(spans, StyledSpan{Text: option.Label, Token: labelToken})
+		if option.Description != "" && width >= 48 {
 			spans = append(spans, StyledSpan{Text: "  " + option.Description, Token: TokenMuted})
 		}
-		rows = append(rows, FormatStyledRow(StyledRow{Spans: spans}, width, noColor))
+		appendRow(spans)
 	}
 	if p.Context != "" {
-		rows = append(rows, FormatStyledRow(StyledRow{Spans: []StyledSpan{{Text: p.Context, Token: TokenMuted}}}, width, noColor))
+		appendRow([]StyledSpan{{Text: p.Context, Token: TokenMuted}})
 	}
-	rows = append(rows, FormatStyledRow(StyledRow{Spans: []StyledSpan{{Text: "↑/↓ select · Enter confirm · Esc/Ctrl+C cancel", Token: TokenMuted}}}, width, noColor))
+	appendRow([]StyledSpan{{Text: "↑↓ navigate · Enter save · Esc cancel", Token: TokenMuted}})
 	return rows
 }

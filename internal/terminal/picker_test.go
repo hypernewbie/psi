@@ -11,7 +11,7 @@ func TestChoicePickerIsBoundedAndHonorsNoColor(t *testing.T) {
 		{Label: "Deny", Description: "ignore protected project resources", Current: true},
 	}}
 	rows := picker.Rows(40, true)
-	if len(rows) != 4 || !strings.Contains(rows[0], "Deny") || !strings.Contains(rows[1], "Trust for this run") {
+	if len(rows) != 5 || !strings.Contains(rows[0], "Project trust") || !strings.Contains(rows[1], "Trust for this run") || !strings.Contains(rows[2], "Deny") {
 		t.Fatalf("picker rows: %q", rows)
 	}
 	if strings.Contains(strings.Join(rows, "\n"), "\x1b[") {
@@ -34,7 +34,7 @@ func TestChoicePickerIsBoundedAndHonorsNoColor(t *testing.T) {
 	picker.Selected = 1
 	tiny := ComposeConsoleViewPicker(20, 6, nil, 0, PresentationSnapshot{NoColor: true}, "", nil, picker.Rows(20, true), PickerChoice)
 	visible := strings.Join(tiny.Rows, "\n")
-	if !strings.Contains(visible, "› Deny") || !strings.Contains(visible, "Trust for this") {
+	if !strings.Contains(visible, "→ ✓ Deny") || !strings.Contains(visible, "Trust for this") {
 		t.Fatalf("tiny choice picker hid its selected/default-deny choices: %q", tiny.Rows)
 	}
 }
