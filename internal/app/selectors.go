@@ -270,20 +270,13 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool) []string
 // pickerHelpText keeps the key hint on one row. A narrow terminal gets a
 // shorter hint instead of a clipped word.
 func pickerHelpText(width int) string {
-	candidates := []string{
+	return terminal.FitHint(width,
 		"↑/↓ select · PageUp/PageDown move · Enter apply · Esc cancel",
 		"↑↓ select · PgUp/PgDn · Enter · Esc",
 		"↑↓ select · Enter apply · Esc",
 		"↑↓ · Enter · Esc",
 		"Enter Esc",
-	}
-	limit := max(1, width-1)
-	for _, text := range candidates {
-		if terminal.CellWidth(text) <= limit {
-			return text
-		}
-	}
-	return candidates[len(candidates)-1]
+	)
 }
 
 func (s *Selector) pickerText(item session.SessionInfo, now time.Time) (string, string) {

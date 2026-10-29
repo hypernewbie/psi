@@ -18,6 +18,21 @@ type ChoiceOption struct {
 	Current     bool
 }
 
+// FitHint returns the first candidate that fits one physical row at the given
+// width. A narrow terminal gets a shorter hint instead of a clipped word.
+func FitHint(width int, candidates ...string) string {
+	limit := max(1, width-1)
+	for _, text := range candidates {
+		if CellWidth(text) <= limit {
+			return text
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[len(candidates)-1]
+}
+
 // ChoicePicker is used for startup trust and confirmation decisions. It shares
 // psi's bordered editor tail and keyboard precedence without opening an overlay.
 type ChoicePicker struct {
@@ -73,6 +88,6 @@ func (p *ChoicePicker) Rows(width int, noColor bool) []string {
 	if p.Context != "" {
 		appendRow([]StyledSpan{{Text: p.Context, Token: TokenMuted}})
 	}
-	appendRow([]StyledSpan{{Text: "↑↓ navigate · Enter save · Esc cancel", Token: TokenMuted}})
+	appendRow([]StyledSpan{{Text: FitHint(width, "↑↓ navigate · Enter save · Esc cancel", "↑↓ · Enter · Esc", "Enter Esc"), Token: TokenMuted}})
 	return rows
 }

@@ -38,3 +38,15 @@ func TestChoicePickerIsBoundedAndHonorsNoColor(t *testing.T) {
 		t.Fatalf("tiny choice picker hid its selected/default-deny choices: %q", tiny.Rows)
 	}
 }
+
+// The choice picker hint stays on one row at narrow widths.
+func TestChoicePickerHintFitsNarrowWidths(t *testing.T) {
+	picker := &ChoicePicker{Title: "Project trust", Options: []ChoiceOption{{Label: "Deny"}}}
+	for _, width := range []int{16, 20, 30, 40, 80} {
+		rows := picker.Rows(width, true)
+		hint := rows[len(rows)-1]
+		if CellWidth(hint) > width-1 {
+			t.Fatalf("choice hint does not fit width %d: %q", width, hint)
+		}
+	}
+}
