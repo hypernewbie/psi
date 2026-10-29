@@ -39,5 +39,15 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test ./...
+      - name: race
+        # The race detector needs cgo, which the Windows runner does not
+        # provide. Linux and macOS match the local ./scripts/check.sh gate.
+        if: runner.os != 'Windows'
+        run: go test -race ./...
+      - name: acceptance-profiles
+        # PLAN4 P4-034: the idle, metadata, and compacted-session profiles are
+        # part of the delivered evidence, not only local measurements.
+        if: runner.os != 'Windows'
+        run: go test -tags acceptance ./internal/app -run 'TestTenIdleSecondsProduceNoScheduledFrames|TestScale10000MetadataFirstPage|TestScale512MiBActivation' -count=1 -v
       - name: build
         run: go build ./...
