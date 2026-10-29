@@ -138,3 +138,35 @@ func TestEditorBorderFollowsPiLayout(t *testing.T) {
 		t.Fatalf("overflow count is not centered in the bottom border: %q", bottom)
 	}
 }
+
+// Pi's indexed fallback maps semantic tokens to ANSI palette slots. The
+// thinking families keep Pi's slate, blue, periwinkle, violet, magenta, and
+// red slots.
+func TestIndexedFallbackMatchesPiPaletteSlots(t *testing.T) {
+	cases := map[ThemeToken]string{
+		TokenText:            "",
+		TokenMuted:           "2",
+		TokenQuote:           "2",
+		TokenBorder:          "34",
+		TokenLink:            "34",
+		TokenAccent:          "35",
+		TokenCode:            "35",
+		TokenSuccess:         "32",
+		TokenCodeBlock:       "32",
+		TokenWarning:         "33",
+		TokenHeading:         "33",
+		TokenError:           "31",
+		TokenThinkingOff:     "",
+		TokenThinkingMinimal: "34",
+		TokenThinkingLow:     "34",
+		TokenThinkingMedium:  "36",
+		TokenThinkingHigh:    "35",
+		TokenThinkingXhigh:   "95",
+		TokenThinkingMax:     "31",
+	}
+	for token, want := range cases {
+		if got := tokenSGR(token); got != want {
+			t.Fatalf("token %s: got %q, want %q", token, got, want)
+		}
+	}
+}

@@ -39,7 +39,7 @@ const (
 // Thinking levels use Pi's indexed slate/blue/periwinkle/violet/magenta/red map.
 func tokenSGR(token ThemeToken) string {
 	switch token {
-	case TokenMuted:
+	case TokenMuted, TokenQuote:
 		return "2"
 	case TokenBorder, TokenThinkingMinimal, TokenThinkingLow:
 		return "34" // palette slot 4, blue
@@ -51,7 +51,9 @@ func tokenSGR(token ThemeToken) string {
 		return "33" // palette slot 3, yellow
 	case TokenError:
 		return "31" // palette slot 1, red
-	case TokenLink, TokenThinkingMedium:
+	case TokenLink:
+		return "34" // Pi's mdLink uses the blue family, palette slot 4
+	case TokenThinkingMedium:
 		return "36" // palette slot 6, calamine
 	case TokenThinkingXhigh:
 		return "95" // palette slot 13, bright magenta

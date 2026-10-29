@@ -42,7 +42,7 @@ func TestRenderMarkdownRetainedSubset(t *testing.T) {
 
 func TestRenderMarkdownStylesAreSemanticAndNoColorSafe(t *testing.T) {
 	colored := strings.Join(RenderMarkdown("## Heading\n\n**bold** *italic* `code` [link](https://example.test)", 80, false), "\n")
-	if !strings.Contains(colored, "\x1b[33;1mHeading\x1b[0m") || !strings.Contains(strings.Join(RenderMarkdown("# Title", 80, false), "\n"), "\x1b[33;1;4mTitle\x1b[0m") || !strings.Contains(colored, "\x1b[1mbold\x1b[0m") || !strings.Contains(colored, "\x1b[3mitalic\x1b[0m") || !strings.Contains(colored, "\x1b[35mcode\x1b[0m") || !strings.Contains(colored, "\x1b[36;4mlink\x1b[0m") {
+	if !strings.Contains(colored, "\x1b[33;1mHeading\x1b[0m") || !strings.Contains(strings.Join(RenderMarkdown("# Title", 80, false), "\n"), "\x1b[33;1;4mTitle\x1b[0m") || !strings.Contains(colored, "\x1b[1mbold\x1b[0m") || !strings.Contains(colored, "\x1b[3mitalic\x1b[0m") || !strings.Contains(colored, "\x1b[35mcode\x1b[0m") || !strings.Contains(colored, "\x1b[34;4mlink\x1b[0m") {
 		t.Fatalf("missing Pi semantic Markdown styling: %q", colored)
 	}
 	plain := strings.Join(RenderMarkdown("## Heading\n\n**bold** *italic* `code` [link](https://example.test)", 80, true), "\n")
