@@ -98,6 +98,15 @@ No live provider request ran. Existing human and native-platform gaps remain ope
 
 `./scripts/check.sh` passes on the current working tree, including the race suite. It covers the existing packages and new local regressions. Seven session, provider-SSE, editor, and terminal-decoder fuzz targets also passed local mutation runs (including 65,809 `FuzzExactKeysDifferential` executions after its seed corpus loaded). This is local evidence only.
 
+### Reviewed executable
+
+Built `./psi` from clean source revision `a32f083d50ebdae799a9802f0120a8ea413817e7` on WSL2 Linux/amd64 with Go 1.26.4.
+The build uses `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`.
+SHA-256: `65fa7d382deea248b182656e1f120c82ed76d84d406d89ee2aabe07c9ba15b0f`.
+The ignored executable is byte-identical to the reviewed candidate.
+The full app suite passed again with `-psi-test-binary` pointed at this delivered executable.
+This includes isolated loopback-provider PTYs, not live-provider or human acceptance.
+
 ### Original PLAN5 executable
 
 Built `./psi` from clean source revision `58a8d6ba6a003b169f1b76eb3061acf6deb71260` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
@@ -124,6 +133,6 @@ Gate status below refers only to evidence in this ledger. It does not claim remo
 | G5-05 | Partial | Human shell/lifecycle review and unavailable native-platform cases. |
 | G5-06 | Met locally on WSL2 Linux/amd64 | Resource profiles are not evidence for other platforms. |
 | G5-07 | Blocked/partial | Native macOS runtime, remaining Windows console/human checks, SSH/tmux review, and authorized remote CI. |
-| G5-08 | Original delivery met locally. Review delivery pending. | Rebuild the reviewed source and repeat the copied-executable journeys. External acceptance is not implied. |
+| G5-08 | Met locally | The reviewed executable matches source `a32f083d50ebdae799a9802f0120a8ea413817e7` and passed the actual-binary app suite. External acceptance is not implied. |
 
 Local tests, cross-builds, fixtures, and PTYs do not close blocked remote, native-platform, or human gates.
