@@ -7,9 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -558,18 +561,40 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 
 func formatFooterTokens(n float64) string {
 	if n < 1000 {
-		return fmt.Sprintf("%d", int64(n))
+		return strconv.FormatFloat(n, 'f', -1, 64)
 	}
 	if n < 10000 {
-		return fmt.Sprintf("%.1fk", n/1000)
+		return formatFooterFixedOneDecimal(n/1000, "k")
 	}
 	if n < 1000000 {
-		return fmt.Sprintf("%dk", int64(n+500)/1000)
+		return fmt.Sprintf("%dk", int64(math.Floor(n/1000+0.5)))
 	}
 	if n < 10000000 {
-		return fmt.Sprintf("%.1fM", n/1000000)
+		return formatFooterFixedOneDecimal(n/1000000, "M")
 	}
-	return fmt.Sprintf("%dM", int64(n+500000)/1000000)
+	return fmt.Sprintf("%dM", int64(math.Floor(n/1000000+0.5)))
+}
+
+// Pi's number.toFixed rounds exact halfway values away from zero. fmt's
+// decimal formatter rounds ties to even, so use the float's exact rational
+// value for the two one-decimal footer ranges.
+func formatFooterFixedOneDecimal(value float64, suffix string) string {
+	sign := ""
+	if value < 0 {
+		sign, value = "-", -value
+	}
+	scaled := new(big.Rat).SetFloat64(value)
+	if scaled == nil {
+		return fmt.Sprintf("%.1f%s", value, suffix)
+	}
+	scaled.Mul(scaled, big.NewRat(10, 1))
+	quotient, remainder := new(big.Int).QuoRem(scaled.Num(), scaled.Denom(), new(big.Int))
+	if new(big.Int).Lsh(remainder, 1).Cmp(scaled.Denom()) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	whole, fraction := new(big.Int), new(big.Int)
+	whole.QuoRem(quotient, big.NewInt(10), fraction)
+	return sign + whole.String() + "." + fraction.String() + suffix
 }
 
 func (r *runtime) replace(next *session.Store) error {

@@ -37,6 +37,22 @@ func TestParseBoundary(t *testing.T) {
 	}
 }
 
+func TestFooterTokenFormattingMatchesPi(t *testing.T) {
+	for _, tc := range []struct {
+		tokens float64
+		want   string
+	}{
+		{0, "0"}, {999, "999"}, {999.9, "999.9"},
+		{1000, "1.0k"}, {1050, "1.1k"}, {1150, "1.1k"}, {1250, "1.3k"}, {1350, "1.4k"},
+		{1450, "1.4k"}, {1550, "1.6k"}, {9999, "10.0k"}, {10000, "10k"}, {999999, "1000k"},
+		{1000000, "1.0M"}, {1250000, "1.3M"}, {9999999, "10.0M"}, {10000000, "10M"},
+	} {
+		if got := formatFooterTokens(tc.tokens); got != tc.want {
+			t.Errorf("formatFooterTokens(%v)=%q; want Pi format %q", tc.tokens, got, tc.want)
+		}
+	}
+}
+
 func testRuntime(t *testing.T) *runtime {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
