@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `ce7b56b` (`test(app): prove the picker replaces the editor without flooding scrollback`), following the picker-region change in `1608df7` (`feat(ui): replace the editor region with the Pi picker`); the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `9b81b8e` (`feat(ui): use Pi's editor border layout`), following the picker-region change in `1608df7` and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, and `cb79a93`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -45,20 +45,40 @@ The audit found implementation gaps, not just missing external evidence:
 
 Validation: `./scripts/check.sh`, Windows vet/build, and Darwin amd64/arm64 builds plus app/terminal test-binary compilation passed. The full native Windows app and terminal packages passed. Five repeated ConPTY journeys checked all six sizes, including draft and picker redraws without a new key. Tests wait for the selected row **and** editor cursor, not a partial output chunk. Three synthetic PTY journeys also passed against the rebuilt `./psi` executable: streaming/tools, model/thinking/restart, and resume/recall.
 
-### Picker-region evidence at `1608df7` and `ce7b56b`
+### Picker-region and Pi-parity evidence at `1608df7` through `9b81b8e`
 
 - Component: `internal/terminal/picker_region_test.go` asserts that the picker owns exactly one border pair, renders the `> ` query row, places the cursor on that row, keeps the query scrolling horizontally, stays inside the terminal height at 120×40, 80×24, 60×16, 40×12, 20×6, 20×4, and 20×3, emits no SGR under `NO_COLOR`, and gives the choice picker no query row. `internal/app/selectors_test.go` re-runs the plan-size geometry matrix against the picker composition.
 - Actual app: `TestActualPickerReplacesTheEditorWithoutFloodingScrollback` opens the model picker in a real PTY, asserts one border pair and a query row, filters and navigates, and proves that native scrollback gained no result rows. Cancelling restores the submitted `/model` draft.
 - Delivered binary: the rebuilt `./psi` executable was driven in a PTY. The startup header and editor border appear, `/model` opens a picker with a query row and a selection pointer, filtering appends no second result page, and `Ctrl+C` restores the draft.
 - Native Windows: the `internal/app` and `internal/terminal` package binaries passed on Windows 11 `10.0.26200.8875` through WSL2 interop after the picker-region change, including `TestActualWindowsConPTYInteraction` with the six-size picker resize matrix.
 
-On the same Linux/amd64 host, 100 edits over 10,000 picker entries measured p50 `2.80682ms`, p95 `3.854093ms`, max `4.112572ms`. All remained below the 50 ms p95 budget. Audit fixture hashes:
+Additional Pi-source transcriptions after the picker-region change:
+
+- **P4-024/P4-026:** Pi's no-match treatment is component-specific: the model selector says `No matching models`, the session list says `No sessions found`, and the thinking selector inherits the shared `SelectList` wording. Pi's thinking selector uses the `SelectList` pointer, so psi's thinking rows use `→ ` and only the session list keeps `› `. The completion menu is a `SelectList` too, so its selected row uses `→ `.
+- **P4-024:** Pi's model selector adds `  (position/total)` when the bounded window cannot show every filtered item. psi shows the same indicator and keeps the optional selected detail until the row budget is tight.
+- **P4-030:** Pi's `trust-selector.ts` shows a title, the options with a `→ ` pointer and a `✓ ` current marker, the visible folder, and its navigation hint. psi's project-trust and workspace-confirmation regions use that shape and keep psi's reduced allow/deny set with deny selected by default.
+- **P4-012:** Pi's `CompactionStatusIndicator` distinguishes a manual compaction from an automatic one and names the overflow reason. psi's compaction activity now uses `Compacting context…`, `Auto-compacting…`, and `Context overflow detected, Auto-compacting…` with the same cancellation hint.
+- **P4-006:** Pi's custom editor puts the working status at the left of the top border and centers the overflow count with `createScrollBorder`. psi's editor border now uses that layout.
+
+New coverage added with those changes:
+
+- `TestActualCompactionShowsPiIndicatorAndSettles` shows Pi's compaction indicator in a real PTY, proves the provider received a summary request, and checks the committed summary.
+- `TestFailedModelPersistenceKeepsPriorRuntimeAndDraft` proves a refused store keeps the prior provider, configuration, session file, footer, draft, cursor, and recall.
+- `TestCompactionActivityFollowsPiPhases`, `TestPickerNoMatchTreatmentAndPointerFollowPiComponents`, and `TestEditorBorderFollowsPiLayout` cover the transcribed wording and layout.
+
+
+On the same Linux/amd64 host, 100 edits over 10,000 picker entries measured p50 `2.801081ms`, p95 `3.751883ms`, max `3.89351ms`. All remained below the 50 ms p95 budget. Audit fixture hashes:
 
 ```text
 internal/app/picker_perf_test.go       3b20091169b79f7ef9eefe220ee8adf7ea5fd0e2b4e640fa8380e910b3a1ae1b
-internal/app/selectors_test.go         80f4d45211941f80f45f2a66328708a7f4704b4a643d60507ab818739d167816
+internal/app/selectors_test.go         425b9a47fd5a727f31f749cc13a5823fe8a56ebe106abbf6bc26643cba60ef5f
 internal/app/conpty_windows_test.go    071b677bf05e11a8ae80fb4900cf14123713eed1351723a3668d6af55763e95a
 internal/terminal/maintained_test.go    cae637bec61339370782861eb3a7cda73f0fbb345541fbeb3028fc8a4e55e912
+internal/terminal/picker_region_test.go fbb25a8fd18b5fa5945158932737c7282aeb44e451f4d6743641bc742c69669e
+internal/terminal/presentation.go      0265e4529ff62bdd1636f57175230b7229ad1a2e5b193dd658b95f792c83977c
+internal/terminal/console.go            6c31f86e8fae358e3252f752ebc918c955f4c98656b865c335af5b495ad5af59
+internal/terminal/picker.go             08a2b90d7615533e572e673a5aa51b2ef6f07975300a0d87bfc2d6dbe8a67f23
+internal/app/selectors.go              2da90de31d75ad3e3e1f987e07523ef96990b44785cef57dfcec68b6fe4e489d
 ```
 
 ## Resource profiles
@@ -72,8 +92,8 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 | 256 KiB paste | One warm end-marker-to-frame sample | `93.070487ms` | Pass, ≤200 ms |
 | 1,000 vs 10,000 one-character Markdown deltas | One allocation sample each | `107,752` / `887,288` bytes; ratio `8.24×` | Pass, ≤15× allocation growth; component stream path, not a runtime frame-count measurement |
 | Picker search/render, 10,000 entries | 100 edits | p50 `2.509537ms`, p95 `3.295760ms`, max `3.421518ms` | Pass, p95 ≤50 ms |
-| 10,000-session metadata activation | One synthetic workspace | `663.780031ms` to a usable 20-item first page | Pass for measured activation path |
-| 512 MiB compacted session | 15,328 historical tool records; 15,331 total entries | activation `2,280ms`, peak RSS `42,544 KiB` | Pass existing 3 s / 160 MiB budgets |
+| 10,000-session metadata activation | One synthetic workspace | `673.730235ms` to a usable 20-item first page | Pass for measured activation path |
+| 512 MiB compacted session | 15,328 historical tool records; 15,331 total entries | activation `2,408ms`, peak RSS `43,868 KiB` | Pass existing 3 s / 160 MiB budgets |
 | 1 MiB prose stream | One benchmark iteration | `477,780,897ns/op`, `2.22 MB/s`, `66,882,488 B/op`, `707,161 allocs/op` | Recorded; allocations are cumulative churn, not retained response size. Active source remains bounded by tests. |
 | Long fenced code | 8,192 completed lines plus an over-limit single-line case | active source ≤64 KiB; completed code lines commit incrementally; output matches replay | Pass component bounds and shared formatting |
 | Large writes | Existing short-write and 64 KiB batching tests | no write unit exceeds 64 KiB; suffix bytes preserved | Pass |
@@ -81,7 +101,7 @@ Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87
 | Six-size resize | Maintained VT plus actual Windows ConPTY app with synthetic SSE and Git Bash tool | component retains draft/sentinel; actual app exercises typing, streaming, running-tool redraws, and picker selection at each size | Pass for all four scripted operations; human flicker review remains blocked |
 | Ten-second idle | One settled REPL session | zero new frames, writes, or bytes over 10 seconds | Pass for the measured idle path |
 | Idle output | Cached-footer redraw test | unchanged redraw emits zero additional bytes | Pass |
-| 10,000 tiny output deltas | Actual-app PTY plus paced in-process REPL profile | PTY `1.095512757s`; REPL `1.145584044s`, 12 timer frames, 6 event frames, 26 writer frames, 24 writes, `20,736` bytes, max write `11,284` bytes | Pass: timer rate <30/s, categories counted separately, write units <64 KiB; PTY confirms ordered persistence and footer |
+| 10,000 tiny output deltas | Actual-app PTY plus paced in-process REPL profile | PTY `1.095512757s`; REPL `1.143269396s`, 12 timer frames, 6 event frames, 26 writer frames, 24 writes, `20,761` bytes, max write `11,284` bytes | Pass: timer rate <30/s, categories counted separately, write units <64 KiB; PTY confirms ordered persistence and footer |
 
 Historical profile fixture hashes (the newer picker/resize fixtures are recorded above):
 
@@ -121,10 +141,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `ce7b56b` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
+Built from repository tree revision `9b81b8e` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
 
 ```text
-SHA-256  6eecee4e1e619eabaddc98f08c9972a2e39324f2aafa3eb6b54f3254547d0686
+SHA-256  b6f8d67c098ebf2e09dfb140cee86cc0e1e502f63f581231616799c7326344f7
 ```
 
 ## Gate disposition
