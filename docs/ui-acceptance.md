@@ -112,7 +112,7 @@ internal/app/resume_test.go             b6527a5add4652cdde431d6aec6e40c48135ef81
 internal/app/selectors_fixture_test.go  314331785099fda3e6c783490c168386d618fefcc0d3a4ed5319a00756cb707a
 internal/app/testdata/plan4-pi-pickers.json 43760215dd73da24a421852a486e80e16e2a560f7dceaff5e1335ebb3b93ba11
 internal/session/store.go               eb0ce40ba792f4c40c0e7555822db46568983344532452493cf8eaa2b812e0d1
-internal/session/session_name_test.go   4609cf3b90c232932ba3f5db9987df895bdd50f478b4807054de813decddfad9
+internal/session/session_name_test.go   af3608f33661fa77c826406db1817b95fdf05a7448c3f857207a9ea0f14d1427
 internal/terminal/presentation_fixtures_test.go d488a523f1d203fdcbdb16273f11207e4a1a250c6d56127689e1be045f4772fe
 internal/terminal/testdata/plan4-pi-completion.json e733af5ede9d711d32adbe94859909d8f1ffd14e1a84ccee4dade300d7153e28
 internal/terminal/stream_composition_test.go 40018fb16be221021dd71920d7892391e621022c63120c3776465ee30b5bc6a3
@@ -182,7 +182,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `47351f1` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, and optional-provider width fallback. The documentation-only ledger update follows this build.
+Built from repository tree revision `69579ff` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, and optional-provider width fallback. The documentation-only ledger update follows this build.
 
 ```text
 SHA-256  4ad6dffd0307631f05715e68f5efc47eabc2c1abb05c9c10df941a7eb27b4148
