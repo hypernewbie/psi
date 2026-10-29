@@ -37,6 +37,29 @@ func TestParseBoundary(t *testing.T) {
 	}
 }
 
+func TestFooterSnapshotUsesPiTokenFormatting(t *testing.T) {
+	r := testRuntime(t)
+	_, err := r.store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "m",
+		Usage: session.Usage{Input: 1250},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+	r.refreshPresentation(console)
+	if r.footerSnapshot.Usage != "↑1.3k" {
+		t.Fatalf("stored usage displayed as %q; want Pi format ↑1.3k", r.footerSnapshot.Usage)
+	}
+}
+
 func TestFooterTokenFormattingMatchesPi(t *testing.T) {
 	for _, tc := range []struct {
 		tokens float64
