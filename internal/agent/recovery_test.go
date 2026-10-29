@@ -36,12 +36,12 @@ func TestContextLimitRecovery(t *testing.T) {
 						text("visible partial")
 					}
 					return nil, limit
-				case 3:
-					if len(req.Tools) != 0 || !strings.Contains(req.System, "Summarize") {
+				case 3, 4:
+					if len(req.Tools) != 0 || !strings.Contains(strings.ToLower(req.System), "summar") {
 						t.Error("recovery did not request a tool-free summary")
 					}
-					return &provider.Response{Text: "summary", StopReason: "stop"}, nil
-				case 4:
+					return &provider.Response{Text: "summary part", StopReason: "stop", Usage: provider.Usage{Input: 2, Output: 1, TotalTokens: 3}}, nil
+				case 5:
 					if mode == "repeated limit" {
 						return nil, limit
 					}
@@ -63,7 +63,7 @@ func TestContextLimitRecovery(t *testing.T) {
 			if (err != nil) != (mode != "success") {
 				t.Fatalf("outcome: %v", err)
 			}
-			wantRequests := 4
+			wantRequests := 5
 			if mode == "partial response" {
 				wantRequests = 2
 			}

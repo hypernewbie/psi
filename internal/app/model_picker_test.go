@@ -213,6 +213,23 @@ func hasQueryRow(screen string) bool {
 	return false
 }
 
+func TestActualEmptyCompactIsOfflineNoOpWithoutIndicator(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"keepRecentTokens":20000}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"http://127.0.0.1:1/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":100000}]}}}`)
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--no-session")
+	q.prompt()
+	q.write("/compact\r")
+	q.wait("Nothing to compact yet. The session has no conversation history.")
+	q.prompt()
+	if strings.Contains(q.raw.String(), "Compacting context") {
+		t.Fatalf("no-work command showed a compaction indicator: %q", q.raw.String())
+	}
+	q.write("/quit\r")
+	q.finish()
+}
+
 // A manual compaction shows Pi's compaction indicator in the editor border and
 // then settles with a committed summary. The provider request must be a real
 // summary request, not a credential refresh.
@@ -243,7 +260,7 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 		fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"synthetic\",\"model\":\"m\",\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"SUMMARY_COMMITTED\"}}\n\nevent: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {}\n\n")
 	}))
 	defer server.Close()
-	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false,"keepRecentTokens":0}}`)
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false,"keepRecentTokens":20000}}`)
 	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":100000}]}}}`)
 	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-compaction-key"}}`)
 	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
@@ -253,9 +270,17 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	if _, err := store.AppendMessage(agentMessageUser("old synthetic question")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "m", StopReason: "stop", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "old synthetic answer"}}}}}); err != nil {
+	for i := 0; i < 2; i++ {
+		text := strings.Repeat(string(rune('a'+i)), 80_000)
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "m", StopReason: "stop", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: text}}}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	initialPath, err := store.ActivePath()
+	if err != nil {
 		t.Fatal(err)
 	}
+	lastAssistantID := initialPath[len(initialPath)-1].ID()
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
 	q.prompt()
 	q.write("/compact\r")
@@ -270,8 +295,13 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	select {
 	case body := <-requests:
 		system, _ := body["system"].(string)
-		if !strings.Contains(system, "Summarize the supplied conversation") {
+		if !strings.Contains(system, "context summarization assistant") {
 			t.Fatalf("compaction did not send a summary request: %v", body)
+		}
+		serialized, _ := json.Marshal(body)
+		prompt := string(serialized)
+		if !strings.Contains(prompt, strings.Repeat("a", 100)) || strings.Contains(prompt, strings.Repeat("b", 100)) {
+			t.Fatalf("ordinary-budget split summary included the wrong span: request length=%d", len(prompt))
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatal("compaction did not reach the provider")
@@ -289,6 +319,18 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	}
 	if !bytes.Contains(after, []byte("SUMMARY_COMMITTED")) {
 		t.Fatalf("compaction summary was not committed: %s", after)
+	}
+	saved, err := session.OpenFile(store.File(), work, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	savedPath, err := saved.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := savedPath[len(savedPath)-1].Compaction
+	if last == nil || last.FirstKeptEntryID != lastAssistantID {
+		t.Fatalf("actual app chose wrong ordinary-budget continuation: %+v, want %s", last, lastAssistantID)
 	}
 	q.write("/quit\r")
 	q.finish()

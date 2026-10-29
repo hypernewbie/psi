@@ -1249,6 +1249,31 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if cmd.Name == "compact" {
+					if writeErr := r.store.WriteError(); writeErr != nil {
+						notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
+						r.draw(console)
+						continue
+					}
+					checker := agent.New(r.store, r.reg, r.prov, nil)
+					_, checkErr := checker.CheckCompaction(r.cfg)
+					var noWork *agent.CompactionNoWorkError
+					if errors.As(checkErr, &noWork) {
+						message := "Nothing to compact yet. Recent conversation is already within the retained budget."
+						switch noWork.Disposition {
+						case agent.CompactionEmpty:
+							message = "Nothing to compact yet. The session has no conversation history."
+						case agent.CompactionAlreadyDone:
+							message = "Nothing to compact yet. This session is already compacted."
+						}
+						notice(terminal.NoticeInfo, message)
+						r.draw(console)
+						continue
+					}
+					if checkErr != nil {
+						notice(terminal.NoticeError, checkErr.Error())
+						r.draw(console)
+						continue
+					}
 					start("", "", cmd.Arg, "", "", true)
 					continue
 				}

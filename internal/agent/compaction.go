@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf16"
 
 	"psi/internal/session"
 )
@@ -127,6 +128,283 @@ func userLen(u *session.UserMessage) int {
 		}
 	}
 	return n
+}
+
+// CompactionDisposition distinguishes legitimate no-work cases from failures.
+type CompactionDisposition string
+
+const (
+	CompactionEligible     CompactionDisposition = "eligible"
+	CompactionEmpty        CompactionDisposition = "empty"
+	CompactionWithinBudget CompactionDisposition = "within_budget"
+	CompactionAlreadyDone  CompactionDisposition = "already_compacted"
+)
+
+// CompactionPreparation is a read-only snapshot of the context to compact.
+// Messages retain their entry order and are split only at Pi-safe cut points.
+type CompactionPreparation struct {
+	Disposition      CompactionDisposition
+	FirstKeptEntryID string
+	Messages         []session.AgentMessage
+	TurnPrefix       []session.AgentMessage
+	SplitTurn        bool
+	PreviousSummary  string
+	TokensBefore     int
+}
+
+// NoWork reports a legitimate manual/automatic compaction no-op.
+type CompactionNoWorkError struct{ Disposition CompactionDisposition }
+
+func (e *CompactionNoWorkError) Error() string {
+	switch e.Disposition {
+	case CompactionAlreadyDone:
+		return "session is already compacted"
+	case CompactionEmpty:
+		return "nothing to compact: no conversation history"
+	default:
+		return "nothing to compact: recent conversation is already within the retained budget"
+	}
+}
+
+// PrepareCompaction ports Pi's projected cut-point selection for psi's retained
+// message roles. It does not call a provider or mutate the session.
+func PrepareCompaction(path []*session.Entry, proj *session.Projection, keepRecentTokens int) (CompactionPreparation, error) {
+	prepared := CompactionPreparation{Disposition: CompactionEmpty}
+	if keepRecentTokens < 0 {
+		return prepared, fmt.Errorf("keepRecentTokens must be non-negative")
+	}
+	if len(path) > 0 && path[len(path)-1].Kind == "compaction" {
+		prepared.Disposition = CompactionAlreadyDone
+		return prepared, nil
+	}
+	if proj == nil || len(proj.Entries) == 0 {
+		return prepared, nil
+	}
+	start := 0
+	for i, entry := range proj.Entries {
+		if entry.Kind == "compaction" && len(proj.Messages[i]) > 0 {
+			prepared.PreviousSummary = entry.Compaction.Summary
+			start = i + 1
+			break
+		}
+	}
+	end := len(proj.Entries)
+	cutPoints := make([]int, 0, end-start)
+	for i := start; i < end; i++ {
+		if proj.Entries[i].Kind != "compaction" && entryCanBeCompactionCut(proj.Messages[i]) {
+			cutPoints = append(cutPoints, i)
+		}
+	}
+	if len(cutPoints) == 0 {
+		if len(proj.Flat) == 0 || len(proj.Flat) == 1 && proj.Flat[0].Role == "system" {
+			return prepared, nil
+		}
+		prepared.Disposition = CompactionWithinBudget
+		return prepared, nil
+	}
+
+	cut := cutPoints[0]
+	if keepRecentTokens == 0 {
+		// psi's established explicit retain-none mode is an intentional deviation
+		// from Pi's ordinary cut-point policy. Keep it readable and tested.
+		prepared.Messages = append([]session.AgentMessage(nil), proj.Flat...)
+		if summaryTranscript(session.ConvertToLLM(prepared.Messages)) == "" {
+			prepared.Messages = nil
+			return prepared, nil
+		}
+		prepared.Disposition = CompactionEligible
+		return prepared, nil
+	}
+
+	accumulated := 0
+	for i := end - 1; i >= start; i-- {
+		tokens := 0
+		for _, message := range proj.Messages[i] {
+			tokens += piEstimateTokens(message)
+		}
+		if tokens == 0 {
+			continue
+		}
+		accumulated += tokens
+		if accumulated >= keepRecentTokens {
+			cut = cutPoints[len(cutPoints)-1]
+			for _, candidate := range cutPoints {
+				if candidate >= i {
+					cut = candidate
+					break
+				}
+			}
+			break
+		}
+	}
+	for cut > start {
+		previous := cut - 1
+		if proj.Entries[previous].Kind == "compaction" || len(proj.Messages[previous]) > 0 {
+			break
+		}
+		cut--
+	}
+	turnStart := -1
+	if !entryStartsCompactionTurn(proj.Messages[cut]) {
+		for i := cut; i >= start; i-- {
+			if entryStartsCompactionTurn(proj.Messages[i]) {
+				turnStart = i
+				break
+			}
+		}
+	}
+	prepared.SplitTurn = turnStart >= 0
+	if prepared.SplitTurn {
+		prepared.Messages = flattenProjectionMessages(proj.Messages[start:turnStart])
+		prepared.TurnPrefix = flattenProjectionMessages(proj.Messages[turnStart:cut])
+	} else {
+		prepared.Messages = flattenProjectionMessages(proj.Messages[start:cut])
+	}
+	historyText := summaryTranscript(session.ConvertToLLM(prepared.Messages))
+	turnPrefixText := summaryTranscript(session.ConvertToLLM(prepared.TurnPrefix))
+	if strings.TrimSpace(historyText) == "" && strings.TrimSpace(turnPrefixText) == "" {
+		prepared.Messages = nil
+		prepared.TurnPrefix = nil
+		prepared.SplitTurn = false
+		prepared.Disposition = CompactionWithinBudget
+		return prepared, nil
+	}
+	prepared.FirstKeptEntryID = proj.Entries[cut].ID()
+	prepared.Disposition = CompactionEligible
+	return prepared, nil
+}
+
+func flattenProjectionMessages(groups [][]session.AgentMessage) []session.AgentMessage {
+	var out []session.AgentMessage
+	for _, group := range groups {
+		out = append(out, group...)
+	}
+	return out
+}
+
+func entryCanBeCompactionCut(messages []session.AgentMessage) bool {
+	for _, m := range messages {
+		switch m.Role {
+		case "user", "assistant", "custom", "branchSummary", "compactionSummary", "bashExecution":
+			return true
+		}
+	}
+	return false
+}
+
+func entryStartsCompactionTurn(messages []session.AgentMessage) bool {
+	for _, m := range messages {
+		switch m.Role {
+		case "user", "custom", "branchSummary", "compactionSummary", "bashExecution":
+			return true
+		}
+	}
+	return false
+}
+
+func piEstimateTokens(m session.AgentMessage) int {
+	chars := 0
+	switch m.Role {
+	case "system":
+		if m.System != nil {
+			chars += piContentChars(m.System.Content)
+			for _, section := range m.System.Sections {
+				if section != nil {
+					chars += piStringChars(*section)
+				}
+			}
+			if m.System.ToolsAdded != nil {
+				chars += piJSONChars(m.System.ToolsAdded)
+			}
+		}
+	case "user":
+		if m.User != nil {
+			chars = piContentChars(m.User.Content)
+		}
+	case "assistant":
+		if m.Assistant != nil {
+			for _, block := range m.Assistant.Content {
+				switch block.Type {
+				case "text":
+					if block.Text != nil {
+						chars += piStringChars(block.Text.Text)
+					}
+				case "thinking":
+					if block.Thinking != nil {
+						chars += piStringChars(block.Thinking.Thinking)
+					}
+				case "toolCall":
+					if block.Call != nil {
+						chars += piStringChars(block.Call.Name) + piJSONChars(block.Call.Arguments)
+					}
+				}
+			}
+		}
+	case "toolResult":
+		if m.ToolResult != nil {
+			chars = piContentChars(m.ToolResult.Content)
+		}
+	case "custom":
+		if m.Custom != nil {
+			chars = piContentChars(m.Custom.Content)
+		}
+	case "bashExecution":
+		if m.BashExecution != nil {
+			chars = piStringChars(m.BashExecution.Command) + piStringChars(m.BashExecution.Output)
+		}
+	case "branchSummary":
+		if m.BranchSummary != nil {
+			chars = piStringChars(m.BranchSummary.Summary)
+		}
+	case "compactionSummary":
+		if m.CompactionSummary != nil {
+			chars = piStringChars(m.CompactionSummary.Summary)
+		}
+	}
+	return (chars + 3) / 4
+}
+
+func piContentChars(value any) int {
+	switch content := value.(type) {
+	case string:
+		return piStringChars(content)
+	case []session.UserContentBlock:
+		chars := 0
+		for _, block := range content {
+			if block.Text != nil {
+				chars += piStringChars(block.Text.Text)
+			}
+			if block.Image != nil {
+				chars += 4800
+			}
+		}
+		return chars
+	case []any:
+		chars := 0
+		for _, item := range content {
+			if block, ok := item.(map[string]any); ok {
+				if text, ok := block["text"].(string); ok {
+					chars += piStringChars(text)
+				}
+				if block["type"] == "image" {
+					chars += 4800
+				}
+			}
+		}
+		return chars
+	default:
+		return 0
+	}
+}
+
+func piStringChars(s string) int { return len(utf16.Encode([]rune(s))) }
+
+func piJSONChars(value any) int {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return 0
+	}
+	return piStringChars(string(data))
 }
 
 // Boundary selects a safe compaction boundary: tool calls stay with results,

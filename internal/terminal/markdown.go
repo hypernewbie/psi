@@ -24,6 +24,7 @@ const (
 type NoticeKind string
 
 const (
+	NoticeInfo    NoticeKind = "info"
 	NoticeSuccess NoticeKind = "success"
 	NoticeWarning NoticeKind = "warning"
 	NoticeError   NoticeKind = "error"
