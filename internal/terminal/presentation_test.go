@@ -142,7 +142,7 @@ func TestFooterOmitsProviderWhenPiWouldNeedMoreRoom(t *testing.T) {
 		t.Fatalf("footer rows=%q", rows)
 	}
 	line := Sanitize(rows[1])
-	if strings.Contains(line, "anthropic") || !strings.Contains(line, "↑12k ~8%/100k") || !strings.Contains(line, "m • hi") || strings.Contains(line, "m • high") {
+	if strings.Contains(line, "anthropic") || !strings.Contains(line, "↑12k ~8%/100k") || !strings.HasSuffix(line, "m • hig") {
 		t.Fatalf("narrow footer should preserve stats, omit provider, then clip the model side like Pi: %q", line)
 	}
 	if CellWidth(line) > 22 {
