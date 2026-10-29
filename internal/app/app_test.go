@@ -19,6 +19,7 @@ import (
 	"github.com/creack/pty"
 
 	"psi/internal/config"
+	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/terminal"
 	"psi/internal/testutil"
@@ -495,5 +496,22 @@ func waitForEditorScreen(t *testing.T, chunks <-chan string, screen *testutil.VT
 				t.Fatalf("timeout waiting for bordered editor: %q", *pending)
 			}
 		}
+	}
+}
+
+// Pi's footer names the thinking level only for a model that supports
+// reasoning, and it spells out the disabled state.
+func TestFooterThinkingLabelFollowsPi(t *testing.T) {
+	if got := footerThinkingLabel(provider.ModelMeta{ID: "m"}, "high"); got != "" {
+		t.Fatalf("non-reasoning model shows a thinking level: %q", got)
+	}
+	if got := footerThinkingLabel(provider.ModelMeta{ID: "m", Reasoning: true}, "high"); got != "high" {
+		t.Fatalf("reasoning model lost its thinking level: %q", got)
+	}
+	if got := footerThinkingLabel(provider.ModelMeta{ID: "m", Reasoning: true}, "off"); got != "thinking off" {
+		t.Fatalf("disabled thinking level is not spelled out: %q", got)
+	}
+	if got := footerThinkingLabel(provider.ModelMeta{ID: "m", Reasoning: true}, ""); got != "thinking off" {
+		t.Fatalf("unset thinking level is not spelled out: %q", got)
 	}
 }

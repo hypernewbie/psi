@@ -478,6 +478,19 @@ func (r *runtime) installConfiguration(candidate *runtime) {
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
 }
 
+// footerThinkingLabel follows Pi's footer. The thinking level appears only for
+// a model that supports reasoning, and the disabled state is spelled out so it
+// cannot be mistaken for a model name.
+func footerThinkingLabel(model provider.ModelMeta, level string) string {
+	if !model.Reasoning {
+		return ""
+	}
+	if level == "" || level == "off" {
+		return "thinking off"
+	}
+	return level
+}
+
 func (r *runtime) refreshPresentation(console *terminal.Console) {
 	if console == nil || r.store == nil {
 		return
@@ -490,7 +503,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		}
 		snapshot := terminal.PresentationSnapshot{
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home,
-			Provider: r.ov.Provider, Model: r.ov.Model, Thinking: r.ov.Thinking,
+			Provider: r.ov.Provider, Model: r.ov.Model, Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking),
 		}
 		if accounting, err := r.store.Accounting(); err == nil {
 			if accounting.Usage.Input > 0 {
