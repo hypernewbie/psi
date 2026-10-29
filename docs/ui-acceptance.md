@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `69579ff` (`test(session): cover null session-name clearing`), following the Pi session-name semantics correction in `3219438`, the session-name control test in `78e7cb8`, the active-session-name optimization in `b614826`, and stored session-name footer support in `888189e`, the Pi provider-visibility correction in `7e2c1d0`, the thinking-label correction in `f87851e`, and the cancellation test in `c9002e3`, plus the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `c3bde8c` (`test(session): verify trimmed footer name`), following null-name coverage in `69579ff` and the Pi session-name semantics correction in `3219438`, the session-name control test in `78e7cb8`, the active-session-name optimization in `b614826`, and stored session-name footer support in `888189e`, the Pi provider-visibility correction in `7e2c1d0`, the thinking-label correction in `f87851e`, and the cancellation test in `c9002e3`, plus the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -112,7 +112,7 @@ internal/app/resume_test.go             b6527a5add4652cdde431d6aec6e40c48135ef81
 internal/app/selectors_fixture_test.go  314331785099fda3e6c783490c168386d618fefcc0d3a4ed5319a00756cb707a
 internal/app/testdata/plan4-pi-pickers.json 43760215dd73da24a421852a486e80e16e2a560f7dceaff5e1335ebb3b93ba11
 internal/session/store.go               eb0ce40ba792f4c40c0e7555822db46568983344532452493cf8eaa2b812e0d1
-internal/session/session_name_test.go   af3608f33661fa77c826406db1817b95fdf05a7448c3f857207a9ea0f14d1427
+internal/session/session_name_test.go   df28e9dd7d684ca8ee7b8aa209b56ec9ec68c54f7591d9b30615f771f88e8c56
 internal/terminal/presentation_fixtures_test.go d488a523f1d203fdcbdb16273f11207e4a1a250c6d56127689e1be045f4772fe
 internal/terminal/testdata/plan4-pi-completion.json e733af5ede9d711d32adbe94859909d8f1ffd14e1a84ccee4dade300d7153e28
 internal/terminal/stream_composition_test.go 40018fb16be221021dd71920d7892391e621022c63120c3776465ee30b5bc6a3
@@ -182,7 +182,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `69579ff` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, and optional-provider width fallback. The documentation-only ledger update follows this build.
+Built from repository tree revision `c3bde8c` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, and optional-provider width fallback. The documentation-only ledger update follows this build.
 
 ```text
 SHA-256  4ad6dffd0307631f05715e68f5efc47eabc2c1abb05c9c10df941a7eb27b4148
