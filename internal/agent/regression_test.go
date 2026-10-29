@@ -102,6 +102,40 @@ func TestManualCompactionEmitsStartAndEndReason(t *testing.T) {
 	}
 }
 
+func TestAutomaticCompactionNoWorkDoesNotRetryProvider(t *testing.T) {
+	store, reg, fake, _, _ := testSetup(t)
+	fake.Responses = []*provider.Response{{Text: "answer", StopReason: "stop"}}
+	var events []event.Event
+	loop := New(store, reg, fake, func(e event.Event) { events = append(events, e) })
+	cfg := Config{
+		Model:            provider.ModelMeta{ID: "m", API: "anthropic-messages", ContextWindow: 1000, MaxTokens: 100},
+		AutoCompact:      true,
+		ReserveTokens:    2000,
+		KeepRecentTokens: 20000,
+		MaxTurns:         3,
+	}
+	if err := loop.Submit(context.Background(), "short request", cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("provider calls after automatic no-op = %d, want 1", len(fake.Calls))
+	}
+	for _, e := range events {
+		if e.Type == event.CompactionStart || e.Type == event.CompactionEnd {
+			t.Fatalf("no-work compaction emitted activity event: %+v", e)
+		}
+	}
+	path, err := store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range path {
+		if entry.Kind == "compaction" {
+			t.Fatal("automatic no-op wrote a compaction checkpoint")
+		}
+	}
+}
+
 func TestAutomaticCompactionEmitsThresholdReason(t *testing.T) {
 	store, reg, fake, _, _ := testSetup(t)
 	old := strings.Repeat("older history ", 1000)
