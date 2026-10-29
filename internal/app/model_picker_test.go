@@ -213,6 +213,42 @@ func hasQueryRow(screen string) bool {
 	return false
 }
 
+func TestActualShortCompactIsOfflineNoOpAndPreservesSessionBytes(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"keepRecentTokens":20000}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"http://127.0.0.1:1/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":100000}]}}}`)
+	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("short synthetic request")); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
+	q.prompt()
+	q.write("/compact\r")
+	q.wait("Nothing to compact yet. Recent conversation is already within")
+	q.wait("budget.")
+	q.prompt()
+	if strings.Contains(q.raw.String(), "Compacting context") {
+		t.Fatalf("short-session no-op showed a compaction indicator: %q", q.raw.String())
+	}
+	q.write("/quit\r")
+	q.finish()
+	after, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("short-session no-op changed persisted session bytes")
+	}
+}
+
 func TestActualEmptyCompactIsOfflineNoOpWithoutIndicator(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")

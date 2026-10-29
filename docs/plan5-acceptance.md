@@ -20,7 +20,7 @@ Manual `/compact` performs read-only preparation before showing a spinner or req
 |---|---|---|
 | Component | `TestPrepareCompactionReportsNoWorkOutcomes`, `TestPrepareCompactionSplitsLongAssistantSpanAtPiCutPoint`, `TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget` | Pass; the long-span fixture uses the ordinary 20,000-token retention budget. |
 | Agent/storage | Two-stage split summary, previous-summary update, aggregate usage, failure/incomplete/cancelled-summary usage, failed-checkpoint append, no-checkpoint, threshold no-op, overflow no-op, retain-none, projected replacement, omitted recovery suffix, and tool-call/result boundary regressions | Pass with fake providers and storage fault injection. |
-| Actual app | Empty `/compact` offline no-op, real-PTY ordinary-budget long-span summary through a loopback Anthropic server, and a second-process restart with compact default replay plus explicit `/history all` summary | Pass; the request and saved `firstKeptEntryId` are checked. |
+| Actual app | Empty and persistent short-session `/compact` offline no-ops; the short-session case preserves exact file bytes. A real-PTY ordinary-budget long-span summary runs through a loopback Anthropic server, is cancelled in a separate actual-app journey without changing session bytes, then is reopened in a second process with compact default replay and explicit `/history all`. | Pass; the summary request and saved `firstKeptEntryId` are checked. |
 | Reference | Pinned Pi cut-point and split-summary source reviewed | Source comparison only; no full Pi runtime session. |
 | Human | Visual review, selection/copy, flicker, macOS and Windows Terminal acceptance | Not performed. |
 
@@ -68,13 +68,19 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 
 `./scripts/check.sh` passes on the current working tree, including the race suite. It covers the existing packages and new local regressions. This is local evidence only.
 
+### Final executable
+
+Built `./psi` from clean source revision `a34b1803aa14cb6faf9ff86507ef50861c9f9976` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
+
+The copied executable passed loopback-only actual-binary journeys for all four tools, ordinary-budget compaction and a second-process replay/history check, two selected custom-theme user surfaces, atomic theme reload, a mid-stream theme reload, and provider retry status. The binary used for the temporary-path runs had the same SHA-256. No live provider request ran.
+
+Cross-build and test-binary compilation passed for windows/amd64 and darwin/amd64 and darwin/arm64. These checks do not establish native runtime behavior.
+
 Still open:
 
-- Finish remaining compaction differential and pinned-reader comparisons, plus app-level restart/cancellation journeys. The local agent/storage failure, cancellation, and append-fault regressions pass.
-- The measured latency, idle, history, picker, paste, hidden-argument allocation, scheduled-frame, delta-allocation, theme-burst, and watcher-lifecycle profiles listed above pass locally.
+- Finish remaining compaction differential and pinned-reader comparisons. Agent/storage and actual-app cancellation, failed-append, no-op byte-preservation, and restart-replay regressions pass locally.
 - Complete the documented Linux/macOS/Windows platform matrix and native console journeys.
 - Complete human light/dark/no-color readability, selection/copy, SSH/tmux, and flicker review.
 - Run remote CI only if an authorized existing VCI coordinator destination is provided. Do not configure or create a coordinator.
-- Build and checksum the final delivered executable from the final source commit.
 
 G5-01 through G5-08 remain open. Local tests, cross-builds, and PTY fixtures do not close blocked remote, native-platform, or human gates.
