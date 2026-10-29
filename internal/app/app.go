@@ -523,7 +523,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	if console == nil || r.store == nil {
 		return
 	}
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd())
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
@@ -533,7 +533,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		snapshot := terminal.PresentationSnapshot{
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName,
 			Provider: r.ov.Provider, ProviderCount: footerProviderCount(r.models), Model: r.ov.Model,
-			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking),
+			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking), AutoCompact: r.cfg.AutoCompact,
 		}
 		if accounting, err := r.store.Accounting(); err == nil {
 			if accounting.Usage.Input > 0 {

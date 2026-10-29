@@ -86,6 +86,14 @@ func TestFooterSnapshotIsCachedAcrossRedraws(t *testing.T) {
 	if strings.Contains(first.WorkingDirectory, "SYNTHETIC") || strings.Contains(first.Usage, "$") {
 		t.Fatalf("footer fabricated or leaked data: %+v", first)
 	}
+	if first.AutoCompact != r.cfg.AutoCompact {
+		t.Fatalf("footer auto-compaction=%v, configuration=%v", first.AutoCompact, r.cfg.AutoCompact)
+	}
+	r.cfg.AutoCompact = !r.cfg.AutoCompact
+	r.refreshPresentation(console)
+	if r.footerKey == key || r.footerSnapshot.AutoCompact != r.cfg.AutoCompact {
+		t.Fatalf("footer cache did not track auto-compaction configuration: key=%q snapshot=%v config=%v", r.footerKey, r.footerSnapshot.AutoCompact, r.cfg.AutoCompact)
+	}
 }
 
 func TestCommandsReplaceSessionAndValidateBeforeMutation(t *testing.T) {

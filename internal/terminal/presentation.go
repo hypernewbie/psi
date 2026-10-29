@@ -191,6 +191,7 @@ type PresentationSnapshot struct {
 	SessionName      string
 	Usage            string // only locally stored counters; empty means unavailable
 	ContextEstimate  string // explicitly marked approximation, e.g. ~8%/100k
+	AutoCompact      bool
 	Provider         string
 	ProviderCount    int
 	Model            string
@@ -249,7 +250,11 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 		path += " • " + SanitizeStatusRow(snapshot.SessionName)
 	}
 	path = truncateFooterText(path, width, "...")
-	secondLeft := truncateFooterText(strings.TrimSpace(snapshot.Usage+" "+snapshot.ContextEstimate), width, "...")
+	contextEstimate := snapshot.ContextEstimate
+	if snapshot.AutoCompact && contextEstimate != "" {
+		contextEstimate += " (auto)"
+	}
+	secondLeft := truncateFooterText(strings.TrimSpace(snapshot.Usage+" "+contextEstimate), width, "...")
 	modelSide := SanitizeStatusRow(snapshot.Model)
 	if snapshot.Thinking != "" {
 		modelSide += " • " + SanitizeStatusRow(snapshot.Thinking)

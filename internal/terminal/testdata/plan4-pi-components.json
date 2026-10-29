@@ -5,6 +5,8 @@
     "workingDirectory": "/home/operator/work",
     "homeDirectory": "/home/operator",
     "sessionName": "release audit",
+    "contextEstimate": "~8.0%/100k",
+    "autoCompact": true,
     "provider": "anthropic",
     "providerCount": 2,
     "model": "m",
@@ -15,7 +17,7 @@
     "",
     "───────────────────────────────────────",
     "~/work • release audit",
-    "                   (anthropic) m • high"
+    "~8.0%/100k (auto)  (anthropic) m • high"
   ],
   "omissions": [
     "No side borders, fullscreen screen, mouse, or transcript viewport",

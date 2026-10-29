@@ -124,6 +124,21 @@ func TestFooterSessionNameSanitizesTerminalControls(t *testing.T) {
 	}
 }
 
+func TestFooterShowsPiAutoCompactMarker(t *testing.T) {
+	rows, _ := formatFooter(PresentationSnapshot{
+		ContextEstimate: "~8%/100k", AutoCompact: true, Model: "m", NoColor: true,
+	}, 80, 3, true)
+	if !strings.Contains(Sanitize(rows[1]), "~8%/100k (auto)") {
+		t.Fatalf("enabled auto-compaction marker missing from footer: %q", rows[1])
+	}
+	rows, _ = formatFooter(PresentationSnapshot{
+		ContextEstimate: "~8%/100k", Model: "m", NoColor: true,
+	}, 80, 3, true)
+	if strings.Contains(Sanitize(rows[1]), "(auto)") {
+		t.Fatalf("disabled auto-compaction marker appeared in footer: %q", rows[1])
+	}
+}
+
 func TestFooterOmitsProviderWhenOnlyOneProviderIsAvailable(t *testing.T) {
 	rows, _ := formatFooter(PresentationSnapshot{
 		Provider: "anthropic", ProviderCount: 1, Model: "m", Thinking: "high", NoColor: true,
