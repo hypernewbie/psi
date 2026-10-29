@@ -36,3 +36,21 @@ func TestBusyInputCannotSubmitOrExecutePastedControl(t *testing.T) {
 		t.Fatal("typed Ctrl+C did not cancel")
 	}
 }
+
+// A4-15: ordinary keys during an active run are ignored. They never submit,
+// never cancel, and never become a queued prompt.
+func TestBusyRunIgnoresOrdinaryKeysWithoutQueueingThem(t *testing.T) {
+	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}, writer: NewWriter(&strings.Builder{}), decoder: NewDecoder()}
+	for _, key := range [][]byte{[]byte("x"), []byte("\r"), []byte("hello"), []byte{9}} {
+		text, submitted, quit, cancel := c.Handle(Input{Key: key}, true)
+		if text != "" || submitted || quit || cancel {
+			t.Fatalf("busy key %q was acted on: text=%q submitted=%v quit=%v cancel=%v", key, text, submitted, quit, cancel)
+		}
+	}
+	if c.Editor.Text() != "" {
+		t.Fatalf("busy run queued ordinary input: %q", c.Editor.Text())
+	}
+	if len(c.completionItems) != 0 {
+		t.Fatalf("busy run opened a completion list: %q", c.completionItems)
+	}
+}
