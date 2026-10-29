@@ -715,7 +715,8 @@ type ModelMeta struct {
 }
 
 type ModelsFile struct {
-	Providers map[string]ProviderMeta `json:"providers"`
+	Providers    map[string]ProviderMeta `json:"providers"`
+	cachedModels map[string]map[string]ModelMeta
 }
 
 type ProviderMeta struct {
@@ -729,16 +730,16 @@ type ProviderMeta struct {
 
 func LoadModels(path string) (*ModelsFile, error) {
 	b, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return &ModelsFile{}, nil
-	}
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 	var mf ModelsFile
-	if err := json.Unmarshal(stripBOM(b), &mf); err != nil {
-		return nil, fmt.Errorf("%s: malformed models.json", path)
+	if err == nil {
+		if err := json.Unmarshal(stripBOM(b), &mf); err != nil {
+			return nil, fmt.Errorf("%s: malformed models.json", path)
+		}
 	}
+	mf.cachedModels = loadPiModelCache(filepath.Join(filepath.Dir(path), "models-store.json"))
 	return &mf, nil
 }
 
@@ -764,6 +765,9 @@ func (mf *ModelsFile) SelectModel(provider, id string) (ModelMeta, error) {
 		return ModelMeta{}, fmt.Errorf("unsupported provider %q: available providers are anthropic and openai-codex", provider)
 	}
 	expectedAPI := m.API
+	if cached, ok := mf.cachedModels[provider][id]; ok {
+		m, known = cached, true
+	}
 	p := mf.Providers[provider]
 	for _, configured := range p.Models {
 		if configured.ID == id {

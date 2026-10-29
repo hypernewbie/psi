@@ -58,7 +58,7 @@ Additional storage rules:
 | `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |
 | `network` | idle timeout + bounded retries | one HTTP transport |
 | instructions | `AGENTS.override.md`, `AGENTS.md`, fallbacks, `SYSTEM.md`, `APPEND_SYSTEM.md` | documented discovery + consent |
-| `models.json` | endpoints, model metadata and overrides for supported providers | public versioned snapshot. No catalog refresh |
+| `models.json` | endpoints, model metadata and overrides for supported providers | public snapshot and Pi cache. No network refresh |
 | auth | Anthropic API keys; existing Codex OAuth login and refresh | no login UI or credential-command execution |
 | startup | `quietStartup` | no dynamic renderer |
 | themes | `theme`, `themes`, `terminal.trueColor`, `--use-theme`, repeatable `--theme`, `--no-themes` | Pi theme data and local resource paths; project resources require consent |

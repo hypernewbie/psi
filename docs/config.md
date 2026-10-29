@@ -40,7 +40,7 @@ ancestor folders.
 | Shell | `shellPath`, `shellCommandPrefix` | consent for project executables |
 | Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries` | default idle timeout 300000 ms; 0 disables it; at most 10 retries |
 | Instructions | user/project files | see below |
-| Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | local metadata only; no catalog refresh |
+| Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | bundled catalog and Pi cache; no network refresh |
 | Auth | `auth.json` entries, env refs | no `!command` execution |
 | Startup | `quietStartup` | inline only |
 | Terminal | always inline | fullscreen and rich-display preferences are ignored |
@@ -56,6 +56,11 @@ With no saved provider/model, the default is Anthropic `claude-sonnet-4-5`.
 The public snapshot contains 17 Anthropic models and seven Codex models from `@earendil-works/pi-ai` version `1.4.0`.
 Source hashes are in `internal/config/data/catalog-source.json`.
 The snapshot contains capabilities, not credentials, private endpoints, or user defaults.
+Psi also reads newer model data from Pi's `models-store.json` cache.
+Pi updates this cache. Psi does not fetch model catalogs from the network.
+Psi reads the cache at startup and uses it only when it is newer than the bundled snapshot.
+After Pi updates the cache, restart Psi to load the new data.
+Explicit models and overrides in `models.json` take precedence over the cache.
 `/model` searches the local catalog and configured models without a network request.
 
 A saved Codex selection uses the GPT-5.6 and GPT-6 families.

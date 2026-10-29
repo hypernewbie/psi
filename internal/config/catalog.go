@@ -36,6 +36,9 @@ func (mf *ModelsFile) LocalModels(provider string) []ModelMeta {
 	for _, m := range BundledModels(provider) {
 		ids[m.ID] = true
 	}
+	for id := range mf.cachedModels[provider] {
+		ids[id] = true
+	}
 	for _, m := range mf.Providers[provider].Models {
 		ids[m.ID] = true
 	}
