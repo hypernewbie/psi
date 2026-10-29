@@ -137,16 +137,32 @@ func TestFooterOmitsProviderWhenOnlyOneProviderIsAvailable(t *testing.T) {
 func TestFooterOmitsProviderWhenPiWouldNeedMoreRoom(t *testing.T) {
 	rows, _ := formatFooter(PresentationSnapshot{
 		Usage: "↑12k", ContextEstimate: "~8%/100k", Provider: "anthropic", ProviderCount: 2, Model: "m", Thinking: "high", NoColor: true,
-	}, 25, 3, true)
+	}, 23, 3, true)
 	if len(rows) != 2 {
 		t.Fatalf("footer rows=%q", rows)
 	}
 	line := Sanitize(rows[1])
-	if strings.Contains(line, "anthropic") || !strings.Contains(line, "m • high") {
-		t.Fatalf("narrow footer should omit its optional provider and retain model/thinking: %q", line)
+	if strings.Contains(line, "anthropic") || !strings.Contains(line, "↑12k ~8%/100k") || !strings.Contains(line, "m • hi") || strings.Contains(line, "m • high") {
+		t.Fatalf("narrow footer should preserve stats, omit provider, then clip the model side like Pi: %q", line)
 	}
-	if CellWidth(line) > 24 {
+	if CellWidth(line) > 22 {
 		t.Fatalf("footer exceeded its wrap-safe width: %q", line)
+	}
+}
+
+func TestFooterUsesPiEllipsisForLongPathAndStats(t *testing.T) {
+	pathRows, _ := formatFooter(PresentationSnapshot{
+		WorkingDirectory: filepath.FromSlash("/very/long/project"), SessionName: "release audit", NoColor: true,
+	}, 12, 3, true)
+	if got, want := Sanitize(pathRows[0]), filepath.FromSlash("/very/lo..."); got != want {
+		t.Fatalf("long path footer row=%q; want Pi-style ellipsis", got)
+	}
+
+	statsRows, _ := formatFooter(PresentationSnapshot{
+		Usage: "↑1234567890", ContextEstimate: "~10%/100k", Model: "m", NoColor: true,
+	}, 12, 3, true)
+	if got := Sanitize(statsRows[1]); got != "↑1234567..." {
+		t.Fatalf("long stats footer row=%q; want Pi-style ellipsis", got)
 	}
 }
 

@@ -224,6 +224,21 @@ func homeAbbreviated(path, home string) string {
 	return "~" + string(filepath.Separator) + SanitizeStatusRow(rel)
 }
 
+// truncateFooterText mirrors Pi's truncateToWidth for sanitized footer text.
+func truncateFooterText(text string, width int, ellipsis string) string {
+	if width <= 0 {
+		return ""
+	}
+	if CellWidth(text) <= width {
+		return text
+	}
+	ellipsisWidth := CellWidth(ellipsis)
+	if ellipsisWidth >= width {
+		return TruncateToWidth(ellipsis, width)
+	}
+	return TruncateToWidth(text, width-ellipsisWidth) + ellipsis
+}
+
 func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor bool) ([]string, []int) {
 	if height <= 0 || width <= 0 {
 		return nil, nil
@@ -233,7 +248,8 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 	if snapshot.SessionName != "" {
 		path += " • " + SanitizeStatusRow(snapshot.SessionName)
 	}
-	secondLeft := strings.TrimSpace(snapshot.Usage + " " + snapshot.ContextEstimate)
+	path = truncateFooterText(path, width, "...")
+	secondLeft := truncateFooterText(strings.TrimSpace(snapshot.Usage+" "+snapshot.ContextEstimate), width, "...")
 	modelSide := SanitizeStatusRow(snapshot.Model)
 	if snapshot.Thinking != "" {
 		modelSide += " • " + SanitizeStatusRow(snapshot.Thinking)
@@ -249,10 +265,20 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 	}
 	pathRow := ClipStyledRow(StyledRow{Spans: []StyledSpan{{Text: path, Token: TokenMuted}}}, width)
 	leftRow := ClipStyledRow(StyledRow{Spans: []StyledSpan{{Text: secondLeft, Token: TokenMuted}}}, width)
-	gap := max(0, width-leftRow.Width()-CellWidth(right))
-	if gap < 2 && secondLeft != "" && right != "" {
-		leftRow = ClipStyledRow(StyledRow{Spans: []StyledSpan{{Text: secondLeft, Token: TokenMuted}}}, max(0, width-CellWidth(right)-2))
-		gap = max(0, width-leftRow.Width()-CellWidth(right))
+	statsWidth := leftRow.Width()
+	rightWidth := CellWidth(right)
+	gap := 0
+	// Pi keeps the stats left and truncates the model side when the minimum gap cannot fit.
+	if statsWidth+2+rightWidth <= width {
+		gap = width - statsWidth - rightWidth
+	} else {
+		availableForRight := width - statsWidth - 2
+		if availableForRight > 0 {
+			right = TruncateToWidth(right, availableForRight)
+		} else {
+			right = ""
+		}
+		gap = max(0, width-statsWidth-CellWidth(right))
 	}
 	second := StyledRow{Spans: append(append([]StyledSpan(nil), leftRow.Spans...), StyledSpan{Text: strings.Repeat(" ", gap), Token: TokenText}, StyledSpan{Text: right, Token: TokenText})}
 	second = ClipStyledRow(second, width)
