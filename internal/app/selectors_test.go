@@ -288,3 +288,19 @@ func TestPickerNoMatchTreatmentAndPointerFollowPiComponents(t *testing.T) {
 		t.Fatalf("session picker must keep Pi's session-list pointer: %q", sessions.RenderPickerRows(80, 19, true))
 	}
 }
+
+// The picker key hint stays on one row. A narrow terminal gets a shorter
+// hint instead of a clipped word.
+func TestPickerHelpTextFitsNarrowWidths(t *testing.T) {
+	for _, width := range []int{16, 20, 30, 40, 56, 80} {
+		text := pickerHelpText(width)
+		if terminal.CellWidth(text) > width-1 {
+			t.Fatalf("picker help does not fit width %d: %q", width, text)
+		}
+	}
+	rows := NewSelector([]session.SessionInfo{{ID: "s1", FirstMessage: "first prompt"}}, "s1").RenderPickerRows(40, 12, true)
+	joined := strings.Join(rows, "\n")
+	if strings.Contains(joined, "PageUp/PageDown") {
+		t.Fatalf("narrow picker kept the wide key hint: %q", joined)
+	}
+}
