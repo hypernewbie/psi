@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `9b81b8e` (`feat(ui): use Pi's editor border layout`), following the picker-region change in `1608df7` and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, and `cb79a93`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `541a2c4` (`fix(app): keep Ctrl+D inside the focused picker`), following the picker-region change in `1608df7` and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -64,7 +64,17 @@ New coverage added with those changes:
 
 - `TestActualCompactionShowsPiIndicatorAndSettles` shows Pi's compaction indicator in a real PTY, proves the provider received a summary request, and checks the committed summary.
 - `TestFailedModelPersistenceKeepsPriorRuntimeAndDraft` proves a refused store keeps the prior provider, configuration, session file, footer, draft, cursor, and recall.
-- `TestCompactionActivityFollowsPiPhases`, `TestPickerNoMatchTreatmentAndPointerFollowPiComponents`, and `TestEditorBorderFollowsPiLayout` cover the transcribed wording and layout.
+- `TestActualCancelInsidePartialFenceKeepsTextAndNextPrompt` cancels a real run inside an open code fence and checks that the partial text stays visible, the interrupted outcome is stated, no style escape leaks, and the next prompt stays usable.
+- `TestActualCtrlDInPickerDoesNotExitTheSession` proves Ctrl+D stays with the focused picker instead of ending the session.
+- `TestStartupHeaderUsesPiCompactHints` checks Pi's compact startup hints.
+- `TestCompactionActivityFollowsPiPhases`, `TestPickerNoMatchTreatmentAndPointerFollowPiComponents`, `TestEditorBorderFollowsPiLayout`, and `TestIndexedFallbackMatchesPiPaletteSlots` cover the transcribed wording, layout, and palette slots.
+
+### Platform and delivery evidence at `541a2c4`
+
+- Native Windows: the `internal/app` and `internal/terminal` package binaries passed again on Windows 11 `10.0.26200.8875` through WSL2 interop after the picker-parity and key-ownership work. `TestActualWindowsConPTYInteraction` passed three consecutive runs over the six-size matrix.
+- Cross-builds: `GOOS=windows go vet ./...`, `GOOS=windows go build ./...`, the Darwin amd64/arm64 package builds, and Darwin app/terminal test-binary compilation passed. macOS binaries were not executed.
+- CI: the workflow now runs the race suite and the acceptance-tagged idle, metadata, and compacted-session profiles on Linux and macOS. The Windows race step stays out because that runner has no cgo. The workflow itself was not executed by a remote runner.
+
 
 
 On the same Linux/amd64 host, 100 edits over 10,000 picker entries measured p50 `2.801081ms`, p95 `3.751883ms`, max `3.89351ms`. All remained below the 50 ms p95 budget. Audit fixture hashes:
@@ -75,10 +85,12 @@ internal/app/selectors_test.go         425b9a47fd5a727f31f749cc13a5823fe8a56ebe1
 internal/app/conpty_windows_test.go    071b677bf05e11a8ae80fb4900cf14123713eed1351723a3668d6af55763e95a
 internal/terminal/maintained_test.go    cae637bec61339370782861eb3a7cda73f0fbb345541fbeb3028fc8a4e55e912
 internal/terminal/picker_region_test.go fbb25a8fd18b5fa5945158932737c7282aeb44e451f4d6743641bc742c69669e
-internal/terminal/presentation.go      0265e4529ff62bdd1636f57175230b7229ad1a2e5b193dd658b95f792c83977c
+internal/terminal/presentation.go      9d56956a66f61c29bd4d7ac5c09d5b31d1a202e127b14205746cc6a022b6372d
 internal/terminal/console.go            6c31f86e8fae358e3252f752ebc918c955f4c98656b865c335af5b495ad5af59
 internal/terminal/picker.go             08a2b90d7615533e572e673a5aa51b2ef6f07975300a0d87bfc2d6dbe8a67f23
 internal/app/selectors.go              2da90de31d75ad3e3e1f987e07523ef96990b44785cef57dfcec68b6fe4e489d
+internal/app/app.go                    b6d343f9101f11a7b862667b9b6138480ea49e2442b2c9ac86dd80820ee2235e
+internal/app/helpers.go                dbc8d1be8e91b08ff4a3270d7b109ac8d189b2878d75ca104356e3c7d39b82de
 ```
 
 ## Resource profiles
@@ -141,10 +153,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `9b81b8e` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
+Built from repository tree revision `541a2c4` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
 
 ```text
-SHA-256  b6f8d67c098ebf2e09dfb140cee86cc0e1e502f63f581231616799c7326344f7
+SHA-256  da48c3b6dfc7af35709ab32d6a196c353762c1b7cdc9dd9914979fa100e4fa62
 ```
 
 ## Gate disposition
