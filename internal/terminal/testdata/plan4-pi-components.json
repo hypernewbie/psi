@@ -4,6 +4,7 @@
   "snapshot": {
     "workingDirectory": "/home/operator/work",
     "homeDirectory": "/home/operator",
+    "sessionName": "release audit",
     "provider": "anthropic",
     "providerCount": 2,
     "model": "m",
@@ -13,7 +14,7 @@
     "───────────────────────────────────────",
     "",
     "───────────────────────────────────────",
-    "~/work",
+    "~/work • release audit",
     "                   (anthropic) m • high"
   ],
   "omissions": [
