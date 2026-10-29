@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `c9002e3` (`test(app): prove Escape cancels a running tool and settles it`), following the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `b8b280f` (`test(app): assert Pi footer hides unsupported thinking`), following the Pi-style footer label fix in `f87851e` and the cancellation test in `c9002e3`, plus the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -24,7 +24,7 @@ No live provider request was made. Tests use synthetic credentials, temporary wo
 | A4-01–02 | Inline startup/editor, grapheme editing, literal paste, recall, cursor, overflow, and responsive geometry tests; actual-app PTY coverage | Human readability and copy check blocked |
 | A4-03 | Slow-stream and actual-app PTY tests preserve the indicator, footer, editor, and partial text. A loopback provider sends 10,000 one-character deltas in 30 paced batches; order and persistence are checked. The REPL profile separately counts timer and event-boundary frames, writer frames/writes, and maximum write size. | Automated pass; human perception/flicker check remains blocked |
 | A4-04–07 | Tool-state privacy/deduplication, shared live/replay Markdown, chunk-boundary, partial-fence, session replay, and settlement tests. The active tool row sits above the editor with the message margin, the settled line replaces it once, and the replayed tool row uses the same margin. | Automated pass |
-| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests. The picker replaces the editor region with its own border and `> ` query row; navigation and filtering do not append a result page to native scrollback. Pi-derived picker and completion fixtures pin the row shape. | Automated pass on Linux PTY; Windows ConPTY opens/cancels and navigates the model picker at all six sizes |
+| A4-08–13 | Inline completion/pickers, 10,000-entry search, model/thinking persistence, startup resume, trust default-deny, pending-input preservation, and picker lifecycle tests. The picker replaces the editor region with its own border and `> ` query row; navigation and filtering do not append a result page to native scrollback. Pi-derived picker and completion fixtures pin the row shape. The footer shows thinking only for reasoning-capable models and spells the disabled state `thinking off`. | Automated pass on Linux PTY; Windows ConPTY opens/cancels and navigates the model picker at all six sizes |
 | A4-14–17 | Synthetic compaction phase, cancellation settlement, busy paste, storage-failure, and durable/interrupted/unsaved outcome tests. Escape during a running tool keeps `Cancelling…` visible until settlement and leaves the next prompt usable. | Automated pass |
 | A4-18 | Maintained VT keeps an active draft and committed sentinel through all six sizes. Native Windows ConPTY exercises the actual app at those sizes while typing, streaming from a local SSE provider, running a five-second Git Bash tool, and navigating the model picker. | Automated pass for the resize matrix; human flicker/readability checks remain blocked |
 | A4-19 | `NO_COLOR`, semantic token, and no-generated-SGR fixtures | Automated pass; light/dark human checks blocked |
@@ -59,6 +59,7 @@ Additional Pi-source transcriptions after the picker-region change:
 - **P4-030:** Pi's `trust-selector.ts` shows a title, the options with a `→ ` pointer and a `✓ ` current marker, the visible folder, and its navigation hint. psi's project-trust and workspace-confirmation regions use that shape and keep psi's reduced allow/deny set with deny selected by default.
 - **P4-012:** Pi's `CompactionStatusIndicator` distinguishes a manual compaction from an automatic one and names the overflow reason. psi's compaction activity now uses `Compacting context…`, `Auto-compacting…`, and `Context overflow detected, Auto-compacting…` with the same cancellation hint.
 - **P4-006:** Pi's custom editor puts the working status at the left of the top border and centers the overflow count with `createScrollBorder`. psi's editor border now uses that layout.
+- **R4-04/P4-007:** Pi's footer names a thinking level only when the selected model supports reasoning; its disabled label is `thinking off`. psi no longer shows the misleading `• off` for models without reasoning support. `TestFooterThinkingLabelFollowsPi` covers the state mapping, and the actual picker PTY asserts that an unsupported model keeps its identity without a thinking suffix.
 - **P4-014:** Pi's `tool-execution.ts` keeps the running tool row above the editor while the border carries the working indicator, and pads it like the surrounding transcript content. psi renders the active tool row in the owned tail with the shared message margin, and the settled line uses the same margin. The settled line and the row removal share one frame, so no duplicate running row stays visible. The active row is clipped to one physical row at the emission width.
 
 New coverage added with those changes:
@@ -73,14 +74,15 @@ New coverage added with those changes:
 - `TestPickerHelpTextFitsNarrowWidths` and `TestChoicePickerHintFitsNarrowWidths` prove the picker key hints stay on one row instead of clipping a word.
 - `TestActualCancelDuringToolKeepsCancellationVisibleAndSettles` proves Escape cancels a running tool, keeps `Cancelling…` visible until settlement, settles the call as `cancelled`, and leaves the next prompt usable.
 - `TestPlan4PiPickerFixture` and `TestPlan4PiCompletionFixture` compare the picker and completion rows with Pi-derived expected fixtures.
+- `TestFooterThinkingLabelFollowsPi` and `TestActualPickerReplacesTheEditorWithoutFloodingScrollback` pin the Pi reasoning-support and disabled-thinking footer behavior.
 - `TestActualSessionPickerSelectsAndCancelsInWorkspace` selects A → B → A across workspace sessions and restores the submitted draft when the picker is cancelled.
 - `TestBusyRunIgnoresOrdinaryKeysWithoutQueueingThem` proves ordinary keys are ignored during an active run.
 - `TestStartupHeaderUsesPiCompactHints` checks Pi's compact startup hints.
 - `TestCompactionActivityFollowsPiPhases`, `TestPickerNoMatchTreatmentAndPointerFollowPiComponents`, `TestEditorBorderFollowsPiLayout`, and `TestIndexedFallbackMatchesPiPaletteSlots` cover the transcribed wording, layout, and palette slots.
 
-### Platform and delivery evidence at `c9002e3`
+### Platform and delivery evidence at `b8b280f`
 
-- Native Windows: the `internal/app` and `internal/terminal` package binaries passed again on Windows 11 `10.0.26200.8875` through WSL2 interop after the picker-parity, key-ownership, tool-row, hint, and fixture work. `TestActualWindowsConPTYInteraction` passed three consecutive runs over the six-size matrix.
+- Native Windows: the `internal/app` and `internal/terminal` package binaries passed on Windows 11 `10.0.26200.8875` through WSL2 interop after the footer label fix at `f87851e`. The three-run `TestActualWindowsConPTYInteraction` six-size matrix was last verified at `c9002e3`; it was not rerun for this footer-only change.
 - Cross-builds: `GOOS=windows go vet ./...`, `GOOS=windows go build ./...`, the Darwin amd64/arm64 package builds, and Darwin app/terminal test-binary compilation passed. macOS binaries were not executed.
 - CI: the workflow now runs the race suite and the acceptance-tagged idle, metadata, and compacted-session profiles on Linux and macOS. The Windows race step stays out because that runner has no cgo. The workflow itself was not executed by a remote runner.
 
@@ -100,7 +102,9 @@ internal/terminal/picker.go             1bb311edc41922c83fe74bc7b8cde14ac3c56bd6
 internal/terminal/status.go             7a33957c8f92929214ac1fbd3ac0133e22944ad1186c40591c68fe7e76d7bea7
 internal/terminal/markdown.go           447ed044d4f91f404d5d60d0b75566ea3f17a86e923ef43149276fca75a5ebb3
 internal/app/selectors.go              8e5a45ea167c8869d17ba733499034cf9e7f9f296e9ce7ce4eb58135c67493d9
-internal/app/app.go                    8928e6458d972592251ac23492441870e84720c45971d0a20091e997d6cbee1b
+internal/app/app.go                    5cf23baf88ff95afb1caa88df2231a4557a9d1adc1c66d3c1ee278f658294fdd
+internal/app/app_test.go               92eda90f168699721b39333101abbde0a2d8a44ec3bbddb3110e1132b86e7b76
+internal/app/model_picker_test.go       eab63ee957ca20281b30d1b4715824616da6b47185c7e5f73f89dbee9f6394d6
 internal/app/helpers.go                fd29926f236318bb67416e181644ff840b95a6c93f69581f1c8c76a836a63293
 internal/app/replay.go                 3c03198aacd46f1f9eaf39b25af088d3984302e4b18d90e195274c31aa063694
 internal/app/review_test.go             68b7e10c7c1b786bf3e2e72b762a3cb172430ab410252696d9ffc3e6d59c32a9
@@ -173,10 +177,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `c9002e3` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
+Built from repository tree revision `b8b280f` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. The actual-app PTY verifies the footer does not show a thinking suffix for a model without reasoning support. The documentation-only ledger update follows this build.
 
 ```text
-SHA-256  bb8b541987c190a01dc18f62ca6560d46ab3770338ff460e619bec9fbe06c78a
+SHA-256  55cc423569d68cd0ab2c9f996a60207aed3d20ee3a8eb3672d3a11b2ccb8a932
 ```
 
 ## Gate disposition
