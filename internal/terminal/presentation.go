@@ -233,14 +233,18 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 		path += " • " + SanitizeStatusRow(snapshot.SessionName)
 	}
 	secondLeft := strings.TrimSpace(snapshot.Usage + " " + snapshot.ContextEstimate)
-	var right string
-	if snapshot.Provider != "" {
-		right = "(" + SanitizeStatusRow(snapshot.Provider) + ") " + SanitizeStatusRow(snapshot.Model)
-	} else {
-		right = SanitizeStatusRow(snapshot.Model)
-	}
+	modelSide := SanitizeStatusRow(snapshot.Model)
 	if snapshot.Thinking != "" {
-		right += " • " + SanitizeStatusRow(snapshot.Thinking)
+		modelSide += " • " + SanitizeStatusRow(snapshot.Thinking)
+	}
+	right := modelSide
+	if snapshot.Provider != "" && snapshot.Model != "" {
+		withProvider := "(" + SanitizeStatusRow(snapshot.Provider) + ") " + modelSide
+		// Pi includes the provider only when the complete label fits alongside
+		// the existing stats and its minimum two-cell separator.
+		if CellWidth(secondLeft)+2+CellWidth(withProvider) <= width {
+			right = withProvider
+		}
 	}
 	pathRow := ClipStyledRow(StyledRow{Spans: []StyledSpan{{Text: path, Token: TokenMuted}}}, width)
 	leftRow := ClipStyledRow(StyledRow{Spans: []StyledSpan{{Text: secondLeft, Token: TokenMuted}}}, width)

@@ -111,6 +111,22 @@ func TestHomeAbbreviationRespectsDirectoryBoundary(t *testing.T) {
 	}
 }
 
+func TestFooterOmitsProviderWhenPiWouldNeedMoreRoom(t *testing.T) {
+	rows, _ := formatFooter(PresentationSnapshot{
+		Usage: "↑12k", ContextEstimate: "~8%/100k", Provider: "anthropic", Model: "m", Thinking: "high", NoColor: true,
+	}, 25, 3, true)
+	if len(rows) != 2 {
+		t.Fatalf("footer rows=%q", rows)
+	}
+	line := Sanitize(rows[1])
+	if strings.Contains(line, "anthropic") || !strings.Contains(line, "m • high") {
+		t.Fatalf("narrow footer should omit its optional provider and retain model/thinking: %q", line)
+	}
+	if CellWidth(line) > 24 {
+		t.Fatalf("footer exceeded its wrap-safe width: %q", line)
+	}
+}
+
 func TestNoColorEnvStillLeavesStateText(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	view := ComposeEditorView(50, 10, nil, 0, PresentationSnapshot{WorkingDirectory: "/work", Model: "model", Thinking: "high"}, "Working…")
