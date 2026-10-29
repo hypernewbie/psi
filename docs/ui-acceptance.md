@@ -183,7 +183,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `fce9403` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, optional-provider fallback, and Pi's narrow-width footer truncation. The documentation-only ledger update follows this build.
+Built from repository tree revision `fce9403` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, optional-provider fallback, and Pi's narrow-width footer truncation. The built executable also passed an offline startup/footer/exit PTY smoke with an isolated HOME and no provider request. The documentation-only ledger update follows this build.
 
 ```text
 SHA-256  4ef99831944876be82c1c76573fb24ddef13e02c062f75dce8043df471322045
