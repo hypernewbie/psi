@@ -12,14 +12,17 @@ psi --thinking LEVEL
 psi --session-dir PATH
 psi --tools read,bash,edit,write
 psi --no-tools
+psi --use-theme NAME
+psi --theme PATH
+psi --no-themes
 psi --no-session
 psi --help
 psi --version
 ```
 
 Project consent: `--allow-project` / `--deny-project`. Otherwise an inline
-choice appears before psi reads `.pi/settings.json`, project skills, or project
-`SYSTEM.md`/`APPEND_SYSTEM.md`. The default is deny; Escape and Ctrl+C also deny.
+choice appears before psi reads `.pi/settings.json`, project skills/themes/packages,
+or project `SYSTEM.md`/`APPEND_SYSTEM.md`. The default is deny; Escape and Ctrl+C also deny.
 The choice applies to this run only. Context files such as `AGENTS.md` load
 separately, as in Pi. User instructions come from the agent directory and
 ancestor folders.
@@ -32,6 +35,8 @@ ancestor folders.
 | Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |
 | Skills | `skills`, `enableSkillCommands` | paths + selector |
 | Compaction | `compaction.enabled,reserveTokens,keepRecentTokens` | bounded summaries |
+| Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
+| Display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | bounded inline spacing and code-block indent |
 | Shell | `shellPath`, `shellCommandPrefix` | consent for project executables |
 | Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries` | default idle timeout 300000 ms; 0 disables it; at most 10 retries |
 | Instructions | user/project files | see below |
@@ -39,6 +44,8 @@ ancestor folders.
 | Auth | `auth.json` entries, env refs | no `!command` execution |
 | Startup | `quietStartup` | inline only |
 | Terminal | always inline | fullscreen and rich-display preferences are ignored |
+
+`theme` selects `system` by default, a built-in (`dark` or `light`), or an exact discovered theme name. `themes` is an array of additional local file or directory paths. `--use-theme` overrides the selection; repeat `--theme PATH` to add resources; `--no-themes` disables configured and discovered resources. Theme files are data only: schema URLs are not fetched and theme/package code is not run. Project theme bodies load only after project consent. `terminal.trueColor` accepts `auto`, `true`, or `false`; `NO_COLOR` always disables generated SGR. `/reload` installs valid theme and display settings atomically; an invalid reload keeps the last valid snapshot. `/session` reports theme, appearance, color mode, source, and diagnostics.
 
 Credential references support `$VAR`, `${VAR}`, `$$`, and `$!` escapes.
 Psi rejects `!command` values without running them. Stored Anthropic credentials

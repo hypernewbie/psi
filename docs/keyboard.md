@@ -27,7 +27,8 @@ Commands (bounded inline, searchable editor pickers, no fullscreen):
 - `/model` — searchable model picker with Pi's `→` selection pointer, `✓` current marker, provider badges, and selected-model credential details; `/model [provider/]model` applies a direct session-local choice
 - `/thinking` — searchable supported-level picker with Pi's `→` pointer; `/thinking [level]` applies a direct session-local choice
 - `/compact [focus]` — real cancellable summary, start/settled outcome
-- `/session` — identity, workspace, provider/API/model, thinking, continuation, usage (no secrets, no invented $0.00)
+- `/session` — identity, workspace, provider/API/model, thinking, continuation, usage, and theme diagnostics (no secrets, no invented $0.00)
+- `/reload` — reload supported display/theme settings and resources without replaying committed scrollback
 - `/history [N|all]` — last N user spans (default 20) or full history, display-only, no mutation
 - `/skill:name [args]` — resolve, persist reproducible input (`psi.input`), show invocation once
 - `/quit` — settle work, restore terminal

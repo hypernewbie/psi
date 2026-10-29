@@ -17,6 +17,8 @@ export ANTHROPIC_API_KEY="..."
 ./psi --provider openai-codex --model gpt-5.6-luna
 ```
 
+Theme selection is available at startup, for example `./psi --use-theme dark` or `./psi --theme /path/to/theme.json`. Set `theme` and optional `themes` paths in `~/.pi/agent/settings.json`; use `/reload` to apply supported display/theme changes. Project themes load only after project consent. See `docs/config.md` for settings and resource rules.
+
 Resume (every form shows current-view history before the next prompt):
 
 ```sh
