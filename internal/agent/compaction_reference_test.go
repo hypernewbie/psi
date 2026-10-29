@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"psi/internal/provider"
 	"psi/internal/session"
 )
 
@@ -26,6 +27,110 @@ const settings={enabled:true,reserveTokens:16384,keepRecentTokens:Number(process
 const p=m.prepareCompaction(entries,settings);
 console.log(JSON.stringify(p&&{firstKeptEntryId:p.firstKeptEntryId,isSplitTurn:p.isSplitTurn}));
 `
+
+const piCompactionSummaryReferenceScript = `
+const m=await import(process.argv[1]);
+const entries=m.loadEntriesFromFile(process.argv[2]).filter(e=>e.type!=='session');
+const preparation=m.prepareCompaction(entries,{enabled:true,reserveTokens:16384,keepRecentTokens:20000});
+const requests=[];
+const usage={input:20,output:5,cacheRead:0,cacheWrite:0,totalTokens:25,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}};
+const stream=async(_model,context)=>{requests.push(context);const n=requests.length;return {result:async()=>({role:'assistant',content:[{type:'text',text:n===1?'SYNTHETIC_HISTORY':'SYNTHETIC_TURN'}],stopReason:'stop',usage})}};
+const result=await m.compact(preparation,{id:'synthetic-model',api:'anthropic-messages',reasoning:false},undefined,undefined,undefined,undefined,undefined,stream);
+const prompts=requests.map(context=>{const message=context.messages.filter(m=>m.role==='user').at(-1);const content=message.content;const text=typeof content==='string'?content:content.filter(b=>b.type==='text').map(b=>b.text).join('\\n');return {hasPreviousSummary:text.includes('previous checkpoint'),hasRetainedBoundary:text.includes('retained boundary request'),hasAncient:text.includes('ancient discarded request'),hasCurrentTask:text.includes('ongoing current task')}});
+console.log(JSON.stringify({firstKeptEntryId:preparation.firstKeptEntryId,isSplitTurn:preparation.isSplitTurn,prompts,summary:result.summary,totalTokens:result.usage.totalTokens}));
+`
+
+func TestPiCompactionSummaryUsesInjectedStream(t *testing.T) {
+	module := piCompactionReferenceModule
+	if module == "" {
+		t.Skip("set PSI_PI_SESSION_MODULE to the pinned Pi reference adapter")
+	}
+	if piReferenceNodePath == "" {
+		t.Skip("Node is required for the opt-in pinned Pi reference")
+	}
+	store, _, fake, loop, _ := testSetup(t)
+	if _, err := store.AppendMessage(userMsg("ancient discarded request")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(userMsg("retained boundary request")); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendCompaction("previous checkpoint", path[len(path)-1].ID(), 100, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(userMsg("ongoing current task")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		appendAssistantText(t, store, strings.Repeat(string(rune('a'+i)), 80_000))
+	}
+	projection, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err = store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareCompaction(path, projection, 20_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	home := t.TempDir()
+	cmd := exec.CommandContext(ctx, piReferenceNodePath, "--no-warnings", "--input-type=module", "-e", piCompactionSummaryReferenceScript, module, store.File())
+	cmd.Dir = home
+	cmd.Env = []string{"HOME=" + home, "PATH=/usr/local/bin:/usr/bin:/bin", "PI_CODING_AGENT_DIR=" + filepath.Join(home, "agent"), "PI_CODING_AGENT_SESSION_DIR=" + filepath.Join(home, "sessions")}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pinned Pi synthetic compaction: %v: %s", err, out)
+	}
+	var pi struct {
+		FirstKeptEntryID string `json:"firstKeptEntryId"`
+		IsSplitTurn      bool   `json:"isSplitTurn"`
+		Prompts          []struct {
+			HasPreviousSummary  bool `json:"hasPreviousSummary"`
+			HasRetainedBoundary bool `json:"hasRetainedBoundary"`
+			HasAncient          bool `json:"hasAncient"`
+			HasCurrentTask      bool `json:"hasCurrentTask"`
+		} `json:"prompts"`
+		Summary     string `json:"summary"`
+		TotalTokens int    `json:"totalTokens"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &pi); err != nil {
+		t.Fatalf("decode Pi compaction result %q: %v", out, err)
+	}
+	if pi.FirstKeptEntryID != prepared.FirstKeptEntryID || pi.IsSplitTurn != prepared.SplitTurn {
+		t.Fatalf("Pi compaction preparation differs: psi=%+v Pi=%+v", prepared, pi)
+	}
+	if len(pi.Prompts) != 2 || !pi.Prompts[0].HasPreviousSummary || !pi.Prompts[0].HasRetainedBoundary || pi.Prompts[0].HasAncient || !pi.Prompts[1].HasCurrentTask {
+		t.Fatalf("Pi split-summary requests lost or invented context: %+v", pi.Prompts)
+	}
+	fake.Responses = []*provider.Response{
+		{Text: "SYNTHETIC_HISTORY", StopReason: "stop", Usage: provider.Usage{Input: 20, Output: 5, TotalTokens: 25}},
+		{Text: "SYNTHETIC_TURN", StopReason: "stop", Usage: provider.Usage{Input: 20, Output: 5, TotalTokens: 25}},
+	}
+	if err := loop.Compact(t.Context(), Config{Model: modelMeta(), KeepRecentTokens: 20_000}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Calls) != len(pi.Prompts) {
+		t.Fatalf("summary requests differ: psi=%d Pi=%d", len(fake.Calls), len(pi.Prompts))
+	}
+	for _, call := range fake.Calls {
+		if len(call.Messages) != 1 || call.Messages[0].Role != "user" {
+			t.Fatalf("psi summary request has unexpected transcript: %+v", call)
+		}
+	}
+	compacted := store.Entries()[len(store.Entries())-1].Compaction
+	if compacted == nil || compacted.FirstKeptEntryID != pi.FirstKeptEntryID || !strings.Contains(compacted.Summary, pi.Summary) || compacted.Usage == nil || compacted.Usage.TotalTokens != float64(pi.TotalTokens) {
+		t.Fatalf("psi result differs from pinned Pi's injected-summary flow: psi=%+v Pi=%+v", compacted, pi)
+	}
+}
 
 func TestPiCompactionCutPointDifferential(t *testing.T) {
 	module := piCompactionReferenceModule

@@ -15,8 +15,8 @@
 ## Reference adapter
 
 `scripts/build-reference.mjs` requires the pinned revision and a checkout without tracked changes.
-It imports unmodified Pi source through a TypeScript loader, including the session reader and pure compaction preparation.
-It does not load agent configuration, credentials, extensions, provider factories, or call a summary provider.
+It imports unmodified Pi source through a TypeScript loader, including the session reader and compaction preparation/generation.
+It does not load agent configuration, credentials, extensions, or provider factories. The optional compact-flow comparison injects a synthetic stream; the `completeSimple` stub throws if a provider call is attempted.
 Public dependencies come from the installed coding-agent package, never an agent data directory.
 
 The adapter records these source hashes:

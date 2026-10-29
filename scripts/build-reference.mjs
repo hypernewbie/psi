@@ -1,6 +1,6 @@
 // Build an isolated, dependency-minimal adapter around the unmodified pinned
-// session reader and pure compaction preparation. Requires Node 24. No provider
-// factories, credentials, or summary-generation calls load.
+// session reader and compaction APIs. Requires Node 24. No provider factories
+// or credentials load; summary calls require the injected synthetic stream.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -42,11 +42,11 @@ registerHooks({resolve(specifier,context,next){
 const reader=await import(${JSON.stringify(pathToFileURL(reader).href)});
 const compaction=await import(${JSON.stringify(pathToFileURL(compaction).href)});
 export const {SessionManager,loadEntriesFromFile,buildSessionProjection,buildSessionContext}=reader;
-export const {findCutPoint,prepareCompaction}=compaction;
+export const {findCutPoint,prepareCompaction,compact}=compaction;
 export async function findWordBackward(...args) {
  const word=await import(${JSON.stringify(pathToFileURL(wordNavigation).href)});
  return word.findWordBackward(...args);
 }
 `);
 writeFileSync(output+'.manifest.json',JSON.stringify({revision,readerSha256:createHash('sha256').update(readFileSync(reader)).digest('hex'),compactionSha256:createHash('sha256').update(readFileSync(compaction)).digest('hex'),wordNavigationSha256:createHash('sha256').update(readFileSync(wordNavigation)).digest('hex'),adapter:'native-node-types-v3-compaction',sourceUnmodified:true},null,2)+'\n');
-console.log('Pinned reference adapter built (unmodified reader and pure compaction exports).');
+console.log('Pinned reference adapter built (unmodified reader and compaction exports).');
