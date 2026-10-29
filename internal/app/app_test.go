@@ -501,7 +501,7 @@ func waitForEditorScreen(t *testing.T, chunks <-chan string, screen *testutil.VT
 
 // Pi's footer names the thinking level only for a model that supports
 // reasoning, and it spells out the disabled state.
-func TestFooterSnapshotShowsActiveSessionNameAndTracksLeaf(t *testing.T) {
+func TestFooterSnapshotShowsLatestSessionNameAndTracksLeaf(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "named.jsonl")
 	lines := []string{
 		`{"type":"session","version":3,"id":"named","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/work"}`,
