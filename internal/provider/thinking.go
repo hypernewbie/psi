@@ -25,6 +25,37 @@ func ThinkingDescription(model ModelMeta, level string) string {
 		}
 		return level + " (provider default; disabling reasoning unavailable)"
 	}
+	if model.API == "openai-completions" {
+		compat, err := resolveCompletionsCompat(model)
+		if err != nil {
+			return "unavailable: " + err.Error()
+		}
+		if level == "off" {
+			switch compat.thinkingFormat {
+			case "deepseek":
+				if mapped, exists := model.ThinkingLevelMap["off"]; exists && mapped == nil {
+					return "off (provider default; disabling reasoning unavailable)"
+				}
+				return "off"
+			case "zai":
+				return "off"
+			default:
+				if mapped, exists := model.ThinkingLevelMap["off"]; exists && mapped != nil {
+					return fmt.Sprintf("off (effective effort %s)", *mapped)
+				}
+				return "off (provider default; disabling reasoning unavailable)"
+			}
+		}
+		if compat.supportsReasoningEffort {
+			if effort, ok := mappedEffort(model, level); ok {
+				return fmt.Sprintf("%s (effective effort %s)", level, effort)
+			}
+		}
+		if compat.thinkingFormat == "deepseek" || compat.thinkingFormat == "zai" {
+			return level + " (thinking enabled; provider effort default)"
+		}
+		return level + " (provider effort default; effort control unavailable)"
+	}
 	if model.AdaptiveThinking {
 		if level == "off" {
 			if thinking, ok := request["thinking"].(map[string]any); ok {

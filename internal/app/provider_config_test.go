@@ -1,8 +1,14 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"psi/internal/config"
@@ -58,4 +64,41 @@ func TestConfigureUsesProviderSpecificAnthropicKeysAndCatalogPaths(t *testing.T)
 	if !ok || openCode.APIKey != "" || r.authErr == nil {
 		t.Fatal("OpenCode unexpectedly used a different provider's credential")
 	}
+}
+
+func TestConfigureDispatchesDeepSeekCompletionsWithProviderKey(t *testing.T) {
+	var seen atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(true)
+		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer synthetic-deepseek-key" {
+			t.Errorf("completion request path/auth = %s %#v", r.URL.Path, r.Header)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if body["max_tokens"] != float64(1234) || body["model"] != "synthetic-deepseek" {
+			t.Errorf("completion body = %#v", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	t.Setenv("DEEPSEEK_API_KEY", "synthetic-deepseek-key")
+	r := testRuntime(t)
+	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"deepseek": {Models: []config.ModelMeta{{
+		ID: "synthetic-deepseek", API: "openai-completions", BaseURL: server.URL, MaxTokens: 1234, Input: []string{"text"},
+	}}}}}
+	if err := r.configure(config.StartupOverrides{Provider: "deepseek", Model: "synthetic-deepseek", Thinking: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	client, ok := r.prov.(*provider.CompletionsClient)
+	if !ok || client.APIKey != "synthetic-deepseek-key" || r.authErr != nil || r.cfg.Model.API != "openai-completions" {
+		t.Fatal("DeepSeek model did not select the Completions adapter and its provider key")
+	}
+	response, err := client.Send(context.Background(), provider.Request{Model: r.cfg.Model, Thinking: "off", Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "synthetic"}}}}}, nil)
+	if err != nil || response.Text != "ok" || !seen.Load() {
+		t.Fatalf("configured provider request = %+v, %v (seen %v)", response, err, seen.Load())
+	}
+	client.CloseIdle()
 }

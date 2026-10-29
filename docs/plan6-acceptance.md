@@ -15,8 +15,8 @@
 |---|---|---|
 | 1. Registry, catalog, and auth | Complete locally | P6-001–012: explicit registry, seven public catalogs, model API/endpoint and compat metadata, Pi cache policy, truthful unavailable model options, and provider-specific API-key precedence. Evidence: `go test ./internal/modelmeta ./internal/providerregistry ./internal/config ./internal/provider ./internal/app -count=1`; generator check below. |
 | 2. MiniMax and OpenCode Anthropic | Complete locally | P6-013–018: provider-specific keys/endpoints, `/anthropic/v1/messages` path, adaptive-thinking and `allowEmptySignature`, case-insensitive OpenCode session-header precedence, tool/image translation, text/thinking streams, partial-stream settlement, and restarted-session replay. Evidence below. |
-| 3. OpenAI Chat Completions | Not started | — |
-| 4. Google Generative AI | Not started | — |
+| 3. OpenAI Chat Completions | Complete locally | P6-019–030: dedicated bounded client, Pi-compatible history/tool/image translation and call-ID linking, model-specific compatibility fields, DeepSeek/Z.AI controls, OpenCode reasoning normalization, usage/finish parsing, retry/cancel/malformed-stream settlement. Unsupported mid-conversation system/tool-addition modes remain visible as unavailable. Evidence below. |
+| 4. Google Generative AI | In progress | — |
 | 5. OpenCode Responses | Not started | — |
 | 6. Integration, safety, and release | Not started | — |
 
@@ -37,4 +37,12 @@
 - `internal/agent/anthropic_replay_test.go` reopens synthetic v3 sessions for both providers, continues through the request builder, and checks thinking signatures and tool/result linkage.
 - `go test ./... -count=1` passed after slice 2. No live provider requests ran.
 
-G6-01 and G6-02 are met by local synthetic evidence. Remaining gates stay open until their listed A6 cases have evidence. Local protocol mocks will not be described as live-provider acceptance.
+### Slice 3 evidence
+
+- `internal/provider/completions_request_test.go` covers DeepSeek `max_tokens`, tool schema, images, thinking enable/off and effort, assistant `reasoning_content`, Z.AI `clear_thinking`/effort/`tool_stream`, OpenCode `reasoning` normalization, compatibility flags, and rejection of unknown or unsupported compatibility fields.
+- `internal/provider/completions_test.go` and `completions_edge_test.go` use loopback servers. They cover the OpenCode route and session-header precedence, interleaved tool indexes/IDs, fragmented arguments, response/model IDs, usage-only chunks, `stop`/`length`/`tool_calls` finish reasons, malformed/truncated streams, no-finish compatibility, retry-before-stream, no retry after stream start, cancellation, missing-key refusal, and secret-safe HTTP errors.
+- `internal/agent/completions_cycle_test.go` completes a synthetic DeepSeek reasoning/tool/read/result/final-answer cycle and checks that reasoning and tool results are replayed on the following request. `completions_replay_test.go` reopens sessions for DeepSeek and OpenCode and checks cross-API tool-ID normalization and linked results.
+- `internal/app/provider_config_test.go` verifies selected DeepSeek key/API/client construction. `internal/app/completions_test.go` checks that catalog models have a request path or a clear picker-unavailable reason, and that an imported unsupported model leaves history readable.
+- `go test ./... -count=1` passed after slice 3. No live provider requests ran.
+
+G6-01, G6-02, and G6-03 are met by local synthetic evidence. Remaining gates stay open until their listed A6 cases have evidence. Local protocol mocks will not be described as live-provider acceptance.

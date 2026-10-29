@@ -13,6 +13,9 @@ func BuildCodexRequest(req Request) (map[string]any, error) {
 	if req.Model.API != "openai-codex-responses" || req.Model.ID == "" {
 		return nil, fmt.Errorf("Codex model and API are required")
 	}
+	if err := validateProviderAPI(req.Model, "openai-codex-responses"); err != nil {
+		return nil, err
+	}
 	level := req.Thinking
 	if level == "" {
 		level = "off"

@@ -405,7 +405,11 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 					if b.Call.Namespace != nil {
 						namespace = *b.Call.Namespace
 					}
-					blocks = append(blocks, provider.Block{Type: "toolCall", ID: b.Call.ID, Name: b.Call.Name, Arguments: b.Call.Arguments, Namespace: namespace})
+					thoughtSignature := ""
+					if b.Call.ThoughtSignature != nil {
+						thoughtSignature = *b.Call.ThoughtSignature
+					}
+					blocks = append(blocks, provider.Block{Type: "toolCall", ID: b.Call.ID, Name: b.Call.Name, Arguments: b.Call.Arguments, Namespace: namespace, ThoughtSignature: thoughtSignature})
 				default:
 					return provider.Request{}, fmt.Errorf("unsupported assistant block %q", b.Type)
 				}
@@ -414,7 +418,7 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 			if m.Assistant.ProviderThinkingLevel != nil {
 				effort = *m.Assistant.ProviderThinkingLevel
 			}
-			msgs = append(msgs, provider.Message{Role: "assistant", Content: blocks, Provider: m.Assistant.Provider, API: m.Assistant.API, Model: m.Assistant.Model, ThinkingLevel: effort})
+			msgs = append(msgs, provider.Message{Role: "assistant", Content: blocks, Provider: m.Assistant.Provider, API: m.Assistant.API, Model: m.Assistant.Model, ThinkingLevel: effort, StopReason: m.Assistant.StopReason})
 		case "toolResult":
 			msgs = append(msgs, provider.Message{Role: "toolResult", ToolCallID: m.ToolResult.ToolCallID, ToolName: m.ToolResult.ToolName, IsError: m.ToolResult.IsError, Content: userBlocks(m.ToolResult.Content)})
 		default:
@@ -474,12 +478,16 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 			if args == nil {
 				args = map[string]any{}
 			}
-			var namespace *string
+			var namespace, thoughtSignature *string
 			if b.Namespace != "" {
 				ns := b.Namespace
 				namespace = &ns
 			}
-			blocks = append(blocks, session.ContentBlock{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: b.ID, Name: b.Name, Arguments: args, Namespace: namespace}})
+			if b.ThoughtSignature != "" {
+				sig := b.ThoughtSignature
+				thoughtSignature = &sig
+			}
+			blocks = append(blocks, session.ContentBlock{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: b.ID, Name: b.Name, Arguments: args, Namespace: namespace, ThoughtSignature: thoughtSignature}})
 		}
 	}
 	stop := resp.StopReason

@@ -1,4 +1,4 @@
-// Package provider implements the Anthropic Messages and ChatGPT Codex SSE paths.
+// Package provider implements the supported provider wire protocols.
 package provider
 
 import (
@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"psi/internal/modelmeta"
+	"psi/internal/providerregistry"
 )
 
 // Thinking levels supported in the first release.
@@ -71,6 +72,7 @@ type Message struct {
 	IsError              bool
 	Provider, API, Model string // source of opaque assistant replay metadata
 	ThinkingLevel        string // effective provider effort for historical replay
+	StopReason           string
 }
 
 type Block struct {
@@ -88,6 +90,7 @@ type Block struct {
 	// Thinking (opaque replay).
 	Thinking          string
 	ThinkingSignature string
+	ThoughtSignature  string
 	Redacted          bool
 }
 
@@ -157,14 +160,35 @@ func (m ModelMeta) ProviderID() string {
 }
 
 func BuildRequest(req Request) (map[string]any, error) {
+	if req.Model.API == "" {
+		if req.Model.Provider != "" {
+			return nil, fmt.Errorf("model %q must declare its provider API", req.Model.ID)
+		}
+		req.Model.API = "anthropic-messages" // legacy psi model metadata
+	}
+	if !providerregistry.SupportsAPI(req.Model.ProviderID(), req.Model.API) {
+		return nil, fmt.Errorf("provider %q does not support API %q", req.Model.ProviderID(), req.Model.API)
+	}
 	switch req.Model.API {
-	case "", "anthropic-messages":
+	case "anthropic-messages":
 		return BuildAnthropicRequest(req)
 	case "openai-codex-responses":
 		return BuildCodexRequest(req)
+	case "openai-completions":
+		return BuildCompletionsRequest(req)
 	default:
 		return nil, fmt.Errorf("unsupported provider API %q", req.Model.API)
 	}
+}
+
+func validateProviderAPI(model ModelMeta, api string) error {
+	if model.API == "" && model.Provider != "" {
+		return fmt.Errorf("model %q must declare its provider API", model.ID)
+	}
+	if !providerregistry.SupportsAPI(model.ProviderID(), api) {
+		return fmt.Errorf("provider %q does not support API %q", model.ProviderID(), api)
+	}
+	return nil
 }
 
 // Provider streams text deltas and returns one completed message.

@@ -24,6 +24,9 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	if req.Model.API != "" && req.Model.API != "anthropic-messages" {
 		return nil, fmt.Errorf("unsupported API %q: first release supports anthropic-messages only", req.Model.API)
 	}
+	if err := validateProviderAPI(req.Model, "anthropic-messages"); err != nil {
+		return nil, err
+	}
 	if req.Model.ID == "" {
 		return nil, fmt.Errorf("model is required")
 	}

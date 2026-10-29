@@ -363,6 +363,13 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		anthropic.Headers = headers
 		anthropic.SessionID = r.store.Header().ID
 		client = anthropic
+	case "openai-completions":
+		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		authErr = err
+		completions := provider.NewCompletionsClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
+		completions.Headers = headers
+		completions.SessionID = r.store.Header().ID
+		client = completions
 	default:
 		return fmt.Errorf("unsupported provider API %q", meta.API)
 	}
@@ -499,7 +506,14 @@ func agentMessageUser(text string) session.AgentMessage {
 }
 
 func containsUnsupported(err error) bool {
-	return err != nil && containsStr(err.Error(), "unsupported provider")
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return containsStr(message, "unsupported provider") ||
+		containsStr(message, "unavailable:") ||
+		(containsStr(message, "model ") && containsStr(message, "unsupported")) ||
+		containsStr(message, "does not support thinking")
 }
 
 func containsNoModel(err error) bool {
