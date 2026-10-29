@@ -125,7 +125,7 @@ internal/terminal/status_test.go         3fc2811e5ac75d6365dc53cb9926a0e72c26ec5
 
 ## Resource profiles
 
-Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`. Revalidation after the Pi session-name semantics correction at `47351f1` passed: ten idle seconds produced no scheduled frames; 10,000-session metadata reached a usable first page in `691.733406ms`; the 512 MiB activation completed in `2,467ms` at `44,212 KiB` peak RSS.
+Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`. Revalidation after the Pi footer truncation correction at `6a671c9` passed: ten idle seconds produced no scheduled frames; 10,000-session metadata reached a usable first page in `746.558613ms`; the 512 MiB activation completed in `2,522ms` at `43,824 KiB` peak RSS.
 
 | Profile | Samples / fixture | Raw result | Assessment |
 |---|---|---|---|
