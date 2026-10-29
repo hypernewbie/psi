@@ -71,7 +71,7 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 
 ### Final executable
 
-Built `./psi` from clean source revision `e903025de02fa946fc94cfb7a16cfa6452a9f16a` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
+Built `./psi` from clean source revision `211df061f6488ed8d41bd54526bc6840c94d52d0` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
 
 The copied executable passed loopback-only actual-binary journeys for all four tools, empty and short-session no-op compaction, ordinary-budget compaction and a second-process replay/history check, cancelled compaction without session mutation, two selected custom-theme user surfaces, atomic theme reload, a mid-stream theme reload, theme save during suspend/resume with picker state retained, and provider retry status. The binary used for the temporary-path runs had the same SHA-256. No live provider request ran.
 
