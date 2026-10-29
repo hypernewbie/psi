@@ -217,6 +217,7 @@ func PrepareCompaction(path []*session.Entry, proj *session.Projection, keepRece
 	}
 
 	accumulated := 0
+	exceededBudget := false
 	for i := end - 1; i >= start; i-- {
 		tokens := 0
 		for _, message := range proj.Messages[i] {
@@ -227,6 +228,7 @@ func PrepareCompaction(path []*session.Entry, proj *session.Projection, keepRece
 		}
 		accumulated += tokens
 		if accumulated >= keepRecentTokens {
+			exceededBudget = true
 			cut = cutPoints[len(cutPoints)-1]
 			for _, candidate := range cutPoints {
 				if candidate >= i {
@@ -236,6 +238,9 @@ func PrepareCompaction(path []*session.Entry, proj *session.Projection, keepRece
 			}
 			break
 		}
+	}
+	if recoveryOmissionSuffix(proj, cut, end, exceededBudget) {
+		cut++
 	}
 	for cut > start {
 		previous := cut - 1
@@ -272,6 +277,48 @@ func PrepareCompaction(path []*session.Entry, proj *session.Projection, keepRece
 	prepared.FirstKeptEntryID = proj.Entries[cut].ID()
 	prepared.Disposition = CompactionEligible
 	return prepared, nil
+}
+
+// recoveryOmissionSuffix mirrors Pi's special cut adjustment for a closed
+// context-invisible suffix of abandoned assistant attempts and their omission edits.
+func recoveryOmissionSuffix(proj *session.Projection, cut, end int, exceededBudget bool) bool {
+	if !exceededBudget || cut+1 >= end {
+		return false
+	}
+	suffix := make([]int, 0, end-cut-1)
+	omittedIDs := map[string]bool{}
+	for i := cut + 1; i < end; i++ {
+		entry := proj.Entries[i]
+		intrinsicallyVisible := entry.Kind != "context_edit" && len(session.EntryToContextMessages(entry)) > 0
+		omitted := intrinsicallyVisible && len(proj.Messages[i]) == 0
+		if omitted {
+			omittedIDs[entry.ID()] = true
+		}
+		suffix = append(suffix, i)
+	}
+	hasExternalReplacement := false
+	hasOmittedAssistant := false
+	for _, i := range suffix {
+		entry := proj.Entries[i]
+		if entry.Kind == "context_edit" && entry.ContextEdit != nil && len(entry.ContextEdit.Replacement) > 0 && string(entry.ContextEdit.Replacement) != "null" && !omittedIDs[entry.ContextEdit.TargetID] {
+			hasExternalReplacement = true
+		}
+		if entry.Kind == "message" && entry.Message != nil && entry.Message.Message.Assistant != nil && len(proj.Messages[i]) == 0 {
+			hasOmittedAssistant = true
+		}
+	}
+	if hasExternalReplacement || !hasOmittedAssistant {
+		return false
+	}
+	for _, i := range suffix {
+		entry := proj.Entries[i]
+		intrinsicallyVisible := entry.Kind != "context_edit" && len(session.EntryToContextMessages(entry)) > 0
+		omitted := intrinsicallyVisible && len(proj.Messages[i]) == 0
+		if entry.Kind == "compaction" || intrinsicallyVisible && !omitted {
+			return false
+		}
+	}
+	return true
 }
 
 func flattenProjectionMessages(groups [][]session.AgentMessage) []session.AgentMessage {

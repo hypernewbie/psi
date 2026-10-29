@@ -116,6 +116,71 @@ func TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget(t *testing.T) {
 	}
 }
 
+func TestPrepareCompactionKeepsToolCallWithTrailingResult(t *testing.T) {
+	store, _, _, _, _ := testSetup(t)
+	if _, err := store.AppendMessage(userMsg("older request")); err != nil {
+		t.Fatal(err)
+	}
+	callID, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", Content: []session.ContentBlock{{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: "read-one", Name: "read", Arguments: map[string]any{"path": "large.txt"}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{Role: "toolResult", ToolCallID: "read-one", ToolName: "read", Content: []session.UserContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: strings.Repeat("result ", 2000)}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared := prepareFromStore(t, store, 1)
+	if prepared.Disposition != CompactionEligible || prepared.FirstKeptEntryID != callID || !prepared.SplitTurn {
+		t.Fatalf("cut separated tool call/result: %+v, expected call %s", prepared, callID)
+	}
+	if len(prepared.TurnPrefix) != 1 || prepared.TurnPrefix[0].Role != "user" || len(prepared.Messages) != 0 {
+		t.Fatalf("wrong messages around tool boundary: prefix=%+v history=%+v", prepared.TurnPrefix, prepared.Messages)
+	}
+}
+
+func TestPrepareCompactionUsesProjectedReplacementContent(t *testing.T) {
+	store, _, _, _, _ := testSetup(t)
+	oldID, err := store.AppendMessage(userMsg("old original prompt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendAssistantText(t, store, "old answer")
+	if _, err := store.AppendMessage(userMsg("current continuation")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendContextEdit(oldID, []byte(`{"content":"replacement prompt"}`)); err != nil {
+		t.Fatal(err)
+	}
+	prepared := prepareFromStore(t, store, 1)
+	if prepared.Disposition != CompactionEligible || prepared.SplitTurn {
+		t.Fatalf("replacement compaction preparation = %+v", prepared)
+	}
+	transcript := summaryTranscript(session.ConvertToLLM(prepared.Messages))
+	if !strings.Contains(transcript, "replacement prompt") || strings.Contains(transcript, "old original prompt") {
+		t.Fatalf("summary used raw rather than projected message: %q", transcript)
+	}
+}
+
+func TestPrepareCompactionAdvancesAcrossClosedOmittedAttemptSuffix(t *testing.T) {
+	store, _, _, _, _ := testSetup(t)
+	if _, err := store.AppendMessage(userMsg("visible current request")); err != nil {
+		t.Fatal(err)
+	}
+	omittedID, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", StopReason: "aborted", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "abandoned attempt"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendContextEdit(omittedID, []byte("null")); err != nil {
+		t.Fatal(err)
+	}
+	prepared := prepareFromStore(t, store, 1)
+	if prepared.Disposition != CompactionEligible || !prepared.SplitTurn || prepared.FirstKeptEntryID != omittedID {
+		t.Fatalf("omitted recovery suffix cut = %+v, expected first-kept %s", prepared, omittedID)
+	}
+	if len(prepared.TurnPrefix) != 1 || prepared.TurnPrefix[0].Role != "user" {
+		t.Fatalf("recovery prefix lost the visible request: %+v", prepared.TurnPrefix)
+	}
+}
+
 func TestThresholdNoWorkContinuesWithoutCompaction(t *testing.T) {
 	store, _, fake, loop, _ := testSetup(t)
 	fake.Responses = []*provider.Response{{Text: "answer", StopReason: "stop"}}
