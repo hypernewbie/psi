@@ -1,5 +1,6 @@
 // Build an isolated, dependency-minimal adapter around the unmodified pinned
-// session reader. Requires Node 24. No provider factories or credentials load.
+// session reader and pure compaction preparation. Requires Node 24. No provider
+// factories, credentials, or summary-generation calls load.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -14,13 +15,15 @@ const revision = execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { enco
 if (revision !== pinned) throw new Error('reference revision does not match the pin');
 if (execFileSync('git', ['-C', source, 'status', '--porcelain', '--untracked-files=no'], {encoding:'utf8'}).trim()) throw new Error('reference source has tracked changes');
 const reader = join(source, 'packages/coding-agent/src/core/session-manager.ts');
+const compaction = join(source, 'packages/coding-agent/src/core/compaction/compaction.ts');
 const wordNavigation = join(source, 'packages/tui/src/word-navigation.ts');
 const ai = join(source, 'packages/ai/src/utils');
 // cross-spawn is imported by the reference's platform wrapper. Linux uses the
 // native node:child_process branch. Resolve the public installed dependency,
 // never an agent directory, auth store, extension, or user configuration.
 const dependencies = join(dirname(dirname(process.execPath)), 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules');
-const facade = `export {getCurrentSystemMessage} from ${JSON.stringify(pathToFileURL(join(ai,'transcript.ts')).href)}; export {uuidv7} from ${JSON.stringify(pathToFileURL(join(ai,'uuid.ts')).href)};`;
+const facade = `export {getCurrentSystemMessage,normalizeContext} from ${JSON.stringify(pathToFileURL(join(ai,'transcript.ts')).href)}; export {contentText} from ${JSON.stringify(pathToFileURL(join(ai,'text.ts')).href)}; export {retryAssistantCall} from ${JSON.stringify(pathToFileURL(join(ai,'retry.ts')).href)}; export {uuidv7} from ${JSON.stringify(pathToFileURL(join(ai,'uuid.ts')).href)};`;
+const compatFacade = `export async function completeSimple(){throw new Error('Pi reference adapter does not perform provider calls')}`;
 mkdirSync(dirname(output), {recursive:true});
 writeFileSync(output, `import {registerHooks,stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
@@ -28,6 +31,7 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 const require = createRequire(${JSON.stringify(pathToFileURL(join(dependencies,'reference-loader.cjs')).href)});
 registerHooks({resolve(specifier,context,next){
+ if(specifier==='@earendil-works/pi-ai/compat')return {url:'data:text/javascript,'+encodeURIComponent(${JSON.stringify(compatFacade)}),shortCircuit:true};
  if(specifier==='@earendil-works/pi-ai')return {url:'data:text/javascript,'+encodeURIComponent(${JSON.stringify(facade)}),shortCircuit:true};
  if(specifier==='cross-spawn'||specifier==='get-east-asian-width')return {url:new URL('file://'+require.resolve(specifier)).href,shortCircuit:true};
  return next(specifier,context);
@@ -36,11 +40,13 @@ registerHooks({resolve(specifier,context,next){
  return next(url,context);
 }});
 const reader=await import(${JSON.stringify(pathToFileURL(reader).href)});
+const compaction=await import(${JSON.stringify(pathToFileURL(compaction).href)});
 export const {SessionManager,loadEntriesFromFile,buildSessionProjection,buildSessionContext}=reader;
+export const {findCutPoint,prepareCompaction}=compaction;
 export async function findWordBackward(...args) {
  const word=await import(${JSON.stringify(pathToFileURL(wordNavigation).href)});
  return word.findWordBackward(...args);
 }
 `);
-writeFileSync(output+'.manifest.json',JSON.stringify({revision,readerSha256:createHash('sha256').update(readFileSync(reader)).digest('hex'),wordNavigationSha256:createHash('sha256').update(readFileSync(wordNavigation)).digest('hex'),adapter:'native-node-types-v2',sourceUnmodified:true},null,2)+'\n');
-console.log('Pinned reference adapter built (unmodified reader and pinned transcript/UUID exports).');
+writeFileSync(output+'.manifest.json',JSON.stringify({revision,readerSha256:createHash('sha256').update(readFileSync(reader)).digest('hex'),compactionSha256:createHash('sha256').update(readFileSync(compaction)).digest('hex'),wordNavigationSha256:createHash('sha256').update(readFileSync(wordNavigation)).digest('hex'),adapter:'native-node-types-v3-compaction',sourceUnmodified:true},null,2)+'\n');
+console.log('Pinned reference adapter built (unmodified reader and pure compaction exports).');

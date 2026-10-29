@@ -15,8 +15,8 @@
 ## Reference adapter
 
 `scripts/build-reference.mjs` requires the pinned revision and a checkout without tracked changes.
-It imports unmodified Pi source through a TypeScript loader.
-It does not load agent configuration, credentials, extensions, or provider factories.
+It imports unmodified Pi source through a TypeScript loader, including the session reader and pure compaction preparation.
+It does not load agent configuration, credentials, extensions, provider factories, or call a summary provider.
 Public dependencies come from the installed coding-agent package, never an agent data directory.
 
 The adapter records these source hashes:
@@ -24,9 +24,10 @@ The adapter records these source hashes:
 | Source | SHA-256 |
 |---|---|
 | `packages/coding-agent/src/core/session-manager.ts` | `6dd4b725c91f7b3102ec30b4e7d26f0ae486e603e9744b2eca781d57c2a7466c` |
+| `packages/coding-agent/src/core/compaction/compaction.ts` | `32714966eb644da31cd84e8eb172965256160626b3d26ae9752c3894300f2b0b` |
 | `packages/tui/src/word-navigation.ts` | `b73e915a524926ac8881731e89026b0bc7b5b0bd465de67257af81a420465c7f` |
 
-The generated manifest uses adapter version `native-node-types-v2`.
+The generated manifest uses adapter version `native-node-types-v3-compaction`.
 Session reference tests use the public `cross-spawn` dependency.
 Word-navigation reference tests also use public `get-east-asian-width`.
 
@@ -43,6 +44,9 @@ Run the session and word-navigation checks:
 ```sh
 PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
   go test ./internal/session -run '^TestReferencePi' -count=2
+
+PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
+  go test ./internal/agent -run '^TestPiCompactionCutPointDifferential$' -count=1
 
 go test ./internal/terminal -run '^TestF09WordParityWithPi$' -count=3 \
   -args -psi-test-pi-word-module="file://$PWD/temp/pi-reference.mjs"

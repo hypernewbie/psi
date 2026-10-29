@@ -21,7 +21,7 @@ Manual `/compact` performs read-only preparation before showing a spinner or req
 | Component | `TestPrepareCompactionReportsNoWorkOutcomes`, `TestPrepareCompactionSplitsLongAssistantSpanAtPiCutPoint`, `TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget` | Pass; the long-span fixture uses the ordinary 20,000-token retention budget. |
 | Agent/storage | Two-stage split summary, previous-summary update, aggregate usage, failure/incomplete/cancelled-summary usage, failed-checkpoint append, no-checkpoint, threshold no-op, overflow no-op, retain-none, projected replacement, omitted recovery suffix, and tool-call/result boundary regressions | Pass with fake providers and storage fault injection. |
 | Actual app | Empty and persistent short-session `/compact` offline no-ops; the short-session case preserves exact file bytes. A real-PTY ordinary-budget long-span summary runs through a loopback Anthropic server, is cancelled in a separate actual-app journey without changing session bytes, then is reopened in a second process with compact default replay and explicit `/history all`. | Pass; the summary request and saved `firstKeptEntryId` are checked. |
-| Reference | Pinned Pi cut-point and split-summary source reviewed | Source comparison only; no full Pi runtime session. |
+| Reference | Pinned Pi `prepareCompaction`/`findCutPoint` compared against Go for a default-budget long-assistant span, a prior summary with adjacent metadata, and a tool-call/result boundary; the unmodified Pi session reader compared across Anthropic and Codex continuation/projection fixtures | Pass through the pinned Node 24 adapter. Pi source revision and hashes are recorded in `docs/reference-manifest.md`; the adapter's `completeSimple` stub prevents provider summary calls. |
 | Human | Visual review, selection/copy, flicker, macOS and Windows Terminal acceptance | Not performed. |
 
 ## Theme and presentation implementation checkpoint
@@ -62,25 +62,25 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 | Lazy session | Large hidden-body canaries, bounded timeline items, no full tool-call load for summary, compact/default versus explicit compaction history | Pass locally. |
 | Provider protocol | Loopback Anthropic and Codex retry tests verify a real retry and observed backoff metadata | Pass. |
 | Actual app | Codex tool round trip, atomic user-theme reload with completion query retained, open-picker theme reload, mid-stream theme reload, and Anthropic backoff status | Pass in isolated Unix PTYs. |
-| Resource profile | 512 MiB compacted-history fixture; summary bounds; 10k metadata/picker/deltas; paste and key latency; idle frames; 100 watcher lifecycles | Pass locally. On WSL2 Linux/amd64 (Go 1.26.4): 512 MiB activation 2,323 ms / 44,680 KiB peak RSS; 10k metadata first page 675 ms; 10k picker query/render p95 4.17 ms; actual 10k deltas 1.095 s; paced 10k delta profile 1.257 s, 14 timer frames, 5 event frames, 27 writer frames / 25 writes, 20,882 bytes, 11,301-byte max write; 1k/10k single-character allocations 108,864/896,000 bytes (8.23×); 1 KiB/512 KiB hidden write bodies allocated 5,110/5,106 bytes per summary; key-to-frame p95 207 μs; cancellation dispatch p95 40 ns; 256 KiB paste 81.6 ms; 10 idle seconds emitted no frames; 100 watcher create/close cycles added no goroutine or file descriptor. |
+| Resource profile | 512 MiB compacted-history fixture; summary bounds; 10k metadata/picker/deltas; paste and key latency; idle frames; 100 watcher lifecycles | Pass locally. On WSL2 Linux/amd64 (Go 1.26.4): 512 MiB activation 2,323 ms / 44,680 KiB peak RSS; 10k metadata first page 675 ms; 10k picker query/render p95 4.17 ms; actual 10k deltas 1.095 s; paced 10k delta profile 1.257 s, 14 timer frames, 5 event frames, 27 writer frames / 25 writes, 20,882 bytes, 11,301-byte max write; 1k/10k single-character allocations 108,864/896,000 bytes (8.23×); a 1 MiB answer theme refresh re-rendered the 23-byte active tail with 104 bytes allocated; 1 KiB/512 KiB hidden write bodies allocated 5,110/5,106 bytes per summary; key-to-frame p95 207 μs; cancellation dispatch p95 40 ns; 256 KiB paste 81.6 ms; 10 idle seconds emitted no frames; 100 watcher create/close cycles added no goroutine or file descriptor. |
 
 ## Validation and open acceptance
 
-`./scripts/check.sh` passes on the current working tree, including the race suite. It covers the existing packages and new local regressions. This is local evidence only.
+`./scripts/check.sh` passes on the current working tree, including the race suite. It covers the existing packages and new local regressions. Seven session, provider-SSE, editor, and terminal-decoder fuzz targets also passed local mutation runs (including 65,809 `FuzzExactKeysDifferential` executions after its seed corpus loaded). This is local evidence only.
 
 ### Final executable
 
-Built `./psi` from clean source revision `2cf2d7518d3b87c44a63102d260be4ba3de3db36` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
+Built `./psi` from clean source revision `2caa0ef881630b83b15e2764c5eb50c095df9d33` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
 
-The copied executable passed loopback-only actual-binary journeys for all four tools, empty and short-session no-op compaction, ordinary-budget compaction and a second-process replay/history check, cancelled compaction without session mutation, two selected custom-theme user surfaces, atomic theme reload, a mid-stream theme reload, and provider retry status. The binary used for the temporary-path runs had the same SHA-256. No live provider request ran.
+The copied executable passed loopback-only actual-binary journeys for all four tools, empty and short-session no-op compaction, ordinary-budget compaction and a second-process replay/history check, cancelled compaction without session mutation, two selected custom-theme user surfaces, atomic theme reload, a mid-stream theme reload, theme save during suspend/resume with picker state retained, and provider retry status. The binary used for the temporary-path runs had the same SHA-256. No live provider request ran.
 
 Cross-build and test-binary compilation passed for windows/amd64 and darwin/amd64 and darwin/arm64. These checks do not establish native runtime behavior.
 
 Still open:
 
-- Finish remaining compaction differential and pinned-reader comparisons. Agent/storage and actual-app cancellation, failed-append, no-op byte-preservation, and restart-replay regressions pass locally.
-- Complete the documented Linux/macOS/Windows platform matrix and native console journeys.
-- Complete human light/dark/no-color readability, selection/copy, SSH/tmux, and flicker review.
+- Complete the documented Linux/macOS/Windows platform matrix and native console journeys. Cross-build and test-binary compilation are not runtime evidence.
+- Complete human light/dark/no-color readability, selection/copy, SSH/tmux, and flicker review, including a Pi side-by-side session.
 - Run remote CI only if an authorized existing VCI coordinator destination is provided. Do not configure or create a coordinator.
+- The pinned Pi summary-generation provider path was not invoked; compaction differential tests exercise only the pinned pure preparation functions. No live provider request ran.
 
-G5-01 through G5-08 remain open. Local tests, cross-builds, and PTY fixtures do not close blocked remote, native-platform, or human gates.
+G5-01 through G5-07 remain open or partial until their remaining evidence is collected. G5-08's local documentation and tested-binary evidence is complete; external acceptance is not implied. Local tests, cross-builds, and PTY fixtures do not close blocked remote, native-platform, or human gates.
