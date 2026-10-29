@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `6a671c9` (`fix(ui): match Pi footer truncation priority`), following the Pi-derived session-name footer fixture in `8443db9` and trimmed-name coverage in `c3bde8c`, null-name coverage in `69579ff`, and the Pi session-name semantics correction in `3219438`, the session-name control test in `78e7cb8`, the active-session-name optimization in `b614826`, and stored session-name footer support in `888189e`, the Pi provider-visibility correction in `7e2c1d0`, the thinking-label correction in `f87851e`, and the cancellation test in `c9002e3`, plus the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run. An isolated `/tmp` archive was tried with `npm ci --offline --ignore-scripts`, but the local cache lacked `@anthropic-ai/sdk@0.52.0`; no network install or provider request was made.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `fce9403` (`test(terminal): cover wide Pi footer truncation`), following the footer behavior correction in `6a671c9` and the Pi-derived session-name footer fixture in `8443db9` and trimmed-name coverage in `c3bde8c`, null-name coverage in `69579ff`, and the Pi session-name semantics correction in `3219438`, the session-name control test in `78e7cb8`, the active-session-name optimization in `b614826`, and stored session-name footer support in `888189e`, the Pi provider-visibility correction in `7e2c1d0`, the thinking-label correction in `f87851e`, and the cancellation test in `c9002e3`, plus the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run. An isolated `/tmp` archive was tried with `npm ci --offline --ignore-scripts`, but the local cache lacked `@anthropic-ai/sdk@0.52.0`; no network install or provider request was made.
 
 ## Evidence by level
 
@@ -83,7 +83,7 @@ New coverage added with those changes:
 ### Platform and delivery evidence at `6a671c9`
 
 - Native Windows: all nine package test binaries passed on Windows 11 `10.0.26200.8875` through native PowerShell with Git for Windows on `PATH`. `TestActualWindowsConPTYInteraction` passed three consecutive runs with its six-size matrix after the footer session-name and truncation-parity changes.
-- Native Windows fixture update: after adding the Pi-derived session-name footer row, a fresh `internal/terminal` Windows test binary passed with the updated fixture at `8443db9`.
+- Native Windows fixture update: after adding the Pi-derived session-name footer row, a fresh `internal/terminal` Windows test binary passed with the updated fixture at `8443db9`; the terminal package also passed after the wide-grapheme footer truncation test at `fce9403`.
 - Cross-builds: `GOOS=windows go vet ./...`, `GOOS=windows go build ./...`, the Darwin amd64/arm64 package builds, and Darwin app/terminal test-binary compilation passed. macOS binaries were not executed.
 - CI: the workflow now runs the race suite and the acceptance-tagged idle, metadata, and compacted-session profiles on Linux and macOS. The Windows race step stays out because that runner has no cgo. The workflow itself was not executed by a remote runner.
 
@@ -117,7 +117,7 @@ internal/session/session_name_test.go   df28e9dd7d684ca8ee7b8aa209b56ec9ec68c54f
 internal/terminal/presentation_fixtures_test.go d488a523f1d203fdcbdb16273f11207e4a1a250c6d56127689e1be045f4772fe
 internal/terminal/testdata/plan4-pi-completion.json e733af5ede9d711d32adbe94859909d8f1ffd14e1a84ccee4dade300d7153e28
 internal/terminal/stream_composition_test.go 40018fb16be221021dd71920d7892391e621022c63120c3776465ee30b5bc6a3
-internal/terminal/presentation_test.go  6c2de23b2498f1629a31ba68cd17d86654d0516131e282ad94ebe95ee9a5b88a
+internal/terminal/presentation_test.go  7b4a84a5c64db45bd97608f09722c8827c7e01cad2e1de0a682606b7a28b9237
 internal/terminal/presentation_matrix_test.go 0cf1da306aebd6fdf6cc017a56df192fd3075bbfa7fe76cc7deaa8c89038816a
 internal/terminal/testdata/plan4-pi-components.json 80a38704a9beba4da3990a1d03cc1fb427d50679498f693eec85cf2119e13435
 internal/terminal/status_test.go         3fc2811e5ac75d6365dc53cb9926a0e72c26ec5dc6f04ccaa99c4d88d3b364d8
@@ -183,7 +183,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `6a671c9` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, optional-provider fallback, and Pi's narrow-width footer truncation. The documentation-only ledger update follows this build.
+Built from repository tree revision `fce9403` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, optional-provider fallback, and Pi's narrow-width footer truncation. The documentation-only ledger update follows this build.
 
 ```text
 SHA-256  4ef99831944876be82c1c76573fb24ddef13e02c062f75dce8043df471322045
