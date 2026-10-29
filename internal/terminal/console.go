@@ -77,6 +77,7 @@ type Console struct {
 	completionDismissed bool
 	picker              *pickerRegion
 	toolRow             string
+	thinking            bool
 	busyNoticed         bool
 	dirty               bool
 	frameDepth          int
@@ -758,6 +759,14 @@ func (c *Console) Status(text string) {
 	c.Draw()
 }
 
+// SetThinking updates the faint activity row for the next composed frame.
+func (c *Console) SetThinking(active bool) {
+	if c.thinking != active {
+		c.thinking = active
+		c.dirty = true
+	}
+}
+
 // SetToolRow installs the active tool row above the editor, like Pi's
 // tool-execution component. The row stays in the owned tail until the call
 // settles. It keeps the shared message margin and stays on one physical line
@@ -877,6 +886,9 @@ func (c *Console) emitComposed(appendText string) error {
 		}
 		fragmentRows = c.streamRows
 		hasStream = true
+	}
+	if c.thinking {
+		fragmentRows = append(append([]string(nil), fragmentRows...), FormatThinkingRow(width, c.presentation.NoColor, c.presentation.Display, c.presentation.Theme))
 	}
 	if c.toolRow != "" {
 		// Pi keeps the active tool row above the editor and below the

@@ -237,6 +237,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 		// Completion barrier (P2-014, P2-055): track streamed prefix for reconciliation.
 		// Transient deltas vs durable completion are distinct; final is authoritative.
 		var streamed strings.Builder
+		l.sink(event.Event{Type: event.AssistantStart})
 		resp, err := l.prov.Send(ctx, req, func(s string) {
 			streamed.WriteString(s)
 			l.emitText(s, event.OutcomeTransient)

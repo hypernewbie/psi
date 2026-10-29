@@ -726,6 +726,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
+	var toolSpacing toolBatchSpacing
+	finishTools := func() {
+		toolSpacing.finish(func(line string) bool { _, err := fmt.Fprintln(out, line); return err == nil })
+	}
 	var submittedDraft string
 	var submittedCursor int
 	var suspendPending bool
@@ -760,6 +764,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		r.state = StateCancelling
+		console.SetThinking(false)
 		setActivity("Cancelling… (settling)")
 		cancel()
 	}
@@ -902,13 +907,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		switch ev.Type {
+		case event.AssistantStart:
+			finishTools()
+			if r.state != StateCancelling {
+				console.SetThinking(true)
+			}
 		case event.TextDelta:
+			console.SetThinking(false)
 			r.state = StateStreaming
 			visibleRunText = visibleRunText || ev.Text != ""
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
 		case event.RunEnd:
+			console.SetThinking(false)
 			runOutcome = ev.Outcome
 		case event.Retry:
 			if r.state != StateCancelling {
@@ -916,6 +928,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				setActivity(formatRetryActivity(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond))
 			}
 		case event.ToolStart:
+			console.SetThinking(false)
 			stream.Close()
 			r.state = StateRunningTool
 			r.activeToolName, r.activeToolCallID, r.activeToolSummary = ev.ToolName, ev.ToolCallID, ev.Summary
@@ -927,11 +940,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.ClearToolRow()
 			r.activeToolName, r.activeToolCallID, r.activeToolSummary = "", "", event.ToolSummary{}
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, ev.State, presentationDisplay(r.settings), r.theme, noColorEnvironment())
+			toolSpacing.pending = true
 			if r.state != StateCancelling {
 				r.state = StateWaiting
 				setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
 			}
 		case event.CompactionStart:
+			console.SetThinking(false)
+			finishTools()
 			r.state = StateCompacting
 			setActivity(compactionActivity(ev.State))
 		case event.CompactionEnd:
@@ -1119,12 +1135,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 			cancel()
 			busy = false
 			stream.Close()
+			console.SetThinking(false)
 			console.ClearToolRow()
 			if r.activeToolName != "" {
 				// A result append can fail after execution. Keep its identity,
 				// but never claim success or leave a queued start running.
 				status.UpdateSummary(r.activeToolName, r.activeToolCallID, r.activeToolSummary, "interrupted", presentationDisplay(r.settings), r.theme, noColorEnvironment())
+				toolSpacing.pending = true
 			}
+			finishTools()
 			r.activeToolName, r.activeToolCallID, r.activeToolSummary = "", "", event.ToolSummary{}
 			if !exiting {
 				setActivity("")

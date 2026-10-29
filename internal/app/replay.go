@@ -9,6 +9,18 @@ import (
 	pitheme "psi/internal/theme"
 )
 
+// toolBatchSpacing keeps adjacent calls compact and separates the next block.
+// A streaming timeline retains it across one-item callbacks.
+type toolBatchSpacing struct{ pending bool }
+
+func (s *toolBatchSpacing) finish(emit func(string) bool) bool {
+	if !s.pending {
+		return true
+	}
+	s.pending = false
+	return emit("")
+}
+
 func renderTimeline(print func(string), items []session.TranscriptItem) {
 	renderTimelineChecked(func(s string) bool { print(s); return true }, items)
 }
@@ -28,7 +40,15 @@ func renderTimelineAtWidthWithDisplay(emit func(string) bool, items []session.Tr
 }
 
 func renderTimelineAtWidthWithDisplayAndColor(emit func(string) bool, items []session.TranscriptItem, width int, display terminal.DisplaySettings, noColor bool, palette ...*pitheme.Theme) bool {
+	var spacing toolBatchSpacing
+	return renderTimelineItems(emit, items, width, display, noColor, &spacing, palette...) && spacing.finish(emit)
+}
+
+func renderTimelineItems(emit func(string) bool, items []session.TranscriptItem, width int, display terminal.DisplaySettings, noColor bool, spacing *toolBatchSpacing, palette ...*pitheme.Theme) bool {
 	for _, it := range items {
+		if it.Kind != session.KindTool && !spacing.finish(emit) {
+			return false
+		}
 		var lines []string
 		switch it.Kind {
 		case session.KindUser:
@@ -68,6 +88,9 @@ func renderTimelineAtWidthWithDisplayAndColor(emit func(string) bool, items []se
 				return false
 			}
 		}
+		if it.Kind == session.KindTool && len(lines) > 0 {
+			spacing.pending = true
+		}
 	}
 	return true
 }
@@ -102,16 +125,17 @@ func replayActivationAtWidthWithDisplayAndColor(emit func(string) bool, act *Act
 		}
 	}
 	visible := map[string]bool{}
+	var spacing toolBatchSpacing
 	complete, err := act.Store.Timeline(false, 0, func(it session.TranscriptItem) bool {
 		visible[it.SourceID] = true
-		return renderTimelineAtWidthWithDisplayAndColor(emit, []session.TranscriptItem{it}, width, display, noColor, palette...)
+		return renderTimelineItems(emit, []session.TranscriptItem{it}, width, display, noColor, &spacing, palette...)
 	})
 	if err != nil {
 		notice := strings.Join(terminal.FormatNotice(terminal.NoticeError, "History unavailable: "+err.Error(), width, noColor, palette...), "\n")
 		emit(notice)
 		return false
 	}
-	if !complete {
+	if !complete || !spacing.finish(emit) {
 		return false
 	}
 	omitted := 0

@@ -68,7 +68,12 @@ func renderStoreHistoryAtWidthWithDisplayAndColor(store *session.Store, arg stri
 	if !all && !emit("--- Conversation history (display only, not model input) ---") {
 		return false, nil
 	}
-	return store.Timeline(all, n, func(it session.TranscriptItem) bool {
-		return renderTimelineAtWidthWithDisplayAndColor(emit, []session.TranscriptItem{it}, width, display, noColor, palette...)
+	var spacing toolBatchSpacing
+	complete, err := store.Timeline(all, n, func(it session.TranscriptItem) bool {
+		return renderTimelineItems(emit, []session.TranscriptItem{it}, width, display, noColor, &spacing, palette...)
 	})
+	if err != nil || !complete {
+		return complete, err
+	}
+	return spacing.finish(emit), nil
 }

@@ -86,7 +86,7 @@ func TestReplayedToolRowKeepsTheLiveMargin(t *testing.T) {
 		return true
 	}, items, 80, terminal.DefaultDisplaySettings(), true)
 	want := terminal.FormatToolRow(event.ToolSummary{Kind: "read", Note: "summary unavailable"}, "read", "done", 80, true)
-	if len(lines) != 1 || lines[0] != want {
-		t.Fatalf("replayed tool row differs from the live format: got %q want %q", lines, want)
+	if len(lines) != 2 || lines[0] != want || lines[1] != "" {
+		t.Fatalf("replayed tool row or trailing space differs from the live format: got %q want %q followed by a blank line", lines, want)
 	}
 }
