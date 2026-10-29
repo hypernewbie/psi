@@ -73,11 +73,11 @@ G6-04 is locally supported by synthetic evidence and pinned-source review. This 
 - P6-047–048: provider API support is checked by `BuildRequest` for model selection/configuration; candidate config installs only after validation and durable session change. Existing transactional model/startup tests and `internal/app/completions_test.go` cover available thinking levels for bundled Responses models.
 - P6-049–051: provider tests cover Responses context-limit HTTP classification, usage parsing/persistence, partial/incomplete tool settlement, and session replay. `internal/agent` covers bounded overflow/compaction recovery without duplicate tool execution; synthetic replay fixtures cover all four new protocol APIs and cross-provider call-ID translation.
 - P6-052: the optional Responses request differential and all 20 session continuation directions passed against installed Pi 1.4.0 package files. Request differentials for the other APIs and a reference executable built from the pinned source revision remain unclaimed.
-- P6-053–054: `go test ./internal/app -run TestActualAppPTYProviderToolCycleAndRestart -count=1 -v` passed model restoration, provider-specific credential use, one read-tool cycle, restart replay, endpoint/header checks, and key-leak canaries for MiniMax, OpenCode Go Responses, DeepSeek, Z.AI, and Google.
+- P6-053–054: `go test ./internal/app -run 'TestActualAppPTYProviderToolCycleAndRestart|TestActualCopiedBinaryWithoutNodeUsesAllFourTools' -psi-test-binary="$PWD/psi" -count=1 -v` passed against the delivered executable. The five provider journeys checked restored model, credential use, one read-tool cycle, restart replay, endpoint/header, and key-leak canaries. The copied-binary journey also completed write/read/edit/bash without Node.
 - P6-055–056: `FuzzResponsesSSE` passed 10 seconds (~1.2M executions). The two previously race-flaky PTY tests now wait for visible editor/output settlement; `go test -race ./internal/provider ./internal/agent ./internal/app -count=1` passed. `./scripts/check.sh` passed full vet, test, race, and build. Cross-builds passed for Linux, macOS, and Windows amd64/arm64. Commands and hashes are recorded in the release section below.
 - P6-057: updated `COMPATIBILITY.md`, `README.md`, `docs/config.md`, `docs/quickstart.md`, and `docs/limitations.md` with registered providers, credentials, API boundaries, offline catalogs, and unrun live acceptance.
 - P6-058–059: this ledger records local evidence. PLAN6 live tests require the `liveprovider` build tag plus `PSI_LIVE_PROVIDER=1`, an explicitly selected provider/API/model, and its key. `go test -tags liveprovider ./internal/provider -run '^TestLive' -count=1 -v` skipped because no opt-in was supplied. The separate legacy Anthropic smoke requires `PSI_LIVE_ANTHROPIC=1`. No live requests ran.
-- P6-060: pending final source commit, binary hash, and delivered-binary PTY test.
+- P6-060: `./psi` was built from source commit `374c36cf4ac3cf3c4e8e08f34d38062d9741526b`; its SHA-256 is `0f745e86230ee806e7ed307df8223df433db04777a9d46b2d35d3bc0261004e7`. Delivered-binary provider PTY and no-Node four-tool tests passed.
 
 ## Release evidence
 
@@ -89,8 +89,9 @@ G6-04 is locally supported by synthetic evidence and pinned-source review. This 
   - macOS arm64: `2bab01afba7e41abeaabfa94345303fa91f825541a5f845093f0c68c68e36250`
   - Windows amd64: `aa116653ca82c88be99aabdad090aefd3f9efe17368955bac661317b90cda5c3`
   - Windows arm64: `1f5559a9561453a925cbee95110ca1b2d1aa254850c1a43fd7945bc716e29fd2`
-- `./psi` source commit and SHA-256: pending P6-060 build.
-- Actual delivered-binary tests: pending P6-060.
+- `./psi` source commit: `374c36cf4ac3cf3c4e8e08f34d38062d9741526b`.
+- `./psi` SHA-256: `0f745e86230ee806e7ed307df8223df433db04777a9d46b2d35d3bc0261004e7`.
+- `go test ./internal/app -run 'TestActualAppPTYProviderToolCycleAndRestart|TestActualCopiedBinaryWithoutNodeUsesAllFourTools' -psi-test-binary="$PWD/psi" -count=1 -v` passed. Provider PTY journeys passed for MiniMax, OpenCode Go Responses, DeepSeek, Z.AI, and Google; copied-binary no-Node journey passed all four tools.
 
 ## Remaining acceptance boundaries
 
