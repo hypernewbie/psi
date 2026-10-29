@@ -20,7 +20,7 @@ Manual `/compact` performs read-only preparation before showing a spinner or req
 |---|---|---|
 | Component | `TestPrepareCompactionReportsNoWorkOutcomes`, `TestPrepareCompactionSplitsLongAssistantSpanAtPiCutPoint`, `TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget` | Pass; the long-span fixture uses the ordinary 20,000-token retention budget. |
 | Agent/storage | Two-stage split summary, previous-summary update, aggregate usage, failure/incomplete/cancelled-summary usage, failed-checkpoint append, no-checkpoint, threshold no-op, overflow no-op, retain-none, projected replacement, omitted recovery suffix, and tool-call/result boundary regressions | Pass with fake providers and storage fault injection. |
-| Actual app | Empty `/compact` offline no-op and a real-PTY ordinary-budget long-span summary through a loopback Anthropic server | Pass; the request and saved `firstKeptEntryId` are checked. |
+| Actual app | Empty `/compact` offline no-op, real-PTY ordinary-budget long-span summary through a loopback Anthropic server, and a second-process restart with compact default replay plus explicit `/history all` summary | Pass; the request and saved `firstKeptEntryId` are checked. |
 | Reference | Pinned Pi cut-point and split-summary source reviewed | Source comparison only; no full Pi runtime session. |
 | Human | Visual review, selection/copy, flicker, macOS and Windows Terminal acceptance | Not performed. |
 
@@ -62,7 +62,7 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 | Lazy session | Large hidden-body canaries, bounded timeline items, no full tool-call load for summary, compact/default versus explicit compaction history | Pass locally. |
 | Provider protocol | Loopback Anthropic and Codex retry tests verify a real retry and observed backoff metadata | Pass. |
 | Actual app | Codex tool round trip, atomic user-theme reload with completion query retained, open-picker theme reload, mid-stream theme reload, and Anthropic backoff status | Pass in isolated Unix PTYs. |
-| Resource profile | 512 MiB compacted-history fixture; summary bounds; 10k metadata/picker; 10k deltas; paste and key latency; idle frames; 100 watcher lifecycles | Pass locally. On WSL2 Linux/amd64 (Go 1.26.4): 512 MiB activation 2,323 ms / 44,680 KiB peak RSS; 10k metadata first page 675 ms; 10k picker query/render p95 4.17 ms; actual 10k deltas 1.095 s; 1k/10k single-character allocations 108,864/896,000 bytes (8.23×); key-to-frame p95 207 μs; cancellation dispatch p95 40 ns; 256 KiB paste 81.6 ms; 10 idle seconds emitted no frames; 100 watcher create/close cycles added no goroutine or file descriptor. |
+| Resource profile | 512 MiB compacted-history fixture; summary bounds; 10k metadata/picker/deltas; paste and key latency; idle frames; 100 watcher lifecycles | Pass locally. On WSL2 Linux/amd64 (Go 1.26.4): 512 MiB activation 2,323 ms / 44,680 KiB peak RSS; 10k metadata first page 675 ms; 10k picker query/render p95 4.17 ms; actual 10k deltas 1.095 s; paced 10k delta profile 1.257 s, 14 timer frames, 5 event frames, 27 writer frames / 25 writes, 20,882 bytes, 11,301-byte max write; 1k/10k single-character allocations 108,864/896,000 bytes (8.23×); 1 KiB/512 KiB hidden write bodies allocated 5,110/5,106 bytes per summary; key-to-frame p95 207 μs; cancellation dispatch p95 40 ns; 256 KiB paste 81.6 ms; 10 idle seconds emitted no frames; 100 watcher create/close cycles added no goroutine or file descriptor. |
 
 ## Validation and open acceptance
 
@@ -71,7 +71,7 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 Still open:
 
 - Finish remaining compaction differential and pinned-reader comparisons, plus app-level restart/cancellation journeys. The local agent/storage failure, cancellation, and append-fault regressions pass.
-- Capture the scheduled-frame-count and large-argument-allocation profiles. The measured latency, idle, history, picker, paste, delta-allocation, theme-burst, and watcher-lifecycle profiles listed above pass locally.
+- The measured latency, idle, history, picker, paste, hidden-argument allocation, scheduled-frame, delta-allocation, theme-burst, and watcher-lifecycle profiles listed above pass locally.
 - Complete the documented Linux/macOS/Windows platform matrix and native console journeys.
 - Complete human light/dark/no-color readability, selection/copy, SSH/tmux, and flicker review.
 - Run remote CI only if an authorized existing VCI coordinator destination is provided. Do not configure or create a coordinator.

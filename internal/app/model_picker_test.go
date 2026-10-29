@@ -334,6 +334,18 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	}
 	q.write("/quit\r")
 	q.finish()
+
+	restarted := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
+	restarted.prompt()
+	restartedScreen := restarted.screen.Text()
+	if !strings.Contains(restartedScreen, "earlier messages summarized") || strings.Contains(restartedScreen, "SUMMARY_COMMITTED") {
+		t.Fatalf("restart replay exposed the full summary or lost its compact marker: %q", restartedScreen)
+	}
+	restarted.write("/history all\r")
+	restarted.wait("SUMMARY_COMMITTED")
+	restarted.prompt()
+	restarted.write("/quit\r")
+	restarted.finish()
 }
 
 // Ctrl+D stays with the focused picker. It must never end the session while
