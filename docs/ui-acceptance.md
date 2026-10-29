@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `7e2c1d0` (`fix(ui): match Pi footer provider visibility`), following the Pi provider-space fallback in `c340dd6`, the thinking-label correction in `f87851e`, and the cancellation test in `c9002e3`, plus the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `b614826` (`perf(session): skip name lookup when metadata is absent`), following stored session-name footer support in `888189e`, the Pi provider-visibility correction in `7e2c1d0`, the thinking-label correction in `f87851e`, and the cancellation test in `c9002e3`, plus the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -59,7 +59,7 @@ Additional Pi-source transcriptions after the picker-region change:
 - **P4-030:** Pi's `trust-selector.ts` shows a title, the options with a `→ ` pointer and a `✓ ` current marker, the visible folder, and its navigation hint. psi's project-trust and workspace-confirmation regions use that shape and keep psi's reduced allow/deny set with deny selected by default.
 - **P4-012:** Pi's `CompactionStatusIndicator` distinguishes a manual compaction from an automatic one and names the overflow reason. psi's compaction activity now uses `Compacting context…`, `Auto-compacting…`, and `Context overflow detected, Auto-compacting…` with the same cancellation hint.
 - **P4-006:** Pi's custom editor puts the working status at the left of the top border and centers the overflow count with `createScrollBorder`. psi's editor border now uses that layout.
-- **R4-04/P4-007:** Pi's footer names a thinking level only when the selected model supports reasoning; its disabled label is `thinking off`. psi no longer shows the misleading `• off` for models without reasoning support. Pi also shows the provider only when more than one provider has models and the complete label fits with its two-cell gap. psi derives the available count from its local model catalog and omits the optional provider when it would clip usage or model details. Catalog checks use local metadata only. `TestFooterThinkingLabelFollowsPi`, `TestFooterProviderCountUsesAvailableCatalogs`, and the actual picker PTY cover these rules; terminal tests cover single-provider and narrow-width fallback.
+- **R4-04/P4-007:** Pi's footer names a thinking level only when the selected model supports reasoning; its disabled label is `thinking off`. psi no longer shows the misleading `• off` for models without reasoning support. Pi also shows the provider only when more than one provider has models and the complete label fits with its two-cell gap. psi derives that count from local model metadata and omits the optional provider when it would clip usage or model details. The first footer row also includes an imported `session_info` name when present. `Store.SessionName` follows only the active branch's indexed metadata, and the cache key includes the leaf ID; it does not load message bodies. `TestFooterThinkingLabelFollowsPi`, `TestFooterProviderCountUsesAvailableCatalogs`, `TestFooterSnapshotShowsActiveSessionNameAndTracksLeaf`, and the actual picker PTY cover these rules; terminal tests cover single-provider and narrow-width fallback.
 - **P4-014:** Pi's `tool-execution.ts` keeps the running tool row above the editor while the border carries the working indicator, and pads it like the surrounding transcript content. psi renders the active tool row in the owned tail with the shared message margin, and the settled line uses the same margin. The settled line and the row removal share one frame, so no duplicate running row stays visible. The active row is clipped to one physical row at the emission width.
 
 New coverage added with those changes:
@@ -74,15 +74,15 @@ New coverage added with those changes:
 - `TestPickerHelpTextFitsNarrowWidths` and `TestChoicePickerHintFitsNarrowWidths` prove the picker key hints stay on one row instead of clipping a word.
 - `TestActualCancelDuringToolKeepsCancellationVisibleAndSettles` proves Escape cancels a running tool, keeps `Cancelling…` visible until settlement, settles the call as `cancelled`, and leaves the next prompt usable.
 - `TestPlan4PiPickerFixture` and `TestPlan4PiCompletionFixture` compare the picker and completion rows with Pi-derived expected fixtures.
-- `TestFooterThinkingLabelFollowsPi`, `TestFooterProviderCountUsesAvailableCatalogs`, `TestFooterOmitsProviderWhenOnlyOneProviderIsAvailable`, `TestFooterOmitsProviderWhenPiWouldNeedMoreRoom`, and the actual picker PTY pin Pi's footer thinking/provider behavior.
+- `TestFooterThinkingLabelFollowsPi`, `TestFooterProviderCountUsesAvailableCatalogs`, `TestFooterSnapshotShowsActiveSessionNameAndTracksLeaf`, `TestSessionNameUsesActiveBranchAndHonorsClear`, `TestFooterOmitsProviderWhenOnlyOneProviderIsAvailable`, `TestFooterOmitsProviderWhenPiWouldNeedMoreRoom`, and the actual picker PTY pin Pi's footer behavior.
 - `TestActualSessionPickerSelectsAndCancelsInWorkspace` selects A → B → A across workspace sessions and restores the submitted draft when the picker is cancelled.
 - `TestBusyRunIgnoresOrdinaryKeysWithoutQueueingThem` proves ordinary keys are ignored during an active run.
 - `TestStartupHeaderUsesPiCompactHints` checks Pi's compact startup hints.
 - `TestCompactionActivityFollowsPiPhases`, `TestPickerNoMatchTreatmentAndPointerFollowPiComponents`, `TestEditorBorderFollowsPiLayout`, and `TestIndexedFallbackMatchesPiPaletteSlots` cover the transcribed wording, layout, and palette slots.
 
-### Platform and delivery evidence at `7e2c1d0`
+### Platform and delivery evidence at `b614826`
 
-- Native Windows: the `internal/app` and `internal/terminal` package binaries passed on Windows 11 `10.0.26200.8875` through WSL2 interop after the footer provider-visibility change. `TestActualWindowsConPTYInteraction` passed three consecutive runs with its six-size matrix after the change.
+- Native Windows: all nine package test binaries passed on Windows 11 `10.0.26200.8875` through native PowerShell with Git for Windows on `PATH`. `TestActualWindowsConPTYInteraction` passed three consecutive runs with its six-size matrix after the footer/session-name changes.
 - Cross-builds: `GOOS=windows go vet ./...`, `GOOS=windows go build ./...`, the Darwin amd64/arm64 package builds, and Darwin app/terminal test-binary compilation passed. macOS binaries were not executed.
 - CI: the workflow now runs the race suite and the acceptance-tagged idle, metadata, and compacted-session profiles on Linux and macOS. The Windows race step stays out because that runner has no cgo. The workflow itself was not executed by a remote runner.
 
@@ -102,8 +102,8 @@ internal/terminal/picker.go             1bb311edc41922c83fe74bc7b8cde14ac3c56bd6
 internal/terminal/status.go             7a33957c8f92929214ac1fbd3ac0133e22944ad1186c40591c68fe7e76d7bea7
 internal/terminal/markdown.go           447ed044d4f91f404d5d60d0b75566ea3f17a86e923ef43149276fca75a5ebb3
 internal/app/selectors.go              8e5a45ea167c8869d17ba733499034cf9e7f9f296e9ce7ce4eb58135c67493d9
-internal/app/app.go                    d80f70178a2527316a395e553cb63408110d097e5d5fee9d3a34713a0a7cb4ce
-internal/app/app_test.go               19d9633f74f309bcf5a3f194c82400836b64b2b8b7cb6e494833797b40a8fac9
+internal/app/app.go                    91008e64eca1ecdc8107d745b71c0068726764be8f090fd56bf062352c2630b9
+internal/app/app_test.go               7678e4dac4be084bb786cfe42544e46b51d9dbbb68000fdd5e7b6e9c97f5d06e
 internal/app/model_picker_test.go       eab63ee957ca20281b30d1b4715824616da6b47185c7e5f73f89dbee9f6394d6
 internal/app/helpers.go                fd29926f236318bb67416e181644ff840b95a6c93f69581f1c8c76a836a63293
 internal/app/replay.go                 3c03198aacd46f1f9eaf39b25af088d3984302e4b18d90e195274c31aa063694
@@ -111,6 +111,8 @@ internal/app/review_test.go             68b7e10c7c1b786bf3e2e72b762a3cb172430ab4
 internal/app/resume_test.go             b6527a5add4652cdde431d6aec6e40c48135ef813f78aaf3704eed910e8c8e93
 internal/app/selectors_fixture_test.go  314331785099fda3e6c783490c168386d618fefcc0d3a4ed5319a00756cb707a
 internal/app/testdata/plan4-pi-pickers.json 43760215dd73da24a421852a486e80e16e2a560f7dceaff5e1335ebb3b93ba11
+internal/session/store.go               0d658f960d53c02db0b2135eaa5623b1fde7bec9729248d00b0c9dac474feb65
+internal/session/session_name_test.go   36ad4089f0ac4ca3e28b25b83dcced6c29cecdad7f5acfb87a9a22e975ea8bfa
 internal/terminal/presentation_fixtures_test.go d488a523f1d203fdcbdb16273f11207e4a1a250c6d56127689e1be045f4772fe
 internal/terminal/testdata/plan4-pi-completion.json e733af5ede9d711d32adbe94859909d8f1ffd14e1a84ccee4dade300d7153e28
 internal/terminal/stream_composition_test.go 40018fb16be221021dd71920d7892391e621022c63120c3776465ee30b5bc6a3
@@ -122,7 +124,7 @@ internal/terminal/status_test.go         3fc2811e5ac75d6365dc53cb9926a0e72c26ec5
 
 ## Resource profiles
 
-Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`. Revalidation at footer revision `7e2c1d0` passed: ten idle seconds produced no scheduled frames; 10,000-session metadata reached a usable first page in `679.857991ms`; the 512 MiB activation completed in `2,471ms` at `43,300 KiB` peak RSS.
+Measurements below were collected at revision `51a56e3` on `Linux Minerva 6.6.87.2-microsoft-standard-WSL2`, AMD Ryzen 9 3950X, `linux/amd64`, 32 logical CPUs, Go `1.26.4`. Revalidation at footer/session-name revision `b614826` passed: ten idle seconds produced no scheduled frames; 10,000-session metadata reached a usable first page in `793.886133ms`; the 512 MiB activation completed in `2,608ms` at `43,124 KiB` peak RSS.
 
 | Profile | Samples / fixture | Raw result | Assessment |
 |---|---|---|---|
@@ -180,10 +182,10 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `7e2c1d0` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Actual-app PTY coverage verifies the footer's model and thinking labels; component tests verify the optional-provider width fallback. The documentation-only ledger update follows this build.
+Built from repository tree revision `b614826` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. Component and app tests verify the selected session name, active-leaf cache key, model/thinking labels, and optional-provider width fallback. The documentation-only ledger update follows this build.
 
 ```text
-SHA-256  c729321c0a66f9ce76a2b8236d8e348578b5539e96fd4cebc608333c55333686
+SHA-256  73e7f6ac0979434d518d6b971775d3b3eb043b9e875ceed1bb09065d1cb9448a
 ```
 
 ## Gate disposition
