@@ -38,10 +38,6 @@ func thinkingSelector(r *runtime) *Selector {
 	return selector
 }
 
-func modelList(r *runtime) string {
-	return fmt.Sprintf("current %s/%s thinking %s\n%s", r.ov.Provider, r.ov.Model, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), strings.Join(modelSelector(r).Render(), "\n"))
-}
-
 func (r *runtime) credentialAvailability(family string) string {
 	path := filepath.Join(r.agentDir, "auth.json")
 	switch family {

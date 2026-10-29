@@ -1292,7 +1292,9 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		}
 	case "model":
 		if strings.TrimSpace(cmd.Arg) == "" {
-			print(modelList(r))
+			// The interactive loop opens the searchable picker for an empty
+			// argument, so this fallback never prints another result page.
+			print(fmt.Sprintf("current %s/%s thinking %s (use /model with a provider/model name)", r.ov.Provider, r.ov.Model, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking)))
 			return false, nil
 		}
 		next := r.ov

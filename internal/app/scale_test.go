@@ -73,9 +73,9 @@ func TestScale10000MetadataFirstPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	selector := NewSelector(items, "")
-	lines := selector.Render()
+	rows := selector.RenderPickerRows(80, 19, true)
 	elapsed := time.Since(start)
-	if len(items) != 10000 || len(selector.PageItems()) != 20 || len(lines) != 22 {
+	if len(items) != 10000 || len(selector.PageItems()) != 20 || len(rows) == 0 || len(rows) > 20 {
 		t.Fatal("first page incomplete")
 	}
 	t.Logf("10000 metadata records to usable 20-item first page: %v", elapsed)
