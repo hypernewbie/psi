@@ -229,3 +229,46 @@ func TestBootstrapConfigurationErrorRestoresTerminal(t *testing.T) {
 		}
 	}
 }
+
+// A4-11: the session picker selects A → B → A across workspace sessions,
+// stays bounded, and restores the submitted draft when it is cancelled.
+func TestActualSessionPickerSelectsAndCancelsInWorkspace(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	dir := filepath.Join(home, "sessions")
+	var files []string
+	for _, prompt := range []string{"alpha synthetic prompt", "beta synthetic prompt", "gamma synthetic prompt"} {
+		store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: dir, AgentDir: agentDir, Persist: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: prompt}}); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, store.File())
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", files[0])
+	q.prompt()
+	q.write("/resume\r")
+	q.wait("Sessions ·")
+	q.prompt()
+	screen := q.screen.Text()
+	if !strings.Contains(screen, "alpha synthetic prompt") || !strings.Contains(screen, "beta synthetic prompt") {
+		t.Fatalf("session picker did not list the workspace sessions: %q", screen)
+	}
+	q.write("\x1b[B") // A → B
+	q.prompt()
+	q.write("\x1b[A") // B → A
+	q.prompt()
+	q.write("\x03") // cancel restores the submitted draft
+	q.wait("/resume")
+	q.prompt()
+	if !strings.Contains(q.screen.Text(), "/resume") {
+		t.Fatalf("cancelled session picker did not restore its draft: %q", q.screen.Text())
+	}
+	q.write("\x03")
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+}
