@@ -98,7 +98,7 @@ func TestF10UnsupportedNameThroughConsole(t *testing.T) {
 	sw := NewStatusWriter(&sb)
 	sw.Update("tool\nname", "c1", ToolRunning)
 	sw.Update("tool\nname", "c1", ToolDone)
-	if out := sb.String(); out != "tool name: done\n" {
+	if out := sb.String(); out != MessageIndent+"tool name: done\n" {
 		t.Fatalf("wrong settled status: %q", out)
 	}
 }

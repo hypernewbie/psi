@@ -23,8 +23,11 @@ func FormatStatus(name string, st ToolState) string {
 
 // FormatSettledStatus clips the untrusted tool name while retaining the state
 // label on one physical row. State styling comes from the Pi semantic palette.
+// The row keeps the shared message margin so a settled tool line stays
+// aligned with the prose around it.
 func FormatSettledStatus(name string, st ToolState, terminalWidth int) string {
 	maxCells := max(0, terminalWidth-1) // preserve the last cell against autowrap
+	maxCells = max(0, maxCells-CellWidth(MessageIndent))
 	state := SanitizeStatusRow(string(st))
 	suffix := ": " + state
 	if CellWidth(suffix) > maxCells {
@@ -45,7 +48,7 @@ func FormatSettledStatus(name string, st ToolState, terminalWidth int) string {
 	case ToolCancelled, ToolNotStarted, ToolInterrupted:
 		stateToken = TokenWarning
 	}
-	row := StyledRow{Spans: []StyledSpan{{Text: name, Token: TokenText}, {Text: suffix, Token: stateToken}}}
+	row := StyledRow{Spans: []StyledSpan{{Text: MessageIndent, Token: TokenText}, {Text: name, Token: TokenText}, {Text: suffix, Token: stateToken}}}
 	return row.Serialize(colorDisabled(PresentationSnapshot{}))
 }
 

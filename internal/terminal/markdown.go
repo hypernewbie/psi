@@ -13,7 +13,13 @@ import (
 	gmtext "github.com/yuin/goldmark/text"
 )
 
-const markdownIndent = "  "
+const (
+	// MessageIndent is the shared left margin for message prose and tool
+	// rows. Pi pads its transcript content, so the one-line tool status
+	// stays aligned with the surrounding prose.
+	MessageIndent  = "  "
+	markdownIndent = MessageIndent
+)
 
 type NoticeKind string
 

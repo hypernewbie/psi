@@ -360,7 +360,7 @@ func TestToolStatusesCommitOneOutcomePerCall(t *testing.T) {
 		s.Update("read", id, ToolDone)
 		s.Update("read", id, ToolDone)
 	}
-	if out.String() != strings.Repeat("read: done\n", 100) {
+	if out.String() != strings.Repeat(MessageIndent+"read: done\n", 100) {
 		t.Fatal("transient or duplicate statuses committed")
 	}
 }

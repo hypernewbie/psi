@@ -29,7 +29,9 @@ func renderTimelineAtWidth(emit func(string) bool, items []session.TranscriptIte
 			if it.Note != "" {
 				text += " (" + it.Note + ")"
 			}
-			lines = []string{text}
+			// The replayed tool row keeps the same margin as the live
+			// settled row, so a resumed session looks like the live one.
+			lines = []string{terminal.MessageIndent + text}
 		case session.KindCompaction:
 			label := "Context compacted: "
 			if it.Historical {

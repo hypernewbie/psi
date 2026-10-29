@@ -206,3 +206,28 @@ func TestActiveToolRowStaysInTheOwnedTail(t *testing.T) {
 		t.Fatalf("active tool row survived the settlement: %q", vt.Text())
 	}
 }
+
+// The active tool row keeps the shared message margin and stays on one
+// physical row even when the tool name is longer than the terminal.
+func TestActiveToolRowKeepsMarginAndOnePhysicalRow(t *testing.T) {
+	vt := testutil.NewVTModel(40, 12)
+	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 40, 12 }}
+	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
+	c.Draw()
+	c.SetToolRow("bash-with-a-very-long-name-that-does-not-fit: running")
+	for _, row := range strings.Split(vt.Text(), "\n") {
+		if strings.Contains(row, "bash-with-a-very-long-name") {
+			if !strings.HasPrefix(row, MessageIndent) {
+				t.Fatalf("active tool row lost the message margin: %q", row)
+			}
+			if CellWidth(row) > 39 {
+				t.Fatalf("active tool row exceeds one physical row: %q", row)
+			}
+			if strings.Contains(row, ": running") {
+				t.Fatalf("clipped tool row dropped its state: %q", row)
+			}
+			return
+		}
+	}
+	t.Fatalf("active tool row missing: %q", vt.Text())
+}

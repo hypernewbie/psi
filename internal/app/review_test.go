@@ -693,8 +693,8 @@ func TestActualToolRowIsTransientAndSettlesOnce(t *testing.T) {
 	q.write("run a tool\r")
 	q.wait("bash: running")
 	screen := q.screen.Text()
-	if !strings.Contains(screen, "bash: running") {
-		t.Fatalf("active tool row is missing: %q", screen)
+	if !strings.Contains(screen, "  bash: running") {
+		t.Fatalf("active tool row is missing or lost the message margin: %q", screen)
 	}
 	if !strings.Contains(screen, "Working…") {
 		t.Fatalf("tool run lost the working indicator: %q", screen)
@@ -705,8 +705,8 @@ func TestActualToolRowIsTransientAndSettlesOnce(t *testing.T) {
 	if strings.Contains(final, "bash: running") {
 		t.Fatalf("settled tool left a duplicate running row: %q", final)
 	}
-	if strings.Count(final, "bash: done") != 1 {
-		t.Fatalf("settled tool did not commit exactly one line: %q", final)
+	if strings.Count(final, "  bash: done") != 1 {
+		t.Fatalf("settled tool did not commit exactly one indented line: %q", final)
 	}
 	q.write("/quit\r")
 	q.finish()

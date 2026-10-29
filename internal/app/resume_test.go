@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"psi/internal/session"
+	"psi/internal/terminal"
 	"psi/internal/testutil"
 )
 
@@ -72,5 +73,19 @@ func TestResumeDisplaysHistory(t *testing.T) {
 		if len(act.Recall) == 0 || act.Recall[0] != "first" {
 			t.Fatalf("recall missing: %v", act.Recall)
 		}
+	}
+}
+
+// The replayed tool row keeps the same margin as the live settled row, so a
+// resumed session looks like the live one.
+func TestReplayedToolRowKeepsTheLiveMargin(t *testing.T) {
+	var lines []string
+	items := []session.TranscriptItem{{Kind: session.KindTool, Text: "read: done"}}
+	renderTimelineAtWidth(func(s string) bool {
+		lines = append(lines, s)
+		return true
+	}, items, 80)
+	if len(lines) != 1 || lines[0] != terminal.MessageIndent+"read: done" {
+		t.Fatalf("replayed tool row lost the live margin: %q", lines)
 	}
 }

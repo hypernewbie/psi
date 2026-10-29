@@ -699,9 +699,11 @@ func (c *Console) Status(text string) {
 
 // SetToolRow installs the active tool row above the editor, like Pi's
 // tool-execution component. The row stays in the owned tail until the call
-// settles.
+// settles. It keeps the shared message margin and stays on one physical line
+// at the emission width.
 func (c *Console) SetToolRow(text string) {
-	c.toolRow = SanitizeStatusRow(text)
+	row := MessageIndent + SanitizeStatusRow(text)
+	c.toolRow = TruncateToWidth(row, max(1, c.currentWidth()-1))
 	c.Draw()
 }
 
