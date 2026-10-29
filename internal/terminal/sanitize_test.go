@@ -4,6 +4,23 @@ import (
 	"testing"
 )
 
+func TestSanitizeStatusRowFoldsCarriageReturnsWithoutLeakingSequences(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"before\rafter\nnext\ttab", "before after next tab"},
+		{"left\x1b]52;c;secret\rpayload\x07right", "leftright"},
+		{"left\x1bPsecret\rpayload\x1b\\right", "leftright"},
+		{"left\x1b[31\rmright", "leftright"},
+	}
+	for _, tc := range cases {
+		if got := SanitizeStatusRow(tc.in); got != tc.want {
+			t.Errorf("SanitizeStatusRow(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if got := Sanitize("before\rafter"); got != "beforeafter" {
+		t.Errorf("transcript sanitization changed: %q", got)
+	}
+}
+
 // P2-033: one sanitization policy — ANSI, OSC, DCS, C1, split sequences.
 // Trusted renderer bytes (CSI cursor/erase) stay separate from content bytes.
 func TestSanitizePolicy(t *testing.T) {

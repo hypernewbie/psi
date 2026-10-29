@@ -13,6 +13,12 @@ type Sanitizer struct {
 }
 
 func (s *Sanitizer) Feed(text string) string {
+	return s.feed(text, false)
+}
+
+// foldCR is used only for single-row labels, after escape sequences have been
+// consumed. Transcript sanitization retains its existing control policy.
+func (s *Sanitizer) feed(text string, foldCR bool) string {
 	text = s.pendingUTF8 + text
 	s.pendingUTF8 = ""
 	var out strings.Builder
@@ -79,6 +85,10 @@ func (s *Sanitizer) Feed(text string) string {
 			s.state = 's'
 			continue
 		}
+		if r == '\r' && foldCR {
+			out.WriteByte(' ')
+			continue
+		}
 		if (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) {
 			continue
 		}
@@ -140,7 +150,10 @@ var ForbiddenSequences = []string{
 // Tabs, CR, and LF fold to spaces; remaining C0/C1 and bidi controls drop;
 // ANSI/OSC/DCS/C1 sequences never pass through.
 func SanitizeStatusRow(s string) string {
-	s = Sanitize(s)
+	if requiresSanitization(s) {
+		var sanitizer Sanitizer
+		s = sanitizer.feed(s, true)
+	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
