@@ -35,7 +35,7 @@ Validation at this checkpoint: `./scripts/check.sh` passed, including the full r
 ## Remaining PLAN5 work
 
 - Complete compaction preparation acceptance: cancellation between summary calls, append-failure/restart cases, and pinned Pi session-reader acceptance. Continue differential tests for cut-point edge cases.
-- Implement Pi theme color conversion, built-ins, discovery/trust, terminal replies, reload, and theme-aware styling. The strict 56-role schema parser and missing-only fallbacks are implemented; parsing/schema parity has local unit coverage.
+- Integrate theme settings, built-ins, discovery/trust, terminal replies, reload, and theme-aware styling. The strict 56-role parser, missing-only fallbacks, Pi variable resolution, OKLCH/OKHSL/sRGB conversion, gamut mapping, indexed color handling, and ANSI quantization are implemented. Color fixtures were compared with the pinned Pi TUI source; runtime theme parity remains open.
 - Implement role-aware message surfaces and bounded live/lazy-replay tool summaries with separate hidden-body and credential canaries.
 - Complete retry/status, metadata, navigation, lifecycle, resource, platform, and human acceptance cases.
 - Update compatibility and user documentation, then build and checksum the executable from the final clean commit.

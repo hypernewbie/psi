@@ -54,6 +54,7 @@ func (v ColorValue) IsDefault() bool { return !v.IsIndex && v.Text == "" }
 type ResolvedColor struct {
 	Token Token
 	Value ColorValue
+	Color Color
 }
 
 // Document is a strictly validated Pi theme JSON document. Schema URLs are
