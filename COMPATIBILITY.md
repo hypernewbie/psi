@@ -49,7 +49,7 @@ Additional storage rules:
 
 | Area | Supported | Boundary |
 |---|---|---|
-| `defaultProvider`, `defaultModel` | `anthropic` and `openai-codex` | reject unsupported families without changing defaults |
+| `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, and `google` | use the model's declared registered API; reject unsupported provider/API pairs |
 | `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic budget/adaptive profiles and Codex effort maps |
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | `read,bash,edit,write` with replacement and `+`/`-` | four tools only |
@@ -59,7 +59,7 @@ Additional storage rules:
 | `network` | idle timeout + bounded retries | one HTTP transport |
 | instructions | `AGENTS.override.md`, `AGENTS.md`, fallbacks, `SYSTEM.md`, `APPEND_SYSTEM.md` | documented discovery + consent |
 | `models.json` | endpoints, model metadata and overrides for supported providers | public snapshot and Pi cache. No network refresh |
-| auth | Anthropic API keys; existing Codex OAuth login and refresh | no login UI or credential-command execution |
+| auth | Provider API keys for Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google; existing Codex OAuth login and refresh | no login UI or credential-command execution |
 | startup | `quietStartup` | no dynamic renderer |
 | themes | `theme`, `themes`, `terminal.trueColor`, `--use-theme`, repeatable `--theme`, `--no-themes` | Pi theme data and local resource paths; project resources require consent |
 | display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | normalized bounded inline settings |
@@ -70,19 +70,15 @@ Unknown harmless UI prefs need no per-key warning.
 
 ## Provider
 
-- **Anthropic Messages API** (`https://api.anthropic.com/v1/messages`, SSE).
-  Auth: existing `auth.json` API-key entry, then a configured model credential,
-  then `ANTHROPIC_API_KEY`. Anthropic subscription OAuth is not implemented;
-  an existing OAuth entry refuses API-key fallback.
-- **ChatGPT Codex Responses** (`https://chatgpt.com/backend-api/codex/responses`, SSE).
-  Uses the existing `auth.json` `openai-codex` OAuth entry. Refresh preserves other
-  credentials and unknown fields under a Pi-compatible directory lock. No fallback
-  to `OPENAI_API_KEY`. Login remains a Pi operation.
-- Translates normalized Pi context to each protocol. Preserves Anthropic thinking
-  signatures and Codex encrypted reasoning, text IDs/phases, and tool item/call
-  IDs. Session records retain the selected provider/API, not hardcoded Anthropic.
-- Bounded retries, server `retry-after` honored within cap; no retry of completed tool side effects; partial streams are not invisible retries.
-- Accounting separates stored usage, estimated context, and requested versus returned models. Prices remain unknown without a cost calculation.
+- **Anthropic Messages** uses `ANTHROPIC_API_KEY`; **MiniMax** uses `MINIMAX_API_KEY` and its `/anthropic` base path. Both use the Anthropic Messages stream format. MiniMax thinking controls and OpenCode `allowEmptySignature` follow model metadata.
+- **OpenCode Go** uses `OPENCODE_API_KEY`. Each model selects one registered API: Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses. Its catalog endpoint path is model-specific. Requests add `x-opencode-session` unless an explicit case-insensitive header overrides it.
+- **DeepSeek** uses `DEEPSEEK_API_KEY` with OpenAI Chat Completions. **Z.AI** uses `ZAI_API_KEY` with its coding Completions endpoint. Their reasoning and tool-stream behavior follows supported model metadata.
+- **Google Generative AI** uses `GEMINI_API_KEY`, `x-goog-api-key`, and the `:streamGenerateContent?alt=sse` route. Google Vertex and OAuth are not implemented.
+- **OpenAI Responses** for OpenCode Go uses `OPENCODE_API_KEY`, bearer authentication, `store:false`, and the generic `/responses` route. It is distinct from **ChatGPT Codex Responses**, which uses the `openai-codex` OAuth entry and `/backend-api/codex/responses`. Codex never falls back to `OPENAI_API_KEY`.
+- API-key precedence is provider `auth.json`, configured `models.json` key, then that provider's exact environment variable. Unsupported stored auth and `!command` credentials fail closed. No login UI is included.
+- The model selects the protocol; psi does not infer API from provider name or forward a model through an unrelated adapter. Unknown compatibility fields and unsupported API pairs remain unavailable. The public catalog is pinned to the provenance in `internal/config/data/catalog-source.json`; Pi's cache is an offline overlay, and psi does not refresh it from the network.
+- Adapters translate normalized Pi context and retain supported provider/model identity, usage, reasoning signatures, text IDs/phases, and linked tool IDs in JSONL v3. Bounded retries honor `retry-after` within the configured cap. A stream that has started is not retried, and incomplete calls are never dispatched.
+- Accounting separates reported usage, estimated context, and requested versus returned models. Prices remain unknown because psi does not calculate costs. No live provider request has run for PLAN6.
 
 ## Terminal
 
@@ -115,7 +111,7 @@ TypeScript extensions, JS runtime, npm package installation/execution, MCP, code
 subagents, public SDK, RPC server, JSON event mode, print mode, fullscreen mode,
 custom widgets, Pi TUI API, session tree/branch/fork/clone UI, HTML export,
 sharing, bug uploads, hosted services, update checks, self-update, catalog
-refresh, telemetry, browser automation, cloud credential discovery, extra
+refresh, telemetry, browser automation, cloud credential discovery, unregistered
 providers, cache warming, background jobs, virtual models, routing, classifier
 models, generated media, clipboard, image paste, external editor, prompt
 templates, sandbox, per-tool approval, permission-policy language, automatic Git
@@ -140,10 +136,11 @@ server. It covers prompt/configuration wiring, stored credentials, skill
 submission, session replacement, and cancellation. A synthetic Codex OAuth
 workflow checks a complete model/tool/model round trip and encrypted replay.
 OAuth refresh, rotation, cancellation, and concurrent access use dummy tokens
-and local HTTP servers. The optional
-`PSI_PI_SESSION_MODULE` suite uses the actual pinned Pi reader and writer.
-It covers both continuation directions and both provider metadata forms.
-A JSON-shape test alone is not evidence of complete Pi interchange.
+and local HTTP servers. The optional `PSI_PI_SESSION_MODULE` suite exercises a configured Pi reader and
+writer across both continuation directions and the supported provider/API pairs.
+The recorded run used the installed Pi 1.4.0 package adapter, not a verified
+build from the pinned source revision. Exact executable Pi parity remains
+unclaimed. A JSON-shape test alone is not evidence of complete Pi interchange.
 
 See `docs/limitations.md` for explicit size limits, reasoning-protocol limits,
 and compaction boundaries. See `docs/ui-acceptance.md` for component, emulator,

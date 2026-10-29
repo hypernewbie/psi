@@ -7,8 +7,9 @@ It has no fullscreen mode, widgets, panels, session-tree interface, or Pi TUI AP
 It has no extension runtime, MCP, codemode, tool search, subagents, public SDK, RPC, or JSON event mode.
 Print mode, HTML export, sharing, bug uploads, hosted services, telemetry, and automatic updates are excluded.
 
-psi supports Anthropic Messages and Codex Responses only.
-Additional providers, cloud credential discovery, routing, virtual models, and automatic catalog refresh are excluded.
+psi supports Anthropic, ChatGPT Codex, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google. OpenCode Go selects Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses per model. Unsupported provider/API pairs and compatibility features remain unavailable.
+
+Cloud credential discovery, routing, virtual models, and automatic catalog refresh are excluded. Google Vertex and OAuth, OpenCode Zen, MiniMax China, and Z.AI China endpoints are not included. Live-provider acceptance has not run.
 Background provider jobs, cache warming, classifier models, and image/audio/video generation are excluded.
 Clipboard access, image paste, external editors, prompt templates, and browser automation are excluded.
 The `read` tool can read supported image files.
@@ -21,15 +22,9 @@ Regression shell processes instead use an isolated environment.
 
 ## Authentication
 
-Anthropic uses API keys.
-Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock.
-Refresh preserves unrelated fields and existing permission bits.
-It persists credential changes through atomic replacement.
+Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.
 
-psi has no login interface and does not support Anthropic OAuth or `!command` execution.
-Codex login remains Pi `/login openai-codex`.
-psi does not substitute a billed OpenAI API key for Codex OAuth.
-Partial streams do not permit an invisible request replay.
+psi has no login interface, does not support Anthropic OAuth, and does not execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
 
 ## Current implementation limits
 
@@ -44,7 +39,7 @@ Recall retains at most 200 prompts within a 4 MiB text budget.
 Persistent continuation resolves symlinks to one canonical writer-lock path.
 Hard-linked sessions permit read-only history but require a separate copy for persistent continuation.
 
-The unmodified pinned Pi reader and writer passed both continuation directions for both provider metadata forms (rerun after the PLAN3 storage/parser changes).
+The Pi JSONL v3 format retains provider/API/model identity and supported opaque signatures. PLAN6 added synthetic replay coverage for MiniMax/OpenCode Anthropic, DeepSeek/OpenCode Completions, Google/OpenCode Google, and OpenCode Responses. The optional reference session matrix has been run with the installed Pi 1.4.0 package; that run does not claim the installed artifact is byte-for-byte built from the pinned source revision.
 The fixtures cover branches, context edits, compaction, signed reasoning, images, and state-only `psi.input` provenance.
 The acceptance ledger separates these results from unfinished user journeys.
 

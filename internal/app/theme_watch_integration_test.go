@@ -102,6 +102,7 @@ func TestUserThemeAtomicSaveReloadsOpenCompletionWithoutLosingQuery(t *testing.T
 	q.wait("theme reloaded: selected")
 	q.prompt()
 	q.write("/")
+	q.wait(thirdAccent)
 	q.prompt()
 	if !strings.Contains(q.raw.String(), thirdAccent) {
 		t.Fatalf("explicit /reload did not install the updated palette %q", thirdAccent)

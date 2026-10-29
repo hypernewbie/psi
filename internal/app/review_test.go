@@ -765,6 +765,7 @@ func TestActualCancelDuringToolKeepsCancellationVisibleAndSettles(t *testing.T) 
 	}
 	// The next prompt is usable after the cancellation settles.
 	q.write("after cancel\r")
+	q.wait("after cancel")
 	q.prompt()
 	if !strings.Contains(q.screen.Text(), "after cancel") {
 		t.Fatalf("the editor is not usable after a cancellation: %q", q.screen.Text())

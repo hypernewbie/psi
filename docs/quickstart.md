@@ -9,13 +9,20 @@ go build -o psi ./cmd/psi
 ./psi
 ```
 
-Daily use (Anthropic Messages and ChatGPT Codex Responses):
+Daily use (Anthropic Messages, ChatGPT Codex Responses, and the registered API-key providers):
 
 ```sh
 export ANTHROPIC_API_KEY="..."
-./psi --provider anthropic --model claude-sonnet-4-5
-./psi --provider openai-codex --model gpt-5.6-luna
+./psi
 ```
+
+Use `/model` to select a locally available provider and model. Each API-key
+provider needs its own environment variable; see `docs/config.md`. The `--provider`
+and `--model` options accept the exact IDs shown by `/model`.
+
+Model lists come from the bundled public snapshot and Pi's local cache. Psi
+does not fetch catalogs from the network. OpenCode Go's API and endpoint are
+selected per model.
 
 Theme selection is available at startup, for example `./psi --use-theme dark` or `./psi --theme /path/to/theme.json`. Set `theme` and optional `themes` paths in `~/.pi/agent/settings.json`; use `/reload` to apply supported display/theme changes. Project themes load only after project consent. See `docs/config.md` for settings and resource rules.
 

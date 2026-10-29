@@ -29,7 +29,7 @@ ancestor folders.
 
 | Area | Keys | Notes |
 |---|---|---|
-| Provider/model | `defaultProvider`, `defaultModel` | `anthropic` or `openai-codex` |
+| Provider/model | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, or `google` |
 | Reasoning | `defaultThinkingLevel` | off/minimal/low/medium/high/xhigh/max |
 | Sessions | `sessionDir` | CLI > env (`PI_CODING_AGENT_SESSION_DIR`) > settings > default |
 | Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |
@@ -48,12 +48,23 @@ ancestor folders.
 `theme` selects `system` by default, a built-in (`dark` or `light`), or an exact discovered theme name. `themes` is an array of additional local file or directory paths. `--use-theme` overrides the selection; repeat `--theme PATH` to add resources; `--no-themes` disables configured and discovered resources. Theme files are data only: schema URLs are not fetched and theme/package code is not run. Project theme bodies load only after project consent. `terminal.trueColor` accepts the booleans `true`/`false` or the string `auto`; `NO_COLOR` always disables generated SGR. `/reload` installs valid theme and display settings atomically; an invalid reload keeps the last valid snapshot. `/session` reports theme, appearance, color mode, source, and diagnostics.
 
 Credential references support `$VAR`, `${VAR}`, `$$`, and `$!` escapes.
-Psi rejects `!command` values without running them. Stored Anthropic credentials
-precede `models.json` credentials, then `ANTHROPIC_API_KEY`. An OAuth entry stops
-API-key selection instead of changing the billing path silently.
+Psi rejects `!command` values without running them. Stored provider API-key entries
+precede `models.json` credentials, then the selected provider's environment variable:
+
+| Provider | Environment variable |
+|---|---|
+| Anthropic | `ANTHROPIC_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| OpenCode Go | `OPENCODE_API_KEY` |
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Z.AI | `ZAI_API_KEY` |
+| Google Generative AI | `GEMINI_API_KEY` |
+
+An unsupported stored auth type stops key selection instead of silently changing
+the billing path. Codex uses its OAuth entry and never falls back to an API key.
 
 With no saved provider/model, the default is Anthropic `claude-sonnet-4-5`.
-The public snapshot contains 17 Anthropic models and seven Codex models from `@earendil-works/pi-ai` version `1.4.0`.
+The public snapshot contains provenance-tracked model metadata for the seven registered providers. It includes API, endpoint, input, thinking, and supported compatibility data from `@earendil-works/pi-ai` version `1.4.0`.
 Source hashes are in `internal/config/data/catalog-source.json`.
 The snapshot contains capabilities, not credentials, private endpoints, or user defaults.
 Psi also reads newer model data from Pi's `models-store.json` cache.
@@ -63,8 +74,8 @@ After Pi updates the cache, restart Psi to load the new data.
 Explicit models and overrides in `models.json` take precedence over the cache.
 `/model` searches the local catalog and configured models without a network request.
 
-A saved Codex selection uses the GPT-5.6 and GPT-6 families.
-Its default is `gpt-5.6-luna`.
+Provider model lists change over time. Use `/model` to select a model in the local catalog. Do not assume that an example model ID is present or available. OpenCode Go models select their own registered API and catalog endpoint; unsupported cached APIs remain visible as unavailable.
+
 Existing `modelOverrides` apply without a duplicate `models[]` entry.
 
 Codex uses the `openai-codex` OAuth credential in `auth.json`, including token
@@ -72,7 +83,7 @@ refresh. Psi updates only that entry and preserves other providers and unknown
 fields. Startup reads credentials locally; refresh occurs on submission. It never
 uses `OPENAI_API_KEY` as a fallback. Run `/login openai-codex` in Pi to log in.
 
-Configure other compatible models in Pi's normal shape:
+Configure explicit model definitions in Pi's normal shape. The following is an Anthropic example; use the API registered for the selected provider:
 
 ```json
 {
