@@ -73,6 +73,9 @@ type Message struct {
 	Provider, API, Model string // source of opaque assistant replay metadata
 	ThinkingLevel        string // effective provider effort for historical replay
 	StopReason           string
+	Sections             []SystemSection
+	ToolsAdded           []ToolDef
+	ToolsRemoved         []string
 }
 
 type Block struct {
@@ -99,6 +102,11 @@ type ToolDef struct {
 	Name        string
 	Description string
 	Schema      map[string]any
+}
+
+type SystemSection struct {
+	Name  string
+	Value *string
 }
 
 // Response is one authoritative completed assistant message.
@@ -179,6 +187,8 @@ func BuildRequest(req Request) (map[string]any, error) {
 		return BuildCompletionsRequest(req)
 	case "google-generative-ai":
 		return BuildGoogleRequest(req)
+	case "openai-responses":
+		return BuildResponsesRequest(req)
 	default:
 		return nil, fmt.Errorf("unsupported provider API %q", req.Model.API)
 	}

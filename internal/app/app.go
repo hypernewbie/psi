@@ -377,6 +377,13 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		google.Headers = headers
 		google.SessionID = r.store.Header().ID
 		client = google
+	case "openai-responses":
+		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		authErr = err
+		responses := provider.NewResponsesClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
+		responses.Headers = headers
+		responses.SessionID = r.store.Header().ID
+		client = responses
 	default:
 		return fmt.Errorf("unsupported provider API %q", meta.API)
 	}

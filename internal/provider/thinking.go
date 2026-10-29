@@ -8,7 +8,7 @@ import (
 func SupportedThinking(model ModelMeta) []string {
 	var levels []string
 	for _, level := range ValidLevels {
-		if model.API == "google-generative-ai" && model.Reasoning {
+		if (model.API == "google-generative-ai" || model.API == "openai-responses") && model.Reasoning {
 			mapped, exists := model.ThinkingLevelMap[level]
 			if exists && mapped == nil {
 				continue
@@ -58,6 +58,17 @@ func ThinkingDescription(model ModelMeta, level string) string {
 			return fmt.Sprintf("%s (effective Google thinking level %s)", level, mapped)
 		}
 		return level + " (provider default)"
+	}
+	if model.API == "openai-responses" {
+		if request["reasoning"] == nil {
+			return level + " (provider default)"
+		}
+		if config, ok := request["reasoning"].(map[string]any); ok {
+			if level == "off" && config["effort"] == "none" {
+				return "off (effective effort none)"
+			}
+			return fmt.Sprintf("%s (effective effort %v)", level, config["effort"])
+		}
 	}
 	if model.API == "openai-completions" {
 		compat, err := resolveCompletionsCompat(model)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"sort"
@@ -377,7 +378,25 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 	for _, m := range llm {
 		switch m.Role {
 		case "system":
-			continue
+			if cfg.Model.API != "openai-responses" || m.System == nil {
+				continue
+			}
+			blocks, err := session.UserBlocks(m.System.Content)
+			if err != nil {
+				return provider.Request{}, err
+			}
+			toolDefs, err := responseToolDefinitions(m.System.ToolsAdded)
+			if err != nil {
+				return provider.Request{}, err
+			}
+			var removed []string
+			for _, tool := range m.System.ToolsRemoved {
+				if tool.Name == nil || *tool.Name == "" {
+					return provider.Request{}, fmt.Errorf("Responses replay refuses a tool removal without a name")
+				}
+				removed = append(removed, *tool.Name)
+			}
+			msgs = append(msgs, provider.Message{Role: "system", Content: userBlocks(blocks), Sections: responseSystemSections(m.System), ToolsAdded: toolDefs, ToolsRemoved: removed})
 		case "user":
 			blocks, err := session.UserBlocks(m.User.Content)
 			if err != nil {
@@ -401,6 +420,9 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 					}
 					blocks = append(blocks, provider.Block{Type: "thinking", Thinking: b.Thinking.Thinking, ThinkingSignature: sig, Redacted: b.Thinking.Redacted != nil && *b.Thinking.Redacted})
 				case "toolCall":
+					if cfg.Model.API == "openai-responses" && b.Call.ArgumentsError != nil {
+						return provider.Request{}, fmt.Errorf("Responses replay refuses a tool call with invalid arguments")
+					}
 					namespace := ""
 					if b.Call.Namespace != nil {
 						namespace = *b.Call.Namespace
@@ -430,6 +452,91 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 		sys = cfg.System
 	}
 	return provider.Request{Model: cfg.Model, System: sys, Messages: msgs, Tools: cfg.Tools, Thinking: cfg.Thinking, MaxTokens: cfg.MaxTokens}, nil
+}
+
+func responseToolDefinitions(tools []session.Tool) ([]provider.ToolDef, error) {
+	out := make([]provider.ToolDef, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Name == "" || len(tool.Parameters) == 0 || string(tool.Parameters) == "null" {
+			return nil, fmt.Errorf("invalid schema for Responses tool %q", tool.Name)
+		}
+		var schema map[string]any
+		if len(tool.Parameters) > 0 && string(tool.Parameters) != "null" {
+			decoder := json.NewDecoder(strings.NewReader(string(tool.Parameters)))
+			decoder.UseNumber()
+			if err := decoder.Decode(&schema); err != nil || schema == nil {
+				return nil, fmt.Errorf("invalid schema for Responses tool %q", tool.Name)
+			}
+			var extra any
+			if err := decoder.Decode(&extra); err != io.EOF {
+				return nil, fmt.Errorf("invalid schema for Responses tool %q", tool.Name)
+			}
+		}
+		out = append(out, provider.ToolDef{Name: tool.Name, Description: tool.Description, Schema: schema})
+	}
+	return out, nil
+}
+
+func responseSystemSections(system *session.SystemMessage) []provider.SystemSection {
+	if system == nil || len(system.Sections) == 0 {
+		return nil
+	}
+	var order []string
+	if len(system.Raw) > 0 {
+		decoder := json.NewDecoder(strings.NewReader(string(system.Raw)))
+		if token, err := decoder.Token(); err == nil && token == json.Delim('{') {
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					break
+				}
+				key, _ := keyToken.(string)
+				if key != "sections" {
+					var discard json.RawMessage
+					if decoder.Decode(&discard) != nil {
+						break
+					}
+					continue
+				}
+				if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+					break
+				}
+				for decoder.More() {
+					sectionToken, err := decoder.Token()
+					if err != nil {
+						break
+					}
+					name, _ := sectionToken.(string)
+					var discard json.RawMessage
+					if decoder.Decode(&discard) != nil {
+						break
+					}
+					order = append(order, name)
+				}
+				_, _ = decoder.Token()
+			}
+		}
+	}
+	seen := make(map[string]bool, len(order))
+	var sections []provider.SystemSection
+	for _, name := range order {
+		if _, ok := system.Sections[name]; !ok || seen[name] {
+			continue
+		}
+		seen[name] = true
+		sections = append(sections, provider.SystemSection{Name: name, Value: system.Sections[name]})
+	}
+	var remaining []string
+	for name := range system.Sections {
+		if !seen[name] {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	for _, name := range remaining {
+		sections = append(sections, provider.SystemSection{Name: name, Value: system.Sections[name]})
+	}
+	return sections
 }
 
 func userBlocks(blocks []session.UserContentBlock) []provider.Block {

@@ -17,8 +17,8 @@ import {copyFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 const [module,mode,path,family]=process.argv.slice(1);
 const {SessionManager}=await import(module);
-const api=family==='anthropic'?'anthropic-messages':'openai-codex-responses';
-const model=family==='anthropic'?'claude-opus-4-6':'gpt-5.6-luna';
+const api=family==='anthropic'?'anthropic-messages':family==='openai-codex'?'openai-codex-responses':'openai-responses';
+const model=family==='anthropic'?'claude-opus-4-6':family==='openai-codex'?'gpt-5.6-luna':'gpt-5.6-luna';
 const usage={input:11,output:7,cacheRead:3,cacheWrite:2,totalTokens:23,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}};
 const assistant=(text,tools=false)=>({role:'assistant',provider:family,api,model,responseModel:model+'-returned',responseId:'synthetic-response',thinkingLevel:'high',providerThinkingLevel:'high',content:[
  {type:'thinking',thinking:'synthetic reasoning',thinkingSignature:family==='anthropic'?'synthetic-signed-thinking':JSON.stringify({id:'rs_synthetic',type:'reasoning',summary:[],encrypted_content:'synthetic-encrypted-reasoning'})},
@@ -76,6 +76,9 @@ func appendReferencePsiContinuation(t *testing.T, s *Store, family string) {
 	if family == "openai-codex" {
 		api, model = "openai-codex-responses", "gpt-5.6-luna"
 		signature = `{"id":"rs_psi","type":"reasoning","encrypted_content":"synthetic-encrypted-reasoning","summary":[]}`
+	} else if family == "opencode-go" {
+		api, model = "openai-responses", "gpt-5.6-luna"
+		signature = `{"id":"rs_psi","type":"reasoning","encrypted_content":"synthetic-encrypted-reasoning","summary":[]}`
 	}
 	raw, _ := json.Marshal(map[string]any{"role": "assistant", "provider": family, "api": api, "model": model, "responseModel": model + "-returned", "responseId": "psi-synthetic-response", "thinkingLevel": "high", "providerThinkingLevel": "high", "futureOpaque": map[string]any{"preserved": true}, "content": []any{map[string]any{"type": "thinking", "thinking": "synthetic reasoning", "thinkingSignature": signature}, map[string]any{"type": "text", "text": "psi continuation", "textSignature": `{"v":1,"id":"msg_psi","phase":"final"}`}}, "usage": Usage{Input: 11, Output: 7, CacheRead: 3, CacheWrite: 2, TotalTokens: 23}, "stopReason": "stop", "timestamp": 101})
 	var message AgentMessage
@@ -101,7 +104,7 @@ func TestReferencePiContinuationMatrix(t *testing.T) {
 	if module == "" {
 		t.Skip("set PSI_PI_SESSION_MODULE to the pinned reference adapter")
 	}
-	for _, family := range []string{"anthropic", "openai-codex"} {
+	for _, family := range []string{"anthropic", "openai-codex", "opencode-go"} {
 		for _, origin := range []string{"Pi", "psi"} {
 			t.Run(origin+"/"+family, func(t *testing.T) {
 				root := t.TempDir()
