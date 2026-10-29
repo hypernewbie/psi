@@ -408,6 +408,18 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 		}
 		text := piBorderRow(borderWidth, status, overflow)
 		row := StyledRow{Spans: []StyledSpan{{Text: text, Token: borderToken}}}
+		if status != "" {
+			if start := strings.Index(text, status); start >= 0 {
+				end := start + len(status)
+				row.Spans = []StyledSpan{{Text: text[:start], Token: borderToken}}
+				clusters := Graphemes(status)
+				if len(clusters) > 0 && strings.Contains("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", clusters[0]) {
+					row.Spans = append(row.Spans, StyledSpan{Text: clusters[0], Token: TokenAccent})
+					status = status[len(clusters[0]):]
+				}
+				row.Spans = append(row.Spans, StyledSpan{Text: status, Token: TokenMuted}, StyledSpan{Text: text[end:], Token: borderToken})
+			}
+		}
 		return row.Serialize(noColor), row.Width()
 	}
 	rows := make([]string, 0, len(fragmentRows)+borderCount+bodyBudget+footerCount)

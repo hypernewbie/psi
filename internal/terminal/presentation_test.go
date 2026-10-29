@@ -38,6 +38,20 @@ func TestNoColorEnvironmentDisablesEveryToken(t *testing.T) {
 	}
 }
 
+func TestActivityBorderUsesPiSpinnerAndMessageColors(t *testing.T) {
+	// Pi's WorkingStatusIndicator uses accent for the spinner and muted for
+	// its message, independently of the thinking-colored editor border.
+	view := ComposeEditorView(60, 10, nil, 0, PresentationSnapshot{Thinking: "low"}, "⠋ Working…")
+	want := "\x1b[34m── \x1b[0m\x1b[35m⠋\x1b[0m\x1b[2m Working…\x1b[0m\x1b[34m "
+	if !strings.HasPrefix(view.Rows[0], want) {
+		t.Fatalf("working border colors = %q, want prefix %q", view.Rows[0], want)
+	}
+	plain := ComposeEditorView(60, 10, nil, 0, PresentationSnapshot{Thinking: "low", NoColor: true}, "⠋ Working…")
+	if strings.Contains(plain.Rows[0], "\x1b[") || Sanitize(view.Rows[0]) != plain.Rows[0] {
+		t.Fatalf("NO_COLOR changed border text: styled=%q plain=%q", view.Rows[0], plain.Rows[0])
+	}
+}
+
 func TestNarrowActivityBorderKeepsPiCancellationHint(t *testing.T) {
 	view := ComposeConsoleView(20, 6, nil, 0, PresentationSnapshot{NoColor: true}, "⠋ Working… (Esc/Ctrl+C cancel, input paused)", "")
 	if !strings.Contains(view.Rows[0], "Esc/Ctrl+C") {
