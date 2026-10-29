@@ -25,7 +25,7 @@ func TestSessionNameUsesLatestEntryRegardlessOfBranch(t *testing.T) {
 	store := openNamedSessionFixture(t,
 		`{"type":"session_info","id":"root","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","name":"root name"}`,
 		`{"type":"session_info","id":"branch-a","parentId":"root","timestamp":"2026-01-01T00:00:02.000Z","name":"branch A"}`,
-		`{"type":"session_info","id":"branch-b","parentId":"root","timestamp":"2026-01-01T00:00:03.000Z","name":"branch B"}`,
+		`{"type":"session_info","id":"branch-b","parentId":"root","timestamp":"2026-01-01T00:00:03.000Z","name":"  branch B  "}`,
 	)
 	check := func(want string) {
 		t.Helper()
