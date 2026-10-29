@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -163,5 +164,63 @@ func TestAdaptiveThinkingDescriptionsAreExplicit(t *testing.T) {
 	}
 	if description := provider.ThinkingDescription(r.cfg.Model, "off"); !strings.Contains(description, "provider default") {
 		t.Fatal(description)
+	}
+}
+
+// A4-12: a failed model persistence keeps the prior session, provider,
+// footer, draft, cursor, and recall. The refused store must never leave a
+// half-installed configuration behind.
+func TestFailedModelPersistenceKeepsPriorRuntimeAndDraft(t *testing.T) {
+	r := testRuntime(t)
+	if _, err := r.store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "synthetic"}}); err != nil {
+		t.Fatal(err)
+	}
+	providerMeta := r.models.Providers["anthropic"]
+	providerMeta.Models = append(providerMeta.Models, config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
+	r.models.Providers["anthropic"] = providerMeta
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	var output strings.Builder
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+	console.Editor.RestoreDraft("keep this draft", 5)
+	console.Editor.SetHistory([]string{"synthetic"})
+	r.draw(console)
+
+	oldProvider, oldModel, oldThinking, oldThinkingLevel := r.ov.Provider, r.ov.Model, r.ov.Thinking, r.cfg.Thinking
+	oldProv, oldFooter := r.prov, r.footerSnapshot
+	before, err := os.ReadFile(r.store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.store.FailWritesForTest(errPoison)
+	if _, err := r.command(&terminal.Command{Name: "model", Arg: "anthropic/m2"}, io.Discard); err == nil {
+		t.Fatal("model change accepted on a refused store")
+	}
+	if r.ov.Provider != oldProvider || r.ov.Model != oldModel || r.ov.Thinking != oldThinking || r.cfg.Thinking != oldThinkingLevel {
+		t.Fatalf("failed model persistence replaced the configuration: %+v", r.ov)
+	}
+	if r.prov != oldProv {
+		t.Fatal("failed model persistence replaced the provider")
+	}
+	if console.Editor.Text() != "keep this draft" || console.Editor.Pos() != 5 {
+		t.Fatalf("failed model persistence changed the draft or cursor: %q %d", console.Editor.Text(), console.Editor.Pos())
+	}
+	if history := console.Editor.History(); len(history) != 1 || history[0] != "synthetic" {
+		t.Fatalf("failed model persistence changed the recall history: %v", history)
+	}
+	after, err := os.ReadFile(r.store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("failed model persistence changed the session file: %s", after)
+	}
+	r.draw(console)
+	if r.footerSnapshot.Model != oldFooter.Model || r.footerSnapshot.Provider != oldFooter.Provider {
+		t.Fatalf("failed model persistence changed the footer: %+v", r.footerSnapshot)
 	}
 }
