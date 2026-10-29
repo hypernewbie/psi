@@ -10,8 +10,8 @@ import (
 )
 
 // Selector owns a stable, searchable collection. The regular-mode picker uses
-// keyboard selection in the editor tail; Page/Render remain for bounded legacy
-// text summaries, not as an alternate selection UI.
+// keyboard selection in the picker region. The page fields remain only for
+// bounded legacy metadata discovery, not as an alternate selection UI.
 type Selector struct {
 	Items    []session.SessionInfo
 	Filtered []session.SessionInfo
@@ -322,42 +322,4 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
-}
-
-// Render returns the bounded text summary used by /session and diagnostics.
-func (s *Selector) Render() []string {
-	items := s.PageItems()
-	var out []string
-	totalPages := (len(s.Filtered) + s.PageSize - 1) / s.PageSize
-	if totalPages == 0 {
-		totalPages = 1
-	}
-	label := "Sessions"
-	if s.Models {
-		label = "Models"
-	} else if s.Thinking {
-		label = "Thinking levels"
-	}
-	out = append(out, fmt.Sprintf("%s (page %d/%d, %d matches, filter: %q)", label, s.Page+1, totalPages, len(s.Filtered), s.Filter))
-	for _, it := range items {
-		marker := " "
-		if it.ID == s.ActiveID {
-			marker = "*"
-		}
-		preview := firstLine(it.FirstMessage)
-		identity := it.ID
-		if !s.Models && !s.Thinking {
-			identity = shortID(identity)
-			if it.Name != "" {
-				identity = firstLine(it.Name) + " (" + identity + ")"
-			}
-			identity += " " + it.Modified.Format("01-02 15:04")
-			if it.Unavailable != "" && it.ID != s.ActiveID {
-				identity += " [unavailable: " + it.Unavailable + "]"
-			}
-		}
-		out = append(out, fmt.Sprintf("%s %s — %s", marker, identity, preview))
-	}
-	out = append(out, "type a search query; empty cancels")
-	return out
 }
