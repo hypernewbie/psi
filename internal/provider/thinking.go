@@ -8,6 +8,15 @@ import (
 func SupportedThinking(model ModelMeta) []string {
 	var levels []string
 	for _, level := range ValidLevels {
+		if model.API == "google-generative-ai" && model.Reasoning {
+			mapped, exists := model.ThinkingLevelMap[level]
+			if exists && mapped == nil {
+				continue
+			}
+			if (level == "xhigh" || level == "max") && !exists {
+				continue
+			}
+		}
 		if _, err := BuildRequest(Request{Model: model, Thinking: level}); err == nil {
 			levels = append(levels, level)
 		}
@@ -24,6 +33,31 @@ func ThinkingDescription(model ModelMeta, level string) string {
 			return fmt.Sprintf("%s (effective effort %s)", level, r["effort"])
 		}
 		return level + " (provider default; disabling reasoning unavailable)"
+	}
+	if model.API == "google-generative-ai" {
+		if level == "off" {
+			config, _ := request["generationConfig"].(map[string]any)
+			thinking, _ := config["thinkingConfig"].(map[string]any)
+			if budget, ok := thinking["thinkingBudget"].(int); ok && budget == 0 {
+				return "off"
+			}
+			if mapped, ok := thinking["thinkingLevel"].(string); ok {
+				return fmt.Sprintf("off (effective fallback level %s; disabling reasoning unavailable)", mapped)
+			}
+			return "off"
+		}
+		config, _ := request["generationConfig"].(map[string]any)
+		thinking, _ := config["thinkingConfig"].(map[string]any)
+		if budget, ok := thinking["thinkingBudget"].(int); ok {
+			if budget < 0 {
+				return level + " (provider-managed thinking budget)"
+			}
+			return fmt.Sprintf("%s (budget %d tokens)", level, budget)
+		}
+		if mapped, ok := thinking["thinkingLevel"].(string); ok {
+			return fmt.Sprintf("%s (effective Google thinking level %s)", level, mapped)
+		}
+		return level + " (provider default)"
 	}
 	if model.API == "openai-completions" {
 		compat, err := resolveCompletionsCompat(model)

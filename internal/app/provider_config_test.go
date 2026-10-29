@@ -66,6 +66,37 @@ func TestConfigureUsesProviderSpecificAnthropicKeysAndCatalogPaths(t *testing.T)
 	}
 }
 
+func TestConfigureDispatchesGoogleGenerativeAIWithProviderKey(t *testing.T) {
+	var seen atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(true)
+		if r.URL.Path != "/v1beta/models/synthetic-google:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" ||
+			r.Header.Get("x-goog-api-key") != "synthetic-google-key" || r.Header.Get("Authorization") != "" {
+			t.Errorf("Google request path/auth = %s?%s %#v", r.URL.Path, r.URL.RawQuery, r.Header)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n")
+	}))
+	defer server.Close()
+	t.Setenv("GEMINI_API_KEY", "synthetic-google-key")
+	r := testRuntime(t)
+	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"google": {Models: []config.ModelMeta{{
+		ID: "synthetic-google", API: "google-generative-ai", BaseURL: server.URL + "/v1beta", MaxTokens: 1234, Input: []string{"text"},
+	}}}}}
+	if err := r.configure(config.StartupOverrides{Provider: "google", Model: "synthetic-google", Thinking: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	client, ok := r.prov.(*provider.GoogleClient)
+	if !ok || client.APIKey != "synthetic-google-key" || r.authErr != nil || r.cfg.Model.API != "google-generative-ai" {
+		t.Fatal("Google model did not select the Generative AI adapter and its provider key")
+	}
+	response, err := client.Send(context.Background(), provider.Request{Model: r.cfg.Model, Thinking: "off", Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "synthetic"}}}}}, nil)
+	if err != nil || response.Text != "ok" || !seen.Load() {
+		t.Fatalf("configured Google provider request = %+v, %v (seen %v)", response, err, seen.Load())
+	}
+	client.CloseIdle()
+}
+
 func TestConfigureDispatchesDeepSeekCompletionsWithProviderKey(t *testing.T) {
 	var seen atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

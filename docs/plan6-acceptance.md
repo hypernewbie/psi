@@ -16,7 +16,7 @@
 | 1. Registry, catalog, and auth | Complete locally | P6-001–012: explicit registry, seven public catalogs, model API/endpoint and compat metadata, Pi cache policy, truthful unavailable model options, and provider-specific API-key precedence. Evidence: `go test ./internal/modelmeta ./internal/providerregistry ./internal/config ./internal/provider ./internal/app -count=1`; generator check below. |
 | 2. MiniMax and OpenCode Anthropic | Complete locally | P6-013–018: provider-specific keys/endpoints, `/anthropic/v1/messages` path, adaptive-thinking and `allowEmptySignature`, case-insensitive OpenCode session-header precedence, tool/image translation, text/thinking streams, partial-stream settlement, and restarted-session replay. Evidence below. |
 | 3. OpenAI Chat Completions | Complete locally | P6-019–030: dedicated bounded client, Pi-compatible history/tool/image translation and call-ID linking, model-specific compatibility fields, DeepSeek/Z.AI controls, OpenCode reasoning normalization, usage/finish parsing, retry/cancel/malformed-stream settlement. Unsupported mid-conversation system/tool-addition modes remain visible as unavailable. Evidence below. |
-| 4. Google Generative AI | In progress | — |
+| 4. Google Generative AI | Complete locally | P6-031–040: separate REST/SSE client, SDK-shaped `generationConfig` wire body, API-key header and route, system/user/image/tool conversion, model-specific IDs and grouped function responses, signature replay, thinking budgets/maps/clamping/off, usage and finish parsing, retries/cancellation, safe partial settlement, and OpenCode Go Google routing/session affinity. Evidence below. Pi pins SDK 2.21.0; an executable version-exact SDK comparison is not claimed. No live provider request ran. |
 | 5. OpenCode Responses | Not started | — |
 | 6. Integration, safety, and release | Not started | — |
 
@@ -46,3 +46,14 @@
 - `go test ./... -count=1` passed after slice 3. No live provider requests ran.
 
 G6-01, G6-02, and G6-03 are met by local synthetic evidence. Remaining gates stay open until their listed A6 cases have evidence. Local protocol mocks will not be described as live-provider acceptance.
+
+### Slice 4 evidence
+
+- `internal/provider/google_request_test.go` checks the REST serialization against Pi's adapter and SDK transformation: `contents`, top-level `systemInstruction` and `tools`, and `generationConfig` (not a nested `config` field). It covers system/user text, inline images, `parametersJsonSchema`, `const` to `enum`, call/response grouping, IDs, errors, and image routing.
+- `internal/provider/google_test.go` uses loopback HTTP to check `:streamGenerateContent?alt=sse`, `x-goog-api-key`, SDK-compatible `Accept: */*`, OpenCode Go's catalog route/session header, and explicit case-insensitive header precedence. Stream tests cover text/thought/signatures, usage, finish mapping, invalid and incomplete calls, secret-safe failures, retry-before-stream, no retry after stream start, and cancellation.
+- `internal/agent/google_replay_test.go` performs a Google tool/read/result round trip, reopens the JSONL v3 session, and checks that the call ID, valid thought signature, function response, response ID, and raw finish reason survive replay.
+- `internal/app/provider_config_test.go` exercises runtime model/API dispatch with `GEMINI_API_KEY`; `internal/app/completions_test.go` checks all bundled Google and OpenCode Go Google models have a valid request path or a clear unavailable reason.
+- A local capture with installed `@google/genai` 1.30.0 showed the matching REST body and route. Pi's lockfile pins 2.21.0; that package was not available offline for an executable version-exact comparison. No live provider request ran.
+- Focused and full package tests passed: `go test ./internal/provider ./internal/agent ./internal/app -count=1`.
+
+G6-04 is locally supported by synthetic evidence and pinned-source review. This does not claim live service acceptance or executable parity with the separately pinned SDK package.

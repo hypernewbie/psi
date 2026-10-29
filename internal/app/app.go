@@ -370,6 +370,13 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		completions.Headers = headers
 		completions.SessionID = r.store.Header().ID
 		client = completions
+	case "google-generative-ai":
+		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		authErr = err
+		google := provider.NewGoogleClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
+		google.Headers = headers
+		google.SessionID = r.store.Header().ID
+		client = google
 	default:
 		return fmt.Errorf("unsupported provider API %q", meta.API)
 	}
@@ -510,9 +517,8 @@ func containsUnsupported(err error) bool {
 		return false
 	}
 	message := err.Error()
-	return containsStr(message, "unsupported provider") ||
+	return containsStr(message, "unsupported") ||
 		containsStr(message, "unavailable:") ||
-		(containsStr(message, "model ") && containsStr(message, "unsupported")) ||
 		containsStr(message, "does not support thinking")
 }
 

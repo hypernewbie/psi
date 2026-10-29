@@ -112,6 +112,7 @@ type Response struct {
 	Usage         Usage
 	Model         string
 	ResponseID    string
+	RawStopReason string
 	ThinkingLevel string
 }
 
@@ -176,6 +177,8 @@ func BuildRequest(req Request) (map[string]any, error) {
 		return BuildCodexRequest(req)
 	case "openai-completions":
 		return BuildCompletionsRequest(req)
+	case "google-generative-ai":
+		return BuildGoogleRequest(req)
 	default:
 		return nil, fmt.Errorf("unsupported provider API %q", req.Model.API)
 	}

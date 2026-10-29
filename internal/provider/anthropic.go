@@ -217,7 +217,7 @@ func classifyHTTPError(resp *http.Response) *ProviderError {
 		kind = ErrAuth
 	case resp.StatusCode == 429:
 		kind = ErrRateLimit
-	case resp.StatusCode >= 500:
+	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusConflict || resp.StatusCode >= 500:
 		kind = ErrTransport
 	case resp.StatusCode == 400 && (strings.Contains(lower, "prompt is too long") || strings.Contains(lower, "context window") || strings.Contains(lower, "maximum context")):
 		kind = ErrContextLimit

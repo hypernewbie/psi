@@ -14,9 +14,9 @@ func TestCompletionCatalogModelsHaveRequestPathsOrPreciseUnavailableReasons(t *t
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
 	checked, unavailable := 0, 0
 	selector := modelSelector(r)
-	for _, family := range []string{"deepseek", "zai", "opencode-go"} {
+	for _, family := range []string{"deepseek", "zai", "opencode-go", "google"} {
 		for _, meta := range config.BundledModels(family) {
-			if meta.API != "openai-completions" {
+			if meta.API != "openai-completions" && meta.API != "google-generative-ai" {
 				continue
 			}
 			checked++

@@ -507,6 +507,10 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 		id := resp.ResponseID
 		a.ResponseID = &id
 	}
+	if resp.RawStopReason != "" {
+		reason := resp.RawStopReason
+		a.RawStopReason = &reason
+	}
 	if resp.Model != "" && resp.Model != cfg.Model.ID {
 		model := resp.Model
 		a.ResponseModel = &model
