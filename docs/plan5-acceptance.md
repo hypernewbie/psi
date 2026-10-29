@@ -71,7 +71,7 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 
 ### Final executable
 
-Built `./psi` from clean source revision `fbbcfc05563c2c3539dbd9b8d04fbaa8c5a4f0c8` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
+Built `./psi` from clean source revision `58a8d6ba6a003b169f1b76eb3061acf6deb71260` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
 
 The copied executable passed loopback-only actual-binary journeys for all four tools, empty, offline short-session, authenticated short-session, and already-compacted no-op compaction, ordinary-budget compaction and a second-process replay/history check, cancelled compaction without session mutation, unmodified Pi dark/light and two selected custom-theme user surfaces, atomic theme reload, a mid-stream theme reload, theme save during suspend/resume with picker state retained, and provider retry status. The binary used for the temporary-path runs had the same SHA-256. No live provider request ran.
 
@@ -95,6 +95,6 @@ Gate status below refers only to evidence in this ledger. It does not claim remo
 | G5-05 | Partial | Human shell/lifecycle review and unavailable native-platform cases. |
 | G5-06 | Met locally on WSL2 Linux/amd64 | Resource profiles are not evidence for other platforms. |
 | G5-07 | Blocked/partial | Native macOS runtime, remaining Windows console/human checks, SSH/tmux review, and authorized remote CI. |
-| G5-08 | Met locally | Documentation and tested executable match source revision `fbbcfc05563c2c3539dbd9b8d04fbaa8c5a4f0c8`; external acceptance is not implied. |
+| G5-08 | Met locally | Documentation and tested executable match source revision `58a8d6ba6a003b169f1b76eb3061acf6deb71260`; external acceptance is not implied. |
 
 Local tests, cross-builds, fixtures, and PTYs do not close blocked remote, native-platform, or human gates.
