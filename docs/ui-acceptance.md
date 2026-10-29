@@ -4,7 +4,7 @@
 
 The reduced Pi regular-mode UI is implemented and the local automated suite passes. A source-parity audit is continuing; the picker and resize corrections below address gaps found after the earlier acceptance passes. Timer frames, event-boundary frames, writer frames, and maximum write size are now measured in the REPL profile; ten settled idle seconds produce no output. The release gates are still **partial**: remote CI, native macOS runtime, broader Windows Terminal interactions, and human terminal review remain outstanding. Native Windows test-package suites and the full scripted ConPTY resize-operation matrix pass.
 
-Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `82afc93` (`fix(ui): share one-row picker hints between the app and terminal`), following the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
+Reference source: Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` in the ignored `temp/pi-mono` checkout. Latest evidence revision: `c9002e3` (`test(app): prove Escape cancels a running tool and settles it`), following the picker and completion fixtures in `6257946`, the tool-row margin change in `9fd37a6`, the one-row picker hint change in `f59bf34`, the active tool-row change in `fdc7c3d`, the picker-region change in `1608df7`, and the Pi picker-parity work in `23e147e`, `22f45e6`, `31776dc`, `cb79a93`, `ebe6337`, and `4a1bb10`; the earlier quantitative UI profiles were collected at `51a56e3`, with the picker remeasurement and resize audit recorded below. The reference was source-reviewed; no pinned Pi comparison session was run.
 
 ## Evidence by level
 
@@ -71,14 +71,16 @@ New coverage added with those changes:
 - `TestActiveToolRowKeepsMarginAndOnePhysicalRow` proves the active tool row keeps the message margin and stays on one physical row.
 - `TestReplayedToolRowKeepsTheLiveMargin` proves the replayed tool row uses the same margin as the live settled row.
 - `TestPickerHelpTextFitsNarrowWidths` and `TestChoicePickerHintFitsNarrowWidths` prove the picker key hints stay on one row instead of clipping a word.
+- `TestActualCancelDuringToolKeepsCancellationVisibleAndSettles` proves Escape cancels a running tool, keeps `Cancelling…` visible until settlement, settles the call as `cancelled`, and leaves the next prompt usable.
+- `TestPlan4PiPickerFixture` and `TestPlan4PiCompletionFixture` compare the picker and completion rows with Pi-derived expected fixtures.
 - `TestActualSessionPickerSelectsAndCancelsInWorkspace` selects A → B → A across workspace sessions and restores the submitted draft when the picker is cancelled.
 - `TestBusyRunIgnoresOrdinaryKeysWithoutQueueingThem` proves ordinary keys are ignored during an active run.
 - `TestStartupHeaderUsesPiCompactHints` checks Pi's compact startup hints.
 - `TestCompactionActivityFollowsPiPhases`, `TestPickerNoMatchTreatmentAndPointerFollowPiComponents`, `TestEditorBorderFollowsPiLayout`, and `TestIndexedFallbackMatchesPiPaletteSlots` cover the transcribed wording, layout, and palette slots.
 
-### Platform and delivery evidence at `82afc93`
+### Platform and delivery evidence at `c9002e3`
 
-- Native Windows: the `internal/app` and `internal/terminal` package binaries passed again on Windows 11 `10.0.26200.8875` through WSL2 interop after the picker-parity, key-ownership, tool-row, and hint work. `TestActualWindowsConPTYInteraction` passed two consecutive runs over the six-size matrix.
+- Native Windows: the `internal/app` and `internal/terminal` package binaries passed again on Windows 11 `10.0.26200.8875` through WSL2 interop after the picker-parity, key-ownership, tool-row, hint, and fixture work. `TestActualWindowsConPTYInteraction` passed three consecutive runs over the six-size matrix.
 - Cross-builds: `GOOS=windows go vet ./...`, `GOOS=windows go build ./...`, the Darwin amd64/arm64 package builds, and Darwin app/terminal test-binary compilation passed. macOS binaries were not executed.
 - CI: the workflow now runs the race suite and the acceptance-tagged idle, metadata, and compacted-session profiles on Linux and macOS. The Windows race step stays out because that runner has no cgo. The workflow itself was not executed by a remote runner.
 
@@ -101,6 +103,14 @@ internal/app/selectors.go              8e5a45ea167c8869d17ba733499034cf9e7f9f296
 internal/app/app.go                    8928e6458d972592251ac23492441870e84720c45971d0a20091e997d6cbee1b
 internal/app/helpers.go                fd29926f236318bb67416e181644ff840b95a6c93f69581f1c8c76a836a63293
 internal/app/replay.go                 3c03198aacd46f1f9eaf39b25af088d3984302e4b18d90e195274c31aa063694
+internal/app/review_test.go             68b7e10c7c1b786bf3e2e72b762a3cb172430ab410252696d9ffc3e6d59c32a9
+internal/app/resume_test.go             b6527a5add4652cdde431d6aec6e40c48135ef813f78aaf3704eed910e8c8e93
+internal/app/selectors_fixture_test.go  314331785099fda3e6c783490c168386d618fefcc0d3a4ed5319a00756cb707a
+internal/app/testdata/plan4-pi-pickers.json 43760215dd73da24a421852a486e80e16e2a560f7dceaff5e1335ebb3b93ba11
+internal/terminal/presentation_fixtures_test.go d488a523f1d203fdcbdb16273f11207e4a1a250c6d56127689e1be045f4772fe
+internal/terminal/testdata/plan4-pi-completion.json e733af5ede9d711d32adbe94859909d8f1ffd14e1a84ccee4dade300d7153e28
+internal/terminal/stream_composition_test.go ad4641bc51b60ad1de5ccfacb353abf4c250ac8ca51e44b88c2235eff20e9ad5
+internal/terminal/status_test.go         3fc2811e5ac75d6365dc53cb9926a0e72c26ec5dc6f04ccaa99c4d88d3b364d8
 ```
 
 ## Resource profiles
@@ -163,7 +173,7 @@ go test ./internal/terminal -run '^$' -bench '^BenchmarkMarkdownStream1MiB$' -be
 
 ### Final executable provenance
 
-Built from repository tree revision `82afc93` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
+Built from repository tree revision `c9002e3` with `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o psi ./cmd/psi` on Linux amd64 using Go 1.26.4. This replaces the stale ignored root executable. The delivered binary was driven in a PTY to confirm the startup header, the picker region with its `> ` query row, scrollback-stable filtering, and draft restoration. The documentation-only ledger update follows this build.
 
 ```text
 SHA-256  bb8b541987c190a01dc18f62ca6560d46ab3770338ff460e619bec9fbe06c78a
