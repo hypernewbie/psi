@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"psi/internal/config"
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/terminal"
@@ -222,5 +223,19 @@ func TestFailedModelPersistenceKeepsPriorRuntimeAndDraft(t *testing.T) {
 	r.draw(console)
 	if r.footerSnapshot.Model != oldFooter.Model || r.footerSnapshot.Provider != oldFooter.Provider {
 		t.Fatalf("failed model persistence changed the footer: %+v", r.footerSnapshot)
+	}
+}
+
+// Pi's compaction indicator names the phase and the cancellation binding.
+func TestCompactionActivityFollowsPiPhases(t *testing.T) {
+	cases := map[string]string{
+		event.CompactionManual:    "Compacting context… (Esc/Ctrl+C cancel)",
+		event.CompactionThreshold: "Auto-compacting… (Esc/Ctrl+C cancel)",
+		event.CompactionOverflow:  "Context overflow detected, Auto-compacting… (Esc/Ctrl+C cancel)",
+	}
+	for state, want := range cases {
+		if got := compactionActivity(state); got != want {
+			t.Fatalf("compaction %s: got %q, want %q", state, got, want)
+		}
 	}
 }

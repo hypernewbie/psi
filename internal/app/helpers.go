@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
 )
@@ -67,4 +68,18 @@ func continuable(proj *session.Projection) string {
 		return "blocked: unresolved tool calls (inspect, then new session or copy)"
 	}
 	return "ok"
+}
+
+// compactionActivity returns Pi's compaction indicator text for a compaction
+// phase. Pi distinguishes a manual compaction from an automatic one and names
+// the overflow reason.
+func compactionActivity(state string) string {
+	switch state {
+	case event.CompactionThreshold:
+		return "Auto-compacting… (Esc/Ctrl+C cancel)"
+	case event.CompactionOverflow:
+		return "Context overflow detected, Auto-compacting… (Esc/Ctrl+C cancel)"
+	default:
+		return "Compacting context… (Esc/Ctrl+C cancel)"
+	}
 }

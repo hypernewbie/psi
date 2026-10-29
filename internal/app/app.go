@@ -780,14 +780,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		case event.CompactionStart:
 			r.state = StateCompacting
-			message := "Compacting context… (Esc/Ctrl+C cancel)"
-			switch ev.State {
-			case event.CompactionThreshold:
-				message = "Auto-compacting context… (Esc/Ctrl+C cancel)"
-			case event.CompactionOverflow:
-				message = "Context overflow; compacting… (Esc/Ctrl+C cancel)"
-			}
-			setActivity(message)
+			setActivity(compactionActivity(ev.State))
 		case event.CompactionEnd:
 			if r.state != StateCancelling {
 				r.state = StateWaiting
