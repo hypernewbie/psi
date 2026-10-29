@@ -1,0 +1,176 @@
+{
+  "reference": "Pinned Pi dark theme; beforeTheme is the indexed fallback, selectedDarkTheme is the resolved Pi palette.",
+  "sizes": [
+    {
+      "size": "120x40",
+      "beforeTheme": [
+        "-- user --",
+        "  › Create a concise report.                                                                                           ",
+        "",
+        "-- assistant --",
+        "  \u001b[33;1mProgress\u001b[0m",
+        "",
+        "  \u001b[35m- \u001b[0mPreserve the current task.",
+        "",
+        "-- tool --",
+        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0msrc/main.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "-- metadata --",
+        "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted                                                                                       ",
+        ""
+      ],
+      "selectedDarkTheme": [
+        "-- user --",
+        "\u001b[38;5;254m\u001b[48;5;23m  › Create a concise report.\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m                                                                                           \u001b[49m\u001b[39m",
+        "",
+        "-- assistant --",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;172m\u001b[1mProgress\u001b[22m\u001b[39m",
+        "",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
+        "",
+        "-- tool --",
+        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145msrc/main.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "-- metadata --",
+        "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m                                                                                       \u001b[49m\u001b[39m",
+        ""
+      ]
+    },
+    {
+      "size": "80x24",
+      "beforeTheme": [
+        "-- user --",
+        "  › Create a concise report.                                                   ",
+        "",
+        "-- assistant --",
+        "  \u001b[33;1mProgress\u001b[0m",
+        "",
+        "  \u001b[35m- \u001b[0mPreserve the current task.",
+        "",
+        "-- tool --",
+        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0msrc/main.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "-- metadata --",
+        "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted                                               ",
+        ""
+      ],
+      "selectedDarkTheme": [
+        "-- user --",
+        "\u001b[38;5;254m\u001b[48;5;23m  › Create a concise report.\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m                                                   \u001b[49m\u001b[39m",
+        "",
+        "-- assistant --",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;172m\u001b[1mProgress\u001b[22m\u001b[39m",
+        "",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
+        "",
+        "-- tool --",
+        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145msrc/main.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "-- metadata --",
+        "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m                                               \u001b[49m\u001b[39m",
+        ""
+      ]
+    },
+    {
+      "size": "60x16",
+      "beforeTheme": [
+        "-- user --",
+        "  › Create a concise report.                               ",
+        "",
+        "-- assistant --",
+        "  \u001b[33;1mProgress\u001b[0m",
+        "",
+        "  \u001b[35m- \u001b[0mPreserve the current task.",
+        "",
+        "-- tool --",
+        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0msrc/main.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "-- metadata --",
+        "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted                           ",
+        ""
+      ],
+      "selectedDarkTheme": [
+        "-- user --",
+        "\u001b[38;5;254m\u001b[48;5;23m  › Create a concise report.\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m                               \u001b[49m\u001b[39m",
+        "",
+        "-- assistant --",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;172m\u001b[1mProgress\u001b[22m\u001b[39m",
+        "",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
+        "",
+        "-- tool --",
+        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145msrc/main.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "-- metadata --",
+        "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m                           \u001b[49m\u001b[39m",
+        ""
+      ]
+    },
+    {
+      "size": "40x12",
+      "beforeTheme": [
+        "-- user --",
+        "  › Create a concise report.           ",
+        "",
+        "-- assistant --",
+        "  \u001b[33;1mProgress\u001b[0m",
+        "",
+        "  \u001b[35m- \u001b[0mPreserve the current task.",
+        "",
+        "-- tool --",
+        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[35;1mread\u001b[0m\u001b[2m  \u001b[0m…n.goL4-L8\u001b[33m · outcome unknown\u001b[0m",
+        "-- metadata --",
+        "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mContext compacted       ",
+        ""
+      ],
+      "selectedDarkTheme": [
+        "-- user --",
+        "\u001b[38;5;254m\u001b[48;5;23m  › Create a concise report.\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m           \u001b[49m\u001b[39m",
+        "",
+        "-- assistant --",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;172m\u001b[1mProgress\u001b[22m\u001b[39m",
+        "",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the current task.\u001b[39m",
+        "",
+        "-- tool --",
+        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;254m\u001b[1mread\u001b[22m\u001b[39m\u001b[38;5;145m  \u001b[39m\u001b[38;5;145m…n.goL4-L8\u001b[39m\u001b[38;5;172m · outcome unknown\u001b[39m",
+        "-- metadata --",
+        "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mContext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m       \u001b[49m\u001b[39m",
+        ""
+      ]
+    },
+    {
+      "size": "20x6",
+      "beforeTheme": [
+        "-- user --",
+        "  › Create a concis",
+        "  report.          ",
+        "",
+        "-- assistant --",
+        "  \u001b[33;1mProgress\u001b[0m",
+        "",
+        "  \u001b[35m- \u001b[0mPreserve the",
+        "    current task.",
+        "",
+        "-- tool --",
+        "\u001b[2m   \u001b[0m\u001b[33m?\u001b[0m\u001b[2m \u001b[0m\u001b[33m · outcome unk\u001b[0m",
+        "-- metadata --",
+        "\u001b[2m  \u001b[0m\u001b[2m[compaction] \u001b[0mCont",
+        "  ext compacted    ",
+        ""
+      ],
+      "selectedDarkTheme": [
+        "-- user --",
+        "\u001b[38;5;254m\u001b[48;5;23m  › Create a concis\u001b[49m\u001b[39m",
+        "\u001b[38;5;254m\u001b[48;5;23m  report.\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;23m          \u001b[49m\u001b[39m",
+        "",
+        "-- assistant --",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;172m\u001b[1mProgress\u001b[22m\u001b[39m",
+        "",
+        "\u001b[38;5;254m  \u001b[39m\u001b[38;5;140m- \u001b[39m\u001b[38;5;254mPreserve the\u001b[39m",
+        "\u001b[38;5;254m    current task.\u001b[39m",
+        "",
+        "-- tool --",
+        "\u001b[38;5;145m   \u001b[39m\u001b[38;5;172m?\u001b[39m\u001b[38;5;145m \u001b[39m\u001b[38;5;172m · outcome unk\u001b[39m",
+        "-- metadata --",
+        "\u001b[38;5;102m\u001b[48;5;59m  \u001b[49m\u001b[39m\u001b[38;5;140m\u001b[48;5;59m[compaction] \u001b[49m\u001b[39m\u001b[38;5;145m\u001b[48;5;59mCont\u001b[49m\u001b[39m",
+        "\u001b[38;5;145m\u001b[48;5;59m  ext compacted\u001b[49m\u001b[39m\u001b[38;5;254m\u001b[48;5;59m    \u001b[49m\u001b[39m",
+        ""
+      ]
+    }
+  ]
+}

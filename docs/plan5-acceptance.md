@@ -41,6 +41,7 @@ Role-aware output now covers user surfaces, assistant Markdown, metadata, notice
 | Level | Evidence | Result |
 |---|---|---|
 | Component | Theme parser/color/system/catalog tests; display, surface, picker, Markdown, and reply fixtures | Pass. |
+| Visual fixtures | `plan5-color-matrix.json` pairs indexed fallback and selected pinned dark-theme user, assistant, read-preview, and metadata rows at 120x40, 80x24, 60x16, 40x12, and 20x6 | Pass as colored component snapshots; this is not a human visual review. |
 | Actual app | Two distinct custom-theme user surfaces, late appearance reply, atomic-save completion reload, explicit `/reload`, open model-picker query/current selection/cursor, invalid-save last-good retention and one warning, theme save while suspended with picker focus retained on resume, and a mid-stream theme change that preserves the committed sentinel while restyling the active tail | Pass in isolated Unix PTYs. |
 | Watch lifecycle | Eight atomic saves coalesce to one notification; directory creation, unselected-file filtering, debounce, close, suspend/resume with a pending selected-theme save, and 100-cycle goroutine/file-descriptor checks | Pass locally. |
 | No-color | Theme serializer and replay tests assert no generated SGR while retaining text/geometry | Pass locally; human readability remains open. |

@@ -10,8 +10,8 @@ import (
 	pitheme "psi/internal/theme"
 )
 
-// ThemeToken is the small semantic style vocabulary used by psi's Pi-derived
-// regular-mode components. It is not a user-configurable theme engine.
+// ThemeToken names the Pi semantic roles used by psi's regular-mode components.
+// The selected, resolved theme supplies their colors.
 type ThemeToken string
 
 const (
