@@ -1101,9 +1101,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 				}
 				before := console.Editor.Text()
-				_, _, quit, _ := console.Handle(input, false)
-				if quit {
-					return console.Err()
+				if key == "\x04" {
+					// Ctrl+D stays with the focused picker. It deletes forward in
+					// the query and never exits the session.
+					console.Editor.Delete()
+				} else {
+					_, _, quit, _ := console.Handle(input, false)
+					if quit {
+						return console.Err()
+					}
 				}
 				if query := console.Editor.Text(); query != before {
 					r.selector.SetFilter(query)

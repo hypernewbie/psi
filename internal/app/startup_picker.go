@@ -188,9 +188,15 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 				}
 			}
 			before := console.Editor.Text()
-			_, _, quit, _ := console.Handle(input, false)
-			if quit {
-				return nil, true, nil
+			if string(input.Key) == "\x04" {
+				// Ctrl+D stays with the focused picker. It deletes forward in the
+				// query and never ends the startup selection.
+				console.Editor.Delete()
+			} else {
+				_, _, quit, _ := console.Handle(input, false)
+				if quit {
+					return nil, true, nil
+				}
 			}
 			if query := console.Editor.Text(); query != before {
 				selector.SetFilter(query)

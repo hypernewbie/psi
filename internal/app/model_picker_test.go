@@ -287,3 +287,27 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	q.write("/quit\r")
 	q.finish()
 }
+
+// Ctrl+D stays with the focused picker. It must never end the session while
+// a picker owns the input.
+func TestActualCtrlDInPickerDoesNotExitTheSession(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
+	q.prompt()
+	q.write("/model\r")
+	q.wait("Models ·")
+	q.prompt()
+	q.write("\x04")
+	q.prompt()
+	if !strings.Contains(q.screen.Text(), "Models ·") {
+		t.Fatalf("Ctrl+D closed the picker instead of staying in the query: %q", q.screen.Text())
+	}
+	q.write("\x03")
+	q.prompt()
+	q.write("\x03")
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+}
