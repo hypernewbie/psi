@@ -41,6 +41,31 @@ func (m *VTModel) Clear() {
 	m.CursorRow, m.CursorCol, m.wrap = 0, 0, false
 }
 
+// Resize models a viewport change while retaining visible rows. It does not
+// reflow text; tests use it to verify that an invalidated owned tail cannot
+// erase or duplicate already appended output.
+func (m *VTModel) Resize(width, height int) {
+	width, height = max(1, width), max(1, height)
+	oldRows := m.Rows
+	start := 0
+	if height < len(oldRows) {
+		start = len(oldRows) - height
+		for _, row := range oldRows[:start] {
+			m.Scrollback = append(m.Scrollback, rowText(row))
+		}
+	}
+	rows := make([][]rune, height)
+	for i := range rows {
+		rows[i] = make([]rune, width)
+		if start+i < len(oldRows) {
+			copy(rows[i], oldRows[start+i][:min(width, len(oldRows[start+i]))])
+		}
+	}
+	m.CursorRow = min(max(0, m.CursorRow-start), height-1)
+	m.CursorCol = min(m.CursorCol, width-1)
+	m.Width, m.Height, m.Rows, m.wrap = width, height, rows, false
+}
+
 func rowText(row []rune) string {
 	var b strings.Builder
 	for _, r := range row {

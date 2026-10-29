@@ -41,8 +41,8 @@ Role-aware output now covers user surfaces, assistant Markdown, metadata, notice
 | Level | Evidence | Result |
 |---|---|---|
 | Component | Theme parser/color/system/catalog tests; display, surface, picker, Markdown, and reply fixtures | Pass. |
-| Actual app | Two distinct custom-theme user surfaces, late appearance reply, atomic-save completion reload, explicit `/reload`, open model-picker query/current selection/cursor, invalid-save last-good retention and one warning, and a mid-stream theme change that preserves the committed sentinel while restyling the active tail | Pass in isolated Unix PTYs. |
-| Watch lifecycle | Eight atomic saves coalesce to one notification; directory creation, unselected-file filtering, debounce, close, and 100-cycle goroutine/file-descriptor checks | Pass locally. |
+| Actual app | Two distinct custom-theme user surfaces, late appearance reply, atomic-save completion reload, explicit `/reload`, open model-picker query/current selection/cursor, invalid-save last-good retention and one warning, theme save while suspended with picker focus retained on resume, and a mid-stream theme change that preserves the committed sentinel while restyling the active tail | Pass in isolated Unix PTYs. |
+| Watch lifecycle | Eight atomic saves coalesce to one notification; directory creation, unselected-file filtering, debounce, close, suspend/resume with a pending selected-theme save, and 100-cycle goroutine/file-descriptor checks | Pass locally. |
 | No-color | Theme serializer and replay tests assert no generated SGR while retaining text/geometry | Pass locally; human readability remains open. |
 | Human/platform | Native selection/copy, perceived flicker, native macOS, and Windows Terminal review | Not performed. |
 
@@ -70,9 +70,9 @@ Default replay displays a compact compaction marker. `/history` explicitly loads
 
 ### Final executable
 
-Built `./psi` from clean source revision `a34b1803aa14cb6faf9ff86507ef50861c9f9976` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
+Built `./psi` from clean source revision `2cf2d7518d3b87c44a63102d260be4ba3de3db36` on WSL2 Linux/amd64 with Go 1.26.4, using `CGO_ENABLED=0`, `-trimpath`, and `-buildvcs=false`. SHA-256: `5a294b78ade259fea27c3f8a6f03fb39773c8aa51da9e5a994dbcee31bbab15b`. The executable is an ignored build artifact, not a tracked source file.
 
-The copied executable passed loopback-only actual-binary journeys for all four tools, ordinary-budget compaction and a second-process replay/history check, two selected custom-theme user surfaces, atomic theme reload, a mid-stream theme reload, and provider retry status. The binary used for the temporary-path runs had the same SHA-256. No live provider request ran.
+The copied executable passed loopback-only actual-binary journeys for all four tools, empty and short-session no-op compaction, ordinary-budget compaction and a second-process replay/history check, cancelled compaction without session mutation, two selected custom-theme user surfaces, atomic theme reload, a mid-stream theme reload, and provider retry status. The binary used for the temporary-path runs had the same SHA-256. No live provider request ran.
 
 Cross-build and test-binary compilation passed for windows/amd64 and darwin/amd64 and darwin/arm64. These checks do not establish native runtime behavior.
 

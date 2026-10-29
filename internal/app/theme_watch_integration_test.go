@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -103,6 +106,56 @@ func TestUserThemeAtomicSaveReloadsOpenCompletionWithoutLosingQuery(t *testing.T
 	if !strings.Contains(q.raw.String(), thirdAccent) {
 		t.Fatalf("explicit /reload did not install the updated palette %q", thirdAccent)
 	}
+	q.write("\x15/quit\r")
+	q.finish()
+}
+
+func TestThemeWatchDuringSuspendResumePreservesOpenPicker(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	themeDir := filepath.Join(agentDir, "themes")
+	if err := os.MkdirAll(themeDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	themePath := filepath.Join(themeDir, "selected.json")
+	writeAccentTheme(t, themePath, "#123456", false)
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--no-session", "--use-theme", "selected")
+	q.prompt()
+	q.write("/model\r")
+	q.wait("Models ·")
+	q.write("anth")
+	q.prompt()
+	if !strings.Contains(q.screen.Text(), "anth") {
+		t.Fatalf("model picker query missing before suspend: %q", q.screen.Text())
+	}
+	q.write("\x1a")
+	q.wait("\x1b[?2004l")
+	deadline := time.Now().Add(3 * time.Second)
+	stopped := false
+	for time.Now().Before(deadline) {
+		state, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(q.cmd.Process.Pid)).Output()
+		if err == nil && len(state) > 0 && state[0] == 'T' {
+			stopped = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !stopped {
+		t.Fatal("app did not suspend before the theme save")
+	}
+	newAccent := writeAccentTheme(t, themePath, "#abcdef", true)
+	if err := q.cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	q.wait(newAccent)
+	q.prompt()
+	screen := q.screen.Text()
+	if !strings.Contains(screen, "Models") || !strings.Contains(screen, "anth") || !strings.Contains(screen, "→ ✓ m [anthropic]") {
+		t.Fatalf("suspend/resume or theme reload lost the open picker state: %q", screen)
+	}
+	q.write("\x03")
+	q.prompt()
 	q.write("\x15/quit\r")
 	q.finish()
 }
