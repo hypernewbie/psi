@@ -122,3 +122,82 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.write("/quit\r")
 	q.finish()
 }
+
+// The picker replaces the editor region, like Pi's showSelector. Navigation
+// and filtering must not append another result page to native scrollback, and
+// a cancelled picker must restore the submitted draft.
+func TestActualPickerReplacesTheEditorWithoutFloodingScrollback(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "synthetic recalled prompt"}}); err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", store.File())
+	q.prompt()
+	q.write("/model\r")
+	q.wait("Models ·")
+	q.prompt()
+	screen := q.screen.Text()
+	if !hasQueryRow(screen) {
+		t.Fatalf("picker did not own a search query row: %q", screen)
+	}
+	if borders := countSolidBorderRows(screen); borders != 2 {
+		t.Fatalf("picker rendered an extra editor border pair: %d border rows in %q", borders, screen)
+	}
+	before := countRowsContaining(q.screen.Scrollback, "→ ")
+	q.write("gpt")
+	q.wait("matches")
+	q.prompt()
+	q.write("\x1b[B") // select the next model
+	q.prompt()
+	q.write("\x1b[A") // return to the previous model
+	q.prompt()
+	if after := countRowsContaining(q.screen.Scrollback, "→ "); after > before {
+		t.Fatalf("picker navigation appended result rows to the scrollback: %d -> %d", before, after)
+	}
+	q.write("\x03") // cancel the picker and restore its submitted draft
+	q.wait("/model")
+	q.prompt()
+	if !strings.Contains(q.screen.Text(), "/model") {
+		t.Fatalf("cancelled picker did not restore its submitted draft: %q", q.screen.Text())
+	}
+	q.write("\x03") // clear the restored draft
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+}
+
+func countSolidBorderRows(screen string) int {
+	count := 0
+	for _, row := range strings.Split(screen, "\n") {
+		trimmed := strings.TrimSpace(row)
+		if trimmed != "" && strings.Trim(trimmed, "─") == "" {
+			count++
+		}
+	}
+	return count
+}
+
+func countRowsContaining(rows []string, want string) int {
+	count := 0
+	for _, row := range rows {
+		if strings.Contains(row, want) {
+			count++
+		}
+	}
+	return count
+}
+
+func hasQueryRow(screen string) bool {
+	for _, row := range strings.Split(screen, "\n") {
+		if strings.HasPrefix(row, ">") {
+			return true
+		}
+	}
+	return false
+}
