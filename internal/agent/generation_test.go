@@ -17,7 +17,7 @@ import (
 func TestFailedContextSendsNoRequest(t *testing.T) {
 	store, _, fake, loop, _ := testSetup(t)
 	fake.Responses = []*provider.Response{{Text: "done", StopReason: "stop"}}
-	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), MaxTurns: 5, System: "base"}
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
 	if err := loop.Submit(context.Background(), "hello", cfg); err != nil {
 		t.Fatal(err)
 	}

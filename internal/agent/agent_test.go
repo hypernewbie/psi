@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func toolDefs() []provider.ToolDef {
 func TestSubmitAndFinalAnswer(t *testing.T) {
 	_, _, fake, loop, _ := testSetup(t)
 	fake.Responses = []*provider.Response{{Text: "done", StopReason: "stop"}}
-	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), MaxTurns: 5, System: "base"}
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
 	ctx := context.Background()
 	if err := loop.Submit(ctx, "hello", cfg); err != nil {
 		t.Fatal(err)
@@ -164,16 +165,28 @@ func TestCancellation(t *testing.T) {
 	}
 }
 
-func TestRunGuard(t *testing.T) {
-	_, _, fake, loop, _ := testSetup(t)
-	// Always tool-use: should hit guard.
-	for i := 0; i < 30; i++ {
-		fake.Responses = append(fake.Responses, &provider.Response{Text: "again", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: string(rune('a' + i)), Name: "bash", Arguments: map[string]any{"command": "true"}}}})
+func TestToolChainRunsPastTwentyFiveTurnsWithoutACap(t *testing.T) {
+	// Pi's agent loop has no turn cap. A chain of sequential tool calls is
+	// legitimate work, so the run must continue past any fixed turn count and
+	// end only when the model stops calling tools.
+	store, _, fake, loop, _ := testSetup(t)
+	const chain = 30
+	for i := 0; i < chain; i++ {
+		fake.Responses = append(fake.Responses, &provider.Response{Text: "again", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: fmt.Sprintf("call-%02d", i), Name: "bash", Arguments: map[string]any{"command": "true"}}}})
 	}
-	cfg := Config{Model: modelMeta(), Tools: toolDefs(), MaxTurns: 5}
-	err := loop.Submit(context.Background(), "loop", cfg)
-	if err == nil || !strings.Contains(err.Error(), "run guard") {
-		t.Errorf("guard: %v", err)
+	fake.Responses = append(fake.Responses, &provider.Response{Text: "done", StopReason: "stop"})
+	cfg := Config{Model: modelMeta(), Tools: toolDefs()}
+	if err := loop.Submit(context.Background(), "loop", cfg); err != nil {
+		t.Fatalf("long tool chain was cut short: %v", err)
+	}
+	results := 0
+	for _, entry := range store.Entries() {
+		if entry.Kind == "message" && entry.Message != nil && entry.Message.Message.Role == "toolResult" {
+			results++
+		}
+	}
+	if results != chain {
+		t.Fatalf("tool results persisted = %d, want %d", results, chain)
 	}
 }
 

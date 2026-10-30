@@ -47,7 +47,7 @@ func TestF12AgentPersistsPartialUsageExactlyOnce(t *testing.T) {
 	defer server.Close()
 	_, _, _, loop, _ := testSetup(t)
 	loop.prov = provider.NewClient(server.URL, "test-key", 0, 5*time.Second)
-	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), MaxTurns: 3, System: "base"}
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
 	err := loop.Submit(context.Background(), "hello", cfg)
 	if err == nil || !strings.Contains(err.Error(), "interrupted") {
 		t.Fatalf("expected interruption, got %v", err)

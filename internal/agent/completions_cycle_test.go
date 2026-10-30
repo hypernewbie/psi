@@ -67,7 +67,7 @@ func TestDeepSeekCompletionsToolCycleUsesCompleteCallsAndReplaysReasoning(t *tes
 			"requiresReasoningContentOnAssistantMessages": json.RawMessage(`true`),
 		}}
 	loop := New(store, tools.NewRegistry(cwd), client, nil)
-	cfg := Config{Model: model, Thinking: "high", Tools: toolDefs(), MaxTurns: 3, System: "synthetic system"}
+	cfg := Config{Model: model, Thinking: "high", Tools: toolDefs(), System: "synthetic system"}
 	if err := loop.Submit(context.Background(), "read fixture.txt", cfg); err != nil {
 		t.Fatal(err)
 	}

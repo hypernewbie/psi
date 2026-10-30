@@ -136,7 +136,7 @@ func TestSubmitDefersMessageOutputUntilApplicationClassification(t *testing.T) {
 	c.Draw()
 	fmt.Fprintln(RawOutput{W: c}, "a local notice")
 	c.Draw()
-	want := "committed sentinel\na local notice\n─"
+	want := "committed sentinel\na local notice\n\n─"
 	if !strings.HasPrefix(vt.Text(), want) {
 		t.Fatalf("screen:\n%s\nwant:\n%s", vt.Text(), want)
 	}

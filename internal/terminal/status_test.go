@@ -90,7 +90,7 @@ func TestF10UnsupportedNameThroughConsole(t *testing.T) {
 			t.Fatalf("owned row escapes: %q", row)
 		}
 	}
-	if len(c.visibleTail) < 3 || !strings.Contains(Sanitize(c.visibleTail[0]), "pwn second: running") {
+	if len(c.visibleTail) < 3 || !strings.Contains(Sanitize(c.visibleTail[1]), "pwn second: running") {
 		t.Fatalf("activity missing from bordered editor: %q", c.visibleTail)
 	}
 	// A running status emits nothing, then settlement commits one line.

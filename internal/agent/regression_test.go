@@ -112,7 +112,6 @@ func TestAutomaticCompactionNoWorkDoesNotRetryProvider(t *testing.T) {
 		AutoCompact:      true,
 		ReserveTokens:    2000,
 		KeepRecentTokens: 20000,
-		MaxTurns:         3,
 	}
 	if err := loop.Submit(context.Background(), "short request", cfg); err != nil {
 		t.Fatal(err)

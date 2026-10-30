@@ -90,7 +90,9 @@ func TestPlan4PiEditorAndFooterFixture(t *testing.T) {
 	if len(fixture.PlainRows) <= 3 {
 		t.Fatalf("component fixture is missing the footer path row: %q", fixture.PlainRows)
 	}
-	wantRows := append([]string(nil), fixture.PlainRows...)
+	// The fixture pins Pi's editor component. The interactive layout adds the
+	// constant widget spacer above it, so prepend that row before comparing.
+	wantRows := append([]string{""}, fixture.PlainRows...)
 	wantRows[3] = strings.ReplaceAll(wantRows[3], "/", string(filepath.Separator))
 	view := ComposeEditorView(40, 12, nil, 0, fixture.Snapshot, "")
 	if len(view.Rows) != len(wantRows) {

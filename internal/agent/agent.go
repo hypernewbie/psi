@@ -25,7 +25,6 @@ type Config struct {
 	Model            provider.ModelMeta
 	Thinking         string
 	Tools            []provider.ToolDef
-	MaxTurns         int
 	MaxTokens        int
 	System           string
 	AutoCompact      bool
@@ -202,15 +201,14 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 }
 
 func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
-	maxTurns := cfg.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 25
-	}
+	// Pi's agent loop has no turn cap: it runs until the model stops calling
+	// tools, the provider errors, or the user cancels. A legitimate chain of
+	// sequential tool calls is unbounded, so psi must not invent a limit.
 	outcome := event.OutcomeDurable
 	l.sink(event.Event{Type: event.RunStart})
 	defer func() { l.sink(event.Event{Type: event.RunEnd, Outcome: outcome, Err: runErr}) }()
 	recovery := &Recovery{}
-	for turn := 0; turn < maxTurns; turn++ {
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -327,7 +325,6 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			return err
 		}
 	}
-	return fmt.Errorf("run guard: exceeded %d turns (possible endless tool cycle)", maxTurns)
 }
 
 // The app's 64-item event queue retains at most 512 KiB of text payload.

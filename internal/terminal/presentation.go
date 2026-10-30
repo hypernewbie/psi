@@ -423,7 +423,8 @@ func ComposeConsoleViewWithRows(width, height int, buf []rune, pos int, snapshot
 }
 
 // EditorComponentRowBudget leaves room for the focused input row, borders,
-// and footer. Picker layout and composition must use the same height budget.
+// the widget spacer above them, and footer. Picker layout and composition must
+// use the same height budget.
 func EditorComponentRowBudget(height int) int {
 	if height <= 2 {
 		return 0
@@ -432,7 +433,7 @@ func EditorComponentRowBudget(height int) int {
 	if height < 8 {
 		footer = 1
 	}
-	return max(0, height-footer-3)
+	return max(0, height-footer-4)
 }
 
 // ComposeConsoleViewComponents places an active fragment above the editor,
@@ -474,7 +475,11 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	if len(fragmentRows) > fragmentBudget {
 		fragmentRows = fragmentRows[len(fragmentRows)-fragmentBudget:]
 	}
-	bodyBudget := max(1, height-footerCount-borderCount-len(fragmentRows)-len(completionRows))
+	// Pi keeps one Spacer row above the editor container at all times
+	// (renderWidgetContainer: spacerWhenEmpty), so the transcript, status, and
+	// fragment rows never touch the editor's top border.
+	spacerCount := 1
+	bodyBudget := max(1, height-footerCount-borderCount-spacerCount-len(fragmentRows)-len(completionRows))
 	bodyBudget = min(bodyBudget, preferred)
 	bodyBudget = min(bodyBudget, len(layout.Rows))
 	start := max(0, layout.CursorRow-bodyBudget+1)
@@ -523,9 +528,10 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	for _, row := range fragmentRows {
 		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
 	}
+	rows, cells = append(rows, ""), append(cells, 0)
 	top, topWidth := borderRow(true)
 	rows, cells = append(rows, top), append(cells, topWidth)
-	cursorRow := len(fragmentRows) + layout.CursorRow - start + 1
+	cursorRow := len(fragmentRows) + spacerCount + layout.CursorRow - start + 1
 	for i := start; i < end; i++ {
 		plain := SanitizeStatusRow(layout.Rows[i])
 		clipped := strings.Repeat(" ", editorPad) + TruncateToWidth(plain, max(0, width-1-editorPad))
@@ -637,11 +643,14 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 	borderText := border.SerializeWithTheme(snapshot.Theme, noColor)
 	borderCells := border.Width()
 
-	rows := make([]string, 0, len(fragment)+queryRows+chromeRows+bodyCount+footerCount)
+	rows := make([]string, 0, len(fragment)+queryRows+chromeRows+bodyCount+footerCount+1)
 	cells := make([]int, 0, cap(rows))
 	for _, row := range fragment {
 		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
 	}
+	// Pi's widget spacer stays above the editor container even when a selector
+	// replaces the editor, so the picker border keeps the same leading gap.
+	rows, cells = append(rows, ""), append(cells, 0)
 	cursorRow, cursorCol := len(rows), 0
 	if keepTop {
 		rows, cells = append(rows, borderText), append(cells, borderCells)

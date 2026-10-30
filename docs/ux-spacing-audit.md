@@ -29,6 +29,7 @@ Psi retains compact tool summaries and native scrollback. This audit does not co
 | Thinking/model feedback | Each successful change appended another chat log. | The footer shows the selection without appending a success log. Errors remain visible. |
 | Configuration replay | Restart and history showed each model/thinking record as a message. | The records remain durable but do not enter the chat transcript. |
 | Unchanged thinking | Repeated selection added redundant records. Cycling a model with one level also added records. | An unchanged level adds no record. Single-level cycling does nothing. |
+| Editor box gap | The input box border sat directly on the last committed row. A blank appeared only when that row ended with padding. | One constant blank row sits directly above the editor and picker borders, in every state. This copies Pi's `widgetContainerAbove` spacer, which is always present. |
 
 The committed-row tracker retains only boundary state. It does not retain transcript bodies or count editor, picker, tool, or thinking rows as committed output.
 
@@ -38,7 +39,7 @@ The gap correction does not collapse blank lines inside Markdown or code. Explic
 
 - `internal/app/ux_spacing_review_pty_test.go` compares the same transcript across live output, `/history all`, `/history 2`, and restart. It includes separate tool-only responses, a blank chunk, a code block, custom indentation, and a second turn.
 
-- `internal/terminal/spacing_review_test.go` covers idempotent gaps, pending frames, styled blank rows, repeated stream close, blank chunks, color modes, and first-frame display geometry.
+- `internal/terminal/spacing_review_test.go` covers idempotent gaps, pending frames, styled blank rows, repeated stream close, blank chunks, color modes, first-frame display geometry, and the constant border spacer across startup, committed rows, streaming, thinking, completion, and both picker modes.
 
 - `internal/app/ux_spacing_review_test.go` covers quiet configuration changes, durable state, no-op selection, and configuration-free replay.
 

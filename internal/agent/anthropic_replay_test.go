@@ -52,7 +52,7 @@ func TestMiniMaxAndOpenCodeAnthropicSessionReplayAfterRestart(t *testing.T) {
 			fake := &provider.Fake{Responses: []*provider.Response{{Text: "synthetic continued answer", StopReason: "stop"}}}
 			loop := New(reopened, tools.NewRegistry(cwd), fake, nil)
 			model := provider.ModelMeta{ID: tc.modelID, API: "anthropic-messages", Provider: tc.providerID, MaxTokens: 16384, Reasoning: true, AdaptiveThinking: tc.providerID == "minimax", AllowEmptySignature: tc.allowEmpty}
-			cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), MaxTurns: 2, System: "synthetic system"}
+			cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), System: "synthetic system"}
 			if err := loop.Submit(context.Background(), "synthetic continuation", cfg); err != nil {
 				t.Fatal(err)
 			}

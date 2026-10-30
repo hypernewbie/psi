@@ -75,12 +75,12 @@ func TestOpenCodeResponsesToolCycleReplaysAfterSessionRestart(t *testing.T) {
 	model := provider.ModelMeta{ID: "synthetic-opencode-responses", API: "openai-responses", Provider: "opencode-go", BaseURL: client.BaseURL,
 		MaxTokens: 4096, Reasoning: true, InputImage: true, ThinkingLevelMap: map[string]*string{"off": nil, "low": responsesCycleString("low")},
 		Compat: modelmeta.Compat{"sessionAffinityFormat": json.RawMessage(`"openai-nosession"`), "supportsMidConvoSystemMessages": json.RawMessage(`true`), "supportsAdditionalTools": json.RawMessage(`true`)}}
-	cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), MaxTurns: 1, System: "synthetic Responses system"}
+	cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), System: "synthetic Responses system"}
 	loop := New(store, tools.NewRegistry(cwd), client, nil)
-	if err := loop.Submit(context.Background(), "read fixture.txt", cfg); err == nil || !strings.Contains(err.Error(), "run guard") {
-		t.Fatalf("one-turn tool round did not stop at the test boundary: %v", err)
+	if err := loop.Submit(context.Background(), "read fixture.txt", cfg); err != nil {
+		t.Fatalf("Responses tool round did not settle at the test boundary: %v", err)
 	}
-	if turns.Load() != 1 {
+	if turns.Load() != 2 {
 		t.Fatalf("first Responses turn count = %d", turns.Load())
 	}
 
@@ -88,12 +88,11 @@ func TestOpenCodeResponsesToolCycleReplaysAfterSessionRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.MaxTurns = 2
 	continued := New(reopened, tools.NewRegistry(cwd), client, nil)
 	if err := continued.Submit(context.Background(), "continue after restart", cfg); err != nil {
 		t.Fatal(err)
 	}
-	if turns.Load() != 2 {
+	if turns.Load() != 3 {
 		t.Fatalf("Responses restart turn count = %d", turns.Load())
 	}
 	select {

@@ -70,12 +70,12 @@ func TestGoogleToolRoundTripAndThoughtSignatureReplayAfterRestart(t *testing.T) 
 	client := provider.NewGoogleClient(server.URL+"/v1beta", "synthetic-google-key", 0, time.Second)
 	model := provider.ModelMeta{ID: "gemini-3-flash-preview", API: "google-generative-ai", Provider: "google", BaseURL: server.URL + "/v1beta",
 		MaxTokens: 8192, Reasoning: true, InputImage: true, ThinkingLevelMap: map[string]*string{"off": nil, "minimal": googleReplayString("minimal"), "low": googleReplayString("low")}}
-	cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), MaxTurns: 1, System: "synthetic Google system"}
+	cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), System: "synthetic Google system"}
 	loop := New(store, tools.NewRegistry(cwd), client, nil)
-	if err := loop.Submit(context.Background(), "read fixture.txt", cfg); err == nil || !strings.Contains(err.Error(), "run guard") {
-		t.Fatalf("one-turn tool cycle did not stop at the run boundary: %v", err)
+	if err := loop.Submit(context.Background(), "read fixture.txt", cfg); err != nil {
+		t.Fatalf("Google tool cycle did not settle at the run boundary: %v", err)
 	}
-	if turns.Load() != 1 {
+	if turns.Load() != 2 {
 		t.Fatalf("first Google turn count = %d", turns.Load())
 	}
 
@@ -83,12 +83,11 @@ func TestGoogleToolRoundTripAndThoughtSignatureReplayAfterRestart(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.MaxTurns = 2
 	continued := New(reopened, tools.NewRegistry(cwd), client, nil)
 	if err := continued.Submit(context.Background(), "continue after restart", cfg); err != nil {
 		t.Fatal(err)
 	}
-	if turns.Load() != 2 {
+	if turns.Load() != 3 {
 		t.Fatalf("continued Google turn count = %d", turns.Load())
 	}
 	select {

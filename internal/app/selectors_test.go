@@ -217,7 +217,7 @@ func TestPickerPagesByActualVisibleCount(t *testing.T) {
 	for i := range items {
 		items[i].ID = fmt.Sprintf("provider/model-%02d", i)
 	}
-	for _, size := range [][3]int{{120, 40, 10}, {80, 24, 10}, {60, 16, 9}, {40, 12, 5}, {20, 6, 2}} {
+	for _, size := range [][3]int{{120, 40, 10}, {80, 24, 10}, {60, 16, 8}, {40, 12, 4}, {20, 6, 1}} {
 		s := NewSelector(items, items[17].ID)
 		s.Models = true
 		width, height, visible := size[0], size[1], size[2]

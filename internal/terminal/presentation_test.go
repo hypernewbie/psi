@@ -43,19 +43,19 @@ func TestActivityBorderUsesPiSpinnerAndMessageColors(t *testing.T) {
 	// its message, independently of the thinking-colored editor border.
 	view := ComposeEditorView(60, 10, nil, 0, PresentationSnapshot{Thinking: "low"}, "⠋ Working…")
 	want := "\x1b[34m── \x1b[0m\x1b[35m⠋\x1b[0m\x1b[2m Working…\x1b[0m\x1b[34m "
-	if !strings.HasPrefix(view.Rows[0], want) {
+	if !strings.HasPrefix(view.Rows[1], want) {
 		t.Fatalf("working border colors = %q, want prefix %q", view.Rows[0], want)
 	}
 	plain := ComposeEditorView(60, 10, nil, 0, PresentationSnapshot{Thinking: "low", NoColor: true}, "⠋ Working…")
-	if strings.Contains(plain.Rows[0], "\x1b[") || Sanitize(view.Rows[0]) != plain.Rows[0] {
-		t.Fatalf("NO_COLOR changed border text: styled=%q plain=%q", view.Rows[0], plain.Rows[0])
+	if strings.Contains(plain.Rows[1], "\x1b[") || Sanitize(view.Rows[1]) != plain.Rows[1] {
+		t.Fatalf("NO_COLOR changed border text: styled=%q plain=%q", view.Rows[1], plain.Rows[1])
 	}
 }
 
 func TestNarrowActivityBorderKeepsPiCancellationHint(t *testing.T) {
 	view := ComposeConsoleView(20, 6, nil, 0, PresentationSnapshot{NoColor: true}, "⠋ Working… (Esc/Ctrl+C cancel, input paused)", "")
-	if !strings.Contains(view.Rows[0], "Esc/Ctrl+C") {
-		t.Fatalf("narrow status discarded cancellation binding: %q", view.Rows[0])
+	if !strings.Contains(view.Rows[1], "Esc/Ctrl+C") {
+		t.Fatalf("narrow status discarded cancellation binding: %q", view.Rows[1])
 	}
 	for _, row := range view.Rows {
 		if CellWidth(Sanitize(row)) > 20 {
@@ -67,12 +67,12 @@ func TestNarrowActivityBorderKeepsPiCancellationHint(t *testing.T) {
 func TestComposeEditorViewShowsPiOverflowCounts(t *testing.T) {
 	draft := []rune(strings.Repeat("line\n", 30))
 	atEnd := ComposeEditorView(40, 12, draft, len(draft), PresentationSnapshot{NoColor: true}, "")
-	if !strings.Contains(atEnd.Rows[0], "↑ 26 more") {
-		t.Fatalf("top border lacks hidden-row count: %q", atEnd.Rows[0])
+	if !strings.Contains(atEnd.Rows[1], "↑ 26 more") {
+		t.Fatalf("top border lacks hidden-row count: %q", atEnd.Rows[1])
 	}
 	atStart := ComposeEditorView(40, 12, draft, 0, PresentationSnapshot{NoColor: true}, "")
-	if !strings.Contains(atStart.Rows[6], "↓ 26 more") {
-		t.Fatalf("bottom border lacks hidden-row count: %q", atStart.Rows[6])
+	if !strings.Contains(atStart.Rows[7], "↓ 26 more") {
+		t.Fatalf("bottom border lacks hidden-row count: %q", atStart.Rows[7])
 	}
 }
 
@@ -215,10 +215,10 @@ func TestNoColorEnvStillLeavesStateText(t *testing.T) {
 func TestEditorBorderFollowsPiLayout(t *testing.T) {
 	draft := []rune("line\nline\nline\nline\nline\nline\nline\nline")
 	view := ComposeConsoleView(80, 24, draft, 0, PresentationSnapshot{NoColor: true}, "⠋ Working… (Esc/Ctrl+C cancel, input paused)", "")
-	if !strings.HasPrefix(view.Rows[0], "── ⠋ Working…") {
-		t.Fatalf("working status is not at the left of the top border: %q", view.Rows[0])
+	if !strings.HasPrefix(view.Rows[1], "── ⠋ Working…") {
+		t.Fatalf("working status is not at the left of the top border: %q", view.Rows[1])
 	}
-	bottom := view.Rows[8]
+	bottom := view.Rows[9]
 	if !strings.Contains(bottom, "↓ 1 more") {
 		t.Fatalf("bottom border lost the overflow count: %q", bottom)
 	}

@@ -54,7 +54,7 @@ func TestDeepSeekAndOpenCodeCompletionsReplayAfterRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			model := provider.ModelMeta{ID: tc.modelID, API: "openai-completions", Provider: tc.providerID, MaxTokens: 8192, Reasoning: true, Compat: compat}
-			cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), MaxTurns: 2, System: "synthetic system"}
+			cfg := Config{Model: model, Thinking: "off", Tools: toolDefs(), System: "synthetic system"}
 			if err := loop.Submit(context.Background(), "synthetic continuation", cfg); err != nil {
 				t.Fatal(err)
 			}

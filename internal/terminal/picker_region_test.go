@@ -17,16 +17,16 @@ func TestPickerRegionReplacesTheEditorBlock(t *testing.T) {
 	if borders := countBorderRows(view.Rows); borders != 2 {
 		t.Fatalf("picker did not own exactly one border pair: %q", view.Rows)
 	}
-	if view.Rows[0] != strings.Repeat("─", 79) {
-		t.Fatalf("picker top border is not Pi's dynamic border: %q", view.Rows[0])
+	if view.Rows[0] != "" || view.Rows[1] != strings.Repeat("─", 79) {
+		t.Fatalf("picker spacer/top border missing: %q", view.Rows[:2])
 	}
 	if view.Rows[len(view.Rows)-3] != strings.Repeat("─", 79) {
 		t.Fatalf("picker closing border is missing: %q", view.Rows)
 	}
-	if !strings.HasPrefix(view.Rows[1], "> gpt-5") {
-		t.Fatalf("picker did not own Pi's search query row: %q", view.Rows[1])
+	if !strings.HasPrefix(view.Rows[2], "> gpt-5") {
+		t.Fatalf("picker did not own Pi's search query row: %q", view.Rows[2])
 	}
-	if view.CursorRow != 1 || view.CursorCol != 7 {
+	if view.CursorRow != 2 || view.CursorCol != 7 {
 		t.Fatalf("picker cursor is not on the query row: row=%d col=%d rows=%q", view.CursorRow, view.CursorCol, view.Rows)
 	}
 	// The editor draft is the query, so the editor block itself must not be
@@ -61,7 +61,7 @@ func TestPickerQueryScrollsToKeepTheCursorVisible(t *testing.T) {
 	buf := []rune(long)
 	pos := len(buf)
 	view := ComposeConsoleViewPicker(40, 24, buf, pos, PresentationSnapshot{NoColor: true}, "", nil, []string{"row"}, PickerSearch)
-	query := view.Rows[1]
+	query := view.Rows[2]
 	if strings.Contains(query, "PREFIX") {
 		t.Fatalf("long query did not scroll away from its start: %q", query)
 	}
