@@ -38,30 +38,190 @@ import (
 type Options struct {
 	Help, Version, Continue, Resume                           bool
 	SessionPath, Provider, Model, Thinking, SessionDir, Tools string
+	Name, ExcludeTools, Mode, TUIMode, SystemPrompt           string
+	AppendSystemPrompts                                       []string
+	ListModels                                                bool
+	ListModelsFilter                                          string
 	NoTools, NoSession, AllowProj, DenyProj                   bool
-	NoThemes                                                  bool
+	NoThemes, NoSkills, NoContextFiles, Offline               bool
 	UseTheme                                                  string
 	ThemePaths                                                []string
+	Messages                                                  []string
+}
+
+var cliValueFlags = map[string]bool{
+	"provider": true, "model": true, "thinking": true, "session": true,
+	"session-dir": true, "tools": true, "t": true, "theme": true,
+	"use-theme": true, "name": true, "n": true, "exclude-tools": true,
+	"xt": true, "mode": true, "tui-mode": true, "system-prompt": true,
+	"append-system-prompt": true,
+}
+
+var cliBoolFlags = map[string]bool{
+	"help": true, "h": true, "version": true, "v": true,
+	"continue": true, "c": true, "resume": true, "r": true,
+	"no-session": true, "no-tools": true, "nt": true,
+	"no-builtin-tools": true, "nbt": true,
+	"allow-project": true, "approve": true, "a": true,
+	"deny-project": true, "no-approve": true, "na": true,
+	"no-themes": true, "no-skills": true, "ns": true,
+	"no-context-files": true, "nc": true, "offline": true,
+}
+
+// splitCLIArgs allows Pi-style interspersed options while keeping Go's flag
+// parser for value validation. Positional arguments remain separate prompts.
+func splitCLIArgs(args []string) (flags, messages []string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			messages = append(messages, args[i+1:]...)
+			break
+		}
+		if arg == "--list-models" {
+			value := ""
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.HasPrefix(args[i+1], "@") {
+				i++
+				value = args[i]
+			}
+			flags = append(flags, "--list-models="+value)
+			continue
+		}
+		if strings.HasPrefix(arg, "--list-models=") {
+			flags = append(flags, arg)
+			continue
+		}
+		if arg == "-" || !strings.HasPrefix(arg, "-") {
+			messages = append(messages, arg)
+			continue
+		}
+		name := strings.SplitN(arg, "=", 2)[0]
+		name = strings.TrimLeft(name, "-")
+		if name == "print" || name == "p" {
+			return nil, nil, fmt.Errorf("Pi print mode is not supported; psi requires an interactive terminal")
+		}
+		isOption := strings.HasPrefix(arg, "-") && arg != "-"
+		if isOption && (cliValueFlags[name] || cliBoolFlags[name]) {
+			flags = append(flags, arg)
+			if cliValueFlags[name] && !strings.Contains(arg, "=") && i+1 < len(args) {
+				next := args[i+1]
+				nextName := strings.TrimLeft(strings.SplitN(next, "=", 2)[0], "-")
+				if next == "-" || !strings.HasPrefix(next, "-") || (!cliValueFlags[nextName] && !cliBoolFlags[nextName]) {
+					flags = append(flags, next)
+					i++
+				}
+			}
+			continue
+		}
+		flags = append(flags, arg) // Let flag.Parse report unknown options.
+	}
+	return flags, messages, nil
+}
+
+func normalizeModelOption(o *Options) error {
+	if o.Model == "" {
+		if o.Provider != "" {
+			for _, providerID := range providerregistry.IDs() {
+				if strings.EqualFold(o.Provider, providerID) {
+					o.Provider = providerID
+					break
+				}
+			}
+		}
+		return nil
+	}
+	if i := strings.LastIndexByte(o.Model, ':'); i >= 0 {
+		level := o.Model[i+1:]
+		for _, valid := range config.ValidThinkingLevels {
+			if level == valid {
+				o.Model = o.Model[:i]
+				if o.Thinking == "" {
+					o.Thinking = level
+				}
+				break
+			}
+		}
+	}
+	if i := strings.IndexByte(o.Model, '/'); i > 0 {
+		prefix := o.Model[:i]
+		for _, providerID := range providerregistry.IDs() {
+			if strings.EqualFold(prefix, providerID) {
+				if o.Provider != "" && !strings.EqualFold(o.Provider, providerID) {
+					return fmt.Errorf("--model provider %q conflicts with --provider %q", providerID, o.Provider)
+				}
+				o.Provider, o.Model = providerID, o.Model[i+1:]
+				break
+			}
+		}
+	}
+	if strings.TrimSpace(o.Model) == "" {
+		return fmt.Errorf("--model requires a model ID")
+	}
+	if o.Provider != "" {
+		for _, providerID := range providerregistry.IDs() {
+			if strings.EqualFold(o.Provider, providerID) {
+				o.Provider = providerID
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func Parse(args []string) (Options, *flag.FlagSet, error) {
 	var o Options
+	flagArgs, messages, err := splitCLIArgs(args)
+	if err != nil {
+		return o, nil, err
+	}
 	fs := flag.NewFlagSet("psi", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.BoolVar(&o.Help, "help", false, "show help")
+	fs.BoolVar(&o.Help, "h", false, "show help (Pi alias)")
 	fs.BoolVar(&o.Version, "version", false, "show version")
+	fs.BoolVar(&o.Version, "v", false, "show version (Pi alias)")
 	fs.BoolVar(&o.Continue, "continue", false, "continue most recent session")
+	fs.BoolVar(&o.Continue, "c", false, "continue most recent session (Pi alias)")
 	fs.BoolVar(&o.Resume, "resume", false, "resume with selection")
-	fs.StringVar(&o.SessionPath, "session", "", "open explicit session path")
-	fs.StringVar(&o.Provider, "provider", "", "provider ("+strings.Join(providerregistry.IDs(), ", ")+")")
-	fs.StringVar(&o.Model, "model", "", "model ID")
+	fs.BoolVar(&o.Resume, "r", false, "resume with selection (Pi alias)")
+	fs.StringVar(&o.SessionPath, "session", "", "open session path or ID")
+	fs.StringVar(&o.Provider, "provider", "", "provider")
+	fs.StringVar(&o.Model, "model", "", "model ID or provider/model")
 	fs.StringVar(&o.Thinking, "thinking", "", "thinking level")
 	fs.StringVar(&o.SessionDir, "session-dir", "", "session directory")
 	fs.StringVar(&o.Tools, "tools", "", "tool list (read,bash,edit,write)")
+	fs.StringVar(&o.Tools, "t", "", "tool list (Pi alias)")
+	fs.StringVar(&o.ExcludeTools, "exclude-tools", "", "comma-separated tools to disable")
+	fs.StringVar(&o.ExcludeTools, "xt", "", "comma-separated tools to disable (Pi alias)")
 	fs.BoolVar(&o.NoTools, "no-tools", false, "disable tools")
+	fs.BoolVar(&o.NoTools, "nt", false, "disable tools (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable built-in tools (all psi tools)")
+	fs.BoolVar(&o.NoTools, "nbt", false, "disable built-in tools (Pi alias)")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
+	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
+	fs.BoolVar(&o.AllowProj, "a", false, "allow project resources (Pi alias)")
 	fs.BoolVar(&o.DenyProj, "deny-project", false, "deny protected project resources")
-	fs.BoolVar(&o.NoThemes, "no-themes", false, "disable configured and discovered theme resources")
+	fs.BoolVar(&o.DenyProj, "no-approve", false, "deny project resources (Pi alias)")
+	fs.BoolVar(&o.DenyProj, "na", false, "deny project resources (Pi alias)")
+	fs.BoolVar(&o.NoThemes, "no-themes", false, "disable configured and discovered themes")
+	fs.BoolVar(&o.NoSkills, "no-skills", false, "disable skills")
+	fs.BoolVar(&o.NoSkills, "ns", false, "disable skills (Pi alias)")
+	fs.BoolVar(&o.NoContextFiles, "no-context-files", false, "disable AGENTS.md and CLAUDE.md")
+	fs.BoolVar(&o.NoContextFiles, "nc", false, "disable context files (Pi alias)")
+	fs.BoolVar(&o.Offline, "offline", false, "disable background catalog refresh (no-op in psi)")
+	fs.StringVar(&o.Name, "name", "", "set session display name")
+	fs.StringVar(&o.Name, "n", "", "set session display name (Pi alias)")
+	fs.StringVar(&o.Mode, "mode", "text", "interactive text mode (Pi compatibility)")
+	fs.StringVar(&o.TUIMode, "tui-mode", "regular", "regular inline terminal mode")
+	fs.StringVar(&o.SystemPrompt, "system-prompt", "", "set the system prompt text or file path")
+	fs.Func("append-system-prompt", "append system prompt text or file path (repeatable)", func(value string) error {
+		o.AppendSystemPrompts = append(o.AppendSystemPrompts, value)
+		return nil
+	})
+	fs.Func("list-models", "list models from the local Pi catalog (optional search text)", func(value string) error {
+		o.ListModels, o.ListModelsFilter = true, value
+		return nil
+	})
 	fs.StringVar(&o.UseTheme, "use-theme", "", "select a Pi theme for this invocation")
 	fs.Func("theme", "load an additional local theme file or directory (repeatable)", func(value string) error {
 		if strings.TrimSpace(value) == "" {
@@ -70,14 +230,17 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 		o.ThemePaths = append(o.ThemePaths, value)
 		return nil
 	})
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(flagArgs); err != nil {
 		return o, fs, err
 	}
-	if fs.NArg() != 0 {
-		return o, fs, fmt.Errorf("unexpected positional arguments; psi is interactive only")
+	o.Messages = messages
+	for _, message := range o.Messages {
+		if strings.HasPrefix(message, "@") {
+			return o, fs, fmt.Errorf("Pi @file arguments are not supported; pass file content in a message or use the read tool")
+		}
 	}
 	if o.AllowProj && o.DenyProj {
-		return o, fs, fmt.Errorf("--allow-project and --deny-project conflict")
+		return o, fs, fmt.Errorf("--approve/--allow-project and --no-approve/--deny-project conflict")
 	}
 	count := 0
 	for _, selected := range []bool{o.Continue, o.Resume, o.SessionPath != ""} {
@@ -88,11 +251,165 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	if count > 1 {
 		return o, fs, fmt.Errorf("choose only one of --continue, --resume, and --session")
 	}
+	if o.Name != "" {
+		o.Name = strings.TrimSpace(o.Name)
+		if o.Name == "" {
+			return o, fs, fmt.Errorf("--name requires a non-empty value")
+		}
+	}
+	if o.Mode != "text" {
+		return o, fs, fmt.Errorf("psi supports only --mode text; print, JSON, and RPC modes are not supported")
+	}
+	if o.TUIMode != "regular" {
+		return o, fs, fmt.Errorf("psi uses the regular inline terminal; --tui-mode fullscreen is not supported")
+	}
+	if err := normalizeModelOption(&o); err != nil {
+		return o, fs, err
+	}
 	return o, fs, nil
 }
 
+func fuzzyMatch(text, query string) bool {
+	textRunes, queryRunes := []rune(strings.ToLower(text)), []rune(strings.ToLower(query))
+	if len(queryRunes) == 0 {
+		return true
+	}
+	matched := 0
+	for _, r := range textRunes {
+		if r == queryRunes[matched] {
+			matched++
+			if matched == len(queryRunes) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func formatModelTokenCount(count int) string {
+	if count >= 1_000_000 {
+		millions := float64(count) / 1_000_000
+		if millions == math.Trunc(millions) {
+			return fmt.Sprintf("%.0fM", millions)
+		}
+		return fmt.Sprintf("%.1fM", millions)
+	}
+	if count >= 1_000 {
+		thousands := float64(count) / 1_000
+		if thousands == math.Trunc(thousands) {
+			return fmt.Sprintf("%.0fK", thousands)
+		}
+		return fmt.Sprintf("%.1fK", thousands)
+	}
+	return strconv.Itoa(count)
+}
+
+func listAvailableModels(output io.Writer, agentDir, filter string) error {
+	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
+	if err != nil {
+		return err
+	}
+	type row struct {
+		provider, model, context, maxOutput, thinking, images string
+	}
+	var rows []row
+	for _, providerID := range providerregistry.IDs() {
+		for _, option := range models.ModelOptions(providerID) {
+			if !option.Available || !fuzzyMatch(providerID+" "+option.Model.ID, filter) {
+				continue
+			}
+			thinking, images := "no", "no"
+			if option.Model.Reasoning {
+				thinking = "yes"
+			}
+			if option.Model.InputImage {
+				images = "yes"
+			}
+			rows = append(rows, row{providerID, option.Model.ID, formatModelTokenCount(option.Model.ContextWindow), formatModelTokenCount(option.Model.MaxTokens), thinking, images})
+		}
+	}
+	if len(rows) == 0 {
+		if filter != "" {
+			_, err = fmt.Fprintf(output, "No models matching %q\n", filter)
+			return err
+		}
+		_, err = fmt.Fprintln(output, "No models available in the local catalog.")
+		return err
+	}
+	widths := []int{len("provider"), len("model"), len("context"), len("max-out"), len("thinking"), len("images")}
+	for _, item := range rows {
+		values := []string{item.provider, item.model, item.context, item.maxOutput, item.thinking, item.images}
+		for i, value := range values {
+			if len(value) > widths[i] {
+				widths[i] = len(value)
+			}
+		}
+	}
+	format := fmt.Sprintf("%%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds\n", widths[0], widths[1], widths[2], widths[3], widths[4], widths[5])
+	if _, err := fmt.Fprintf(output, format, "provider", "model", "context", "max-out", "thinking", "images"); err != nil {
+		return err
+	}
+	for _, item := range rows {
+		if _, err := fmt.Fprintf(output, format, item.provider, item.model, item.context, item.maxOutput, item.thinking, item.images); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resolveCLIPrompt(input string) string {
+	if input == "" {
+		return ""
+	}
+	if data, err := os.ReadFile(input); err == nil {
+		return strings.TrimPrefix(string(data), "\uFEFF")
+	}
+	return input
+}
+
+func helpText(version string) string {
+	return fmt.Sprintf(`psi %s — minimal Go coding agent
+
+Usage: psi [options] [messages...]
+
+Pi-compatible options:
+  --continue, -c             Continue the most recent session
+  --resume, -r               Select a session to resume
+  --session <path|id>        Open session file or ID prefix in session directory
+  --session-dir <dir>        Session directory
+  --provider <name>          Select provider; use configured model if omitted
+  --model <id|provider/id>   Select model; :thinking suffix is supported
+  --thinking <level>         Set thinking level
+  --system-prompt <text|file> Set system prompt text or load it from a file
+  --append-system-prompt <text|file> Append system prompt text or file (repeatable)
+  --name, -n <name>          Set session display name
+  --no-session               Keep this session in memory only
+  --tools, -t <list>         Select read,bash,edit,write tools
+  --exclude-tools, -xt <list> Disable selected tools
+  --no-tools, -nt            Disable all tools
+  --no-builtin-tools, -nbt   Disable psi tools (all tools are built-in)
+  --approve, -a              Allow project resources
+  --no-approve, -na          Deny project resources
+  --theme <path>             Load a theme (repeatable)
+  --use-theme <name>         Select a theme
+  --no-themes                Disable theme loading
+  --no-skills, -ns           Disable skills
+  --no-context-files, -nc    Disable AGENTS.md and CLAUDE.md
+  --mode text                Select the only supported output mode
+  --tui-mode regular         Select the inline terminal mode
+  --offline                  No-op; psi does not refresh Pi's model cache
+  --list-models [search]     List cached and bundled models without network access
+  --help, -h                 Show this help
+  --version, -v              Show version
+
+Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
+Use -- before a message that starts with a hyphen.
+Not supported: --print/-p, JSON/RPC modes, fullscreen mode, @file, --api-key, --models, --session-id, --fork, --export, extensions, MCP, and prompt templates.
+`, version)
+}
+
 func Run(args []string, version string) error {
-	o, fs, err := Parse(args)
+	o, _, err := Parse(args)
 	if err != nil {
 		return err
 	}
@@ -101,10 +418,11 @@ func Run(args []string, version string) error {
 		return nil
 	}
 	if o.Help {
-		fmt.Printf("psi %s — minimal Go coding agent\n", version)
-		fs.SetOutput(os.Stdout)
-		fs.PrintDefaults()
+		fmt.Print(helpText(version))
 		return nil
+	}
+	if o.ListModels {
+		return listAvailableModels(os.Stdout, session.AgentDir(), o.ListModelsFilter)
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return fmt.Errorf("noninteractive input: psi needs a terminal (no print/RPC mode)")
@@ -151,22 +469,50 @@ func Run(args []string, version string) error {
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: activeTheme, NoColor: noColor, Display: presentationDisplay(st)})
 	if o.NoTools {
 		st.DefaultTools = []string{}
-	} else if o.Tools != "" {
-		st.DefaultTools, err = config.ResolveTools(strings.Split(o.Tools, ","), st.DefaultTools)
-		if err != nil {
-			return err
+	} else {
+		if o.Tools != "" {
+			st.DefaultTools, err = config.ResolveTools(strings.Split(o.Tools, ","), st.DefaultTools)
+			if err != nil {
+				return err
+			}
+		}
+		if o.ExcludeTools != "" {
+			var excluded []string
+			for _, name := range strings.Split(o.ExcludeTools, ",") {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					excluded = append(excluded, "-"+name)
+				}
+			}
+			if len(excluded) > 0 {
+				st.DefaultTools, err = config.ResolveTools(excluded, st.DefaultTools)
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
 	if err != nil {
 		return err
 	}
-	instructions, err := config.DiscoverInstructions(cwd, agentDir, consent)
-	if err != nil {
-		return err
+	var instructions []config.InstructionFile
+	if !o.NoContextFiles {
+		instructions, err = config.DiscoverInstructions(cwd, agentDir, consent)
+		if err != nil {
+			return err
+		}
 	}
-	sk, diagnostics := skills.Discover(cwd, agentDir, st.Skills, consent)
-	prompt := config.AssemblePrompt(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools)
+	var sk []skills.Skill
+	var diagnostics []skills.Diagnostic
+	if !o.NoSkills {
+		sk, diagnostics = skills.Discover(cwd, agentDir, st.Skills, consent)
+	}
+	var appendSystemPrompts []string
+	for _, source := range o.AppendSystemPrompts {
+		appendSystemPrompts = append(appendSystemPrompts, resolveCLIPrompt(source))
+	}
+	prompt := config.AssemblePromptWithOverrides(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools, resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
 	if o.Provider != "" {
 		if _, ok := providerregistry.Lookup(o.Provider); !ok {
 			return fmt.Errorf("unsupported provider %q (available: %s)", o.Provider, strings.Join(providerregistry.IDs(), ", "))
@@ -206,6 +552,11 @@ func Run(args []string, version string) error {
 	}()
 	if err := r.restore(); err != nil {
 		return err
+	}
+	if o.Name != "" {
+		if _, err := r.store.AppendSessionInfo(o.Name); err != nil {
+			return fmt.Errorf("set session name: %w", err)
+		}
 	}
 	r.tty, r.lifecycle, r.signals = tty, lifecycle, signals
 	r.queryTerminalColors(console, 100*time.Millisecond)
@@ -478,7 +829,33 @@ func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.
 	dir := session.SessionDirOverride(ov.SessionDir, "", "", cwd, agentDir)
 	persist := !ov.NoSession
 	if o.SessionPath != "" {
-		return session.OpenFile(o.SessionPath, cwd, persist)
+		path := o.SessionPath
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if strings.ContainsAny(path, `/\\`) || strings.HasSuffix(path, ".jsonl") {
+				return nil, err
+			}
+			infos, discoverErr := session.Discover(dir)
+			if discoverErr != nil {
+				return nil, discoverErr
+			}
+			var matches []session.SessionInfo
+			for _, info := range infos {
+				if strings.HasPrefix(info.ID, path) {
+					matches = append(matches, info)
+				}
+			}
+			switch len(matches) {
+			case 0:
+				return nil, fmt.Errorf("session %q was not found in %s", path, dir)
+			case 1:
+				path = matches[0].Path
+			default:
+				return nil, fmt.Errorf("session ID %q is ambiguous; use a longer prefix", path)
+			}
+		} else if err != nil {
+			return nil, err
+		}
+		return session.OpenFile(path, cwd, persist)
 	}
 	if o.Continue {
 		return session.Continue(cwd, dir, agentDir, persist)
@@ -854,6 +1231,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	for _, input := range pendingInputs {
 		pendingInputBytes += len(input.Key) + len(input.Reply)
 	}
+	initialMessages := append([]string(nil), r.options.Messages...)
 	frameTimer := time.NewTimer(time.Hour)
 	frameTimer.Stop()
 	defer frameTimer.Stop()
@@ -1157,6 +1535,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	console.SetDeferDraw(false)
 	r.draw(console)
+	if len(initialMessages) > 0 {
+		message := initialMessages[0]
+		initialMessages = initialMessages[1:]
+		start(message, message, "", "", "", false)
+	}
 	for {
 		if exiting && !busy {
 			return console.Err()
@@ -1346,6 +1729,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Status("")
 				r.refreshPresentation(console)
 				r.draw(console)
+			}
+			if r.state == StateIdle && len(initialMessages) > 0 {
+				message := initialMessages[0]
+				initialMessages = initialMessages[1:]
+				start(message, message, "", "", "", false)
 			}
 			_, doneFramesAfter, _, _ := console.FrameStats()
 			r.eventFrames += doneFramesAfter - doneFramesBefore

@@ -996,12 +996,21 @@ func ancestorDirs(cwd string) []string {
 // AssemblePrompt builds the effective system prompt: short psi base for the
 // four tools + instructions + workspace + skill descriptions. Deterministic.
 func AssemblePrompt(cwd string, instructions []InstructionFile, skillDescs []string, tools []string) string {
+	return AssemblePromptWithOverrides(cwd, instructions, skillDescs, tools, "", false, nil)
+}
+
+// AssemblePromptWithOverrides applies Pi-style CLI system-prompt overrides
+// without removing project context, skill descriptions, or the tool loadout.
+func AssemblePromptWithOverrides(cwd string, instructions []InstructionFile, skillDescs []string, tools []string, systemPrompt string, useSystemPrompt bool, appendSystemPrompts []string) string {
 	var sb strings.Builder
 	base := "You are psi, a minimal Go coding agent. Use the declared tools to inspect and change the workspace. Show file paths clearly."
 	for _, ins := range instructions {
 		if ins.Kind == "system" {
 			base = ins.Content
 		}
+	}
+	if useSystemPrompt {
+		base = systemPrompt
 	}
 	sb.WriteString(base + "\n")
 	sb.WriteString("Available tools: " + strings.Join(tools, ", ") + ".\n")
@@ -1013,6 +1022,11 @@ func AssemblePrompt(cwd string, instructions []InstructionFile, skillDescs []str
 	for _, d := range skillDescs {
 		if d != "" {
 			sb.WriteString("\n" + d + "\n")
+		}
+	}
+	for _, text := range appendSystemPrompts {
+		if text != "" {
+			sb.WriteString("\n" + text + "\n")
 		}
 	}
 	sb.WriteString("\nWorkspace: " + cwd + "\n")

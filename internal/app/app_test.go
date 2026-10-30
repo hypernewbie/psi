@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	goruntime "runtime"
 	"strings"
 	"testing"
@@ -30,10 +31,94 @@ func TestParseBoundary(t *testing.T) {
 	if err != nil || o.Model != "m" || !o.NoSession || o.UseTheme != "light/dark" || !o.NoThemes || len(o.ThemePaths) != 2 {
 		t.Fatalf("%+v %v", o, err)
 	}
-	for _, args := range [][]string{{"positional"}, {"--continue", "--resume"}, {"--allow-project", "--deny-project"}} {
+	for _, args := range [][]string{{"--continue", "--resume"}, {"--allow-project", "--deny-project"}, {"--print", "prompt"}, {"--mode", "rpc"}, {"--tui-mode", "fullscreen"}} {
 		if _, _, err := Parse(args); err == nil {
-			t.Errorf("accepted conflicting/unused arguments: %v", args)
+			t.Errorf("accepted conflicting/unsupported arguments: %v", args)
 		}
+	}
+}
+
+func TestPiCLICompatibilityAliasesAndInitialMessages(t *testing.T) {
+	o, _, err := Parse([]string{"first prompt", "-c", "--model", "openai-codex/gpt-5.6-luna:xhigh", "second prompt", "-t", "read,write", "--name", "Refactor auth", "--no-context-files", "-ns", "--mode=text", "--tui-mode=regular", "--system-prompt", "replace base", "--append-system-prompt", "extra rules", "--append-system-prompt", "more rules", "-nbt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.Continue || o.Provider != "openai-codex" || o.Model != "gpt-5.6-luna" || o.Thinking != "xhigh" || o.Tools != "read,write" || o.Name != "Refactor auth" || !o.NoContextFiles || !o.NoSkills || !o.NoTools || o.SystemPrompt != "replace base" || !reflect.DeepEqual(o.AppendSystemPrompts, []string{"extra rules", "more rules"}) {
+		t.Fatalf("parsed Pi options = %+v", o)
+	}
+	if !reflect.DeepEqual(o.Messages, []string{"first prompt", "second prompt"}) {
+		t.Fatalf("initial messages = %#v", o.Messages)
+	}
+	o, _, err = Parse([]string{"--", "-dash prompt"})
+	if err != nil || !reflect.DeepEqual(o.Messages, []string{"-dash prompt"}) {
+		t.Fatalf("-- positional handling: options=%+v err=%v", o, err)
+	}
+	o, _, err = Parse([]string{"--list-models", "claude-sonnet"})
+	if err != nil || !o.ListModels || o.ListModelsFilter != "claude-sonnet" || len(o.Messages) != 0 {
+		t.Fatalf("optional list-models argument: options=%+v err=%v", o, err)
+	}
+	o, _, err = Parse([]string{"--list-models", "--offline"})
+	if err != nil || !o.ListModels || !o.Offline || o.ListModelsFilter != "" {
+		t.Fatalf("bare list-models argument: options=%+v err=%v", o, err)
+	}
+}
+
+func TestLocalModelListUsesCachedCatalog(t *testing.T) {
+	var output bytes.Buffer
+	if err := listAvailableModels(&output, t.TempDir(), "claude-sonnet"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "anthropic") || !strings.Contains(output.String(), "claude-sonnet") || !strings.Contains(output.String(), "context") {
+		t.Fatalf("model list output = %s", output.String())
+	}
+	output.Reset()
+	if err := listAvailableModels(&output, t.TempDir(), "not-a-model"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `No models matching "not-a-model"`) {
+		t.Fatalf("empty search output = %s", output.String())
+	}
+}
+
+func TestCLISystemPromptOverrideAndFileInput(t *testing.T) {
+	instructions := []config.InstructionFile{{Path: "system.md", Kind: "system", Content: "configured base"}, {Path: "AGENTS.md", Kind: "agents", Content: "project context"}}
+	prompt := config.AssemblePromptWithOverrides("/workspace", instructions, []string{"skill info"}, []string{"read"}, "CLI base", true, []string{"CLI addendum"})
+	for _, want := range []string{"CLI base", "Available tools: read", "project context", "skill info", "CLI addendum", "Workspace: /workspace"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "configured base") {
+		t.Fatalf("CLI system prompt did not override configured prompt: %s", prompt)
+	}
+	path := filepath.Join(t.TempDir(), "prompt.txt")
+	if err := os.WriteFile(path, []byte("\uFEFFloaded from file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveCLIPrompt(path); got != "loaded from file" {
+		t.Fatalf("resolved prompt file = %q", got)
+	}
+	if got := resolveCLIPrompt("literal prompt"); got != "literal prompt" {
+		t.Fatalf("resolved literal prompt = %q", got)
+	}
+}
+
+func TestOpenSessionResolvesPiSessionIDPrefix(t *testing.T) {
+	cwd, agentDir, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir, SessionDir: sessionDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("existing session")); err != nil {
+		t.Fatal(err)
+	}
+	id := store.Header().ID
+	opened, err := openSession(Options{SessionPath: id[:8]}, cwd, agentDir, config.Settings{}, config.StartupOverrides{SessionDir: sessionDir}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Header().ID != id {
+		t.Fatalf("opened session ID = %s, want %s", opened.Header().ID, id)
 	}
 }
 
