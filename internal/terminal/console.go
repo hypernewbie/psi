@@ -82,6 +82,7 @@ type Console struct {
 	dirty               bool
 	frameDepth          int
 	pendingAppend       strings.Builder
+	transcriptSpacing   transcriptSpacing
 	lastDraw            time.Time
 	// Completion sources (no exec/scan/provider).
 	Commands               []string
@@ -167,6 +168,9 @@ func (c *Console) mode(s string) {
 func (c *Console) emit(f Frame) error {
 	if c.err == nil {
 		c.err = c.writer.Emit(f)
+		if c.err == nil {
+			c.transcriptSpacing.observe(f.Append)
+		}
 	}
 	return c.err
 }
@@ -805,6 +809,7 @@ func (c *Console) MarkdownWrite(p []byte) (int, error) {
 		c.markdownWidth = c.currentWidth()
 		c.markdownStream = NewMarkdownStream(c.markdownWidth, c.presentation.NoColor)
 		c.markdownStream.SetTheme(c.presentation.Theme)
+		c.markdownStream.SetDisplay(c.presentation.Display)
 	}
 	stable, _ := c.markdownStream.Feed(string(p))
 	c.streamRows = c.markdownStream.DisplayTail()
@@ -820,15 +825,17 @@ func (c *Console) CloseMarkdown() error {
 	if c.markdownStream == nil {
 		return c.err
 	}
-	hadOutput := c.markdownStream.HasOutput() || len(c.markdownStream.Tail()) > 0
+	hadOutput := c.markdownStream.HasOutput()
 	rows := c.markdownStream.Finish()
 	clear(c.streamRows)
 	c.streamRows = nil
-	appendText := markdownRowsAppend(rows)
-	if hadOutput {
-		appendText += "\r\n" // Pi-style message padding before the next block.
+	for _, row := range rows {
+		hadOutput = hadOutput || strings.TrimSpace(Sanitize(row)) != ""
 	}
-	return c.emitComposed(appendText)
+	if !hadOutput {
+		return c.emitComposed("")
+	}
+	return c.emitComposed(markdownRowsAppend(rows) + "\r\n")
 }
 
 func markdownRowsAppend(rows []string) string {

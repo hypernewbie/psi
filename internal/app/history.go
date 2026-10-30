@@ -65,7 +65,7 @@ func renderStoreHistoryAtWidthWithDisplayAndColor(store *session.Store, arg stri
 	if err != nil {
 		return false, err
 	}
-	if !all && !emit("--- Conversation history (display only, not model input) ---") {
+	if !all && (!emit("--- Conversation history (display only, not model input) ---") || !emit("")) {
 		return false, nil
 	}
 	var spacing toolBatchSpacing

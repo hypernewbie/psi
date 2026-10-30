@@ -273,10 +273,8 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 		if e.CustomMessage.Display {
 			add(e, KindAssistant, "["+e.CustomMessage.CustomType+"] "+timelineUserText(e.CustomMessage.Content, nil))
 		}
-	case "model_change":
-		add(e, KindSystemMarker, fmt.Sprintf("model: %s/%s", e.ModelChange.Provider, e.ModelChange.ModelID))
-	case "thinking_level_change":
-		add(e, KindSystemMarker, "thinking: "+e.ThinkingLevelChange.ThinkingLevel)
+	case "model_change", "thinking_level_change":
+		// Durable state, not chat messages (Pi's sessionEntryToContextMessages).
 	case "context_edit":
 		add(e, KindSystemMarker, "Context edited (model context updated, transcript preserved).")
 	}

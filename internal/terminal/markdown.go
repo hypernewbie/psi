@@ -45,6 +45,9 @@ func FormatAssistantMessage(source string, width int, noColor bool, palette ...*
 }
 
 func FormatAssistantMessageWithDisplay(source string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
+	if strings.TrimSpace(source) == "" {
+		return nil
+	}
 	rows := RenderMarkdownWithDisplay(source, width, noColor, display, palette...)
 	if len(rows) > 0 {
 		rows = append(rows, "")

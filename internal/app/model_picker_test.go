@@ -35,6 +35,8 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	}
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", store.File())
 	q.prompt()
+	q.write("\x1b[Z\x1b[Z") // No reasoning support: no chat log or durable no-op.
+	q.prompt()
 	q.write("draft survives picker")
 	q.write("\x0c")
 	q.wait("Models ·")
@@ -61,10 +63,10 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.wait("1 matches")
 	q.prompt()
 	q.write("\r")
-	q.wait("openai-codex/gpt-5.6-luna thinking off (session-local)")
+	q.wait("gpt-5.6-luna • thinking off")
 	q.prompt()
 	q.write("/thinking minimal\r")
-	q.wait("thinking minimal (effective effort low) (session-local)")
+	q.wait("gpt-5.6-luna • minimal")
 	q.prompt()
 	q.write("/thinking\r")
 	q.wait("Thinking levels ·")
@@ -73,14 +75,17 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.wait("2 matches")
 	q.prompt()
 	q.write("\r")
-	q.wait("thinking high (effective effort high) (session-local)")
+	q.wait("gpt-5.6-luna • high")
 	q.prompt()
 	q.write("/thinking minimal\r")
-	q.wait("thinking minimal (effective effort low) (session-local)")
+	q.wait("gpt-5.6-luna • minimal")
 	q.prompt()
 	q.write("\x1b[Z")
-	q.wait("thinking low (effective effort low) (session-local)")
+	q.wait("gpt-5.6-luna • low")
 	q.prompt()
+	if view := strings.Join(q.screen.Scrollback, "\n") + "\n" + q.screen.Text(); strings.Contains(view, "(session-local)") || strings.Contains(view, "[session] thinking:") {
+		t.Fatalf("thinking/model changes appended chat logs: %q", view)
+	}
 	q.write("/session\r")
 	q.wait("requested model gpt-5.6-luna")
 	q.wait("effective effort low")
@@ -119,8 +124,20 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	if proj.State.Provider != "openai-codex" || proj.State.ModelID != "gpt-5.6-luna" || proj.State.ThinkingLevel != "low" {
 		t.Fatalf("session-local choices not durable: %+v", proj.State)
 	}
+	thinkingChanges := 0
+	for _, entry := range reopened.Entries() {
+		if entry.Kind == "thinking_level_change" {
+			thinkingChanges++
+		}
+	}
+	if thinkingChanges != 4 {
+		t.Fatalf("thinking cycles added no-op records: got %d changes, want 4", thinkingChanges)
+	}
 	q = startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", store.File())
 	q.prompt()
+	if view := strings.Join(q.screen.Scrollback, "\n") + "\n" + q.screen.Text(); strings.Contains(view, "[session] thinking:") || strings.Contains(view, "[session] model:") {
+		t.Fatalf("restart replayed configuration records as chat logs: %q", view)
+	}
 	q.write("/session\r")
 	q.wait("requested model gpt-5.6-luna")
 	q.wait("effective effort low")

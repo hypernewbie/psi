@@ -831,7 +831,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	cycleThinking := func() {
 		levels := provider.SupportedThinking(r.cfg.Model)
-		if len(levels) == 0 {
+		if len(levels) <= 1 {
 			return
 		}
 		current := 0
@@ -938,14 +938,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		switch ev.Type {
 		case event.AssistantStart:
-			finishTools()
 			if r.state != StateCancelling {
 				console.SetThinking(true)
 			}
 		case event.TextDelta:
-			console.SetThinking(false)
-			r.state = StateStreaming
-			visibleRunText = visibleRunText || ev.Text != ""
+			// Tool-only responses are one compact chain, even across requests.
+			// A blank delta is not a visible assistant block.
+			if strings.TrimSpace(ev.Text) != "" {
+				finishTools()
+				console.SetThinking(false)
+				r.state = StateStreaming
+				visibleRunText = true
+			}
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
@@ -977,7 +981,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		case event.CompactionStart:
 			console.SetThinking(false)
-			finishTools()
+			stream.Close()
 			r.state = StateCompacting
 			setActivity(compactionActivity(ev.State))
 		case event.CompactionEnd:
@@ -1004,7 +1008,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		if strings.TrimSpace(display) != "" {
-			for _, line := range terminal.FormatUserMessageWithDisplay(display, console.StatusWidth(), false, presentationDisplay(r.settings), r.theme) {
+			console.EnsureTranscriptGap()
+			for _, line := range terminal.FormatUserMessageWithDisplay(display, console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
 				fmt.Fprintln(out, line)
 			}
 		}
@@ -1617,7 +1622,6 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 			return false, err
 		}
 		r.installConfiguration(&candidate)
-		print(fmt.Sprintf("%s/%s thinking %s (session-local)", r.ov.Provider, r.ov.Model, r.ov.Thinking))
 	case "thinking":
 		if strings.TrimSpace(cmd.Arg) == "" {
 			print(fmt.Sprintf("thinking %s (supported: %s)", provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), provider.ThinkingChoices(r.cfg.Model)))
@@ -1634,6 +1638,9 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		if !found {
 			return false, fmt.Errorf("unsupported thinking level %q", lvl)
 		}
+		if lvl == r.ov.Thinking {
+			return false, nil
+		}
 		next := r.ov
 		next.Thinking = lvl
 		candidate := *r
@@ -1646,7 +1653,6 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 			return false, err
 		}
 		r.installConfiguration(&candidate)
-		print(fmt.Sprintf("thinking %s (session-local)", provider.ThinkingDescription(r.cfg.Model, lvl)))
 	default:
 		return false, fmt.Errorf("unknown command (see /help)")
 	}

@@ -46,9 +46,6 @@ func renderTimelineAtWidthWithDisplayAndColor(emit func(string) bool, items []se
 
 func renderTimelineItems(emit func(string) bool, items []session.TranscriptItem, width int, display terminal.DisplaySettings, noColor bool, spacing *toolBatchSpacing, palette ...*pitheme.Theme) bool {
 	for _, it := range items {
-		if it.Kind != session.KindTool && !spacing.finish(emit) {
-			return false
-		}
 		var lines []string
 		switch it.Kind {
 		case session.KindUser:
@@ -79,9 +76,15 @@ func renderTimelineItems(emit func(string) bool, items []session.TranscriptItem,
 		case session.KindSystemMarker:
 			lines = terminal.FormatMetadataMessage("[session] ", it.Text, width, noColor, display, palette...)
 		case session.KindHistoryBoundary:
-			lines = []string{"--- " + terminal.Sanitize(it.Text) + " ---"}
+			lines = []string{"--- " + terminal.Sanitize(it.Text) + " ---", ""}
 		case session.KindNotice:
 			lines = []string{terminal.Sanitize(it.Text)}
+		}
+		if len(lines) == 0 {
+			continue
+		}
+		if it.Kind != session.KindTool && !spacing.finish(emit) {
+			return false
 		}
 		for _, line := range lines {
 			if !emit(line) {
@@ -115,12 +118,12 @@ func replayActivationAtWidthWithDisplayAndColor(emit func(string) bool, act *Act
 	if act.Store.Header().ID == activeID && !isNew {
 		return true
 	}
-	if !emit("--- session " + terminal.Sanitize(act.Store.Header().ID) + " ---") {
+	if !emit("--- session "+terminal.Sanitize(act.Store.Header().ID)+" ---") || !emit("") {
 		return false
 	}
 	if act.Offline && act.OfflineErr != nil {
 		notice := strings.Join(terminal.FormatNotice(terminal.NoticeWarning, "Offline: "+act.OfflineErr.Error()+" (history readable, continuation blocked)", width, noColor, palette...), "\n")
-		if !emit(notice) {
+		if !emit(notice) || !emit("") {
 			return false
 		}
 	}
