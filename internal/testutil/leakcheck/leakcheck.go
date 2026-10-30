@@ -18,8 +18,8 @@ func Verify(t *testing.T, opts ...goleak.Option) {
 	goleak.VerifyNone(t, allOpts...)
 }
 
-// VerifyTestMain runs TestMain with goleak verification.
-func VerifyTestMain(m *testing.M, opts ...goleak.Option) int {
+// VerifyTestMain runs TestMain with goleak verification and exits.
+func VerifyTestMain(m *testing.M, opts ...goleak.Option) {
 	allOpts := append(DefaultOptions(), opts...)
-	return goleak.VerifyTestMain(m, allOpts...)
+	goleak.VerifyTestMain(m, allOpts...)
 }

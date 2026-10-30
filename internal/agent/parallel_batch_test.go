@@ -9,12 +9,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
+	"psi/internal/testutil/leakcheck"
 	"psi/internal/tools"
 )
 
@@ -840,4 +842,629 @@ func TestParallelLargeBatchStaysBounded(t *testing.T) {
 		t.Fatalf("200-call batch took %s", elapsed)
 	}
 	t.Logf("batch=%d settled=%d alloc=%d bytes elapsed=%s", calls, settled, grew, elapsed)
+}
+
+// TestBatchDrain_StorageFailureWaitsForInFlightWorkers: storage failure during coordinate
+// calls stopBatch() and b.drain() joins all in-flight workers. Asserts no background
+// worker continues writing or executing after Submit returns, and no goroutine leaks.
+func TestBatchDrain_StorageFailureWaitsForInFlightWorkers(t *testing.T) {
+	defer leakcheck.Verify(t)
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	writeFileFor(t, ws, "fast.txt", "fast data")
+
+	var activeWorkers atomic.Int32
+	var submitReturned atomic.Bool
+	var workerExecutedAfterSubmit atomic.Bool
+
+	worker1Entered := make(chan struct{})
+	worker2Entered := make(chan struct{})
+	var w1Once, w2Once sync.Once
+
+	reg.Write.WriteFile = func(path string, data []byte, mode os.FileMode) error {
+		activeWorkers.Add(1)
+		defer activeWorkers.Add(-1)
+
+		if strings.Contains(path, "w1.txt") {
+			w1Once.Do(func() { close(worker1Entered) })
+		}
+		if strings.Contains(path, "w2.txt") {
+			w2Once.Do(func() { close(worker2Entered) })
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		if submitReturned.Load() {
+			workerExecutedAfterSubmit.Store(true)
+		}
+		return os.WriteFile(path, data, mode)
+	}
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(
+			readCall("r0", "fast.txt"),
+			writeCall("w1", "w1.txt", "payload 1"),
+			writeCall("w2", "w2.txt", "payload 2"),
+		),
+		{Text: "never reached", StopReason: "stop"},
+	}}
+
+	loop := New(store, reg, fake, func(e event.Event) {})
+	cfg := Config{Model: modelMeta(), Tools: toolDefs()}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.Submit(context.Background(), "go", cfg)
+	}()
+
+	// Wait until workers w1 and w2 have entered WriteFile
+	<-worker1Entered
+	<-worker2Entered
+
+	// Now fail writes before r0 settles
+	store.FailWritesForTest(errors.New("simulated storage failure"))
+
+	err = <-done
+	submitReturned.Store(true)
+
+	if err == nil {
+		t.Fatal("expected storage failure error, got nil")
+	}
+	if !strings.Contains(err.Error(), "storage failure") {
+		t.Fatalf("expected storage failure, got %v", err)
+	}
+
+	// Invariant: b.drain() must have waited for all in-flight workers!
+	if active := activeWorkers.Load(); active != 0 {
+		t.Fatalf("active workers when Submit returned = %d, want 0", active)
+	}
+	if workerExecutedAfterSubmit.Load() {
+		t.Fatal("worker executed after Submit returned!")
+	}
+}
+
+// TestParallelBatch_CancellationTenCallsSomeRunningSomeQueued: context cancelled with 10 tool
+// calls in progress (5 started, 5 queued/unadmitted). Admitted calls report cancelled,
+// unadmitted report not_started, and every tool_use ID has a matching tool_result (no orphans).
+func TestParallelBatch_CancellationTenCallsSomeRunningSomeQueued(t *testing.T) {
+	defer leakcheck.Verify(t)
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	for i := 0; i < 3; i++ {
+		writeFileFor(t, ws, fmt.Sprintf("file%d.txt", i), "data")
+	}
+
+	// 5 builtin calls: b0, b1, b2 (reads); b3, b4 (writes to same file "mut.txt" so b4 is queued)
+	// 5 internal calls: c0, c1, c2, c3, c4 (chained, so c1..c4 are queued)
+	calls := []provider.Block{
+		readCall("b0", "file0.txt"),
+		readCall("b1", "file1.txt"),
+		readCall("b2", "file2.txt"),
+		writeCall("b3", "mut.txt", "v1"),
+		writeCall("b4", "mut.txt", "v2"),
+		{Type: "toolCall", ID: "c0", Name: "control", Arguments: map[string]any{"idx": 0}},
+		{Type: "toolCall", ID: "c1", Name: "control", Arguments: map[string]any{"idx": 1}},
+		{Type: "toolCall", ID: "c2", Name: "control", Arguments: map[string]any{"idx": 2}},
+		{Type: "toolCall", ID: "c3", Name: "control", Arguments: map[string]any{"idx": 3}},
+		{Type: "toolCall", ID: "c4", Name: "control", Arguments: map[string]any{"idx": 4}},
+	}
+
+	b0Entered := make(chan struct{})
+	b1Entered := make(chan struct{})
+	b2Entered := make(chan struct{})
+	b3Entered := make(chan struct{})
+	c0Entered := make(chan struct{})
+	releaseAll := make(chan struct{})
+
+	reg.Read.AfterOpen = func(path string) {
+		if strings.Contains(path, "file0.txt") {
+			close(b0Entered)
+		} else if strings.Contains(path, "file1.txt") {
+			close(b1Entered)
+		} else if strings.Contains(path, "file2.txt") {
+			close(b2Entered)
+		}
+		<-releaseAll
+	}
+
+	var b3Once sync.Once
+	reg.Write.AfterMkdir = func() {
+		b3Once.Do(func() { close(b3Entered) })
+		<-releaseAll
+	}
+
+	var c0Once sync.Once
+	cfg := Config{
+		Model: modelMeta(), Tools: toolDefs(),
+		InternalTools: map[string]InternalToolHandler{
+			"control": func(ctx context.Context, inv tools.Invocation) tools.Result {
+				if inv.ID == "c0" {
+					c0Once.Do(func() { close(c0Entered) })
+					<-releaseAll
+				}
+				if ctx.Err() != nil {
+					return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: "control cancelled"}}}
+				}
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: "control done"}}}
+			},
+		},
+	}
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(calls...),
+	}}
+	loop := New(store, reg, fake, func(event.Event) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.Submit(ctx, "go", cfg)
+	}()
+
+	// Wait for b0, b1, b2, b3, c0 to enter
+	<-b0Entered
+	<-b1Entered
+	<-b2Entered
+	<-b3Entered
+	<-c0Entered
+
+	// Cancel while 5 are running and 5 are queued
+	cancel()
+	close(releaseAll)
+
+	err = <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Every tool_use ID gets a matching tool_result in the session (no orphaned tool_use IDs)
+	unresolved := session.UnresolvedToolCalls(session.ConvertToLLM(proj.Flat))
+	if len(unresolved) != 0 {
+		t.Fatalf("orphaned tool_use IDs found: %v", unresolved)
+	}
+
+	resultsByID := make(map[string]*session.ToolResultMessage)
+	var resultOrder []string
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" && m.ToolResult != nil {
+			resultsByID[m.ToolResult.ToolCallID] = m.ToolResult
+			resultOrder = append(resultOrder, m.ToolResult.ToolCallID)
+		}
+	}
+
+	if len(resultsByID) != 10 {
+		t.Fatalf("expected 10 tool results, got %d", len(resultsByID))
+	}
+
+	expectedIDs := []string{"b0", "b1", "b2", "b3", "b4", "c0", "c1", "c2", "c3", "c4"}
+	for i, id := range expectedIDs {
+		if resultOrder[i] != id {
+			t.Errorf("result %d = %s, want %s", i, resultOrder[i], id)
+		}
+	}
+
+	// 2. Started calls report cancelled
+	for _, id := range []string{"b0", "b1", "b2", "b3", "c0"} {
+		res := resultsByID[id]
+		if !strings.Contains(string(res.Details), `"cancelled"`) {
+			t.Errorf("started call %s details = %s, want cancelled", id, res.Details)
+		}
+		if strings.Contains(string(res.Details), "not_started") {
+			t.Errorf("started call %s was mislabeled as not_started", id)
+		}
+	}
+
+	// 3. Unadmitted calls report not_started (specifically c1..c4 which waited on chain)
+	for _, id := range []string{"c1", "c2", "c3", "c4"} {
+		res := resultsByID[id]
+		if !strings.Contains(string(res.Details), "not_started") {
+			t.Errorf("unadmitted call %s details = %s, want not_started", id, res.Details)
+		}
+	}
+}
+
+// TestParallelBatch_OutOfOrderSettlementAppendsInAssistantOrder: when tool calls finish
+// out of order, results are appended to session strictly in assistant order (c1, then c2, then c3...).
+func TestParallelBatch_OutOfOrderSettlementAppendsInAssistantOrder(t *testing.T) {
+	defer leakcheck.Verify(t)
+	const n = 5
+	var calls []provider.Block
+	for i := 1; i <= n; i++ {
+		calls = append(calls, readCall(fmt.Sprintf("r%d", i), fmt.Sprintf("f%d.txt", i)))
+	}
+
+	h := newParallelHarness(t, []*provider.Response{
+		batchResponse(calls...),
+		{Text: "done", StopReason: "stop"},
+	})
+
+	for i := 1; i <= n; i++ {
+		writeFileFor(t, h.ws, fmt.Sprintf("f%d.txt", i), fmt.Sprintf("content-%d", i))
+	}
+
+	// Pre-register gates for all 5 files
+	gates := make([]chan struct{}, n+1)
+	for i := 1; i <= n; i++ {
+		g, _ := h.gate(fmt.Sprintf("f%d.txt", i))
+		gates[i] = g
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- h.loop.Submit(context.Background(), "go", h.config())
+	}()
+
+	// Wait for all 5 to be admitted and entered
+	for i := 1; i <= n; i++ {
+		<-gates[i]
+	}
+
+	// Release in scrambled order: r5, r3, r4, r2, and finally r1
+	h.releaseFile("f5.txt")
+	h.releaseFile("f3.txt")
+	h.releaseFile("f4.txt")
+	h.releaseFile("f2.txt")
+
+	// Since r1 has not completed, NO tool results may have settled yet
+	if ends := h.eventsOf(event.ToolEnd); len(ends) != 0 {
+		t.Fatalf("results settled before r1 finished: %+v", ends)
+	}
+
+	// Release r1
+	h.releaseFile("f1.txt")
+
+	if err := <-done; err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	// Invariant: ToolEnd events are strictly in call order: r1, r2, r3, r4, r5
+	ends := h.eventsOf(event.ToolEnd)
+	if len(ends) != n {
+		t.Fatalf("expected %d ToolEnd events, got %d", n, len(ends))
+	}
+	for i := 1; i <= n; i++ {
+		expectedID := fmt.Sprintf("r%d", i)
+		if ends[i-1].ToolCallID != expectedID {
+			t.Errorf("ToolEnd %d = %s, want %s", i-1, ends[i-1].ToolCallID, expectedID)
+		}
+	}
+
+	// Invariant: session projection results are strictly in call order
+	proj, err := h.store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedIDs []string
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" && m.ToolResult != nil {
+			storedIDs = append(storedIDs, m.ToolResult.ToolCallID)
+		}
+	}
+	if len(storedIDs) != n {
+		t.Fatalf("expected %d stored tool results, got %d", n, len(storedIDs))
+	}
+	for i := 1; i <= n; i++ {
+		expectedID := fmt.Sprintf("r%d", i)
+		if storedIDs[i-1] != expectedID {
+			t.Errorf("stored result %d = %s, want %s", i-1, storedIDs[i-1], expectedID)
+		}
+	}
+
+	// Invariant: provider request has tool results strictly in call order
+	if len(h.fake.Calls) != 2 {
+		t.Fatalf("expected 2 provider requests, got %d", len(h.fake.Calls))
+	}
+	var reqIDs []string
+	for _, m := range h.fake.Calls[1].Messages {
+		if m.Role == "toolResult" {
+			reqIDs = append(reqIDs, m.ToolCallID)
+		}
+	}
+	for i := 1; i <= n; i++ {
+		expectedID := fmt.Sprintf("r%d", i)
+		if reqIDs[i-1] != expectedID {
+			t.Errorf("request result %d = %s, want %s", i-1, reqIDs[i-1], expectedID)
+		}
+	}
+}
+
+// TestParallelBatch_MultipleMutationsSameFileInSingleBatch: multiple mutations (write -> edit -> edit -> write)
+// to the same file in a single batch are serialized by the mutation queue and reflect sequential replay.
+func TestParallelBatch_MultipleMutationsSameFileInSingleBatch(t *testing.T) {
+	defer leakcheck.Verify(t)
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+
+	// In one batch: write -> edit -> edit -> write
+	batchCalls := []provider.Block{
+		writeCall("w1", "doc.txt", "line 1\nline 2\nline 3\n"),
+		{
+			Type: "toolCall", ID: "e1", Name: "edit",
+			Arguments: map[string]any{
+				"path": "doc.txt",
+				"edits": []any{
+					map[string]any{"oldText": "line 2\n", "newText": "line 2 updated\n"},
+				},
+			},
+		},
+		{
+			Type: "toolCall", ID: "e2", Name: "edit",
+			Arguments: map[string]any{
+				"path": "doc.txt",
+				"edits": []any{
+					map[string]any{"oldText": "line 3\n", "newText": "line 3 updated\n"},
+				},
+			},
+		},
+		writeCall("w2", "doc.txt", "line 1\nline 2 updated\nline 3 updated\nline 4 final\n"),
+	}
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(batchCalls...),
+		{Text: "done", StopReason: "stop"},
+	}}
+
+	loop := New(store, reg, fake, func(event.Event) {})
+	cfg := Config{Model: modelMeta(), Tools: toolDefs()}
+
+	if err := loop.Submit(context.Background(), "go", cfg); err != nil {
+		t.Fatalf("batch failed: %v", err)
+	}
+
+	// Final file content reflects sequential application of all 4 mutations
+	content, err := os.ReadFile(filepath.Join(ws, "doc.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedContent := "line 1\nline 2 updated\nline 3 updated\nline 4 final\n"
+	if string(content) != expectedContent {
+		t.Fatalf("file content = %q, want %q", string(content), expectedContent)
+	}
+
+	// Projection has all 4 results without error
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settledCount := 0
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" && m.ToolResult != nil {
+			settledCount++
+			if m.ToolResult.IsError {
+				t.Fatalf("tool %s failed: %+v", m.ToolResult.ToolCallID, m.ToolResult.Content)
+			}
+		}
+	}
+	if settledCount != 4 {
+		t.Fatalf("expected 4 settled results, got %d", settledCount)
+	}
+}
+
+// TestParallelBatch_InternalToolsSequentialWhileBuiltinsOverlap: internal control tools
+// execute strictly sequentially relative to each other, while built-in tools overlap concurrently.
+func TestParallelBatch_InternalToolsSequentialWhileBuiltinsOverlap(t *testing.T) {
+	defer leakcheck.Verify(t)
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	writeFileFor(t, ws, "b1.txt", "b1")
+	writeFileFor(t, ws, "b2.txt", "b2")
+	writeFileFor(t, ws, "b3.txt", "b3")
+
+	var activeInternal atomic.Int32
+	var maxInternal atomic.Int32
+	var internalOrder []string
+	var internalMu sync.Mutex
+
+	var activeBuiltin atomic.Int32
+	var maxBuiltin atomic.Int32
+	var builtinOverlapWithInternal atomic.Bool
+
+	releaseBuiltins := make(chan struct{})
+
+	reg.Read.AfterOpen = func(string) {
+		cur := activeBuiltin.Add(1)
+		defer activeBuiltin.Add(-1)
+		for {
+			old := maxBuiltin.Load()
+			if cur <= old || maxBuiltin.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		if activeInternal.Load() > 0 {
+			builtinOverlapWithInternal.Store(true)
+		}
+		<-releaseBuiltins
+	}
+
+	batchCalls := []provider.Block{
+		readCall("b1", "b1.txt"),
+		{Type: "toolCall", ID: "i1", Name: "loop_control", Arguments: map[string]any{"step": 1}},
+		readCall("b2", "b2.txt"),
+		{Type: "toolCall", ID: "i2", Name: "loop_control", Arguments: map[string]any{"step": 2}},
+		readCall("b3", "b3.txt"),
+		{Type: "toolCall", ID: "i3", Name: "loop_control", Arguments: map[string]any{"step": 3}},
+	}
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(batchCalls...),
+		{Text: "done", StopReason: "stop"},
+	}}
+
+	internalDone := make(chan struct{})
+	cfg := Config{
+		Model: modelMeta(), Tools: toolDefs(),
+		InternalTools: map[string]InternalToolHandler{
+			"loop_control": func(_ context.Context, inv tools.Invocation) tools.Result {
+				cur := activeInternal.Add(1)
+				defer activeInternal.Add(-1)
+				for {
+					old := maxInternal.Load()
+					if cur <= old || maxInternal.CompareAndSwap(old, cur) {
+						break
+					}
+				}
+				if cur > 1 {
+					t.Errorf("concurrent internal tools detected! count = %d", cur)
+				}
+				if activeBuiltin.Load() > 0 {
+					builtinOverlapWithInternal.Store(true)
+				}
+				internalMu.Lock()
+				internalOrder = append(internalOrder, inv.ID)
+				if len(internalOrder) == 3 {
+					close(internalDone)
+				}
+				internalMu.Unlock()
+				time.Sleep(15 * time.Millisecond)
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: "step ok"}}}
+			},
+		},
+	}
+
+	loop := New(store, reg, fake, func(event.Event) {})
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.Submit(context.Background(), "go", cfg)
+	}()
+
+	// Wait until all 3 internal tools have executed while built-ins were held open
+	<-internalDone
+	close(releaseBuiltins)
+
+	if err := <-done; err != nil {
+		t.Fatalf("batch failed: %v", err)
+	}
+
+	// 1. Internal tools were strictly sequential (maxInternal == 1)
+	if m := maxInternal.Load(); m != 1 {
+		t.Fatalf("max concurrent internal tools = %d, want 1", m)
+	}
+
+	// 2. Internal tools executed in call order
+	internalMu.Lock()
+	if len(internalOrder) != 3 || internalOrder[0] != "i1" || internalOrder[1] != "i2" || internalOrder[2] != "i3" {
+		t.Fatalf("internal execution order = %v, want [i1, i2, i3]", internalOrder)
+	}
+	internalMu.Unlock()
+
+	// 3. Built-in tools overlapped concurrently with each other
+	if b := maxBuiltin.Load(); b <= 1 {
+		t.Fatalf("max concurrent built-in tools = %d, expected > 1 (overlap)", b)
+	}
+
+	// 4. Built-in tools overlapped with internal tools
+	if !builtinOverlapWithInternal.Load() {
+		t.Fatal("expected built-in tools to overlap concurrently with internal tools")
+	}
+
+	// 5. Settlement order preserves assistant call order
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedIDs []string
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" && m.ToolResult != nil {
+			storedIDs = append(storedIDs, m.ToolResult.ToolCallID)
+		}
+	}
+	wantIDs := []string{"b1", "i1", "b2", "i2", "b3", "i3"}
+	if len(storedIDs) != len(wantIDs) {
+		t.Fatalf("stored results = %v, want %v", storedIDs, wantIDs)
+	}
+	for i, id := range wantIDs {
+		if storedIDs[i] != id {
+			t.Errorf("result %d = %s, want %s", i, storedIDs[i], id)
+		}
+	}
+}
+
+// TestParallelBatch_ToolPanicDoesNotWedgeBatch: panics inside builtin tools or internal tools
+// are recovered into error results; the mutation slot is released and the batch settles cleanly.
+func TestParallelBatch_ToolPanicDoesNotWedgeBatch(t *testing.T) {
+	defer leakcheck.Verify(t)
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	writeFileFor(t, ws, "ok.txt", "ok")
+
+	reg.Read.AfterOpen = func(path string) {
+		if strings.Contains(path, "panic.txt") {
+			panic("simulated builtin tool panic")
+		}
+	}
+	writeFileFor(t, ws, "panic.txt", "panic")
+
+	batchCalls := []provider.Block{
+		readCall("r1", "panic.txt"),
+		{Type: "toolCall", ID: "i1", Name: "panicking_internal", Arguments: map[string]any{}},
+		readCall("r2", "ok.txt"),
+	}
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(batchCalls...),
+		{Text: "done after panic", StopReason: "stop"},
+	}}
+
+	cfg := Config{
+		Model: modelMeta(), Tools: toolDefs(),
+		InternalTools: map[string]InternalToolHandler{
+			"panicking_internal": func(context.Context, tools.Invocation) tools.Result {
+				panic("simulated internal tool panic")
+			},
+		},
+	}
+
+	loop := New(store, reg, fake, func(event.Event) {})
+	if err := loop.Submit(context.Background(), "go", cfg); err != nil {
+		t.Fatalf("submit failed after tool panic: %v", err)
+	}
+
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(map[string]*session.ToolResultMessage)
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" && m.ToolResult != nil {
+			results[m.ToolResult.ToolCallID] = m.ToolResult
+		}
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 tool results, got %d", len(results))
+	}
+	if !results["r1"].IsError || !strings.Contains(results["r1"].Content[0].Text.Text, "panic") {
+		t.Errorf("r1 result = %+v, want panic error", results["r1"])
+	}
+	if !results["i1"].IsError || !strings.Contains(results["i1"].Content[0].Text.Text, "panic") {
+		t.Errorf("i1 result = %+v, want panic error", results["i1"])
+	}
+	if results["r2"].IsError {
+		t.Errorf("r2 result should be success, got error: %+v", results["r2"])
+	}
 }

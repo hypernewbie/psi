@@ -496,4 +496,3 @@ func TestBashShellEnv(t *testing.T) {
 		t.Errorf("got %q, want /bin/sh", s)
 	}
 }
-

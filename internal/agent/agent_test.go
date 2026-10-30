@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
+	"psi/internal/testutil/leakcheck"
 	"psi/internal/tools"
 )
 
@@ -323,4 +325,352 @@ func storeUserText(entry *session.Entry) string {
 		return text
 	}
 	return ""
+}
+
+type blockingProvider struct {
+	provider.Provider
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingProvider) Send(ctx context.Context, req provider.Request, onText func(string)) (*provider.Response, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-b.release:
+	}
+	return b.Provider.Send(ctx, req, onText)
+}
+
+func (b *blockingProvider) CloseIdle() {
+	b.Provider.CloseIdle()
+}
+
+func TestConcurrentSubmit_ExactlyOneSucceeds(t *testing.T) {
+	defer leakcheck.Verify(t)
+	store, reg, fake, _, _ := testSetup(t)
+	fake.Responses = []*provider.Response{{Text: "done", StopReason: "stop"}}
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	bp := &blockingProvider{
+		Provider: fake,
+		entered:  entered,
+		release:  release,
+	}
+	loop := New(store, reg, bp, func(event.Event) {})
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
+
+	const n = 20
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			errs[idx] = loop.Submit(context.Background(), fmt.Sprintf("msg-%d", idx), cfg)
+		}(i)
+	}
+
+	close(start)
+	<-entered
+
+	// While the winner is running inside Send, any new Submit must fail with "a run is already active"
+	if err := loop.Submit(context.Background(), "mid-flight", cfg); err == nil || !strings.Contains(err.Error(), "a run is already active") {
+		t.Fatalf("expected already active error, got %v", err)
+	}
+
+	close(release)
+	wg.Wait()
+
+	var successes, rejections int
+	for _, err := range errs {
+		if err == nil {
+			successes++
+		} else if strings.Contains(err.Error(), "a run is already active") {
+			rejections++
+		} else {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 success, got %d", successes)
+	}
+	if rejections != n-1 {
+		t.Fatalf("expected %d rejections, got %d", n-1, rejections)
+	}
+	if loop.Running() {
+		t.Fatal("loop still running after completion")
+	}
+
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var users int
+	for _, m := range proj.Flat {
+		if m.Role == "user" {
+			users++
+		}
+	}
+	if users != 1 {
+		t.Fatalf("expected 1 user message, got %d", users)
+	}
+}
+
+func TestSubmitAllowedAfterPreviousRunCompletes(t *testing.T) {
+	defer leakcheck.Verify(t)
+	store, _, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{
+		{Text: "first reply", StopReason: "stop"},
+		{Text: "second reply", StopReason: "stop"},
+	}
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
+
+	if err := loop.Submit(context.Background(), "first", cfg); err != nil {
+		t.Fatalf("first run failed: %v", err)
+	}
+	if loop.Running() {
+		t.Fatal("loop still running after first run")
+	}
+
+	if err := loop.Submit(context.Background(), "second", cfg); err != nil {
+		t.Fatalf("second run failed: %v", err)
+	}
+	if loop.Running() {
+		t.Fatal("loop still running after second run")
+	}
+
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userTexts []string
+	for _, m := range proj.Flat {
+		if m.Role == "user" {
+			userTexts = append(userTexts, m.User.Content.(string))
+		}
+	}
+	if len(userTexts) != 2 || userTexts[0] != "first" || userTexts[1] != "second" {
+		t.Fatalf("user messages = %v, want [first, second]", userTexts)
+	}
+}
+
+func TestSteerWhileStreamingAndBatchRunning(t *testing.T) {
+	defer leakcheck.Verify(t)
+	store, reg, fake, loop, _ := testSetup(t)
+	ws := store.Cwd()
+	if err := os.WriteFile(filepath.Join(ws, "work.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	enteredTool := make(chan struct{})
+	releaseTool := make(chan struct{})
+	var toolOnce sync.Once
+	reg.Read.AfterOpen = func(string) {
+		toolOnce.Do(func() { close(enteredTool) })
+		<-releaseTool
+	}
+
+	fake.Responses = []*provider.Response{
+		{
+			Text:       "calling tool",
+			StopReason: "toolUse",
+			ToolCalls: []provider.Block{
+				{Type: "toolCall", ID: "t1", Name: "read", Arguments: map[string]any{"path": "work.txt"}},
+			},
+		},
+		{Text: "processed steering", StopReason: "stop"},
+	}
+
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.Submit(context.Background(), "initial prompt", cfg)
+	}()
+
+	<-enteredTool
+
+	// While tool batch is running, multiple goroutines call Steer
+	const n = 5
+	var steerWg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		steerWg.Add(1)
+		go func(idx int) {
+			defer steerWg.Done()
+			loop.Steer(fmt.Sprintf("steering-%d", idx))
+		}(i)
+	}
+	steerWg.Wait()
+
+	close(releaseTool)
+
+	if err := <-done; err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	// Provider received 2 calls: first with initial prompt, second with tool result and all 5 steering messages
+	if len(fake.Calls) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(fake.Calls))
+	}
+
+	secondReq := fake.Calls[1]
+	steeredCount := 0
+	for _, m := range secondReq.Messages {
+		if m.Role == "user" {
+			for i := 0; i < n; i++ {
+				if strings.Contains(fmt.Sprint(m.Content), fmt.Sprintf("steering-%d", i)) {
+					steeredCount++
+				}
+			}
+		}
+	}
+	if steeredCount != n {
+		t.Fatalf("expected %d steered messages in provider request, found %d", n, steeredCount)
+	}
+
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedSteered := 0
+	for _, m := range proj.Flat {
+		if m.Role == "user" && strings.HasPrefix(fmt.Sprint(m.User.Content), "steering-") {
+			storedSteered++
+		}
+	}
+	if storedSteered != n {
+		t.Fatalf("expected %d steered messages stored, found %d", n, storedSteered)
+	}
+	if pending := loop.PendingSteering(); len(pending) != 0 {
+		t.Fatalf("pending steering not empty: %v", pending)
+	}
+}
+
+func TestClearSteeringAndPendingSteeringConcurrency(t *testing.T) {
+	defer leakcheck.Verify(t)
+	_, _, _, loop, _ := testSetup(t)
+
+	const goroutines = 8
+	const itemsPerGoroutine = 50
+	var wg sync.WaitGroup
+	var clearedMu sync.Mutex
+	cleared := make(map[string]bool)
+
+	// Producers
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < itemsPerGoroutine; i++ {
+				loop.Steer(fmt.Sprintf("msg-%d-%d", gid, i))
+			}
+		}(g)
+	}
+
+	// Consumers calling PendingSteering and ClearSteering concurrently
+	stopConsumers := make(chan struct{})
+	var consumerWg sync.WaitGroup
+	for c := 0; c < 4; c++ {
+		consumerWg.Add(1)
+		go func() {
+			defer consumerWg.Done()
+			for {
+				select {
+				case <-stopConsumers:
+					return
+				default:
+					_ = loop.PendingSteering()
+					msgs := loop.ClearSteering()
+					if len(msgs) > 0 {
+						clearedMu.Lock()
+						for _, m := range msgs {
+							if cleared[m] {
+								t.Errorf("duplicate message cleared: %s", m)
+							}
+							cleared[m] = true
+						}
+						clearedMu.Unlock()
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	time.Sleep(10 * time.Millisecond)
+	close(stopConsumers)
+	consumerWg.Wait()
+
+	// Drain remaining
+	for _, m := range loop.ClearSteering() {
+		clearedMu.Lock()
+		if cleared[m] {
+			t.Errorf("duplicate message drained: %s", m)
+		}
+		cleared[m] = true
+		clearedMu.Unlock()
+	}
+
+	expectedTotal := goroutines * itemsPerGoroutine
+	if len(cleared) != expectedTotal {
+		t.Fatalf("expected %d unique messages cleared, got %d", expectedTotal, len(cleared))
+	}
+}
+
+func TestSteerRaceWithRunEnding(t *testing.T) {
+	defer leakcheck.Verify(t)
+	store, _, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{{Text: "finished turn", StopReason: "stop"}}
+	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
+
+	var steerOnce sync.Once
+	steeredText := "late-steer-message"
+
+	loop.sink = func(e event.Event) {
+		if e.Type == event.RunEnd {
+			steerOnce.Do(func() {
+				loop.Steer(steeredText)
+			})
+		}
+	}
+
+	err := loop.Submit(context.Background(), "start", cfg)
+	if err != nil {
+		t.Fatalf("submit failed: %v", err)
+	}
+
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inStore := false
+	for _, m := range proj.Flat {
+		if m.Role == "user" && strings.Contains(fmt.Sprint(m.User.Content), steeredText) {
+			inStore = true
+			break
+		}
+	}
+	inPending := false
+	for _, m := range loop.PendingSteering() {
+		if m == steeredText {
+			inPending = true
+			break
+		}
+	}
+
+	if !inStore && !inPending {
+		t.Fatal("late steering message was silently dropped!")
+	}
+	if inStore && inPending {
+		t.Fatal("late steering message is duplicated in store and pending queue!")
+	}
 }

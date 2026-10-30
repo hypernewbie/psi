@@ -114,7 +114,8 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 			prevInternal = chain
 			b.outstanding++
 		case batchBuiltin:
-			go b.runBuiltinCall(batchCtx, plan, i)
+			runner := b.loop.reg.Prepare(plan.invocation)
+			go b.runBuiltinCall(batchCtx, plan, runner, i)
 			b.outstanding++
 		}
 	}
@@ -137,12 +138,24 @@ func closedChain() chan struct{} {
 
 // runBuiltinCall executes one built-in tool call. The worker never touches
 // the store or the sink; it reports through completions exactly once.
-func (b *batch) runBuiltinCall(ctx context.Context, plan *batchPlan, index int) {
+func (b *batch) runBuiltinCall(ctx context.Context, plan *batchPlan, runner func(context.Context) tools.Result, index int) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.completions <- batchCompletion{
+				index:   index,
+				started: true,
+				result:  tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("tool panicked: %v", r)}}},
+			}
+		}
+	}()
 	if err := ctx.Err(); err != nil {
+		if runner != nil {
+			_ = runner(ctx)
+		}
 		b.completions <- batchCompletion{index: index, started: false, result: notStartedResult()}
 		return
 	}
-	res := b.loop.reg.DispatchCtx(ctx, plan.invocation)
+	res := runner(ctx)
 	b.completions <- batchCompletion{index: index, started: true, result: res}
 }
 
@@ -150,6 +163,15 @@ func (b *batch) runBuiltinCall(ctx context.Context, plan *batchPlan, index int) 
 // call in the same batch settles, then opens the chain for its successor.
 func (b *batch) runInternalCall(ctx context.Context, plan *batchPlan, wait, done chan struct{}, index int) {
 	defer close(done)
+	defer func() {
+		if r := recover(); r != nil {
+			b.completions <- batchCompletion{
+				index:   index,
+				started: true,
+				result:  tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("internal tool panicked: %v", r)}}},
+			}
+		}
+	}()
 	<-wait
 	if err := ctx.Err(); err != nil {
 		b.completions <- batchCompletion{index: index, started: false, result: notStartedResult()}

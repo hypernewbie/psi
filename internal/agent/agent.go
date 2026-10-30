@@ -93,12 +93,12 @@ func (l *Loop) deliverSteering() bool {
 	msgs := l.steering
 	l.steering = nil
 	l.steerMu.Unlock()
-	for _, text := range msgs {
+	for i, text := range msgs {
 		if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
 			// Storage failure stops the run like any other append failure; the
 			// message is not silently dropped.
 			l.steerMu.Lock()
-			l.steering = append([]string{text}, l.steering...)
+			l.steering = append(msgs[i:], l.steering...)
 			l.steerMu.Unlock()
 			l.sink(event.Event{Type: event.Error, Text: fmt.Sprintf("storage failure, stopping: %v", err)})
 			return false
