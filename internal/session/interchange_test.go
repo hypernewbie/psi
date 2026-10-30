@@ -160,3 +160,228 @@ func TestFailureInjection(t *testing.T) {
 	}
 	_ = orig
 }
+
+// Invariant: Every valid Entry type marshals to JSONL, unmarshals with UnmarshalFileEntry,
+// and re-marshals back to semantically identical JSON.
+func TestEntryFullRoundTrip(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	testEntries := []struct {
+		name string
+		json string
+	}{
+		{
+			name: "SessionHeader",
+			json: `{"type":"session","version":3,"id":"sess-roundtrip-1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp/roundtrip"}`,
+		},
+		{
+			name: "UserMessageString",
+			json: `{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"hello world","timestamp":100}}`,
+		},
+		{
+			name: "UserMessageBlocks",
+			json: `{"type":"message","id":"u2","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"user","content":[{"type":"text","text":"read this"}],"timestamp":101}}`,
+		},
+		{
+			name: "AssistantMessageWithBlocksAndUsage",
+			json: `{"type":"message","id":"a1","parentId":"u2","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"pondering","thinkingSignature":"sig-123"},{"type":"text","text":"done","textSignature":"tsig-456"}],"api":"anthropic-messages","provider":"anthropic","model":"claude-3-5-sonnet","usage":{"input":150,"output":75,"cacheRead":10,"cacheWrite":5,"totalTokens":240,"cost":{"input":0.001,"output":0.002,"cacheRead":0,"cacheWrite":0,"total":0.003}},"stopReason":"stop","timestamp":102}}`,
+		},
+		{
+			name: "SystemMessageWithSections",
+			json: `{"type":"message","id":"s1","parentId":"a1","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"system","content":"system base prompt","sections":{"tools":"<tools>bash</tools>"},"toolsAdded":[{"name":"bash"}],"timestamp":103}}`,
+		},
+		{
+			name: "ToolResultMessageWithError",
+			json: `{"type":"message","id":"tr1","parentId":"s1","timestamp":"2026-01-01T00:00:05.000Z","message":{"role":"toolResult","toolCallId":"c-123","toolName":"read","content":[{"type":"text","text":"file not found"}],"isError":true,"details":{"path":"missing.txt"},"timestamp":104}}`,
+		},
+		{
+			name: "BashExecutionMessageExcluded",
+			json: `{"type":"message","id":"bx1","parentId":"tr1","timestamp":"2026-01-01T00:00:06.000Z","message":{"role":"bashExecution","command":"echo secret","output":"secret","excludeFromContext":true,"timestamp":105}}`,
+		},
+		{
+			name: "ThinkingLevelChange",
+			json: `{"type":"thinking_level_change","id":"tl1","parentId":"bx1","timestamp":"2026-01-01T00:00:07.000Z","thinkingLevel":"high"}`,
+		},
+		{
+			name: "ModelChange",
+			json: `{"type":"model_change","id":"mc1","parentId":"tl1","timestamp":"2026-01-01T00:00:08.000Z","provider":"anthropic","modelId":"claude-sonnet-4"}`,
+		},
+		{
+			name: "UsageEntryWithNote",
+			json: `{"type":"usage","id":"usg1","parentId":"mc1","timestamp":"2026-01-01T00:00:09.000Z","kind":"warm_cache","provider":"anthropic","model":"claude-sonnet-4","usage":{"input":500,"output":200,"cacheRead":50,"cacheWrite":10,"totalTokens":760,"cost":{"input":0.005,"output":0.01,"cacheRead":0,"cacheWrite":0,"total":0.015}},"note":"cache warming usage"}`,
+		},
+		{
+			name: "CompactionEntry",
+			json: `{"type":"compaction","id":"cmp1","parentId":"usg1","timestamp":"2026-01-01T00:00:10.000Z","summary":"condensed summary of turns","firstKeptEntryId":"u2","tokensBefore":1500,"usage":{"input":100,"output":50,"totalTokens":150}}`,
+		},
+		{
+			name: "BranchSummaryEntry",
+			json: `{"type":"branch_summary","id":"bs1","parentId":"cmp1","timestamp":"2026-01-01T00:00:11.000Z","fromId":"u1","summary":"explored sub-branch for research"}`,
+		},
+		{
+			name: "CustomEntry",
+			json: `{"type":"custom","id":"cust1","parentId":"bs1","timestamp":"2026-01-01T00:00:12.000Z","customType":"psi.input","data":{"invocation":"interactive","source":"terminal"}}`,
+		},
+		{
+			name: "CustomMessageEntry",
+			json: `{"type":"custom_message","id":"cm1","parentId":"cust1","timestamp":"2026-01-01T00:00:13.000Z","customType":"extension.notification","content":"custom notify body","display":true,"details":{"severity":"info"}}`,
+		},
+		{
+			name: "ContextEditEntry",
+			json: `{"type":"context_edit","id":"ce1","parentId":"cm1","timestamp":"2026-01-01T00:00:14.000Z","targetId":"u2","replacement":{"content":"replacement text"}}`,
+		},
+		{
+			name: "LabelEntry",
+			json: `{"type":"label","id":"lbl1","parentId":"ce1","timestamp":"2026-01-01T00:00:15.000Z","targetId":"u2","label":"pinned-checkpoint"}`,
+		},
+		{
+			name: "SessionInfoEntry",
+			json: `{"type":"session_info","id":"si1","parentId":"lbl1","timestamp":"2026-01-01T00:00:16.000Z","name":"My Named Session"}`,
+		},
+	}
+
+	for _, tc := range testEntries {
+		t.Run(tc.name, func(t *testing.T) {
+			fe, err := UnmarshalFileEntry([]byte(tc.json))
+			if err != nil {
+				t.Fatalf("UnmarshalFileEntry failed: %v", err)
+			}
+
+			// 1. If it's a header
+			if fe.IsHeader {
+				if fe.Header == nil || fe.Header.Type != "session" {
+					t.Fatalf("expected valid header, got: %+v", fe.Header)
+				}
+				hdrBytes, err := json.Marshal(fe.Header)
+				if err != nil {
+					t.Fatalf("Marshal header failed: %v", err)
+				}
+				var origMap, roundMap map[string]any
+				_ = json.Unmarshal([]byte(tc.json), &origMap)
+				_ = json.Unmarshal(hdrBytes, &roundMap)
+				if origMap["id"] != roundMap["id"] || origMap["version"].(float64) != roundMap["version"].(float64) {
+					t.Errorf("header mismatch: %s vs %s", tc.json, string(hdrBytes))
+				}
+				return
+			}
+
+			// 2. If it's an entry
+			entry := fe.Entry
+			if entry == nil {
+				t.Fatal("fe.Entry is nil")
+			}
+
+			// Marshal with Raw (preserves raw input)
+			marshaledWithRaw, err := entry.MarshalJSON()
+			if err != nil {
+				t.Fatalf("MarshalJSON with Raw failed: %v", err)
+			}
+			if string(marshaledWithRaw) != tc.json {
+				t.Errorf("MarshalJSON with Raw mismatch:\ngot:  %s\nwant: %s", string(marshaledWithRaw), tc.json)
+			}
+
+			// Marshal without Raw (exercises fallback struct serialization for all entry types)
+			entryNoRaw := *entry
+			entryNoRaw.Raw = nil
+			marshaledNoRaw, err := entryNoRaw.MarshalJSON()
+			if err != nil {
+				t.Fatalf("MarshalJSON without Raw failed: %v", err)
+			}
+
+			// Compare semantic equality of marshaled struct JSON
+			var origMap, noRawMap map[string]any
+			if err := json.Unmarshal([]byte(tc.json), &origMap); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(marshaledNoRaw, &noRawMap); err != nil {
+				t.Fatalf("unmarshal marshaledNoRaw failed: %v (raw: %s)", err, string(marshaledNoRaw))
+			}
+			if origMap["type"] != noRawMap["type"] || origMap["id"] != noRawMap["id"] {
+				t.Errorf("struct marshal mismatch on type/id: orig=%+v, noRaw=%+v", origMap, noRawMap)
+			}
+		})
+	}
+	_ = strPtr
+}
+
+// Invariant: Unrecognized fields at the root or within nested structures are preserved
+// identically (forward compatibility) across unmarshal, storage write, reopen, and re-marshal.
+func TestUnrecognizedFieldsPreservation(t *testing.T) {
+	futureLine := `{"type":"message","id":"future-msg-1","parentId":null,"timestamp":"2026-01-01T00:00:00.000Z","future_root_field":"hello_future","future_root_num":12345,"message":{"role":"user","content":"future content","timestamp":50,"future_inner_map":{"ext":true,"code":"ABC"}}}`
+
+	fe, err := UnmarshalFileEntry([]byte(futureLine))
+	if err != nil {
+		t.Fatalf("UnmarshalFileEntry failed on forward-compat line: %v", err)
+	}
+	if fe.Entry == nil {
+		t.Fatal("entry is nil")
+	}
+
+	// Marshaling preserves unknown fields from Raw
+	marshaled, err := fe.Entry.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON failed: %v", err)
+	}
+	if string(marshaled) != futureLine {
+		t.Errorf("MarshalJSON did not preserve unknown fields:\ngot:  %s\nwant: %s", string(marshaled), futureLine)
+	}
+
+	// Now verify through a persisted session:
+	dir := t.TempDir()
+	path := filepath.Join(dir, "future_session.jsonl")
+	header := `{"type":"session","version":3,"id":"future-sess","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp","future_header_flag":"preserved"}`
+	fileContent := header + "\n" + futureLine + "\n"
+	if err := os.WriteFile(path, []byte(fileContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open with OpenFile
+	store, err := OpenFile(path, "/tmp", true)
+	if err != nil {
+		t.Fatalf("OpenFile failed on forward-compat session: %v", err)
+	}
+
+	// Append a new turn
+	if _, err := store.AppendMessage(AgentMessage{
+		Role: "user",
+		User: &UserMessage{Role: "user", Content: "continuing after future turn", Timestamp: 60},
+	}); err != nil {
+		t.Fatalf("AppendMessage failed: %v", err)
+	}
+
+	// Re-read file from disk and check that the first entry still has future fields intact
+	diskData, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(diskData)), "\n")
+	if len(lines) != 3 { // header + future turn + newly appended turn
+		t.Fatalf("expected 3 lines, got %d", len(lines))
+	}
+	if lines[1] != futureLine {
+		t.Errorf("disk line 1 did not preserve future entry byte-for-byte:\ngot:  %s\nwant: %s", lines[1], futureLine)
+	}
+}
+
+func TestMarshalEntryForAppend(t *testing.T) {
+	entry := ModelChangeEntry{
+		Type:      "model_change",
+		ID:        "mc-append-1",
+		ParentID:  nil,
+		Timestamp: "2026-01-01T00:00:00.000Z",
+		Provider:  "anthropic",
+		ModelID:   "claude-sonnet-4",
+	}
+
+	b, err := MarshalEntryForAppend(entry)
+	if err != nil {
+		t.Fatalf("MarshalEntryForAppend failed: %v", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal result failed: %v", err)
+	}
+	if m["type"] != "model_change" || m["modelId"] != "claude-sonnet-4" || m["provider"] != "anthropic" {
+		t.Errorf("unexpected marshaled output: %s", string(b))
+	}
+}

@@ -302,3 +302,121 @@ func TestUnknownRoleRefuses(t *testing.T) {
 		t.Errorf("unknown context role must refuse")
 	}
 }
+
+func TestReplaceContent(t *testing.T) {
+	// 1. User message with string replacement
+	userMsg := AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "old string", Timestamp: 1}}
+	rep1 := replaceContent(userMsg, json.RawMessage(`"new string"`), false)
+	if len(rep1) != 1 || rep1[0].User.Content != "new string" {
+		t.Errorf("user string replacement failed: %+v", rep1)
+	}
+
+	// 2. User message with blocks replacement
+	rep2 := replaceContent(userMsg, json.RawMessage(`[{"type":"text","text":"new block"}]`), false)
+	if len(rep2) != 1 {
+		t.Fatalf("user block replacement failed: %+v", rep2)
+	}
+	blocks, ok := rep2[0].User.Content.([]UserContentBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Text == nil || blocks[0].Text.Text != "new block" {
+		t.Errorf("user block replacement content mismatch: %+v", rep2[0].User.Content)
+	}
+
+	// 3. User message with invalid content fallback
+	rep3 := replaceContent(userMsg, json.RawMessage(`12345`), false)
+	if len(rep3) != 1 || rep3[0].User.Content != "old string" {
+		t.Errorf("user invalid content should fallback: %+v", rep3)
+	}
+
+	// 4. User message with nil User pointer
+	nilUser := AgentMessage{Role: "user"}
+	repNilUser := replaceContent(nilUser, json.RawMessage(`"new"`), false)
+	if len(repNilUser) != 1 || repNilUser[0].User != nil {
+		t.Errorf("nil user pointer should return original message")
+	}
+
+	// 5. Custom message with string replacement
+	customMsg := AgentMessage{Role: "custom", Custom: &CustomMessage{Role: "custom", Content: "old custom", Timestamp: 2}}
+	repCust1 := replaceContent(customMsg, json.RawMessage(`"new custom"`), false)
+	if len(repCust1) != 1 || repCust1[0].Custom.Content != "new custom" {
+		t.Errorf("custom string replacement failed: %+v", repCust1)
+	}
+
+	// 6. Custom message with object replacement
+	repCust2 := replaceContent(customMsg, json.RawMessage(`{"customKey":"customVal"}`), false)
+	if len(repCust2) != 1 {
+		t.Fatalf("custom object replacement failed: %+v", repCust2)
+	}
+	obj, ok := repCust2[0].Custom.Content.(map[string]any)
+	if !ok || obj["customKey"] != "customVal" {
+		t.Errorf("custom object replacement content mismatch: %+v", repCust2[0].Custom.Content)
+	}
+
+	// 7. Custom message with nil Custom pointer
+	nilCustom := AgentMessage{Role: "custom"}
+	repNilCust := replaceContent(nilCustom, json.RawMessage(`"new"`), false)
+	if len(repNilCust) != 1 || repNilCust[0].Custom != nil {
+		t.Errorf("nil custom pointer should return original message")
+	}
+
+	// 8. Assistant message with ContentBlock array replacement
+	asstMsg := AgentMessage{
+		Role: "assistant",
+		Assistant: &AssistantMessage{
+			Role:    "assistant",
+			Content: []ContentBlock{{Type: "text", Text: &TextContent{Type: "text", Text: "old assistant"}}},
+		},
+	}
+	asstBlocks := `[{"type":"text","text":"replaced assistant"}]`
+	repAsst := replaceContent(asstMsg, json.RawMessage(asstBlocks), true)
+	if len(repAsst) != 1 || len(repAsst[0].Assistant.Content) != 1 || repAsst[0].Assistant.Content[0].Text.Text != "replaced assistant" {
+		t.Errorf("assistant replacement failed: %+v", repAsst)
+	}
+
+	// 9. Assistant message with invalid content fallback
+	repAsstInv := replaceContent(asstMsg, json.RawMessage(`"invalid string for assistant"`), true)
+	if len(repAsstInv) != 1 || repAsstInv[0].Assistant.Content[0].Text.Text != "old assistant" {
+		t.Errorf("assistant invalid content should fallback: %+v", repAsstInv)
+	}
+
+	// 10. Assistant message with nil Assistant pointer
+	nilAsst := AgentMessage{Role: "assistant"}
+	repNilAsst := replaceContent(nilAsst, json.RawMessage(asstBlocks), true)
+	if len(repNilAsst) != 1 || repNilAsst[0].Assistant != nil {
+		t.Errorf("nil assistant pointer should return original message")
+	}
+
+	// 11. ToolResult message with UserContentBlock array replacement
+	toolMsg := AgentMessage{
+		Role: "toolResult",
+		ToolResult: &ToolResultMessage{
+			Role:       "toolResult",
+			ToolCallID: "c1",
+			Content:    []UserContentBlock{{Type: "text", Text: &TextContent{Type: "text", Text: "old tool"}}},
+		},
+	}
+	toolBlocks := `[{"type":"text","text":"replaced tool"}]`
+	repTool := replaceContent(toolMsg, json.RawMessage(toolBlocks), true)
+	if len(repTool) != 1 || len(repTool[0].ToolResult.Content) != 1 || repTool[0].ToolResult.Content[0].Text.Text != "replaced tool" {
+		t.Errorf("toolResult replacement failed: %+v", repTool)
+	}
+
+	// 12. ToolResult with invalid content fallback
+	repToolInv := replaceContent(toolMsg, json.RawMessage(`"invalid string for tool"`), true)
+	if len(repToolInv) != 1 || repToolInv[0].ToolResult.Content[0].Text.Text != "old tool" {
+		t.Errorf("toolResult invalid content should fallback: %+v", repToolInv)
+	}
+
+	// 13. ToolResult with nil pointer
+	nilTool := AgentMessage{Role: "toolResult"}
+	repNilTool := replaceContent(nilTool, json.RawMessage(toolBlocks), true)
+	if len(repNilTool) != 1 || repNilTool[0].ToolResult != nil {
+		t.Errorf("nil tool pointer should return original message")
+	}
+
+	// 14. Unknown role fallback
+	unknownMsg := AgentMessage{Role: "otherRole"}
+	repUnknown := replaceContent(unknownMsg, json.RawMessage(`"content"`), false)
+	if len(repUnknown) != 1 || repUnknown[0].Role != "otherRole" {
+		t.Errorf("unknown role should return original message")
+	}
+}

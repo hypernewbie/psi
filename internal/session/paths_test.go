@@ -93,3 +93,47 @@ func TestAgentDirEnv(t *testing.T) {
 		t.Errorf("PI env: %q", got)
 	}
 }
+
+func TestResolveDirAndExpandHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+
+	// expandHome tests
+	if home != "" {
+		if got := expandHome("~"); got != home {
+			t.Errorf("expandHome(~) = %q, want %q", got, home)
+		}
+		if got := expandHome("~/sub/dir"); got != filepath.Join(home, "sub", "dir") {
+			t.Errorf("expandHome(~/sub/dir) = %q, want %q", got, filepath.Join(home, "sub", "dir"))
+		}
+	}
+	if got := expandHome("/absolute/path"); got != "/absolute/path" {
+		t.Errorf("expandHome(/absolute/path) = %q, want /absolute/path", got)
+	}
+	if got := expandHome("relative/path"); got != "relative/path" {
+		t.Errorf("expandHome(relative/path) = %q, want relative/path", got)
+	}
+
+	// resolveDir tests
+	// 1. Absolute path returned cleaned
+	if got := resolveDir("/a/b/../c", "/base"); got != filepath.Clean("/a/c") {
+		t.Errorf("resolveDir(/a/b/../c) = %q, want %q", got, filepath.Clean("/a/c"))
+	}
+	// 2. Relative path with base
+	if got := resolveDir("child/dir", "/base"); got != filepath.Join("/base", "child/dir") {
+		t.Errorf("resolveDir(child/dir, /base) = %q, want %q", got, filepath.Join("/base", "child/dir"))
+	}
+	// 3. Relative path with empty base returns Abs
+	absRel, _ := filepath.Abs("child/dir")
+	if got := resolveDir("child/dir", ""); got != absRel {
+		t.Errorf("resolveDir(child/dir, '') = %q, want %q", got, absRel)
+	}
+	// 4. Home expansion in resolveDir
+	if home != "" {
+		if got := resolveDir("~/project", "/base"); got != filepath.Join(home, "project") {
+			t.Errorf("resolveDir(~/project) = %q, want %q", got, filepath.Join(home, "project"))
+		}
+	}
+}

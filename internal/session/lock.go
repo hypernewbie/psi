@@ -57,6 +57,8 @@ func (l *sessionLock) Release() {
 	if l == nil || l.f == nil {
 		return
 	}
-	_ = unlockExclusive(l.f)
-	_ = l.f.Close()
+	f := l.f
+	l.f = nil
+	_ = unlockExclusive(f)
+	_ = f.Close()
 }
