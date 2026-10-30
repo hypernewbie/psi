@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 )
 
 // EditTool implements Pi-compatible edit matching and mutation.
 type EditTool struct {
 	Cwd string
-	mu  sync.Mutex // serialize mutation per file (first release: global)
+	// Mutations serializes edits and writes per resolved file (shared with
+	// WriteTool through the Registry). Nil runs the body directly.
+	Mutations *MutationQueue
 	// ReadFile/WriteFile/AfterRead seams admit deterministic schedules.
 	ReadFile  func(string) ([]byte, error)
 	WriteFile func(string, []byte, os.FileMode) error
@@ -47,18 +48,13 @@ func (t *EditTool) Execute(inv Invocation) Result {
 }
 
 // ExecuteCtx checks cancellation between read, transform, write, and result
-// settlement (F06). The mutation mutex stays held until an in-flight write
-// settles, so a cancelled call never releases the next mutation early.
+// settlement (F06). The shared mutation slot stays held until an in-flight
+// write settles, so a cancelled call never releases the next mutation early.
 // Cancellation cannot roll a write back: results stay truthful about whether
 // the file changed.
 func (t *EditTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	if err := ctx.Err(); err != nil {
 		return errResult(fmt.Sprintf("edit: cancelled before start: %v", err))
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return errResult(fmt.Sprintf("edit: cancelled while waiting, before read: %v", err))
 	}
 	path, _ := argString(inv.Arguments, "path")
 	if path == "" {
@@ -67,6 +63,15 @@ func (t *EditTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	edits, err := normalizeEdits(inv.Arguments)
 	if err != nil {
 		return errResult(fmt.Sprintf("edit: %v", err))
+	}
+	return t.Mutations.withSlot(t.Cwd, path, func() Result {
+		return t.editChecked(ctx, path, edits)
+	})
+}
+
+func (t *EditTool) editChecked(ctx context.Context, path string, edits []editItem) Result {
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("edit: cancelled while waiting, before read: %v", err))
 	}
 	abs := resolvePath(t.Cwd, path)
 	data, err := t.doRead(abs)

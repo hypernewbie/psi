@@ -13,6 +13,9 @@ func encodeBase64(b []byte) string { return base64.StdEncoding.EncodeToString(b)
 // WriteTool creates parent dirs and writes complete UTF-8 content.
 type WriteTool struct {
 	Cwd string
+	// Mutations serializes writes and edits per resolved file. Nil runs the
+	// body directly (single-tool tests).
+	Mutations *MutationQueue
 	// MkdirAll/WriteFile seams admit deterministic cancellation schedules.
 	MkdirAll  func(path string, perm os.FileMode) error
 	WriteFile func(path string, data []byte, perm os.FileMode) error
@@ -42,7 +45,9 @@ func (t *WriteTool) Execute(inv Invocation) Result {
 // ExecuteCtx checks cancellation between every filesystem step (F06): before
 // mkdir, after mkdir, and after the write. A cancelled write cannot be
 // rolled back, so the result reports cancellation truthfully without
-// claiming the file stayed unchanged. Serialization is the caller's.
+// claiming the file stayed unchanged. Same-file ordering is the shared
+// mutation queue's; the body runs inside its slot and never releases a
+// successor early.
 func (t *WriteTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	if err := ctx.Err(); err != nil {
 		return errResult(fmt.Sprintf("write: cancelled before start: %v", err))
@@ -54,6 +59,15 @@ func (t *WriteTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	content, ok := argString(inv.Arguments, "content")
 	if !ok {
 		return errResult("write: content is required (string)")
+	}
+	return t.Mutations.withSlot(t.Cwd, path, func() Result {
+		return t.writeChecked(ctx, path, content)
+	})
+}
+
+func (t *WriteTool) writeChecked(ctx context.Context, path, content string) Result {
+	if err := ctx.Err(); err != nil {
+		return errResult(fmt.Sprintf("write: cancelled while waiting, before mkdir: %v", err))
 	}
 	abs := resolvePath(t.Cwd, path)
 	if err := t.doMkdirAll(filepath.Dir(abs)); err != nil {

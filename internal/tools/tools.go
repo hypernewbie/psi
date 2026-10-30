@@ -50,7 +50,10 @@ type Registry struct {
 }
 
 func NewRegistry(cwd string) *Registry {
-	return &Registry{Cwd: cwd, Read: &ReadTool{Cwd: cwd}, Write: &WriteTool{Cwd: cwd}, Edit: &EditTool{Cwd: cwd}, Bash: &BashTool{Cwd: cwd}}
+	// One mutation queue is shared by write and edit so same-file mutations
+	// serialize across both tools, like Pi's file-mutation-queue.
+	mutations := NewMutationQueue()
+	return &Registry{Cwd: cwd, Read: &ReadTool{Cwd: cwd}, Write: &WriteTool{Cwd: cwd, Mutations: mutations}, Edit: &EditTool{Cwd: cwd, Mutations: mutations}, Bash: &BashTool{Cwd: cwd}}
 }
 
 // Dispatch runs calls sequentially in assistant order.

@@ -27,20 +27,29 @@ func TestReviewCancelledEditWaitDoesNotRead(t *testing.T) {
 	defer cancel()
 	ctx := &reviewObservedContext{Context: base, checked: make(chan struct{})}
 	reads := 0
-	tool := &EditTool{Cwd: t.TempDir(), ReadFile: func(string) ([]byte, error) {
+	queue := NewMutationQueue()
+	tool := &EditTool{Cwd: t.TempDir(), Mutations: queue, ReadFile: func(string) ([]byte, error) {
 		reads++
 		return []byte("original"), nil
 	}}
-	tool.mu.Lock()
+	// Hold the file's mutation slot so the edit below queues behind it.
+	held := make(chan struct{})
+	release := make(chan struct{})
+	go queue.withSlot(tool.Cwd, "synthetic", func() Result {
+		close(held)
+		<-release
+		return textResult("holder")
+	})
+	<-held
 	done := make(chan Result, 1)
 	go func() {
 		done <- tool.ExecuteCtx(ctx, Invocation{Name: Edit, Arguments: map[string]any{
 			"path": "synthetic", "oldText": "original", "newText": "changed",
 		}})
 	}()
-	<-ctx.checked // the entry check passed while the mutex was still held
+	<-ctx.checked // the entry check passed while the slot was still held
 	cancel()
-	tool.mu.Unlock()
+	close(release)
 	res := <-done
 	if reads != 0 || !res.IsError || !strings.Contains(res.Content[0].Text, "cancel") {
 		t.Fatalf("cancelled queue waiter started a read: reads=%d result=%+v", reads, res)
