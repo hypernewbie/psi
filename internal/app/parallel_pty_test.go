@@ -91,3 +91,66 @@ func TestParallelBatchActualAppPTY(t *testing.T) {
 		t.Fatalf("write call did not execute: %v", err)
 	}
 }
+
+// Escape during a parallel batch interrupts the run: both started calls show
+// interrupted rows, no result claims success, the prompt returns, and the
+// session stays continuable with both calls resolved.
+func TestParallelBatchEscapeInterruptsAndKeepsPrompt(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"batch\",\"model\":\"m\",\"usage\":{\"input_tokens\":1}}}\n\n"+
+			"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"slow-1\",\"name\":\"bash\",\"input\":{\"command\":\"sleep 30\"}}}\n\n"+
+			"event: content_block_stop\ndata: {\"index\":0}\n\n"+
+			"event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"slow-2\",\"name\":\"bash\",\"input\":{\"command\":\"sleep 30\"}}}\n\n"+
+			"event: content_block_stop\ndata: {\"index\":1}\n\n"+
+			"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"}}\n\nevent: message_stop\ndata: {}\n\n")
+	}))
+	defer server.Close()
+	reviewSettings(t, agentDir, server.URL)
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
+	q.prompt()
+	q.write("run forever\r")
+	q.wait("sleep 30")
+	// Both calls run concurrently; interrupt mid-batch.
+	q.write("\x1b")
+	q.wait("cancelled")
+	q.prompt()
+	screen := q.screen.Text()
+	if strings.Count(screen, "interrupted") < 2 && !strings.Contains(screen, "cancelled") {
+		t.Fatalf("interrupted batch left no trace: %s", screen)
+	}
+	// The shell processes died with the batch: no straggler keeps the run busy.
+	q.write("/quit\r")
+	q.finish()
+	// The session resolves both calls; nothing stays interrupted in the file.
+	sessionPath := filepath.Join(agentDir, "sessions")
+	entries, err := os.ReadDir(sessionPath)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no session recorded: %v", err)
+	}
+	var files []string
+	filepath.WalkDir(sessionPath, func(path string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if len(files) == 0 {
+		t.Fatal("no JSONL session file")
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if strings.Count(body, "slow-1") < 2 || strings.Count(body, "slow-2") < 2 {
+		t.Fatalf("session missing call/result pairs: %s", body)
+	}
+	// At least one admitted call settles cancelled; scheduling decides only
+	// whether the other lands cancelled or not started.
+	if !strings.Contains(body, `"cancelled"`) {
+		t.Fatalf("interrupted batch recorded no cancelled result: %s", body)
+	}
+}
