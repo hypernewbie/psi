@@ -642,11 +642,28 @@ type runtime struct {
 	projectTrusted           bool
 	loops                    *loop.Controller
 	reportedColorScheme      string
-	activeToolName           string
-	activeToolCallID         string
-	activeToolSummary        event.ToolSummary
-	timerFrames              int
-	eventFrames              int
+	// activeTools holds the running calls of the current batch in start
+	// order. Parallel batches keep several; the live row shows the newest.
+	activeTools []activeTool
+	timerFrames int
+	eventFrames int
+}
+
+// activeTool is one running tool call tracked by call ID.
+type activeTool struct {
+	name    string
+	callID  string
+	summary event.ToolSummary
+}
+
+// liveToolRow renders the newest active call's running row. A parallel
+// batch shows the latest start; settled rows still print in call order.
+func (r *runtime) liveToolRow(console *terminal.Console) (string, bool) {
+	if len(r.activeTools) == 0 {
+		return "", false
+	}
+	active := r.activeTools[len(r.activeTools)-1]
+	return terminal.FormatToolRowWithDisplay(active.summary, active.name, "running", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme), true
 }
 
 func (r *runtime) restore() error {
@@ -1185,8 +1202,8 @@ func (r *runtime) cloneSession(print func(string)) error {
 
 func (r *runtime) draw(console *terminal.Console) {
 	r.refreshPresentation(console)
-	if r.activeToolName != "" {
-		console.SetToolRowNoDraw(terminal.FormatToolRowWithDisplay(r.activeToolSummary, r.activeToolName, "running", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme))
+	if row, ok := r.liveToolRow(console); ok {
+		console.SetToolRowNoDraw(row)
 	}
 	if r.selector != nil {
 		width, rows := console.PickerSize()
@@ -1464,14 +1481,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.SetThinking(false)
 			stream.Close()
 			r.state = StateRunningTool
-			r.activeToolName, r.activeToolCallID, r.activeToolSummary = ev.ToolName, ev.ToolCallID, ev.Summary
+			r.activeTools = append(r.activeTools, activeTool{name: ev.ToolName, callID: ev.ToolCallID, summary: ev.Summary})
 			display := presentationDisplay(r.settings)
 			console.SetToolRow(terminal.FormatToolRowWithDisplay(ev.Summary, ev.ToolName, "running", console.StatusWidth(), noColorEnvironment(), display, r.theme))
 			setActivity("Working… (Esc/Ctrl+C cancel)")
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, "running", display, r.theme, noColorEnvironment())
 		case event.ToolEnd:
-			console.ClearToolRow()
-			r.activeToolName, r.activeToolCallID, r.activeToolSummary = "", "", event.ToolSummary{}
+			for i, active := range r.activeTools {
+				if active.callID == ev.ToolCallID {
+					r.activeTools = append(r.activeTools[:i], r.activeTools[i+1:]...)
+					break
+				}
+			}
+			if len(r.activeTools) > 0 {
+				// Sibling calls still run: keep the live row on the newest one
+				// instead of clearing it mid-batch.
+				if row, ok := r.liveToolRow(console); ok {
+					console.SetToolRow(row)
+				}
+			} else {
+				console.ClearToolRow()
+			}
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, ev.State, presentationDisplay(r.settings), r.theme, noColorEnvironment())
 			if ev.ToolName == loop.ControlToolName && r.loops != nil {
 				console.SetLoopStatus(r.loops.StatusLine())
@@ -1740,14 +1770,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Close()
 			console.SetThinking(false)
 			console.ClearToolRow()
-			if r.activeToolName != "" {
+			for _, active := range r.activeTools {
 				// A result append can fail after execution. Keep its identity,
 				// but never claim success or leave a queued start running.
-				status.UpdateSummary(r.activeToolName, r.activeToolCallID, r.activeToolSummary, "interrupted", presentationDisplay(r.settings), r.theme, noColorEnvironment())
+				status.UpdateSummary(active.name, active.callID, active.summary, "interrupted", presentationDisplay(r.settings), r.theme, noColorEnvironment())
+			}
+			if len(r.activeTools) > 0 {
 				toolSpacing.pending = true
 			}
 			finishTools()
-			r.activeToolName, r.activeToolCallID, r.activeToolSummary = "", "", event.ToolSummary{}
+			r.activeTools = nil
 			if !exiting {
 				setActivity("")
 			} else {

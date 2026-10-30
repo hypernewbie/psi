@@ -84,11 +84,14 @@ func TestReviewStorageFailureDrainsAndClearsActiveTool(t *testing.T) {
 		}
 	}
 settled:
-	if r.activeToolName != "" || r.activeToolCallID != "" {
-		t.Fatalf("drained tool start survived settlement: %q (%q)", r.activeToolName, r.activeToolCallID)
+	if len(r.activeTools) != 0 {
+		t.Fatalf("drained tool start survived settlement: %+v", r.activeTools)
 	}
-	if count := strings.Count(terminal.Sanitize(out.String()), "outcome unknown"); count != 1 {
-		t.Fatalf("unsaved tool needs one unknown-outcome row, got %d: %q", count, out.String())
+	// Parallel batches preflight every call before settlement, so a storage
+	// fault leaves every started call unsettled: exactly one unknown-outcome
+	// row per call, with no duplicates and no missing calls.
+	if count := strings.Count(terminal.Sanitize(out.String()), "outcome unknown"); count != 100 {
+		t.Fatalf("storage fault needs one unknown-outcome row per started call, got %d", count)
 	}
 	if r.state != StateStorageBlocked {
 		t.Fatalf("state after storage fault=%q", r.state)

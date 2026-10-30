@@ -568,3 +568,141 @@ func TestParallelBashProcessesAreIndependent(t *testing.T) {
 		t.Fatalf("concurrent bash results crossed: %v", texts)
 	}
 }
+
+// TestParallelLoopControlMixesWithReads: a control call in a mixed batch
+// keeps its state transitions ordered, settles in call order, and defers its
+// model-visible continuation until the whole batch is durable. The read gates
+// the batch, so the control call runs concurrently and settles after it.
+func TestParallelLoopControlMixesWithReads(t *testing.T) {
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	readEntered := make(chan struct{})
+	readRelease := make(chan struct{})
+	var once sync.Once
+	reg.Read.AfterOpen = func(string) {
+		once.Do(func() { close(readEntered) })
+		<-readRelease
+	}
+	if err := os.WriteFile(filepath.Join(ws, "a.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(
+			readCall("r1", "a.txt"),
+			provider.Block{Type: "toolCall", ID: "control-1", Name: "loop_control", Arguments: map[string]any{"status": "next", "summary": "step done"}},
+		),
+		{Text: "finished", StopReason: "stop"},
+	}}
+	controlRan := make(chan struct{}, 1)
+	var continuations []string
+	loop := New(store, reg, fake, func(event.Event) {})
+	cfg := Config{
+		Model: modelMeta(), Tools: toolDefs(),
+		InternalTools: map[string]InternalToolHandler{
+			"loop_control": func(_ context.Context, _ tools.Invocation) tools.Result {
+				controlRan <- struct{}{}
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: "advanced"}}}
+			},
+		},
+		AfterToolCall: func(_ context.Context, inv tools.Invocation, _ tools.Result) error {
+			if inv.Name != "loop_control" {
+				return nil
+			}
+			continuations = append(continuations, "iteration")
+			// Mirror the app wiring: the continuation is a hidden custom entry
+			// appended after the control result is durable.
+			_, err := store.AppendCustomMessage("psi.loop.iteration", "continue the active task", false, nil)
+			return err
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- loop.Submit(context.Background(), "go", cfg) }()
+	<-readEntered
+	// The control call may run while the read still holds the batch open.
+	select {
+	case <-controlRan:
+	default:
+	}
+	close(readRelease)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, m := range proj.Flat {
+		switch {
+		case m.Role == "toolResult":
+			order = append(order, "result:"+m.ToolResult.ToolCallID)
+		case m.Role == "custom":
+			order = append(order, "custom:"+m.Custom.CustomType)
+		}
+	}
+	want := []string{"result:r1", "result:control-1"}
+	if len(order) < 2 || order[0] != want[0] || order[1] != want[1] {
+		t.Fatalf("settlement order = %v, want %v first", order, want)
+	}
+	if len(continuations) != 1 {
+		t.Fatalf("continuation count = %d, want 1", len(continuations))
+	}
+	// The follow-up request carries both results in call order, then the
+	// hidden continuation as the final user message.
+	reqs := fake.Calls
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(reqs))
+	}
+	var tail []string
+	for _, m := range reqs[1].Messages {
+		if m.Role == "toolResult" {
+			tail = append(tail, "toolResult:"+m.ToolCallID)
+		} else if m.Role == "user" {
+			tail = append(tail, "user")
+		}
+	}
+	if len(tail) != 4 || tail[1] != "toolResult:r1" || tail[2] != "toolResult:control-1" || tail[3] != "user" {
+		t.Fatalf("next request order = %v, want [user toolResult:r1 toolResult:control-1 user]", tail)
+	}
+}
+
+// TestParallelSteeringWaitsForBatchSettlement: steering queued while a batch
+// runs is delivered after settlement and before the next request.
+func TestParallelSteeringWaitsForBatchSettlement(t *testing.T) {
+	h := newParallelHarness(t, []*provider.Response{
+		batchResponse(readCall("r1", "a.txt")),
+		{Text: "done", StopReason: "stop"},
+	})
+	writeFileFor(t, h.ws, "a.txt", "a")
+	aEntered, _ := h.gate("a.txt")
+	done := make(chan error, 1)
+	go func() { done <- h.loop.Submit(context.Background(), "go", h.config()) }()
+	<-aEntered
+	// The batch holds the barrier; steering queued now must not jump it.
+	h.loop.Steer("meanwhile")
+	if n := len(h.fake.Calls); n != 1 {
+		t.Fatalf("steering crossed the settlement barrier: %d requests", n)
+	}
+	h.releaseFile("a.txt")
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// The follow-up request carries the steering as a user message after the
+	// tool result.
+	if len(h.fake.Calls) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(h.fake.Calls))
+	}
+	var sawSteer bool
+	for _, m := range h.fake.Calls[1].Messages {
+		if m.Role == "user" && containsBlockText(m.Content, "meanwhile") {
+			sawSteer = true
+		}
+	}
+	if !sawSteer {
+		t.Fatalf("steering never reached the next request: %+v", h.fake.Calls[1].Messages)
+	}
+}
