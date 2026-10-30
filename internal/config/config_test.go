@@ -4,7 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"psi/internal/testutil/leakcheck"
 )
+
+func TestMain(m *testing.M) {
+	leakcheck.VerifyTestMain(m)
+}
 
 func writeJSON(t *testing.T, path, content string) {
 	t.Helper()
@@ -305,5 +311,59 @@ func TestAssemblePromptDeterministic(t *testing.T) {
 	p2 := AssemblePrompt("/ws", ins, []string{"<skill>x</skill>"}, []string{"read", "bash"})
 	if p1 != p2 || p1 == "" {
 		t.Errorf("prompt must be deterministic and non-empty")
+	}
+}
+
+func TestEnvCharAndRedactCredential(t *testing.T) {
+	// isEnvChar first char
+	if !isEnvChar('_', true) || !isEnvChar('A', true) || !isEnvChar('z', true) {
+		t.Errorf("isEnvChar first valid failed")
+	}
+	if isEnvChar('0', true) || isEnvChar('9', true) || isEnvChar('-', true) || isEnvChar('$', true) {
+		t.Errorf("isEnvChar first invalid accepted")
+	}
+
+	// isEnvChar subsequent chars
+	if !isEnvChar('0', false) || !isEnvChar('9', false) || !isEnvChar('_', false) || !isEnvChar('m', false) {
+		t.Errorf("isEnvChar subsequent valid failed")
+	}
+	if isEnvChar('-', false) || isEnvChar('$', false) || isEnvChar(' ', false) {
+		t.Errorf("isEnvChar subsequent invalid accepted")
+	}
+
+	// RedactCredential
+	if got := RedactCredential(""); got != "****" {
+		t.Errorf("RedactCredential(\"\") = %q, want ****", got)
+	}
+	if got := RedactCredential("key"); got != "****" {
+		t.Errorf("RedactCredential(\"key\") = %q, want ****", got)
+	}
+	if got := RedactCredential("1234"); got != "****" {
+		t.Errorf("RedactCredential(\"1234\") = %q, want ****", got)
+	}
+	if got := RedactCredential("sk-secret-key-12345"); got != "sk****45" {
+		t.Errorf("RedactCredential long = %q, want sk****45", got)
+	}
+
+	// clampDisplaySetting
+	if got := clampDisplaySetting(-5.0, 0, 100); got != 0 {
+		t.Errorf("clampDisplaySetting below min = %d, want 0", got)
+	}
+	if got := clampDisplaySetting(150.0, 0, 100); got != 100 {
+		t.Errorf("clampDisplaySetting above max = %d, want 100", got)
+	}
+	if got := clampDisplaySetting(42.8, 0, 100); got != 42 {
+		t.Errorf("clampDisplaySetting in range = %d, want 42", got)
+	}
+
+	// containsString
+	if !containsString([]string{"a", "b", "c"}, "b") {
+		t.Errorf("containsString should find 'b'")
+	}
+	if containsString([]string{"a", "b"}, "z") {
+		t.Errorf("containsString should not find 'z'")
+	}
+	if containsString(nil, "a") {
+		t.Errorf("containsString(nil) should be false")
 	}
 }
