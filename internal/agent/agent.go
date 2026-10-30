@@ -280,6 +280,11 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil && !IsCompactionNoWork(err) {
 				return fmt.Errorf("automatic compaction: %w", err)
 			}
+			// Compaction can take long enough for the user to queue steering.
+			// Pi polls again after next-turn preparation, before the next model
+			// request; do the same here so steering is not stranded until the
+			// post-response boundary (or restored to the editor when the run ends).
+			l.deliverSteering()
 			proj, err = l.store.Projection()
 			if err != nil {
 				return err

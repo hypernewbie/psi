@@ -192,8 +192,8 @@ func TestActualAppSteeringDuringCompaction(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(bodies) < 2 {
-		t.Fatalf("run did not continue past compaction: %d requests", len(bodies))
+	if len(bodies) != 2 {
+		t.Fatalf("provider requests = %d, want 2 (one compaction summary and one post-compaction request with steering)", len(bodies))
 	}
 	last := bodies[len(bodies)-1]
 	if !strings.Contains(last, "STEER_COMPACT") || !strings.Contains(last, "ASK_COMPACT") {
