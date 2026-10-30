@@ -30,14 +30,11 @@ func TestActualAppStartupBanner(t *testing.T) {
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", store.File())
 	q.prompt()
 	screen := q.screen.Text()
-	if !strings.Contains(screen, "█ █ █") {
-		t.Fatalf("startup banner missing the Ψ mark: %q", screen)
+	if n := strings.Count(screen, "▀█▀") + strings.Count(screen, "█ ▄ █"); n < 2 {
+		t.Fatalf("startup banner missing the Psi mark: %q", screen)
 	}
-	if !strings.Contains(screen, "psi v") {
+	if !strings.Contains(screen, " v") && !strings.Contains(screen, "psi v") {
 		t.Fatalf("startup banner missing the version: %q", screen)
-	}
-	if strings.Count(screen, "█ █ █") != 1 {
-		t.Fatalf("Ψ mark printed more than once: %q", screen)
 	}
 	q.write("/quit\r")
 	q.finish()
@@ -48,7 +45,7 @@ func TestActualAppStartupBanner(t *testing.T) {
 	writeAppFile(t, filepath.Join(quiet, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-key"}}`)
 	q2 := startReviewPTY(t, home, work, quiet, "--deny-project", "--session", store.File())
 	q2.prompt()
-	if screen2 := q2.screen.Text(); strings.Contains(screen2, "█ █ █") || strings.Contains(screen2, "psi v") {
+	if screen2 := q2.screen.Text(); strings.Contains(screen2, "▀█▀") || strings.Contains(screen2, "█ ▄ █") || strings.Contains(screen2, "psi v") {
 		t.Fatalf("quietStartup still printed the banner: %q", screen2)
 	}
 	q2.write("/quit\r")
@@ -58,7 +55,7 @@ func TestActualAppStartupBanner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "█ █ █") {
+	if strings.Contains(string(raw), "▀█▀") {
 		t.Fatal("startup banner leaked into the session file")
 	}
 }

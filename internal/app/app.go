@@ -214,7 +214,7 @@ func Run(args []string, version string) error {
 		grouped[d.Message]++
 	}
 	if !st.QuietStartup {
-		for _, line := range terminal.PsiBanner(version, console.StatusWidth(), r.theme, noColorEnvironment()) {
+		for _, line := range terminal.PsiBanner(version, "esc interrupt · ctrl+c/ctrl+d clear/exit · / commands", console.StatusWidth(), r.theme, noColorEnvironment()) {
 			fmt.Fprintln(startupOut, line)
 		}
 		for msg, n := range grouped {
@@ -234,7 +234,6 @@ func Run(args []string, version string) error {
 				fmt.Fprintln(startupOut, line)
 			}
 		}
-		fmt.Fprintln(startupOut, "esc interrupt · ctrl+c/ctrl+d clear/exit · / commands")
 	} else if r.authErr != nil {
 		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error(), 80, noColorEnvironment(), r.theme) {
 			fmt.Fprintln(startupOut, line)

@@ -1,43 +1,33 @@
 package terminal
 
 import (
-	"strings"
-
 	"psi/internal/theme"
 )
 
-// psiMark is psi's startup mark: the Greek letter Ψ in block pixels, five
-// rows tall. Pi's startup header carries a small pixel logo with the dim
-// version beside it; psi keeps that structure with its own letter.
-var psiMark = [5]string{
-	"█   █",
-	"█ █ █",
-	" ███ ",
-	"  █  ",
-	" ███ ",
-}
-
-// PsiBannerWidth is the smallest terminal width that fits the mark plus the
-// version on its baseline. Narrow terminals get the plain text line instead,
-// like Pi's wordmark fallback for terminals that cannot draw its logo.
-const PsiBannerWidth = 28
-
-// PsiBanner renders the startup header lines. The mark uses the theme accent;
-// the baseline row carries the dim version beside it, like Pi's logo line.
-func PsiBanner(version string, width int, tm *theme.Theme, noColor bool) []string {
-	versionText := Sanitize("psi v" + version)
-	if width < PsiBannerWidth {
-		return []string{versionText}
+// Pi's startup logo (pi-logo.ts) is a two-line half-block pixel mark, four
+// cells wide: the first line carries the dim version beside it, the second
+// line the key hints. psi keeps that anatomy with its own letter, a Psi drawn
+// on a 5x4 pixel grid:
+//
+//	X . . . X   arms rise above the stem
+//	X . X . X   stem starts below the arm tops
+//	. X X X .   arms curve in and merge with the stem
+//	. . X . .   bare stem to the baseline
+//
+// Packed into half blocks that is "█ ▄ █" over " ▀█▀ ". Pi paints its mark in
+// fixed brand colors; psi has no brand palette, so the mark follows the theme:
+// arms in accent, stem in borderAccent.
+func PsiBanner(version, hints string, width int, tm *theme.Theme, noColor bool) []string {
+	versionText := "v" + Sanitize(version)
+	if width < 5+1+max(len(versionText), len(hints)) {
+		// Pi's wordmark fallback: the version line first, key hints below.
+		return []string{Sanitize("psi v" + version), hints}
 	}
-	lines := make([]string, len(psiMark))
-	for i, row := range psiMark {
-		mark := bannerStyle(strings.TrimRight(row, " "), "accent", tm, noColor)
-		if i == len(psiMark)-1 {
-			mark += "  " + bannerStyle(versionText, "dim", tm, noColor)
-		}
-		lines[i] = mark
-	}
-	return lines
+	arm := func(cell string) string { return bannerStyle(cell, "accent", tm, noColor) }
+	stem := func(cell string) string { return bannerStyle(cell, "borderAccent", tm, noColor) }
+	top := arm("█") + " " + stem("▄") + " " + arm("█") + " " + bannerStyle(versionText, "dim", tm, noColor)
+	bottom := " " + arm("▀") + stem("█") + arm("▀") + " " + " " + hints
+	return []string{top, bottom}
 }
 
 func bannerStyle(text, token string, tm *theme.Theme, noColor bool) string {
