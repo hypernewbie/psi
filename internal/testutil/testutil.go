@@ -54,4 +54,51 @@ func MustRead(t *testing.T, path string) string {
 	return string(b)
 }
 
+// Barrier is a one-shot N-party synchronization rendezvous.
+type Barrier struct {
+	arrive chan struct{}
+	wait   chan struct{}
+}
+
+// NewBarrier creates a barrier that opens once n parties arrive.
+func NewBarrier(n int) *Barrier {
+	b := &Barrier{
+		arrive: make(chan struct{}, n),
+		wait:   make(chan struct{}),
+	}
+	go func() {
+		for i := 0; i < n; i++ {
+			<-b.arrive
+		}
+		close(b.wait)
+	}()
+	return b
+}
+
+// Await signals arrival and waits for all other parties or timeout.
+func (b *Barrier) Await(timeout time.Duration) bool {
+	b.arrive <- struct{}{}
+	select {
+	case <-b.wait:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// Eventually polls cond periodically until true or timeout.
+func Eventually(t *testing.T, cond func() bool, timeout, interval time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(interval)
+	}
+	if !cond() {
+		t.Fatalf("condition not satisfied within %v", timeout)
+	}
+}
+
 var _ = os.Getenv
