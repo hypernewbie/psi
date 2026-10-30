@@ -44,4 +44,7 @@ func (f *Fake) Send(ctx context.Context, req Request, onText func(string)) (*Res
 	return nil, fmt.Errorf("fake provider: no scripted response %d", idx)
 }
 
-func (f *Fake) CloseIdle() {}
+func (f *Fake) CloseIdle() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+}

@@ -207,10 +207,32 @@ func headerValues(headers map[string]string) []string {
 	return values
 }
 
+func isContextOverflow(status int, body string) bool {
+	if status == http.StatusRequestEntityTooLarge { // 413
+		return true
+	}
+	if status != http.StatusBadRequest { // 400
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "prompt is too long") ||
+		strings.Contains(lower, "prompt too long") ||
+		strings.Contains(lower, "prompt exceeds max length") ||
+		strings.Contains(lower, "request_too_large") ||
+		strings.Contains(lower, "context window") ||
+		strings.Contains(lower, "maximum context") ||
+		strings.Contains(lower, "max context length") ||
+		strings.Contains(lower, "exceeded context length") ||
+		strings.Contains(lower, "exceeds the limit") ||
+		strings.Contains(lower, "context_length_exceeded") ||
+		strings.Contains(lower, "too many tokens") ||
+		strings.Contains(lower, "token limit exceeded") ||
+		(strings.Contains(lower, "input token count") && strings.Contains(lower, "exceeds the maximum"))
+}
+
 func classifyHTTPError(resp *http.Response) *ProviderError {
 	// Do not echo response bodies: gateways can echo request headers or prompts.
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	lower := strings.ToLower(string(b))
 	kind := ErrInvalid
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
@@ -219,10 +241,18 @@ func classifyHTTPError(resp *http.Response) *ProviderError {
 		kind = ErrRateLimit
 	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusConflict || resp.StatusCode >= 500:
 		kind = ErrTransport
-	case resp.StatusCode == 400 && (strings.Contains(lower, "prompt is too long") || strings.Contains(lower, "context window") || strings.Contains(lower, "maximum context")):
+	case isContextOverflow(resp.StatusCode, string(b)):
 		kind = ErrContextLimit
 	}
-	return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode), RetryAfter: parseRetryAfter(resp.Header.Get("retry-after"))}
+	msg := http.StatusText(resp.StatusCode)
+	if msg == "" {
+		if resp.StatusCode == 529 {
+			msg = "Overloaded"
+		} else {
+			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+	}
+	return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: msg, RetryAfter: parseRetryAfter(resp.Header.Get("retry-after"))}
 }
 
 func parseRetryAfter(s string) time.Duration {
