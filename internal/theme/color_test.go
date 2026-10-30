@@ -94,3 +94,42 @@ func TestPiColorParserRejectsInvalidSyntaxAndRanges(t *testing.T) {
 		}
 	}
 }
+
+func TestMixColorsSRGBAndOKLCH(t *testing.T) {
+	c1, err := ParseColor("#000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := ParseColor("#ffffff")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mix 50% srgb
+	midSRGB, err := MixColors(c1, c2, 0.5, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hex, _ := ColorToHex(midSRGB)
+	if hex != "#808080" {
+		t.Errorf("MixColors(srgb 0.5) = %s, want #808080", hex)
+	}
+
+	// Mix 50% oklch
+	midOKLCH, err := MixColors(c1, c2, 0.5, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex, _ := ColorToHex(midOKLCH); hex == "" {
+		t.Errorf("MixColors(oklch 0.5) produced empty hex")
+	}
+
+	// Invalid amounts
+	if _, err := MixColors(c1, c2, -0.1, true); err == nil {
+		t.Errorf("expected error for amount < 0")
+	}
+	if _, err := MixColors(c1, c2, 1.1, true); err == nil {
+		t.Errorf("expected error for amount > 1")
+	}
+}
+

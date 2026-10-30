@@ -1,6 +1,9 @@
 package theme
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseOSCColorResponseFormatsAndTargets(t *testing.T) {
 	cases := []struct {
@@ -63,3 +66,36 @@ func TestAppearanceAndColorModeFollowPiPrecedence(t *testing.T) {
 		t.Fatalf("Windows detection=%s", got)
 	}
 }
+
+func TestDeviceAttributesAndColorQuery(t *testing.T) {
+	if !IsDeviceAttributesReply("\x1b[?1;2c") {
+		t.Errorf("expected valid DA1 reply")
+	}
+	if IsDeviceAttributesReply("invalid") {
+		t.Errorf("expected false for invalid DA1 reply")
+	}
+	longStr := "\x1b[?" + string(make([]byte, 70)) + "c"
+	if IsDeviceAttributesReply(longStr) {
+		t.Errorf("expected false for over-length reply")
+	}
+
+	query := ColorQuery()
+	qStr := string(query)
+	if !strings.HasPrefix(qStr, "\x1b]10;?\x07\x1b]11;?\x07") || !strings.HasSuffix(qStr, "\x1b[c") {
+		t.Errorf("ColorQuery unexpected format: %q", qStr)
+	}
+
+	tc := TerminalColors{
+		Foreground: &RGB{R: 200, G: 200, B: 200},
+		Background: &RGB{R: 20, G: 20, B: 20},
+		Palette:    []RGB{{R: 0, G: 0, B: 0}, {R: 255, G: 0, B: 0}},
+	}
+	sysIn := tc.SystemInput("dark", 0.8)
+	if sysIn.AppearanceHint != "dark" || sysIn.Saturation == nil || *sysIn.Saturation != 0.8 {
+		t.Errorf("SystemInput mismatch: %+v", sysIn)
+	}
+	if len(sysIn.Palette) != 2 {
+		t.Errorf("SystemInput palette length = %d, want 2", len(sysIn.Palette))
+	}
+}
+

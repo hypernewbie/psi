@@ -148,3 +148,42 @@ func TestPiThemeColorValueAcceptsOnlyStringOrPaletteInteger(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveVariableDirectly(t *testing.T) {
+	doc := &Document{
+		Vars: map[string]ColorValue{
+			"primary": {Text: "#ff0000"},
+			"alias":   {Text: "primary"},
+			"cycle1":  {Text: "cycle2"},
+			"cycle2":  {Text: "cycle1"},
+		},
+	}
+
+	// Literal pass-through
+	lit, err := doc.ResolveVariable(ColorValue{Text: "#123456"})
+	if err != nil || lit.Text != "#123456" {
+		t.Errorf("ResolveVariable literal = %+v, %v", lit, err)
+	}
+
+	indexVal, err := doc.ResolveVariable(ColorValue{Index: 42, IsIndex: true})
+	if err != nil || indexVal.Index != 42 {
+		t.Errorf("ResolveVariable index = %+v, %v", indexVal, err)
+	}
+
+	// Chained variable resolution
+	chain, err := doc.ResolveVariable(ColorValue{Text: "alias"})
+	if err != nil || chain.Text != "#ff0000" {
+		t.Errorf("ResolveVariable alias = %+v, %v", chain, err)
+	}
+
+	// Cycle detection
+	if _, err := doc.ResolveVariable(ColorValue{Text: "cycle1"}); err == nil || !strings.Contains(err.Error(), "circular") {
+		t.Errorf("expected circular reference error, got: %v", err)
+	}
+
+	// Missing variable
+	if _, err := doc.ResolveVariable(ColorValue{Text: "missing"}); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected not found error, got: %v", err)
+	}
+}
+
