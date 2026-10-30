@@ -68,6 +68,21 @@ func TestBusyRunKeepsEditorActiveAndSubmitsSteering(t *testing.T) {
 	}
 }
 
+func TestLoopStatusRowRendersAndClears(t *testing.T) {
+	vt := testutil.NewVTModel(60, 20)
+	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 60, 20 }}
+	c.SetPresentation(PresentationSnapshot{NoColor: true})
+	c.Draw()
+	c.SetLoopStatus("loop · pass 2/5 · refine the renderer")
+	if !strings.Contains(vt.Text(), "loop · pass 2/5") {
+		t.Fatalf("loop status missing from active tail: %q", vt.Text())
+	}
+	c.SetLoopStatus("")
+	if strings.Contains(vt.Text(), "loop · pass 2/5") {
+		t.Fatalf("cleared loop status stayed visible: %q", vt.Text())
+	}
+}
+
 func TestSteeringRowsRenderAboveEditorLikePendingMessages(t *testing.T) {
 	vt := testutil.NewVTModel(60, 20)
 	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 60, 20 }}

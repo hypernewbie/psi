@@ -21,6 +21,8 @@ import (
 	"psi/internal/tools"
 )
 
+type InternalToolHandler func(context.Context, tools.Invocation) tools.Result
+
 type Config struct {
 	Model            provider.ModelMeta
 	Thinking         string
@@ -30,6 +32,12 @@ type Config struct {
 	AutoCompact      bool
 	ReserveTokens    int
 	KeepRecentTokens int
+	// DynamicConfig returns the system prompt and tool set for each model request.
+	DynamicConfig func() (string, []provider.ToolDef)
+	InternalTools map[string]InternalToolHandler
+	AfterToolCall func(context.Context, tools.Invocation, tools.Result) error
+	// ContinueOnEnd may return a hidden user message while a control loop stays active.
+	ContinueOnEnd func() (messageType, content string, ok bool)
 }
 
 type Loop struct {
@@ -141,6 +149,7 @@ func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
 	if cfg.Thinking == "" {
 		cfg.Thinking = "off"
 	}
+	refreshDynamicConfig(&cfg)
 	request, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
 	if err != nil {
 		return err
@@ -186,6 +195,7 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 	if cfg.Thinking == "" {
 		cfg.Thinking = "off"
 	}
+	refreshDynamicConfig(&cfg)
 	request, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
 	if err != nil {
 		return err
@@ -206,6 +216,12 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 		}
 	}
 	return l.run(ctx, cfg)
+}
+
+func refreshDynamicConfig(cfg *Config) {
+	if cfg.DynamicConfig != nil {
+		cfg.System, cfg.Tools = cfg.DynamicConfig()
+	}
 }
 
 func userMsg(text string) session.AgentMessage {
@@ -268,11 +284,19 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 		// Turn boundary: deliver steering queued while the previous turn ran,
 		// before the next model request (Pi's getSteeringMessages poll).
 		l.deliverSteering()
+		refreshDynamicConfig(&cfg)
 		proj, err := l.store.Projection()
 		if err != nil {
 			return err
 		}
 		if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+			return err
+		}
+		if err := l.syncConfiguration(proj, cfg); err != nil {
+			return err
+		}
+		proj, err = l.store.Projection()
+		if err != nil {
 			return err
 		}
 		estimated := EstimatedContext(proj, cfg)
@@ -380,13 +404,23 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			return fmt.Errorf("model reached its output limit; response saved, tool calls were not executed")
 		}
 		if len(resp.ToolCalls) == 0 {
-			// A model that stops calling tools ends the run only when no
-			// steering arrived while it produced the final response.
-			if !l.deliverSteering() {
+			// Deliver user steering first. An active loop then adds its hidden
+			// continuation so the next request keeps both messages in order.
+			deliveredSteering := l.deliverSteering()
+			if cfg.ContinueOnEnd != nil {
+				messageType, content, ok := cfg.ContinueOnEnd()
+				if ok {
+					if _, err := l.store.AppendCustomMessage(messageType, content, false, nil); err != nil {
+						return fmt.Errorf("storage failure, stopping: %w", err)
+					}
+					continue
+				}
+			}
+			if !deliveredSteering {
 				return nil
 			}
 		}
-		if err := l.runBatch(ctx, resp.ToolCalls, cfg.Tools); err != nil {
+		if err := l.runBatch(ctx, resp.ToolCalls, cfg); err != nil {
 			return err
 		}
 	}
@@ -693,7 +727,8 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 	return session.AgentMessage{Role: "assistant", Assistant: a}
 }
 
-func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions []provider.ToolDef) error {
+func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config) error {
+	definitions := cfg.Tools
 	enabled := map[string]bool{}
 	for _, d := range definitions {
 		enabled[d.Name] = true
@@ -718,8 +753,11 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 		}
 		l.sink(event.Event{Type: event.ToolStart, ToolName: tc.Name, ToolCallID: tc.ID, State: "running", Summary: summary})
 		res := tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: "Tool is not enabled in this session"}}}
-		if enabled[tc.Name] {
-			res = l.reg.DispatchCtx(ctx, tools.Invocation{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
+		invocation := tools.Invocation{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments}
+		if handler, ok := cfg.InternalTools[tc.Name]; ok {
+			res = handler(ctx, invocation)
+		} else if enabled[tc.Name] {
+			res = l.reg.DispatchCtx(ctx, invocation)
 		}
 		state := "done"
 		if res.IsError {
@@ -757,6 +795,11 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, definitions
 		}
 		tools.SetExitCode(&summary, res.Details)
 		l.sink(event.Event{Type: event.ToolEnd, ToolName: tc.Name, ToolCallID: tc.ID, State: state, Summary: summary})
+		if cfg.AfterToolCall != nil {
+			if err := cfg.AfterToolCall(ctx, invocation, res); err != nil {
+				return fmt.Errorf("tool post-processing: %w", err)
+			}
+		}
 	}
 	return nil
 }

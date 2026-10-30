@@ -9,7 +9,7 @@ import (
 
 // P2-045: command table drives help + parser. Unknown commands never become prompts.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"help", "new", "resume", "model", "thinking", "compact", "session", "history", "name", "clone", "hotkeys", "quit"}
+	cmds := []string{"help", "new", "resume", "model", "thinking", "compact", "loop", "loop-stop", "session", "history", "name", "clone", "hotkeys", "quit"}
 	help := terminal.HelpText()
 	for _, c := range cmds {
 		if !strings.Contains(help, "/"+c) {

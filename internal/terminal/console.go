@@ -77,6 +77,7 @@ type Console struct {
 	picker              *pickerRegion
 	toolRow             string
 	steeringRows        []string
+	loopRows            []string
 	thinking            bool
 	dirty               bool
 	frameDepth          int
@@ -771,6 +772,19 @@ func (c *Console) SetSteeringRows(texts []string) {
 	c.Draw()
 }
 
+// SetLoopStatus shows the active loop state above the editor.
+func (c *Console) SetLoopStatus(text string) {
+	if strings.TrimSpace(text) == "" {
+		c.loopRows = nil
+		c.Draw()
+		return
+	}
+	width := max(1, c.currentWidth()-1)
+	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth(Sanitize(text), width), Token: TokenAccent}}}
+	c.loopRows = []string{FormatStyledRow(row, width, c.presentation.NoColor, c.presentation.Theme)}
+	c.Draw()
+}
+
 // Status is the activity shown in Pi's editor top border. It remains owned by
 // the composed tail until the application clears or replaces it.
 // Status(text string) sets the transient activity shown in the editor's top
@@ -910,6 +924,9 @@ func (c *Console) emitComposed(appendText string) error {
 		}
 		fragmentRows = c.streamRows
 		hasStream = true
+	}
+	if len(c.loopRows) > 0 {
+		fragmentRows = append(append([]string(nil), c.loopRows...), fragmentRows...)
 	}
 	if len(c.steeringRows) > 0 {
 		// Pi mounts pendingMessages above the status row and editor.

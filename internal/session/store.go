@@ -461,6 +461,53 @@ func (s *Store) AppendProvenance(targetID, invocation, source string) (string, e
 	return id, s.appendLocked(e, e.Custom)
 }
 
+// AppendCustomEntry records extension-owned state that does not enter model context.
+func (s *Store) AppendCustomEntry(customType string, data any) (string, error) {
+	if strings.TrimSpace(customType) == "" {
+		return "", fmt.Errorf("custom entry type must not be empty")
+	}
+	var raw json.RawMessage
+	if data != nil {
+		encoded, err := json.Marshal(data)
+		if err != nil {
+			return "", err
+		}
+		raw = encoded
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := newEntryID(s.byID)
+	parent := parentPtr(s.leafID, len(s.entries))
+	ts := nowISO()
+	entry := &Entry{Kind: "custom", Base: entryBase{Type: "custom", ID: id, ParentID: parent, Timestamp: ts},
+		Custom: &CustomEntry{Type: "custom", ID: id, ParentID: parent, Timestamp: ts, CustomType: customType, Data: raw}}
+	return id, s.appendLocked(entry, entry.Custom)
+}
+
+// AppendCustomMessage appends a Pi-compatible custom message. A message with
+// display=false remains in model context but stays out of visible history.
+func (s *Store) AppendCustomMessage(customType, content string, display bool, details any) (string, error) {
+	if strings.TrimSpace(customType) == "" {
+		return "", fmt.Errorf("custom message type must not be empty")
+	}
+	var raw json.RawMessage
+	if details != nil {
+		encoded, err := json.Marshal(details)
+		if err != nil {
+			return "", err
+		}
+		raw = encoded
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := newEntryID(s.byID)
+	parent := parentPtr(s.leafID, len(s.entries))
+	ts := nowISO()
+	entry := &Entry{Kind: "custom_message", Base: entryBase{Type: "custom_message", ID: id, ParentID: parent, Timestamp: ts},
+		CustomMessage: &CustomMessageEntry{Type: "custom_message", ID: id, ParentID: parent, Timestamp: ts, CustomType: customType, Content: content, Details: raw, Display: display}}
+	return id, s.appendLocked(entry, entry.CustomMessage)
+}
+
 // Branch moves the leaf pointer (new branch without modifying history).
 func (s *Store) Branch(branchFromID string) error {
 	s.mu.Lock()

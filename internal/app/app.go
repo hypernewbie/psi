@@ -26,6 +26,7 @@ import (
 	"psi/internal/agent"
 	"psi/internal/config"
 	"psi/internal/event"
+	"psi/internal/loop"
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
 	"psi/internal/session"
@@ -543,6 +544,7 @@ func Run(args []string, version string) error {
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
 		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
+		loops: loop.NewController(store),
 	}
 	defer func() {
 		r.store.Unlock()
@@ -551,6 +553,9 @@ func Run(args []string, version string) error {
 		}
 	}()
 	if err := r.restore(); err != nil {
+		return err
+	}
+	if err := r.loops.Reconstruct(); err != nil {
 		return err
 	}
 	if o.Name != "" {
@@ -635,6 +640,7 @@ type runtime struct {
 	themeFallback            string
 	themeDiagnostics         []pitheme.Diagnostic
 	projectTrusted           bool
+	loops                    *loop.Controller
 	reportedColorScheme      string
 	activeToolName           string
 	activeToolCallID         string
@@ -1084,8 +1090,18 @@ func (r *runtime) replace(next *session.Store) error {
 		return err
 	}
 	old := r.store
+	if r.loops != nil {
+		if err := r.loops.SetStore(next); err != nil {
+			_ = r.loops.SetStore(old)
+			next.Unlock()
+			return err
+		}
+	}
 	r.installConfiguration(&candidate)
 	r.store = next
+	if r.lifecycle != nil && r.lifecycle.console != nil && r.loops != nil {
+		r.lifecycle.console.SetLoopStatus(r.loops.StatusLine())
+	}
 	old.Unlock()
 	return nil
 }
@@ -1182,6 +1198,14 @@ func (r *runtime) draw(console *terminal.Console) {
 }
 
 func (r *runtime) repl(console *terminal.Console) error {
+	// Some embedded callers construct runtime directly instead of going through
+	// Run. Keep the loop feature safe for those callers as well.
+	if r.loops == nil && r.store != nil {
+		r.loops = loop.NewController(r.store)
+		if err := r.loops.Reconstruct(); err != nil {
+			return err
+		}
+	}
 	out := terminal.RawOutput{W: console}
 	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
 	notice := func(kind terminal.NoticeKind, text string) {
@@ -1449,6 +1473,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.ClearToolRow()
 			r.activeToolName, r.activeToolCallID, r.activeToolSummary = "", "", event.ToolSummary{}
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, ev.State, presentationDisplay(r.settings), r.theme, noColorEnvironment())
+			if ev.ToolName == loop.ControlToolName && r.loops != nil {
+				console.SetLoopStatus(r.loops.StatusLine())
+			}
 			toolSpacing.pending = true
 			if r.state != StateCancelling {
 				r.state = StateWaiting
@@ -1499,6 +1526,35 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
+		cfg.DynamicConfig = func() (string, []provider.ToolDef) {
+			state := r.loops.Snapshot()
+			definitions := tools.Definitions(r.settings.DefaultTools)
+			if state.Active && !state.Forever {
+				definitions = append(definitions, loop.ToolDefinition())
+			}
+			return r.prompt + loop.SystemPromptAddition(state), definitions
+		}
+		cfg.InternalTools = map[string]agent.InternalToolHandler{
+			loop.ControlToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {
+				result := r.loops.HandleControl(invocation.Arguments)
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
+			},
+		}
+		cfg.AfterToolCall = func(_ context.Context, invocation tools.Invocation, result tools.Result) error {
+			if invocation.Name != loop.ControlToolName || result.IsError {
+				return nil
+			}
+			state := r.loops.Snapshot()
+			if !state.Active || state.Forever {
+				return nil
+			}
+			_, err := r.store.AppendCustomMessage(loop.IterationMessageType, loop.BuildPrompt(state), false, nil)
+			return err
+		}
+		cfg.ContinueOnEnd = func() (string, string, bool) {
+			content, ok := r.loops.ContinuePrompt()
+			return loop.NudgeMessageType, content, ok
+		}
 		if observable, ok := r.prov.(interface {
 			SetRetryObserver(func(provider.RetryInfo))
 		}); ok {
@@ -1524,6 +1580,21 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		}()
 	}
+	stopLoopCommand := func() {
+		if r.loops == nil {
+			return
+		}
+		state, stopped, err := r.loops.Stop("Stopped by user")
+		if err != nil {
+			notice(terminal.NoticeError, "Could not stop loop: "+err.Error())
+		} else if !stopped {
+			notice(terminal.NoticeInfo, "No active loop")
+		} else {
+			notice(terminal.NoticeWarning, fmt.Sprintf("Loop stopped after %d iteration(s)", state.CurrentStep+1))
+		}
+		console.SetLoopStatus(r.loops.StatusLine())
+		r.draw(console)
+	}
 	suspend := func() error {
 		if err := r.lifecycle.Suspend(); err != nil {
 			return err
@@ -1534,6 +1605,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 		return console.Err()
 	}
 	console.SetDeferDraw(false)
+	if r.loops != nil {
+		console.SetLoopStatus(r.loops.StatusLine())
+	}
 	r.draw(console)
 	if len(initialMessages) > 0 {
 		message := initialMessages[0]
@@ -1742,6 +1816,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 				pendingInputs = pendingInputs[1:]
 				pendingInputBytes -= len(input.Key)
 			}
+			if ok && !input.Paste && r.loops != nil && r.loops.Snapshot().Active {
+				key := string(input.Key)
+				if key == "\x18" || key == "\x1b[88;6u" {
+					stopLoopCommand()
+					if busy {
+						cancelActive()
+					}
+					continue
+				}
+			}
 			if !ok {
 				inputs = nil
 				if busy {
@@ -1908,6 +1992,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// that is delivered at the next turn boundary. Commands stay
 				// idle-only for now; their text returns to the editor, never lost.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "loop-stop" {
+						if strings.TrimSpace(cmd.Arg) != "" {
+							notice(terminal.NoticeError, "use /loop-stop")
+							r.draw(console)
+						} else {
+							stopLoopCommand()
+						}
+						continue
+					}
 					console.Editor.RestoreDraft(text, len([]rune(text)))
 					console.RefreshCompletion()
 					r.draw(console)
@@ -1921,6 +2014,43 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if cmd, ok := terminal.ParseCommand(text); ok {
+				if cmd.Name == "loop" {
+					if err := r.store.WriteError(); err != nil {
+						notice(terminal.NoticeError, "Storage is blocked: "+err.Error())
+						console.Editor.RestoreDraft(text, len([]rune(text)))
+						console.RefreshCompletion()
+						r.draw(console)
+						continue
+					}
+					if r.authErr != nil {
+						notice(terminal.NoticeError, r.authErr.Error())
+						console.Editor.RestoreDraft(text, len([]rune(text)))
+						console.RefreshCompletion()
+						r.draw(console)
+						continue
+					}
+					state, err := r.loops.Start(cmd.Arg)
+					if err != nil {
+						notice(terminal.NoticeError, err.Error())
+						console.Editor.RestoreDraft(text, len([]rune(text)))
+						console.RefreshCompletion()
+						r.draw(console)
+					} else {
+						prompt := loop.BuildPrompt(state)
+						console.SetLoopStatus(r.loops.StatusLine())
+						start(prompt, prompt, "", "", "", false)
+					}
+					continue
+				}
+				if cmd.Name == "loop-stop" {
+					if strings.TrimSpace(cmd.Arg) != "" {
+						notice(terminal.NoticeError, "use /loop-stop")
+						r.draw(console)
+					} else {
+						stopLoopCommand()
+					}
+					continue
+				}
 				if strings.HasPrefix(cmd.Name, "skill:") {
 					name := strings.TrimPrefix(cmd.Name, "skill:")
 					expanded, err := skills.Invoke(r.skills, name, cmd.Arg)
