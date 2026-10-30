@@ -98,4 +98,3 @@ func TestDeviceAttributesAndColorQuery(t *testing.T) {
 		t.Errorf("SystemInput palette length = %d, want 2", len(sysIn.Palette))
 	}
 }
-

@@ -30,8 +30,8 @@ func TestSSEContextCancellationPoints(t *testing.T) {
 			cancelAt: 1, // cancel after first chunk
 		},
 		{
-			name: "cancel mid-JSON-token",
-			payload: []byte("event: message_start\ndata: {\"message\":{\"id\":\"m1\",\"mode"),
+			name:     "cancel mid-JSON-token",
+			payload:  []byte("event: message_start\ndata: {\"message\":{\"id\":\"m1\",\"mode"),
 			cancelAt: 0,
 		},
 		{

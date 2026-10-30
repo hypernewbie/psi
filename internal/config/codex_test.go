@@ -51,4 +51,3 @@ func TestCodexModelHelper(t *testing.T) {
 		t.Errorf("stringPtr = %v", p)
 	}
 }
-

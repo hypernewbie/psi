@@ -148,13 +148,13 @@ func TestInputDecoderByteChunkingInvariance(t *testing.T) {
 	var stream bytes.Buffer
 	stream.WriteString("Hello World 123! ")
 	stream.WriteString("日本語 and emoji: 🌍 🔥 👩‍❤️‍💋‍👩 ")
-	stream.WriteString("\x1b[A\x1b[B\x1b[C\x1b[D") // Arrows
-	stream.WriteString("\x1b[H\x1b[F\x1b[1;5H\x1b[1;5F\x1b[3~") // Home/End/Ctrl+Home/Ctrl+End/Del
-	stream.WriteString("\x1bOA\x1bOB\x1bOC\x1bOD") // SS3
-	stream.WriteString("\x1ba\x1bb\x1bc")         // Alt keys
-	stream.WriteString("\x1b[6;1R")               // Cursor report reply
-	stream.WriteString("\x1b[?1;2c")              // DA query reply
-	stream.WriteString("\x1b]11;rgb:00/00/00\x07") // OSC reply
+	stream.WriteString("\x1b[A\x1b[B\x1b[C\x1b[D")                                // Arrows
+	stream.WriteString("\x1b[H\x1b[F\x1b[1;5H\x1b[1;5F\x1b[3~")                   // Home/End/Ctrl+Home/Ctrl+End/Del
+	stream.WriteString("\x1bOA\x1bOB\x1bOC\x1bOD")                                // SS3
+	stream.WriteString("\x1ba\x1bb\x1bc")                                         // Alt keys
+	stream.WriteString("\x1b[6;1R")                                               // Cursor report reply
+	stream.WriteString("\x1b[?1;2c")                                              // DA query reply
+	stream.WriteString("\x1b]11;rgb:00/00/00\x07")                                // OSC reply
 	stream.WriteString("\x1b[200~pasted line 1\r\npasted line 2 with 🚀\x1b[201~") // Paste
 
 	data := stream.Bytes()

@@ -86,4 +86,3 @@ func TestCompatRawStringAndTypeMismatches(t *testing.T) {
 		t.Errorf("IsNull(missing) = true, want false")
 	}
 }
-

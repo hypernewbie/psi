@@ -374,10 +374,10 @@ func TestConcurrentAppendMessage(t *testing.T) {
 	var prevID *string
 	for i := 1; i <= goroutines; i++ {
 		var entry struct {
-			Type      string `json:"type"`
-			ID        string `json:"id"`
+			Type      string  `json:"type"`
+			ID        string  `json:"id"`
 			ParentID  *string `json:"parentId"`
-			Timestamp string `json:"timestamp"`
+			Timestamp string  `json:"timestamp"`
 		}
 		if err := json.Unmarshal([]byte(lines[i]), &entry); err != nil {
 			t.Fatalf("line %d is invalid JSON: %v", i, err)
@@ -570,7 +570,7 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 			Role:    "assistant",
 			Content: []ContentBlock{{Type: "text", Text: &TextContent{Type: "text", Text: "seed assistant"}}},
 			API:     "anthropic-messages", Provider: "anthropic", Model: "claude-x",
-			Usage:   Usage{Input: 10, Output: 5, TotalTokens: 15},
+			Usage: Usage{Input: 10, Output: 5, TotalTokens: 15},
 		},
 	})
 	if err != nil {
@@ -606,7 +606,7 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 							Role:    "assistant",
 							Content: []ContentBlock{{Type: "text", Text: &TextContent{Type: "text", Text: fmt.Sprintf("a-w%d-%d", workerID, iter)}}},
 							API:     "anthropic-messages", Provider: "anthropic", Model: "claude-x",
-							Usage:   Usage{Input: 5, Output: 2, TotalTokens: 7},
+							Usage: Usage{Input: 5, Output: 2, TotalTokens: 7},
 						},
 					})
 				case 2:
@@ -749,14 +749,14 @@ func TestStoreUncoveredMethods(t *testing.T) {
 	reasoningTokens := 50.0
 	cache1h := 10.0
 	usageVal := Usage{
-		Input:         100,
-		Output:        50,
-		CacheRead:     20,
-		CacheWrite:    10,
-		TotalTokens:   180,
-		Cost:          cost,
-		Reasoning:     &reasoningTokens,
-		CacheWrite1h:  &cache1h,
+		Input:        100,
+		Output:       50,
+		CacheRead:    20,
+		CacheWrite:   10,
+		TotalTokens:  180,
+		Cost:         cost,
+		Reasoning:    &reasoningTokens,
+		CacheWrite1h: &cache1h,
 	}
 	usageID, err := s.AppendUsage("auxiliary", "anthropic", "claude-3-5-sonnet", usageVal, "batch usage")
 	if err != nil {

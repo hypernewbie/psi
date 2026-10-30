@@ -132,4 +132,3 @@ func TestMixColorsSRGBAndOKLCH(t *testing.T) {
 		t.Errorf("expected error for amount > 1")
 	}
 }
-

@@ -235,4 +235,3 @@ func TestOversizedSkillFile(t *testing.T) {
 		t.Errorf("expected oversized diagnostic, got: %+v", diags)
 	}
 }
-

@@ -497,7 +497,7 @@ func TestEditorHandleKeyAllBindings(t *testing.T) {
 
 	// Ctrl+A (Home) and Ctrl+E (End)
 	e.HandleKey([]byte{1}, false) // Home on line 1
-	if e.Pos() != 2 {              // start of line 1 is pos 2
+	if e.Pos() != 2 {             // start of line 1 is pos 2
 		t.Fatalf("Ctrl+A: pos=%d want 2", e.Pos())
 	}
 	e.HandleKey([]byte{5}, false) // End on line 1
@@ -577,7 +577,7 @@ func TestEditorHandleKeyAllBindings(t *testing.T) {
 	}
 
 	// Delete key (\x1b[3~)
-	e.HandleKey([]byte("\x1b[D"), false) // at pos 2 ('z')
+	e.HandleKey([]byte("\x1b[D"), false)  // at pos 2 ('z')
 	e.HandleKey([]byte("\x1b[3~"), false) // delete 'z'
 	if e.Text() != "xy" {
 		t.Fatalf("Delete key: text=%q want 'xy'", e.Text())
