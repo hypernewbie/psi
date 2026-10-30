@@ -330,6 +330,19 @@ func (s *Store) AppendModelChange(provider, modelID string) (string, error) {
 	return id, s.appendLocked(e, e.ModelChange)
 }
 
+// AppendSessionInfo appends a display-name entry (Pi's /name). The latest
+// session_info entry wins; an empty name clears it.
+func (s *Store) AppendSessionInfo(name string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := newEntryID(s.byID)
+	parent := parentPtr(s.leafID, len(s.entries))
+	ts := nowISO()
+	e := &Entry{Kind: "session_info", Base: entryBase{Type: "session_info", ID: id, ParentID: parent, Timestamp: ts},
+		SessionInfo: &SessionInfoEntry{Type: "session_info", ID: id, ParentID: parent, Timestamp: ts, Name: &name}}
+	return id, s.appendLocked(e, e.SessionInfo)
+}
+
 // AppendUsage appends model-attributed usage (no LLM context).
 func (s *Store) AppendUsage(kind, provider, model string, u Usage, note string) (string, error) {
 	s.mu.Lock()

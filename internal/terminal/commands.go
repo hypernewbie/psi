@@ -29,6 +29,9 @@ var commandSpecs = []CommandSpec{
 	{Name: "session", Syntax: "/session", Description: "identity, workspace, provider/model, thinking, usage"},
 	{Name: "reload", Syntax: "/reload", Description: "reload theme and terminal display data"},
 	{Name: "history", Syntax: "/history [N|all]", Description: "last N user spans or display full history"},
+	{Name: "name", Syntax: "/name [name]", Description: "set or show the session display name"},
+	{Name: "clone", Syntax: "/clone", Description: "duplicate this session into a new one"},
+	{Name: "hotkeys", Syntax: "/hotkeys", Description: "show keyboard shortcuts"},
 	{Name: "quit", Syntax: "/quit", Description: "settle work, restore terminal"},
 }
 
@@ -73,6 +76,17 @@ func ParseCommand(line string) (*Command, bool) {
 	return &Command{Name: "unknown:" + name, Arg: arg}, true
 }
 
+func HotkeysText() string {
+	return strings.Join([]string{
+		"Keys (fixed, no Kitty required):",
+		"  Enter submit · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows (edges browse history)",
+		"  Ctrl+P/N history · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
+		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
+		"  Shift+Tab cycle thinking · Ctrl+L select model · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  Ctrl+D delete/exit · paste literal, no submit",
+	}, "\n")
+}
+
 func HelpText() string {
 	lines := []string{"Commands (inline, no fullscreen):"}
 	for _, spec := range commandSpecs {
@@ -81,17 +95,12 @@ func HelpText() string {
 	lines = append(lines,
 		"  /skill:name [args]   resolve skill, persist reproducible input, show invocation",
 		"",
-		"Keys (fixed, no Kitty required):",
-		"  Enter submit · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows (edges browse history)",
-		"  Ctrl+P/N history · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
-		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
-		"  Shift+Tab cycle thinking · Ctrl+L select model · Ctrl+C cancels run (idle: clear draft, empty exits)",
-		"  Ctrl+D delete/exit · paste literal, no submit",
+		HotkeysText(),
 		"",
-		"Limits: busy input is cancellation-only (one quiet notice); unknown /commands never become prompts;",
-		"every command works after resume and after cancellation; draft preserved on command errors.",
+		"Busy input stays active: Enter queues steering; Esc/Ctrl+C cancels; undelivered steering returns to the draft.",
+		"Unknown /commands never become prompts; command errors preserve the draft.",
 		"",
 		"Examples:",
-		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /skill:review fix login")
+		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /name Refactor auth · /skill:review fix login")
 	return strings.Join(lines, "\n")
 }

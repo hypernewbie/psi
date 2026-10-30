@@ -418,7 +418,7 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 
 // Handle returns submitted prompt, quit, or cancellation.
 // State first, draw only when visible state changes (P2 flashing fix).
-// Busy input is cancellation-only with one quiet notice per run.
+// Busy input remains editable; Enter submits text for steering. Esc/Ctrl+C cancel.
 func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, cancel bool) {
 	if input.Err != nil {
 		return "", false, true, busy

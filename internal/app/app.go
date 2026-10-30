@@ -2,7 +2,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -242,6 +245,9 @@ func Run(args []string, version string) error {
 	r.refreshPresentation(console)
 	return r.repl(console)
 }
+
+// newlineRun matches Pi's /name normalization: consecutive CR/LF runs collapse to one space.
+var newlineRun = regexp.MustCompile(`[\r\n]+`)
 
 type runtime struct {
 	store                    *session.Store
@@ -704,6 +710,83 @@ func (r *runtime) replace(next *session.Store) error {
 	r.installConfiguration(&candidate)
 	r.store = next
 	old.Unlock()
+	return nil
+}
+
+// cloneSession duplicates the durable session file into a new session with a
+// new ID, preserving every entry on the active branch byte-for-byte (Pi's
+// /clone fork-at-leaf), then switches the runtime to the copy.
+func (r *runtime) cloneSession(print func(string)) error {
+	data, err := os.ReadFile(r.store.File())
+	if err != nil {
+		return err
+	}
+	// First line is the session header; the clone gets a fresh one.
+	headerEnd := bytes.IndexByte(data, '\n')
+	if headerEnd < 0 {
+		return fmt.Errorf("session file has no header to replace")
+	}
+	next, err := session.New(session.OpenOptions{Cwd: r.store.Cwd(), SessionDir: r.store.Dir(), AgentDir: r.agentDir, Persist: r.store.Persistent()})
+	if err != nil {
+		return err
+	}
+	path, err := r.store.ActivePath()
+	if err != nil {
+		return err
+	}
+	if len(path) == 0 {
+		return fmt.Errorf("nothing to clone yet")
+	}
+	var header map[string]json.RawMessage
+	if err := json.Unmarshal(data[:headerEnd], &header); err != nil {
+		return fmt.Errorf("read session header: %w", err)
+	}
+	newID, _ := json.Marshal(next.Header().ID)
+	newTimestamp, _ := json.Marshal(next.Header().Timestamp)
+	header["id"], header["timestamp"] = newID, newTimestamp
+	hdr, err := json.Marshal(header)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	buf.Write(hdr)
+	buf.WriteByte('\n')
+	for _, entry := range path {
+		if len(entry.Raw) == 0 {
+			return fmt.Errorf("session entry %q has no raw record", entry.ID())
+		}
+		buf.Write(entry.Raw)
+		buf.WriteByte('\n')
+	}
+	f, err := os.OpenFile(next.File(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Close()
+		os.Remove(next.File())
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(next.File())
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(next.File())
+		return err
+	}
+	opened, err := session.OpenFile(next.File(), r.store.Cwd(), r.store.Persistent())
+	if err != nil {
+		os.Remove(next.File())
+		return err
+	}
+	if err := r.replace(opened); err != nil {
+		os.Remove(next.File())
+		return err
+	}
+	r.generation++
+	print("Cloned to new session")
 	return nil
 }
 
@@ -1584,6 +1667,11 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return true, nil
 	case "help":
 		print(terminal.HelpText())
+	case "hotkeys":
+		if strings.TrimSpace(cmd.Arg) != "" {
+			return false, fmt.Errorf("use /hotkeys")
+		}
+		print(terminal.HotkeysText())
 	case "session":
 		proj, err := r.store.Projection()
 		if err != nil {
@@ -1597,7 +1685,11 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		if returned == "" {
 			returned = "unknown (no stored response)"
 		}
-		print(fmt.Sprintf("session %s\nfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.EstimatedContext(proj, r.cfg), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
+		nameLine := ""
+		if name := r.store.SessionName(); name != "" {
+			nameLine = "name " + name + "\n"
+		}
+		print(fmt.Sprintf("session %s\n%sfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, nameLine, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.EstimatedContext(proj, r.cfg), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
 		themeSource := "built-in"
 		if r.theme != nil && r.theme.SourcePath != "" {
 			themeSource = r.theme.SourcePath
@@ -1629,6 +1721,48 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		// Reset recall and session-local state; keep prior scrollback (P2-048).
 		// New sessions start with empty recall.
 		print("new session " + next.Header().ID)
+	case "name":
+		// Pi's /name: no argument shows the current name, an argument appends a
+		// session_info entry. Newlines collapse to spaces; the latest entry wins.
+		arg := strings.TrimSpace(cmd.Arg)
+		if arg == "" {
+			if current := r.store.SessionName(); current != "" {
+				print("Session name: " + current)
+			} else {
+				for _, line := range terminal.FormatNotice(terminal.NoticeWarning, "Usage: /name <name>", 80, noColorEnvironment(), r.theme) {
+					fmt.Fprintln(out, line)
+				}
+			}
+			return false, nil
+		}
+		sanitized := strings.TrimSpace(newlineRun.ReplaceAllString(arg, " "))
+		if _, err := r.store.AppendSessionInfo(sanitized); err != nil {
+			return false, err
+		}
+		if sanitized != arg {
+			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, fmt.Sprintf("Session name was normalized from %q to %q", arg, sanitized), 80, noColorEnvironment(), r.theme) {
+				fmt.Fprintln(out, line)
+			}
+		}
+		print("Session name set: " + r.store.SessionName())
+	case "clone":
+		if strings.TrimSpace(cmd.Arg) != "" {
+			return false, fmt.Errorf("use /clone")
+		}
+		// Pi's /clone forks at the current leaf into a new session file.
+		if r.store.File() == "" || len(r.store.Entries()) == 0 {
+			print("Nothing to clone yet")
+			return false, nil
+		}
+		if _, err := os.Stat(r.store.File()); os.IsNotExist(err) {
+			print("Nothing to clone yet")
+			return false, nil
+		} else if err != nil {
+			return false, err
+		}
+		if err := r.cloneSession(print); err != nil {
+			return false, err
+		}
 	case "history":
 		// /history [N|all]: append last N user spans or full active-branch history (P2-041).
 		// Display-only: no model request, no file change.

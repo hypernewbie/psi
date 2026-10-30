@@ -35,7 +35,8 @@ Resume (every form shows current-view history before the next prompt):
 ./psi --no-session
 ```
 
-Inline commands: `/help /new /resume /model /thinking /compact /session /history /skill:name /quit`.
+Inline commands: `/help /hotkeys /new /resume /model /thinking /compact /session /history /name /clone /skill:name /quit`.
+`/name [name]` sets or shows the session display name. `/clone` copies the current branch to a new session file.
 `/resume [filter]` opens the searchable workspace picker; use arrows or PageUp/PageDown, Enter to select, Escape to cancel.
 `/history [N|all]` is display-only (default 20).
 

@@ -9,7 +9,7 @@ import (
 
 // P2-045: command table drives help + parser. Unknown commands never become prompts.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"help", "new", "resume", "model", "thinking", "compact", "session", "history", "quit"}
+	cmds := []string{"help", "new", "resume", "model", "thinking", "compact", "session", "history", "name", "clone", "hotkeys", "quit"}
 	help := terminal.HelpText()
 	for _, c := range cmds {
 		if !strings.Contains(help, "/"+c) {
@@ -18,6 +18,9 @@ func TestCommandTable(t *testing.T) {
 		if _, ok := terminal.ParseCommand("/" + c); !ok {
 			t.Errorf("parser rejects /%s", c)
 		}
+	}
+	if !strings.Contains(terminal.HotkeysText(), "\n") || strings.Contains(terminal.HotkeysText(), `\n`) {
+		t.Errorf("/hotkeys must render separate lines: %q", terminal.HotkeysText())
 	}
 	// Skill + unknown.
 	if cmd, ok := terminal.ParseCommand("/skill:review fix"); !ok || cmd.Name != "skill:review" {
