@@ -30,3 +30,25 @@ func TestCodexBuiltinsAndModelOverrides(t *testing.T) {
 		t.Fatal("Codex reasoning effort metadata was lost")
 	}
 }
+
+func TestCodexModelHelper(t *testing.T) {
+	// Empty string defaults to gpt-5.6-luna
+	m, ok := codexModel("")
+	if m.ID != "gpt-5.6-luna" {
+		t.Errorf("codexModel(\"\") ID = %q, want gpt-5.6-luna", m.ID)
+	}
+
+	// Unknown model
+	unknown, ok := codexModel("custom-codex-model")
+	if ok || unknown.ID != "custom-codex-model" || unknown.API != "openai-codex-responses" {
+		t.Errorf("codexModel(custom) = %+v, %t", unknown, ok)
+	}
+
+	// stringPtr helper
+	s := "test"
+	p := stringPtr(s)
+	if p == nil || *p != "test" {
+		t.Errorf("stringPtr = %v", p)
+	}
+}
+
