@@ -35,18 +35,30 @@ func TestPsiBannerNarrowTerminalsGetPlainTextFallback(t *testing.T) {
 	}
 }
 
-func TestPsiBannerStylesMarkWithThemeTokens(t *testing.T) {
+func TestPsiBannerPaintsMarkInFixedBrandColors(t *testing.T) {
 	generated := theme.GenerateSystemThemeColors(theme.SystemThemeInput{AppearanceHint: "light"})
 	tm, err := theme.NewResolvedTheme("system", generated.Appearance, generated.Colors, theme.ColorMode256, generated.Dim)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := PsiBanner("1.2.3", bannerHints, 80, tm, false)
-	if !strings.Contains(lines[0], "\x1b[") {
-		t.Fatalf("themed mark lost its color: %q", lines[0])
+	violet, err := theme.ForegroundANSI(psiViolet, tm.Mode)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(lines[0], "v1.2.3") || !strings.HasSuffix(lines[0], "\x1b[39m") {
-		t.Fatalf("logo line lost the dim version or its reset: %q", lines[0])
+	amber, err := theme.ForegroundANSI(psiAmber, tm.Mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	teal, err := theme.ForegroundANSI(psiTeal, tm.Mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lines[0], violet+"█") || !strings.Contains(lines[0], amber+"▄") || !strings.Contains(lines[0], teal+"█") {
+		t.Fatalf("mark lost its brand colors: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "v1.2.3") {
+		t.Fatalf("logo line lost the version: %q", lines[0])
 	}
 	if plain := stripEscapes(lines[1]); !strings.Contains(plain, " ▀█▀ ") {
 		t.Fatalf("hints line lost the mark: %q", plain)
