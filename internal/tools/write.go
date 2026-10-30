@@ -38,6 +38,32 @@ func (t *WriteTool) doWriteFile(abs, content string) error {
 	return os.WriteFile(abs, []byte(content), 0o666)
 }
 
+// Prepare pre-registers the mutation slot in call order.
+func (t *WriteTool) Prepare(inv Invocation) func(context.Context) Result {
+	path, ok := argString(inv.Arguments, "path")
+	if !ok || path == "" {
+		return func(ctx context.Context) Result { return errResult("write: path is required") }
+	}
+	content, ok := argString(inv.Arguments, "content")
+	if !ok {
+		return func(ctx context.Context) Result { return errResult("write: content is required (string)") }
+	}
+	slot, err := t.Mutations.register(t.Cwd, path)
+	if err != nil {
+		return func(ctx context.Context) Result { return errResult(err.Error()) }
+	}
+	return func(ctx context.Context) Result {
+		if err := ctx.Err(); err != nil {
+			return slot.run(func() Result {
+				return errResult(fmt.Sprintf("write: cancelled before start: %v", err))
+			})
+		}
+		return slot.run(func() Result {
+			return t.writeChecked(ctx, path, content)
+		})
+	}
+}
+
 // ExecuteCtx checks cancellation between every filesystem step (F06): before
 // mkdir, after mkdir, and after the write. A cancelled write cannot be
 // rolled back, so the result reports cancellation truthfully without
@@ -45,20 +71,7 @@ func (t *WriteTool) doWriteFile(abs, content string) error {
 // mutation queue's; the body runs inside its slot and never releases a
 // successor early.
 func (t *WriteTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
-	if err := ctx.Err(); err != nil {
-		return errResult(fmt.Sprintf("write: cancelled before start: %v", err))
-	}
-	path, ok := argString(inv.Arguments, "path")
-	if !ok || path == "" {
-		return errResult("write: path is required")
-	}
-	content, ok := argString(inv.Arguments, "content")
-	if !ok {
-		return errResult("write: content is required (string)")
-	}
-	return t.Mutations.withSlot(t.Cwd, path, func() Result {
-		return t.writeChecked(ctx, path, content)
-	})
+	return t.Prepare(inv)(ctx)
 }
 
 func (t *WriteTool) writeChecked(ctx context.Context, path, content string) Result {

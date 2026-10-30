@@ -41,26 +41,39 @@ type editItem struct {
 	New string
 }
 
+// Prepare pre-registers the mutation slot in call order.
+func (t *EditTool) Prepare(inv Invocation) func(context.Context) Result {
+	path, _ := argString(inv.Arguments, "path")
+	if path == "" {
+		return func(ctx context.Context) Result { return errResult("edit: path is required") }
+	}
+	edits, err := normalizeEdits(inv.Arguments)
+	if err != nil {
+		return func(ctx context.Context) Result { return errResult(fmt.Sprintf("edit: %v", err)) }
+	}
+	slot, err := t.Mutations.register(t.Cwd, path)
+	if err != nil {
+		return func(ctx context.Context) Result { return errResult(err.Error()) }
+	}
+	return func(ctx context.Context) Result {
+		if err := ctx.Err(); err != nil {
+			return slot.run(func() Result {
+				return errResult(fmt.Sprintf("edit: cancelled before start: %v", err))
+			})
+		}
+		return slot.run(func() Result {
+			return t.editChecked(ctx, path, edits)
+		})
+	}
+}
+
 // ExecuteCtx checks cancellation between read, transform, write, and result
 // settlement (F06). The shared mutation slot stays held until an in-flight
 // write settles, so a cancelled call never releases the next mutation early.
 // Cancellation cannot roll a write back: results stay truthful about whether
 // the file changed.
 func (t *EditTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
-	if err := ctx.Err(); err != nil {
-		return errResult(fmt.Sprintf("edit: cancelled before start: %v", err))
-	}
-	path, _ := argString(inv.Arguments, "path")
-	if path == "" {
-		return errResult("edit: path is required")
-	}
-	edits, err := normalizeEdits(inv.Arguments)
-	if err != nil {
-		return errResult(fmt.Sprintf("edit: %v", err))
-	}
-	return t.Mutations.withSlot(t.Cwd, path, func() Result {
-		return t.editChecked(ctx, path, edits)
-	})
+	return t.Prepare(inv)(ctx)
 }
 
 func (t *EditTool) editChecked(ctx context.Context, path string, edits []editItem) Result {

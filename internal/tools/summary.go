@@ -340,7 +340,7 @@ func skipJSONSpace(data []byte, i int) int {
 }
 
 func decodeJSONStringSuffix(raw []byte, limit int) (string, bool, bool) {
-	if len(raw) < 2 || raw[0] != '"' || limit <= 0 {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' || limit <= 0 {
 		return "", false, false
 	}
 	out := make([]byte, 0, limit+utf8.UTFMax)
@@ -431,7 +431,7 @@ func decodeJSONString(raw []byte) (string, bool) {
 // decodeJSONStringPrefix decodes only a bounded prefix of a JSON string. Large
 // bash commands therefore do not create a second copy of the whole argument.
 func decodeJSONStringPrefix(raw []byte, limit int) (string, bool, bool) {
-	if len(raw) < 2 || raw[0] != '"' {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
 		return "", false, false
 	}
 	out := make([]byte, 0, limit)
@@ -592,8 +592,8 @@ func boundSuffix(text string, maxBytes int) (string, bool) {
 		return strings.Clone(text), false
 	}
 	const ellipsis = "…"
-	if maxBytes <= len(ellipsis) {
-		return ellipsis[:maxBytes], true
+	if maxBytes < len(ellipsis) {
+		return "", true
 	}
 	tail := text[len(text)-maxBytes+len(ellipsis):]
 	for !utf8.ValidString(tail) && len(tail) > 0 {

@@ -59,6 +59,20 @@ func NewRegistry(cwd string) *Registry {
 	return &Registry{Cwd: cwd, Read: &ReadTool{Cwd: cwd}, Write: &WriteTool{Cwd: cwd, Mutations: mutations}, Edit: &EditTool{Cwd: cwd, Mutations: mutations}, Bash: &BashTool{Cwd: cwd}}
 }
 
+// Prepare pre-registers mutation slots in call order before workers start.
+func (r *Registry) Prepare(inv Invocation) func(context.Context) Result {
+	switch inv.Name {
+	case Write:
+		return r.Write.Prepare(inv)
+	case Edit:
+		return r.Edit.Prepare(inv)
+	default:
+		return func(ctx context.Context) Result {
+			return r.DispatchCtx(ctx, inv)
+		}
+	}
+}
+
 // Dispatch runs one invocation. Callers that execute a batch dispatch each
 // call themselves; same-file mutations serialize through the shared queue.
 func (r *Registry) Dispatch(inv Invocation) Result {

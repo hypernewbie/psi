@@ -105,7 +105,7 @@ func (t *ReadTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 		}
 	}
 	if out.Len() == 0 && !truncated {
-		if offset > lineNumber {
+		if lineNumber > 1 || offset > 1 {
 			return errResult(fmt.Sprintf("read: offset %d is beyond end of file", offset))
 		}
 		return textResult("(empty file)")

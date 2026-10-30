@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,3 +211,289 @@ func TestTruncationExact(t *testing.T) {
 		t.Errorf("exact limit should not truncate")
 	}
 }
+
+// TestDefinitionsGoldenSnapshot: verifies Definitions returns complete schema declarations.
+func TestDefinitionsGoldenSnapshot(t *testing.T) {
+	allNames := []string{Read, Write, Edit, Bash, "unknown"}
+	defs := Definitions(allNames)
+
+	if len(defs) != 4 {
+		t.Fatalf("expected 4 definitions, got %d", len(defs))
+	}
+
+	names := make(map[string]bool)
+	for _, d := range defs {
+		names[d.Name] = true
+		if d.Description == "" {
+			t.Errorf("definition %s missing description", d.Name)
+		}
+		if d.Schema == nil {
+			t.Errorf("definition %s missing schema", d.Name)
+		}
+	}
+
+	for _, expected := range []string{Read, Write, Edit, Bash} {
+		if !names[expected] {
+			t.Errorf("missing definition for %s", expected)
+		}
+	}
+}
+
+// TestRegistryPrepareAndPreRegistration: verifies Registry.Prepare and pre-registered execution.
+func TestRegistryPrepareAndPreRegistration(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir)
+
+	// 1. Prepare Write
+	writeInv := Invocation{
+		ID:        "w-prep",
+		Name:      Write,
+		Arguments: map[string]any{"path": "prep.txt", "content": "prepared write"},
+	}
+	execWrite := reg.Prepare(writeInv)
+	resWrite := execWrite(context.Background())
+	if resWrite.IsError {
+		t.Fatalf("prepared write failed: %+v", resWrite)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "prep.txt"))
+	if string(data) != "prepared write" {
+		t.Fatalf("content mismatch: %q", string(data))
+	}
+
+	// 2. Prepare Edit
+	editInv := Invocation{
+		ID:   "e-prep",
+		Name: Edit,
+		Arguments: map[string]any{
+			"path": "prep.txt",
+			"edits": []any{
+				map[string]any{"oldText": "prepared write", "newText": "prepared edit"},
+			},
+		},
+	}
+	execEdit := reg.Prepare(editInv)
+	resEdit := execEdit(context.Background())
+	if resEdit.IsError {
+		t.Fatalf("prepared edit failed: %+v", resEdit)
+	}
+	dataEdit, _ := os.ReadFile(filepath.Join(dir, "prep.txt"))
+	if string(dataEdit) != "prepared edit" {
+		t.Fatalf("content mismatch: %q", string(dataEdit))
+	}
+
+	// 3. Prepare Read and Bash (fallback to DispatchCtx)
+	readInv := Invocation{ID: "r-prep", Name: Read, Arguments: map[string]any{"path": "prep.txt"}}
+	execRead := reg.Prepare(readInv)
+	resRead := execRead(context.Background())
+	if resRead.IsError || !strings.Contains(resRead.Content[0].Text, "prepared edit") {
+		t.Fatalf("prepared read failed: %+v", resRead)
+	}
+
+	bashInv := Invocation{ID: "b-prep", Name: Bash, Arguments: map[string]any{"command": "echo prepared-bash"}}
+	execBash := reg.Prepare(bashInv)
+	resBash := execBash(context.Background())
+	if resBash.IsError || !strings.Contains(resBash.Content[0].Text, "prepared-bash") {
+		t.Fatalf("prepared bash failed: %+v", resBash)
+	}
+
+	// 4. Prepare cancellation before start
+	ctxCancel, cancel := context.WithCancel(context.Background())
+	cancel()
+	execCancelWrite := reg.Prepare(Invocation{
+		ID:        "w-can",
+		Name:      Write,
+		Arguments: map[string]any{"path": "cancel.txt", "content": "bad"},
+	})
+	resCancel := execCancelWrite(ctxCancel)
+	if !resCancel.IsError || !strings.Contains(resCancel.Content[0].Text, "cancelled") {
+		t.Fatalf("expected cancelled result: %+v", resCancel)
+	}
+
+	// 5. Prepare invalid arguments
+	execBadWrite := reg.Prepare(Invocation{ID: "bad-w", Name: Write, Arguments: map[string]any{}})
+	resBadWrite := execBadWrite(context.Background())
+	if !resBadWrite.IsError {
+		t.Fatal("expected error on bad write prepare")
+	}
+
+	execBadEdit := reg.Prepare(Invocation{ID: "bad-e", Name: Edit, Arguments: map[string]any{}})
+	resBadEdit := execBadEdit(context.Background())
+	if !resBadEdit.IsError {
+		t.Fatal("expected error on bad edit prepare")
+	}
+}
+
+// TestPathsResolveAndTruncate: coverage for resolveToCwd, resolvePath, truncateHead.
+func TestPathsResolveAndTruncate(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	cwd := "/my/project/workspace"
+
+	// resolveToCwd
+	if res := resolveToCwd("", cwd); res != cwd {
+		t.Errorf("empty path: got %q", res)
+	}
+	if res := resolveToCwd("~", cwd); res != home {
+		t.Errorf("~: got %q", res)
+	}
+	if res := resolveToCwd("~/foo/bar", cwd); res != filepath.Join(home, "foo/bar") {
+		t.Errorf("~/foo/bar: got %q", res)
+	}
+	if res := resolveToCwd("/abs/path", cwd); res != "/abs/path" {
+		t.Errorf("abs: got %q", res)
+	}
+
+	// resolvePath
+	if res := resolvePath(cwd, ""); res != cwd {
+		t.Errorf("resolvePath empty: got %q", res)
+	}
+	if res := resolvePath(cwd, "~"); res != home {
+		t.Errorf("resolvePath ~: got %q", res)
+	}
+	if res := resolvePath(cwd, "~/sub"); res != filepath.Join(home, "sub") {
+		t.Errorf("resolvePath ~/sub: got %q", res)
+	}
+	if res := resolvePath(cwd, "/abs"); res != "/abs" {
+		t.Errorf("resolvePath /abs: got %q", res)
+	}
+	if res := resolvePath(cwd, "rel/path"); res != filepath.Join(cwd, "rel/path") {
+		t.Errorf("resolvePath rel: got %q", res)
+	}
+
+	// truncateHead
+	// Default zero params
+	trDefault := truncateHead("line1\nline2\n", 0, 0)
+	if trDefault.Truncated || trDefault.TotalLines != 2 {
+		t.Errorf("default truncateHead failed: %+v", trDefault)
+	}
+
+	// Truncate by bytes where first line alone exceeds byte limit
+	trFirstBig := truncateHead("first line is way too long\nsecond", 10, 5)
+	if !trFirstBig.Truncated || trFirstBig.TruncatedBy != "bytes" || trFirstBig.Content != "" {
+		t.Errorf("first line exceeds limit failed: %+v", trFirstBig)
+	}
+
+	// Truncate by lines
+	trLines := truncateHead("1\n2\n3\n4\n5\n", 3, 1000)
+	if !trLines.Truncated || trLines.TruncatedBy != "lines" || trLines.OutputLines != 3 {
+		t.Errorf("truncate lines failed: %+v", trLines)
+	}
+
+	// Truncate by bytes with multiple kept lines
+	trBytes := truncateHead("1111\n2222\n3333\n4444\n", 10, 12)
+	if !trBytes.Truncated || trBytes.TruncatedBy != "bytes" {
+		t.Errorf("truncate bytes failed: %+v", trBytes)
+	}
+
+	// splitLines on empty
+	if lines := splitLines(""); len(lines) != 0 {
+		t.Errorf("expected empty slice, got %v", lines)
+	}
+}
+
+// TestFormatSize: coverage for formatSize helper.
+func TestFormatSize(t *testing.T) {
+	if s := formatSize(500); s != "500B" {
+		t.Errorf("got %q, want 500B", s)
+	}
+	if s := formatSize(2048); s != "2.0KB" {
+		t.Errorf("got %q, want 2.0KB", s)
+	}
+	if s := formatSize(5 * 1024 * 1024); s != "5.0MB" {
+		t.Errorf("got %q, want 5.0MB", s)
+	}
+}
+
+// TestContinuationNotice: coverage for continuationNotice.
+func TestContinuationNotice(t *testing.T) {
+	notice := continuationNotice("my/file.go")
+	if !strings.Contains(notice, "my/file.go") {
+		t.Errorf("continuationNotice failed: %q", notice)
+	}
+}
+
+// TestArgFloatAndArgString: test argument parsing edge cases.
+func TestArgFloatAndArgString(t *testing.T) {
+	args := map[string]any{
+		"float":  3.14,
+		"int":    42,
+		"int64":  int64(100),
+		"json":   json.Number("55"),
+		"string": "hello",
+	}
+
+	if f, ok := argFloat(args, "float"); !ok || f != 3.14 {
+		t.Errorf("argFloat float failed: %v %v", f, ok)
+	}
+	if f, ok := argFloat(args, "int"); !ok || f != 42 {
+		t.Errorf("argFloat int failed: %v %v", f, ok)
+	}
+	if f, ok := argFloat(args, "int64"); !ok || f != 100 {
+		t.Errorf("argFloat int64 failed: %v %v", f, ok)
+	}
+	if f, ok := argFloat(args, "json"); !ok || f != 55 {
+		t.Errorf("argFloat json failed: %v %v", f, ok)
+	}
+	if _, ok := argFloat(args, "missing"); ok {
+		t.Error("argFloat missing should be false")
+	}
+	if _, ok := argFloat(args, "string"); ok {
+		t.Error("argFloat string should be false")
+	}
+
+	if s, ok := argString(args, "string"); !ok || s != "hello" {
+		t.Errorf("argString string failed: %v %v", s, ok)
+	}
+	if _, ok := argString(args, "missing"); ok {
+		t.Error("argString missing should be false")
+	}
+}
+
+// TestSummaryJSONNumberAndNumberValue: coverage for jsonNumber and numberValue.
+func TestSummaryJSONNumberAndNumberValue(t *testing.T) {
+	// jsonNumber with string-encoded number: "\"42.5\""
+	if val, ok := jsonNumber([]byte(`"42.5"`)); !ok || val != 42.5 {
+		t.Errorf("jsonNumber string failed: %v %v", val, ok)
+	}
+	if _, ok := jsonNumber([]byte(`"not-a-number"`)); ok {
+		t.Error("jsonNumber invalid string should fail")
+	}
+	if _, ok := jsonNumber([]byte(`null`)); ok {
+		t.Error("jsonNumber null should fail")
+	}
+	if _, ok := jsonNumber([]byte(strings.Repeat("9", 200))); ok {
+		t.Error("jsonNumber oversized should fail")
+	}
+
+	// numberValue
+	if val, ok := numberValue(float32(12.5)); !ok || val != 12.5 {
+		t.Errorf("numberValue float32: %v", val)
+	}
+	if val, ok := numberValue(" 99.5 "); !ok || val != 99.5 {
+		t.Errorf("numberValue string: %v", val)
+	}
+	if _, ok := numberValue(struct{}{}); ok {
+		t.Error("numberValue struct should fail")
+	}
+
+	// SummarizeArguments with unknown tool name or nil args
+	if s := SummarizeArguments("unknown", nil, "", ""); s.Available {
+		t.Error("unknown tool should have Available=false")
+	}
+	if s := SummarizeArguments("read", nil, "", ""); s.Available {
+		t.Error("nil args should have Available=false")
+	}
+
+	// SummarizeArguments with NaN/Inf numbers
+	sNaN := SummarizeArguments("read", map[string]any{"path": "f.go", "offset": math.NaN()}, "", "")
+	_ = sNaN
+}
+
+// TestBashShellEnv: coverage for PSI_SHELL env var.
+func TestBashShellEnv(t *testing.T) {
+	t.Setenv("PSI_SHELL", "/bin/sh")
+	tool := &BashTool{}
+	if s := tool.shell(); s != "/bin/sh" {
+		t.Errorf("got %q, want /bin/sh", s)
+	}
+}
+
