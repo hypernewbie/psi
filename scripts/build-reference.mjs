@@ -17,12 +17,14 @@ if (execFileSync('git', ['-C', source, 'status', '--porcelain', '--untracked-fil
 const reader = join(source, 'packages/coding-agent/src/core/session-manager.ts');
 const compaction = join(source, 'packages/coding-agent/src/core/compaction/compaction.ts');
 const wordNavigation = join(source, 'packages/tui/src/word-navigation.ts');
+const agentLoop = join(source, 'packages/agent/src/agent-loop.ts');
+const fileMutationQueue = join(source, 'packages/coding-agent/src/core/tools/file-mutation-queue.ts');
 const ai = join(source, 'packages/ai/src/utils');
 // cross-spawn is imported by the reference's platform wrapper. Linux uses the
 // native node:child_process branch. Resolve the public installed dependency,
 // never an agent directory, auth store, extension, or user configuration.
 const dependencies = join(dirname(dirname(process.execPath)), 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules');
-const facade = `export {getCurrentSystemMessage,normalizeContext} from ${JSON.stringify(pathToFileURL(join(ai,'transcript.ts')).href)}; export {contentText} from ${JSON.stringify(pathToFileURL(join(ai,'text.ts')).href)}; export {retryAssistantCall} from ${JSON.stringify(pathToFileURL(join(ai,'retry.ts')).href)}; export {uuidv7} from ${JSON.stringify(pathToFileURL(join(ai,'uuid.ts')).href)};`;
+const facade = `export {getCurrentSystemMessage,normalizeContext,getCurrentTools,getToolStateChanges,toToolDeclaration} from ${JSON.stringify(pathToFileURL(join(ai,'transcript.ts')).href)}; export {contentText} from ${JSON.stringify(pathToFileURL(join(ai,'text.ts')).href)}; export {retryAssistantCall} from ${JSON.stringify(pathToFileURL(join(ai,'retry.ts')).href)}; export {uuidv7} from ${JSON.stringify(pathToFileURL(join(ai,'uuid.ts')).href)}; export {mergeClientIdentity,PI_ATTRIBUTION} from ${JSON.stringify(pathToFileURL(join(ai,'identity.ts')).href)}; export {validateToolArguments} from ${JSON.stringify(pathToFileURL(join(ai,'validation.ts')).href)}; export {EventStream,AssistantMessageEventStream} from ${JSON.stringify(pathToFileURL(join(ai,'event-stream.ts')).href)};`;
 const compatFacade = `export async function completeSimple(){throw new Error('Pi reference adapter does not perform provider calls')}`;
 mkdirSync(dirname(output), {recursive:true});
 writeFileSync(output, `import {registerHooks,stripTypeScriptTypes} from 'node:module';
@@ -33,7 +35,7 @@ const require = createRequire(${JSON.stringify(pathToFileURL(join(dependencies,'
 registerHooks({resolve(specifier,context,next){
  if(specifier==='@earendil-works/pi-ai/compat')return {url:'data:text/javascript,'+encodeURIComponent(${JSON.stringify(compatFacade)}),shortCircuit:true};
  if(specifier==='@earendil-works/pi-ai')return {url:'data:text/javascript,'+encodeURIComponent(${JSON.stringify(facade)}),shortCircuit:true};
- if(specifier==='cross-spawn'||specifier==='get-east-asian-width')return {url:new URL('file://'+require.resolve(specifier)).href,shortCircuit:true};
+ if(specifier==='cross-spawn'||specifier==='get-east-asian-width'||specifier==='typebox'||specifier.startsWith('typebox/'))return {url:new URL('file://'+require.resolve(specifier)).href,shortCircuit:true};
  return next(specifier,context);
 },load(url,context,next){
  if(url.startsWith('file:')&&url.endsWith('.ts'))return {format:'module',source:stripTypeScriptTypes(readFileSync(fileURLToPath(url),'utf8'),{mode:'transform'}),shortCircuit:true};
@@ -41,12 +43,15 @@ registerHooks({resolve(specifier,context,next){
 }});
 const reader=await import(${JSON.stringify(pathToFileURL(reader).href)});
 const compaction=await import(${JSON.stringify(pathToFileURL(compaction).href)});
+const loop=await import(${JSON.stringify(pathToFileURL(agentLoop).href)});
 export const {SessionManager,loadEntriesFromFile,buildSessionProjection,buildSessionContext}=reader;
 export const {findCutPoint,prepareCompaction,compact}=compaction;
+export const {runAgentLoop}=loop;
+export {AssistantMessageEventStream} from ${JSON.stringify(pathToFileURL(join(ai,'event-stream.ts')).href)};
 export async function findWordBackward(...args) {
  const word=await import(${JSON.stringify(pathToFileURL(wordNavigation).href)});
  return word.findWordBackward(...args);
 }
 `);
-writeFileSync(output+'.manifest.json',JSON.stringify({revision,readerSha256:createHash('sha256').update(readFileSync(reader)).digest('hex'),compactionSha256:createHash('sha256').update(readFileSync(compaction)).digest('hex'),wordNavigationSha256:createHash('sha256').update(readFileSync(wordNavigation)).digest('hex'),adapter:'native-node-types-v3-compaction',sourceUnmodified:true},null,2)+'\n');
-console.log('Pinned reference adapter built (unmodified reader and compaction exports).');
+writeFileSync(output+'.manifest.json',JSON.stringify({revision,readerSha256:createHash('sha256').update(readFileSync(reader)).digest('hex'),compactionSha256:createHash('sha256').update(readFileSync(compaction)).digest('hex'),wordNavigationSha256:createHash('sha256').update(readFileSync(wordNavigation)).digest('hex'),agentLoopSha256:createHash('sha256').update(readFileSync(agentLoop)).digest('hex'),fileMutationQueueSha256:createHash('sha256').update(readFileSync(fileMutationQueue)).digest('hex'),adapter:'native-node-types-v3-compaction-agent-loop',sourceUnmodified:true},null,2)+'\n');
+console.log('Pinned reference adapter built (unmodified reader, compaction, and agent-loop exports).');

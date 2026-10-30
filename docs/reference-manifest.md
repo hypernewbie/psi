@@ -26,10 +26,13 @@ The adapter records these source hashes:
 | `packages/coding-agent/src/core/session-manager.ts` | `6dd4b725c91f7b3102ec30b4e7d26f0ae486e603e9744b2eca781d57c2a7466c` |
 | `packages/coding-agent/src/core/compaction/compaction.ts` | `32714966eb644da31cd84e8eb172965256160626b3d26ae9752c3894300f2b0b` |
 | `packages/tui/src/word-navigation.ts` | `b73e915a524926ac8881731e89026b0bc7b5b0bd465de67257af81a420465c7f` |
+| `packages/agent/src/agent-loop.ts` | `9d7589b5071ea3b8b3e3c624f9cfc09a976ebf7436024a58213837de4645167d` |
+| `packages/coding-agent/src/core/tools/file-mutation-queue.ts` | `33cb06ac9bcdf32c8b84d9d12e33be44c503a7670f668e003a3262cd34294d11` |
 
-The generated manifest uses adapter version `native-node-types-v3-compaction`.
+The generated manifest uses adapter version `native-node-types-v3-compaction-agent-loop`.
 Session reference tests use the public `cross-spawn` dependency.
 Word-navigation reference tests also use public `get-east-asian-width`.
+Agent-loop reference tests also use public `typebox`.
 
 ### Optional reference checks
 
@@ -47,6 +50,9 @@ PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
 
 PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
   go test ./internal/agent -run '^TestPiCompaction(CutPointDifferential|SummaryUsesInjectedStream)$' -count=1
+
+PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
+  go test ./internal/agent -run '^TestPi(Parallel|Sequential)BatchTrace$' -count=1
 
 go test ./internal/terminal -run '^TestF09WordParityWithPi$' -count=3 \
   -args -psi-test-pi-word-module="file://$PWD/temp/pi-reference.mjs"
