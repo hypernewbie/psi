@@ -132,9 +132,14 @@ func TestCancellationSettlesUnstartedCallsWithoutRunningThem(t *testing.T) {
 	store, _ := session.New(session.OpenOptions{Cwd: dir, Persist: false})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Sequential path: one write per response, so cancelling after the first
+	// result must keep the second call from ever running. Parallel batches
+	// have their own cancellation regressions; this one pins turn boundaries.
 	p := &provider.Fake{Responses: []*provider.Response{
 		{ToolCalls: []provider.Block{
 			{Type: "toolCall", ID: "first", Name: "write", Arguments: map[string]any{"path": "first.txt", "content": "done"}},
+		}},
+		{ToolCalls: []provider.Block{
 			{Type: "toolCall", ID: "second", Name: "write", Arguments: map[string]any{"path": "second.txt", "content": "must not run"}},
 		}},
 		{Text: "next", StopReason: "stop"},

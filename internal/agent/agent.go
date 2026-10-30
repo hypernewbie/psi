@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -725,81 +724,4 @@ func toSessionAssistant(resp *provider.Response, cfg Config) session.AgentMessag
 	level := cfg.Thinking
 	a.ThinkingLevel = &level
 	return session.AgentMessage{Role: "assistant", Assistant: a}
-}
-
-func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config) error {
-	definitions := cfg.Tools
-	enabled := map[string]bool{}
-	for _, d := range definitions {
-		enabled[d.Name] = true
-	}
-	for i, tc := range calls {
-		home, _ := os.UserHomeDir()
-		summary := tools.SummarizeArguments(tc.Name, tc.Arguments, l.store.Cwd(), home)
-		if err := ctx.Err(); err != nil {
-			for _, pending := range calls[i:] {
-				msg := session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{
-					Role: "toolResult", ToolCallID: pending.ID, ToolName: pending.Name, IsError: true,
-					Content: []session.UserContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "Tool was not started because the run was cancelled."}}},
-					Details: json.RawMessage(`{"psiOutcome":"not_started"}`), Timestamp: time.Now().UnixMilli(),
-				}}
-				if _, aerr := l.store.AppendMessage(msg); aerr != nil {
-					return fmt.Errorf("storage failure, stopping: %w", aerr)
-				}
-				pendingSummary := tools.SummarizeArguments(pending.Name, pending.Arguments, l.store.Cwd(), home)
-				l.sink(event.Event{Type: event.ToolEnd, ToolName: pending.Name, ToolCallID: pending.ID, State: "not started", Summary: pendingSummary})
-			}
-			return err
-		}
-		l.sink(event.Event{Type: event.ToolStart, ToolName: tc.Name, ToolCallID: tc.ID, State: "running", Summary: summary})
-		res := tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: "Tool is not enabled in this session"}}}
-		invocation := tools.Invocation{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments}
-		if handler, ok := cfg.InternalTools[tc.Name]; ok {
-			res = handler(ctx, invocation)
-		} else if enabled[tc.Name] {
-			res = l.reg.DispatchCtx(ctx, invocation)
-		}
-		state := "done"
-		if res.IsError {
-			state = "failed"
-		}
-		if ctx.Err() != nil && res.IsError {
-			state = "cancelled"
-		}
-		var content []session.UserContentBlock
-		for _, b := range res.Content {
-			if b.Type == "image" {
-				content = append(content, session.UserContentBlock{Type: "image", Image: &session.ImageContent{Type: "image", Data: b.Data, MimeType: b.MimeType}})
-			} else {
-				content = append(content, session.UserContentBlock{Type: "text", Text: &session.TextContent{Type: "text", Text: b.Text}})
-			}
-		}
-		details, err := json.Marshal(res.Details)
-		if err != nil {
-			return err
-		}
-		if state == "cancelled" {
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal(details, &fields); err != nil {
-				fields = map[string]json.RawMessage{"toolDetails": details}
-			}
-			if fields == nil {
-				fields = map[string]json.RawMessage{}
-			}
-			fields["psiOutcome"] = json.RawMessage(`"cancelled"`)
-			details, _ = json.Marshal(fields)
-		}
-		msg := session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{Role: "toolResult", ToolCallID: tc.ID, ToolName: tc.Name, Content: content, Details: details, IsError: res.IsError, Timestamp: time.Now().UnixMilli()}}
-		if _, err := l.store.AppendMessage(msg); err != nil {
-			return fmt.Errorf("storage failure, stopping: %w", err)
-		}
-		tools.SetExitCode(&summary, res.Details)
-		l.sink(event.Event{Type: event.ToolEnd, ToolName: tc.Name, ToolCallID: tc.ID, State: state, Summary: summary})
-		if cfg.AfterToolCall != nil {
-			if err := cfg.AfterToolCall(ctx, invocation, res); err != nil {
-				return fmt.Errorf("tool post-processing: %w", err)
-			}
-		}
-	}
-	return nil
 }

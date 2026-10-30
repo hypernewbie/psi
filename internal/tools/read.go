@@ -14,6 +14,10 @@ import (
 type ReadTool struct {
 	Cwd         string
 	BlockImages bool
+	// AfterOpen runs after the file opens, before the first read, with the
+	// resolved path. It is a deterministic per-call gate seam for concurrency
+	// schedules, like WriteTool's AfterMkdir.
+	AfterOpen func(path string)
 }
 
 var imageExts = map[string]string{
@@ -61,6 +65,9 @@ func (t *ReadTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 		return errResult(fmt.Sprintf("read: %v", err))
 	}
 	defer f.Close()
+	if t.AfterOpen != nil {
+		t.AfterOpen(abs)
+	}
 	br := bufio.NewReader(f)
 	var out strings.Builder
 	lineNumber, kept := 1, 0
