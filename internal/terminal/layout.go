@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
 )
@@ -39,16 +40,40 @@ func LayoutDraft(buf []rune, pos int, width int) Layout {
 	gr := uniseg.NewGraphemes(string(buf))
 	for gr.Next() {
 		text := gr.Str()
-		n := len([]rune(text))
-		if text == "\n" {
+		if len(text) == 1 && text[0] < 0x80 {
+			if text[0] == '\n' {
+				if sourcePos == pos {
+					cursorRow, cursorCol = len(rows), cells
+				}
+				flush()
+				sourcePos++
+				rowStart = sourcePos
+				continue
+			}
+			gw := 1
+			if text[0] == '\t' {
+				gw = 8 - cells%8
+			}
+			if cells > promptCols && cells+gw > limit {
+				flush()
+				if text[0] == '\t' {
+					gw = 8 - cells%8
+				}
+			}
 			if sourcePos == pos {
 				cursorRow, cursorCol = len(rows), cells
 			}
-			flush()
-			sourcePos += n
-			rowStart = sourcePos // the next row must not include the newline
+			if text[0] == '\t' {
+				gw = min(gw, limit-cells)
+				line.WriteString(strings.Repeat(" ", max(0, gw)))
+			} else {
+				line.WriteByte(text[0])
+			}
+			cells += gw
+			sourcePos++
 			continue
 		}
+		n := utf8.RuneCountInString(text)
 		gw := GraphemeWidth(text)
 		if text == "\t" {
 			gw = 8 - cells%8
@@ -105,7 +130,7 @@ func (l Layout) VisualRunePos(buf []rune, row, col int) int {
 			break
 		}
 		cells += gw
-		pos += len([]rune(text))
+		pos += utf8.RuneCountInString(text)
 	}
 	return pos
 }

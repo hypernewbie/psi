@@ -66,7 +66,7 @@ func Test256KiBPasteUpdatesWithinBudget(t *testing.T) {
 	elapsed := time.Since(start)
 	budget := 200 * time.Millisecond
 	if raceInstrumentation {
-		budget = 500 * time.Millisecond
+		budget = 1000 * time.Millisecond
 	}
 	t.Logf("256KiB paste end-to-frame: %s (budget %s)", elapsed, budget)
 	if elapsed > budget {

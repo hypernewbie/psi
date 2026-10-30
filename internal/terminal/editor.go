@@ -3,6 +3,7 @@ package terminal
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
 )
@@ -32,23 +33,11 @@ type Editor struct {
 
 func NewEditor() *Editor { return &Editor{histIdx: -1, prefCol: -1} }
 
-// graphemeBounds returns byte offsets of grapheme boundaries for s.
-func graphemeBounds(s string) []int {
-	var bounds []int
-	gr := uniseg.NewGraphemes(s)
-	for gr.Next() {
-		start, _ := gr.Positions()
-		bounds = append(bounds, start)
-	}
-	bounds = append(bounds, len(s))
-	return bounds
-}
-
 // runeToByte converts rune index to byte offset.
 func runeToByte(buf []rune, pos int) int {
 	n := 0
 	for i := 0; i < pos && i < len(buf); i++ {
-		n += len(string(buf[i]))
+		n += utf8.RuneLen(buf[i])
 	}
 	return n
 }
@@ -57,7 +46,7 @@ func runeToByte(buf []rune, pos int) int {
 func byteToRune(buf []rune, boff int) int {
 	n, ri := 0, 0
 	for ri < len(buf) {
-		l := len(string(buf[ri]))
+		l := utf8.RuneLen(buf[ri])
 		if n+l > boff {
 			break
 		}
@@ -67,12 +56,51 @@ func byteToRune(buf []rune, boff int) int {
 	return ri
 }
 
-// snapToGrapheme moves a byte offset to the nearest valid grapheme boundary (forward).
+// snapByte moves a byte offset to the nearest valid grapheme boundary (forward).
 func snapByte(s string, off int) int {
-	bounds := graphemeBounds(s)
-	for _, b := range bounds {
-		if b >= off {
-			return b
+	if off <= 0 {
+		return 0
+	}
+	if off >= len(s) {
+		return len(s)
+	}
+	gr := uniseg.NewGraphemes(s)
+	for gr.Next() {
+		start, _ := gr.Positions()
+		if start >= off {
+			return start
+		}
+	}
+	return len(s)
+}
+
+// prevGraphemeBoundary returns the nearest byte offset of a grapheme boundary strictly before boff.
+func prevGraphemeBoundary(s string, boff int) int {
+	if boff <= 0 {
+		return 0
+	}
+	gr := uniseg.NewGraphemes(s)
+	prev := 0
+	for gr.Next() {
+		start, _ := gr.Positions()
+		if start >= boff {
+			return prev
+		}
+		prev = start
+	}
+	return prev
+}
+
+// nextGraphemeBoundary returns the nearest byte offset of a grapheme boundary strictly after boff.
+func nextGraphemeBoundary(s string, boff int) int {
+	if boff >= len(s) {
+		return len(s)
+	}
+	gr := uniseg.NewGraphemes(s)
+	for gr.Next() {
+		start, _ := gr.Positions()
+		if start > boff {
+			return start
 		}
 	}
 	return len(s)
@@ -193,21 +221,13 @@ func (e *Editor) Insert(s string) bool {
 }
 
 func (e *Editor) Backspace() {
+	e.prefCol = -1
 	if e.pos <= 0 {
 		return
 	}
 	s := string(e.buf)
 	boff := runeToByte(e.buf, e.pos)
-	bounds := graphemeBounds(s)
-	// Find previous boundary.
-	prev := 0
-	for _, b := range bounds {
-		if b < boff {
-			prev = b
-		} else {
-			break
-		}
-	}
+	prev := prevGraphemeBoundary(s, boff)
 	newText := s[:prev] + s[boff:]
 	e.buf = []rune(newText)
 	e.pos = byteToRune(e.buf, prev)
@@ -215,19 +235,13 @@ func (e *Editor) Backspace() {
 }
 
 func (e *Editor) Delete() {
+	e.prefCol = -1
 	s := string(e.buf)
 	boff := runeToByte(e.buf, e.pos)
 	if boff >= len(s) {
 		return
 	}
-	bounds := graphemeBounds(s)
-	next := len(s)
-	for _, b := range bounds {
-		if b > boff {
-			next = b
-			break
-		}
-	}
+	next := nextGraphemeBoundary(s, boff)
 	newText := s[:boff] + s[next:]
 	e.buf = []rune(newText)
 	// pos unchanged (byte offset same => rune index recomputed same logical spot)
@@ -242,15 +256,7 @@ func (e *Editor) MoveLeft() {
 	if boff <= 0 {
 		return
 	}
-	bounds := graphemeBounds(s)
-	prev := 0
-	for _, b := range bounds {
-		if b < boff {
-			prev = b
-		} else {
-			break
-		}
-	}
+	prev := prevGraphemeBoundary(s, boff)
 	e.pos = byteToRune(e.buf, prev)
 }
 
@@ -261,14 +267,8 @@ func (e *Editor) MoveRight() {
 	if boff >= len(s) {
 		return
 	}
-	bounds := graphemeBounds(s)
-	for _, b := range bounds {
-		if b > boff {
-			e.pos = byteToRune(e.buf, b)
-			return
-		}
-	}
-	e.pos = len(e.buf)
+	next := nextGraphemeBoundary(s, boff)
+	e.pos = byteToRune(e.buf, next)
 }
 
 // logicalLineBounds returns rune indices of the logical line containing pos.
@@ -333,6 +333,9 @@ func (e *Editor) MoveDown(width int) bool {
 // Complete returns slash-command and skill-name candidates for Tab (P2-022).
 // No tool/shell execution, no filesystem scan, no provider request.
 func Complete(draft string, pos int, commands []string, skills []string) (candidates []string, showList bool) {
+	if !strings.Contains(draft, "/") {
+		return nil, false
+	}
 	// Find current token start (after whitespace or start).
 	start := pos
 	runes := []rune(draft)
@@ -372,6 +375,7 @@ func startsWith(s, prefix string) bool {
 // DeleteWordBackward implements Ctrl+W using pi word-navigation semantics:
 // skip trailing whitespace, then one word-like or punctuation run.
 func (e *Editor) DeleteWordBackward() {
+	e.prefCol = -1
 	if e.pos <= 0 {
 		return
 	}
@@ -385,6 +389,7 @@ func (e *Editor) DeleteWordBackward() {
 }
 
 func (e *Editor) DeleteToLineStart() {
+	e.prefCol = -1
 	s, _ := e.logicalLineBounds()
 	boff := runeToByte(e.buf, e.pos)
 	startBoff := runeToByte(e.buf, s)
@@ -395,6 +400,7 @@ func (e *Editor) DeleteToLineStart() {
 }
 
 func (e *Editor) DeleteToLineEnd() {
+	e.prefCol = -1
 	_, en := e.logicalLineBounds()
 	boff := runeToByte(e.buf, e.pos)
 	endBoff := runeToByte(e.buf, en)
@@ -509,6 +515,7 @@ func isPunct(s string) bool {
 }
 
 func (e *Editor) PrevHistory() {
+	e.prefCol = -1
 	if len(e.history) == 0 {
 		return
 	}
@@ -538,6 +545,7 @@ func (e *Editor) PrevHistory() {
 }
 
 func (e *Editor) NextHistory() {
+	e.prefCol = -1
 	if e.histIdx == -1 {
 		return
 	}
@@ -570,6 +578,7 @@ func (e *Editor) NextHistory() {
 }
 
 func (e *Editor) Submit() string {
+	e.prefCol = -1
 	s := string(e.buf)
 	if strings.TrimSpace(s) != "" {
 		// Avoid consecutive duplicates (pi editor behavior).
@@ -636,15 +645,6 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 			return "", false
 		}
 	}
-	// Ctrl+P / Ctrl+N browse history directly (3.4).
-	if len(key) == 1 && (key[0] == 16 || key[0] == 14) {
-		if key[0] == 16 {
-			e.PrevHistory()
-		} else {
-			e.NextHistory()
-		}
-		return "", false
-	}
 	// Tab completion is handled by outer Console (needs skill/command lists).
 	// Editor exposes Complete(); HandleKey leaves Tab for the caller.
 	if len(key) == 1 && key[0] == 9 {
@@ -652,21 +652,21 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 	}
 	s := string(key)
 	switch s {
-	case "\x1b[D":
+	case "\x1b[D", "\x1bOD":
 		e.MoveLeft()
-	case "\x1b[C":
+	case "\x1b[C", "\x1bOC":
 		e.MoveRight()
-	case "\x1b[A":
+	case "\x1b[A", "\x1bOA":
 		if !e.MoveUp(80) {
 			e.PrevHistory()
 		}
-	case "\x1b[B":
+	case "\x1b[B", "\x1bOB":
 		if !e.MoveDown(80) {
 			e.NextHistory()
 		}
-	case "\x1b[H", "\x1b[1~":
+	case "\x1b[H", "\x1b[1~", "\x1bOH", "\x1b[7~":
 		e.Home()
-	case "\x1b[F", "\x1b[4~":
+	case "\x1b[F", "\x1b[4~", "\x1bOF", "\x1b[8~":
 		e.End()
 	case "\x1b[3~":
 		e.Delete()

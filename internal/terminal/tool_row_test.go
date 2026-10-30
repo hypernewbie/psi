@@ -42,3 +42,69 @@ func TestToolRowSanitizesUntrustedPreview(t *testing.T) {
 		t.Fatalf("unsafe row %q", row)
 	}
 }
+
+func TestTruncatePrefixAndSuffixPreview(t *testing.T) {
+	// truncatePrefixPreview
+	if got := truncatePrefixPreview("hello", 0); got != "" {
+		t.Errorf("truncatePrefixPreview(0) = %q, want empty", got)
+	}
+	if got := truncatePrefixPreview("hello", -3); got != "" {
+		t.Errorf("truncatePrefixPreview(-3) = %q, want empty", got)
+	}
+	if got := truncatePrefixPreview("hello", 1); got != "…" {
+		t.Errorf("truncatePrefixPreview(1) = %q, want …", got)
+	}
+	if got := truncatePrefixPreview("hello", 5); got != "hello" {
+		t.Errorf("truncatePrefixPreview(5) = %q, want hello", got)
+	}
+	if got := truncatePrefixPreview("hello", 10); got != "hello" {
+		t.Errorf("truncatePrefixPreview(10) = %q, want hello", got)
+	}
+	if got := truncatePrefixPreview("hello world", 6); got != "hello…" {
+		t.Errorf("truncatePrefixPreview(6) = %q, want hello…", got)
+	}
+	// Wide characters
+	if got := truncatePrefixPreview("あいうえお", 5); got != "あい…" {
+		t.Errorf("truncatePrefixPreview(wide 5) = %q, want あい…", got)
+	}
+
+	// truncateSuffixPreview
+	if got := truncateSuffixPreview("hello", 0); got != "" {
+		t.Errorf("truncateSuffixPreview(0) = %q, want empty", got)
+	}
+	if got := truncateSuffixPreview("hello", 1); got != "…" {
+		t.Errorf("truncateSuffixPreview(1) = %q, want …", got)
+	}
+	if got := truncateSuffixPreview("hello", 5); got != "hello" {
+		t.Errorf("truncateSuffixPreview(5) = %q, want hello", got)
+	}
+	if got := truncateSuffixPreview("path/to/long/file.go", 11); got != "…ng/file.go" {
+		t.Errorf("truncateSuffixPreview(11) = %q, want …ng/file.go", got)
+	}
+}
+
+func TestToolStateMappings(t *testing.T) {
+	cases := []struct {
+		in          string
+		wantEvent   ToolState
+		wantOutcome ToolState
+	}{
+		{"done", ToolDone, ToolDone},
+		{"failed", ToolFailed, ToolFailed},
+		{"cancelled", ToolCancelled, ToolCancelled},
+		{"canceled", ToolCancelled, ToolCancelled},
+		{"not started", ToolNotStarted, ToolNotStarted},
+		{"interrupted", ToolInterrupted, ToolInterrupted},
+		{"running", ToolRunning, ToolRunning},
+		{"unknown", ToolRunning, ToolRunning},
+	}
+
+	for _, tc := range cases {
+		if got := toolStateFromEvent(tc.in); got != tc.wantEvent {
+			t.Errorf("toolStateFromEvent(%q) = %q, want %q", tc.in, got, tc.wantEvent)
+		}
+		if got := toolOutcomeState(tc.in); got != tc.wantOutcome {
+			t.Errorf("toolOutcomeState(%q) = %q, want %q", tc.in, got, tc.wantOutcome)
+		}
+	}
+}

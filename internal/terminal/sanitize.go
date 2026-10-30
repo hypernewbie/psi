@@ -38,6 +38,8 @@ func (s *Sanitizer) feed(text string, foldCR bool) string {
 				s.state = 'o'
 			case 'P', 'X', '^', '_':
 				s.state = 's'
+			case 27:
+				s.state = 'e'
 			default:
 				if r >= 0x20 && r <= 0x2f {
 					s.state = 'i'
@@ -47,26 +49,43 @@ func (s *Sanitizer) feed(text string, foldCR bool) string {
 			}
 			continue
 		case 'i':
-			if r >= 0x30 && r <= 0x7e {
+			if r == 27 {
+				s.state = 'e'
+			} else if r == 0x18 || r == 0x1a {
+				s.state = 0
+			} else if r >= 0x30 && r <= 0x7e {
 				s.state = 0
 			}
 			continue
 		case 'c':
-			if r >= 0x40 && r <= 0x7e {
+			if r == 27 {
+				s.state = 'e'
+			} else if r == 0x18 || r == 0x1a {
+				s.state = 0
+			} else if r >= 0x40 && r <= 0x7e {
 				s.state = 0
 			}
 			continue
 		case 'o', 's':
-			if r == 0x07 || r == 0x9c {
+			if r == 0x07 || r == 0x9c || r == 0x18 || r == 0x1a {
 				s.state = 0
 			} else if r == 27 {
 				s.state = 't'
 			}
 			continue
 		case 't':
-			if r == '\\' {
+			switch r {
+			case '\\':
 				s.state = 0
-			} else {
+			case 27:
+				s.state = 't'
+			case '[':
+				s.state = 'c'
+			case ']':
+				s.state = 'o'
+			case 'P', 'X', '^', '_':
+				s.state = 's'
+			default:
 				s.state = 's'
 			}
 			continue

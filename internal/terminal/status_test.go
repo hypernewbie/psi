@@ -7,9 +7,11 @@ package terminal
 // a committed-scrollback sentinel.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"psi/internal/event"
 	"psi/internal/testutil"
 )
 
@@ -100,5 +102,63 @@ func TestF10UnsupportedNameThroughConsole(t *testing.T) {
 	sw.Update("tool\nname", "c1", ToolDone)
 	if out := sb.String(); out != MessageIndent+"tool name: done\n" {
 		t.Fatalf("wrong settled status: %q", out)
+	}
+}
+
+func TestStatusWriterUpdateSummary(t *testing.T) {
+	var sb strings.Builder
+	sw := NewStatusWriter(&sb)
+
+	code := 1
+	sumRunning := event.ToolSummary{Kind: "bash", Command: "make build", Available: true}
+	sumDone := event.ToolSummary{Kind: "bash", Command: "make build", Available: true}
+	sumFailed := event.ToolSummary{Kind: "bash", Command: "make test", Available: true, ExitCode: &code}
+
+	// 1. Running state does not write settled lines
+	sw.UpdateSummary("bash", "call-1", sumRunning, "running", DefaultDisplaySettings(), nil, true)
+	if sb.Len() > 0 {
+		t.Fatalf("running summary should not write to output, got %q", sb.String())
+	}
+
+	// 2. Duplicate state is suppressed
+	sw.UpdateSummary("bash", "call-1", sumRunning, "running", DefaultDisplaySettings(), nil, true)
+	if sb.Len() > 0 {
+		t.Fatal("duplicate running state should be suppressed")
+	}
+
+	// 3. Settled state "done" writes formatted line
+	sw.UpdateSummary("bash", "call-1", sumDone, "done", DefaultDisplaySettings(), nil, true)
+	if sb.Len() == 0 || !strings.Contains(sb.String(), "make build") || !strings.HasSuffix(sb.String(), "\n") {
+		t.Fatalf("done summary missing or malformed: %q", sb.String())
+	}
+
+	// 4. Settled state duplicate suppressed
+	beforeLen := sb.Len()
+	sw.UpdateSummary("bash", "call-1", sumDone, "done", DefaultDisplaySettings(), nil, true)
+	if sb.Len() != beforeLen {
+		t.Fatal("duplicate done summary should be suppressed")
+	}
+
+	// 5. Failed state writes exit code
+	sw.UpdateSummary("bash", "call-2", sumFailed, "failed", DefaultDisplaySettings(), nil, true)
+	if !strings.Contains(sb.String(), "failed (exit 1)") {
+		t.Fatalf("failed summary missing exit code: %q", sb.String())
+	}
+
+	// 6. Sized writer uses StatusWidth
+	var sizedSb strings.Builder
+	wSized := &fixedStatusWidthWriter{out: &sizedSb, width: 30}
+	swSized := NewStatusWriter(wSized)
+	swSized.UpdateSummary("bash", "call-3", sumFailed, "failed", DefaultDisplaySettings(), nil, true)
+	if CellWidth(Sanitize(sizedSb.String())) > 30 {
+		t.Fatalf("sized summary exceeded width 30: %q", sizedSb.String())
+	}
+
+	// 7. Cache eviction when reaching 1024 keys
+	for i := 0; i < 1030; i++ {
+		sw.UpdateSummary("bash", fmt.Sprintf("call-bulk-%d", i), sumDone, "done", DefaultDisplaySettings(), nil, true)
+	}
+	if len(sw.last) >= 1024 {
+		t.Fatalf("cache should clear when reaching 1024 entries, got %d", len(sw.last))
 	}
 }
