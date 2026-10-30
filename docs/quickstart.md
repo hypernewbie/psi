@@ -40,6 +40,18 @@ Inline commands: `/help /hotkeys /new /resume /model /thinking /compact /session
 `/resume [filter]` opens the searchable workspace picker; use arrows or PageUp/PageDown, Enter to select, Escape to cancel.
 `/history [N|all]` is display-only (default 20).
 
+Initial prompts are interactive. Run `./psi "Review this change"` to start a run. Psi returns to the editor when the run ends.
+
+Common Pi aliases include `-h`, `-v`, `-c`, `-r`, `-t`, `-nt`, `-nbt`, `-a`, and `-na`. Options can appear before or after initial prompts.
+
+`--list-models [search]` lists models from the bundled catalog, `models.json`, and Pi's local cache. It does not use the network. `--system-prompt` and repeatable `--append-system-prompt` accept text or file paths.
+
+Psi does not support these Pi options:
+
+- `--print/-p`, JSON/RPC modes, or fullscreen mode.
+- `@file`, `--api-key`, `--models`, `--session-id`, `--fork`, or `--export`.
+- Extensions, MCP, or prompt templates.
+
 Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/picker selection),
 `Ctrl+P/N` history, five-row slash completion, `Ctrl+L` model picker, `Shift+Tab` thinking cycle,
 `Ctrl+C` cancels a picker/run (idle clears, empty exits), `Ctrl+D` delete/exit, paste literal,
