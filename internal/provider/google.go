@@ -141,6 +141,7 @@ func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onText
 	scanner := bufio.NewScanner(io.LimitReader(reader, maxStreamBytes+1))
 	scanner.Buffer(make([]byte, 64*1024), maxStreamBytes+1)
 	response := &Response{Model: req.Model.ID}
+	var textBuffer googleTextAccumulator
 	var data []string
 	totalBytes := 0
 	finishSeen := false
@@ -149,6 +150,7 @@ func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onText
 	var generatedID uint64
 
 	partial := func() *Response {
+		textBuffer.flush(response)
 		copy := *response
 		copy.Content = nil
 		copy.ToolCalls = nil
@@ -249,9 +251,9 @@ func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onText
 					}
 				}
 				if thought {
-					appendGoogleText(response, "thinking", text, signature)
+					textBuffer.append(response, "thinking", text, signature)
 				} else {
-					appendGoogleText(response, "text", text, signature)
+					textBuffer.append(response, "text", text, signature)
 					if text != "" && onText != nil {
 						onText(text)
 					}
@@ -338,6 +340,7 @@ func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onText
 	if response.StopReason == "stop" && len(response.ToolCalls) > 0 {
 		response.StopReason = "toolUse"
 	}
+	textBuffer.flush(response)
 	var text, thinking strings.Builder
 	for _, block := range response.Content {
 		if block.Type == "text" {
@@ -350,29 +353,43 @@ func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onText
 	return response, nil
 }
 
-func appendGoogleText(response *Response, kind, delta, signature string) {
-	if len(response.Content) > 0 && response.Content[len(response.Content)-1].Type == kind {
-		block := &response.Content[len(response.Content)-1]
-		if kind == "text" {
-			block.Text += delta
-			if signature != "" {
-				block.TextSignature = signature
-			}
-		} else {
-			block.Thinking += delta
-			if signature != "" {
-				block.ThinkingSignature = signature
-			}
-		}
+// Buffer the active text/thought block instead of copying its full prefix for
+// every stream delta. Block boundaries and last nonempty signatures stay intact.
+type googleTextAccumulator struct {
+	text   strings.Builder
+	index  int
+	active bool
+}
+
+func (b *googleTextAccumulator) flush(response *Response) {
+	if !b.active {
 		return
 	}
-	block := Block{Type: kind}
-	if kind == "text" {
-		block.Text, block.TextSignature = delta, signature
+	block := &response.Content[b.index]
+	if block.Type == "text" {
+		block.Text = b.text.String()
 	} else {
-		block.Thinking, block.ThinkingSignature = delta, signature
+		block.Thinking = b.text.String()
 	}
-	response.Content = append(response.Content, block)
+	b.text.Reset()
+	b.active = false
+}
+
+func (b *googleTextAccumulator) append(response *Response, kind, delta, signature string) {
+	if !b.active || b.index != len(response.Content)-1 || response.Content[b.index].Type != kind {
+		b.flush(response)
+		response.Content = append(response.Content, Block{Type: kind})
+		b.index, b.active = len(response.Content)-1, true
+	}
+	b.text.WriteString(delta)
+	block := &response.Content[b.index]
+	if signature != "" {
+		if kind == "text" {
+			block.TextSignature = signature
+		} else {
+			block.ThinkingSignature = signature
+		}
+	}
 }
 
 func googleStopReason(reason string) string {

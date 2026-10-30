@@ -38,8 +38,12 @@ func BuildResponsesRequest(req Request) (map[string]any, error) {
 		return nil, err
 	}
 	body := map[string]any{"model": req.Model.ID, "input": input, "stream": true, "store": false}
-	if req.MaxTokens > 0 && compat.supportsMaxOutputTokens {
-		body["max_output_tokens"] = max(16, req.MaxTokens)
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = req.Model.MaxTokens
+	}
+	if maxTokens > 0 && compat.supportsMaxOutputTokens {
+		body["max_output_tokens"] = max(16, maxTokens)
 	}
 	if !compat.supportsMidConvoSystemMessages || !compat.supportsAdditionalTools {
 		if tools := responseTools(req.Tools, compat.supportsStrictMode); len(tools) > 0 {
@@ -47,7 +51,10 @@ func BuildResponsesRequest(req Request) (map[string]any, error) {
 		}
 	}
 	if req.Model.Reasoning {
-		level := clampResponsesThinking(req.Model, req.Thinking)
+		level, ok := clampModelThinkingLevel(req.Model, req.Thinking)
+		if !ok {
+			return nil, fmt.Errorf("model %q has no supported thinking level", req.Model.ID)
+		}
 		if level == "off" {
 			mapped, present := req.Model.ThinkingLevelMap["off"]
 			if !present {
@@ -118,45 +125,6 @@ func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
 		return responsesCompat{}, fmt.Errorf("model %q uses unsupported Responses session affinity format %q", model.ID, compat.sessionAffinityFormat)
 	}
 	return compat, nil
-}
-
-func clampResponsesThinking(model ModelMeta, requested string) string {
-	levels := []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
-	if !model.Reasoning {
-		return "off"
-	}
-	available := make(map[string]bool, len(levels))
-	for _, level := range levels {
-		mapped, exists := model.ThinkingLevelMap[level]
-		if exists && mapped == nil {
-			continue
-		}
-		if (level == "xhigh" || level == "max") && !exists {
-			continue
-		}
-		available[level] = true
-	}
-	for index, level := range levels {
-		if level != requested {
-			continue
-		}
-		for i := index; i < len(levels); i++ {
-			if available[levels[i]] {
-				return levels[i]
-			}
-		}
-		for i := index - 1; i >= 0; i-- {
-			if available[levels[i]] {
-				return levels[i]
-			}
-		}
-	}
-	for _, level := range levels {
-		if available[level] {
-			return level
-		}
-	}
-	return "off"
 }
 
 func validateResponsesTools(req Request) error {
@@ -370,6 +338,12 @@ func convertResponsesMessages(req Request, compat responsesCompat) ([]any, error
 }
 
 func transformResponsesMessages(messages []Message, model ModelMeta) []Message {
+	return transformReplayMessages(messages, model, normalizeResponsesID)
+}
+
+// transformReplayMessages applies Pi's protocol-neutral replay rules. Each API
+// supplies its own cross-provider ID normalizer before encoding wire messages.
+func transformReplayMessages(messages []Message, model ModelMeta, normalizeID func(string) string) []Message {
 	idMap := make(map[string]string)
 	var output []Message
 	var pending []Message
@@ -421,7 +395,7 @@ func transformResponsesMessages(messages []Message, model ModelMeta) []Message {
 					}
 				case "toolCall":
 					if !sameModel {
-						id := normalizeResponsesID(block.ID)
+						id := normalizeID(block.ID)
 						idMap[block.ID] = id
 						block.ID, block.ThoughtSignature = id, ""
 					}

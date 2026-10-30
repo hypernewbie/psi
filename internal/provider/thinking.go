@@ -8,7 +8,7 @@ import (
 func SupportedThinking(model ModelMeta) []string {
 	var levels []string
 	for _, level := range ValidLevels {
-		if (model.API == "google-generative-ai" || model.API == "openai-responses") && model.Reasoning {
+		if (model.API == "google-generative-ai" || model.API == "openai-responses" || model.API == "openai-completions") && model.Reasoning {
 			mapped, exists := model.ThinkingLevelMap[level]
 			if exists && mapped == nil {
 				continue
@@ -71,6 +71,13 @@ func ThinkingDescription(model ModelMeta, level string) string {
 		}
 	}
 	if model.API == "openai-completions" {
+		effective, ok := clampModelThinkingLevel(model, level)
+		if !ok {
+			return "unavailable: model has no supported thinking level"
+		}
+		if effective != level {
+			return fmt.Sprintf("%s (effective fallback %s)", level, ThinkingDescription(model, effective))
+		}
 		compat, err := resolveCompletionsCompat(model)
 		if err != nil {
 			return "unavailable: " + err.Error()
@@ -122,3 +129,33 @@ func ThinkingDescription(model ModelMeta, level string) string {
 	return fmt.Sprintf("%s (budget %d tokens)", level, budget)
 }
 func ThinkingChoices(model ModelMeta) string { return strings.Join(SupportedThinking(model), ", ") }
+
+// Pi clamps to the nearest supported level, preferring a higher level before
+// searching lower levels. A null mapping excludes a level; xhigh and max need
+// explicit mappings. This is shared by the three PLAN6 protocol adapters.
+func clampModelThinkingLevel(model ModelMeta, requested string) (string, bool) {
+	if !model.Reasoning {
+		return "off", true
+	}
+	available := func(level string) bool {
+		mapped, exists := model.ThinkingLevelMap[level]
+		return (!exists || mapped != nil) && (exists || level != "xhigh" && level != "max")
+	}
+	for i, level := range ValidLevels {
+		if level != requested {
+			continue
+		}
+		for j := i; j < len(ValidLevels); j++ {
+			if available(ValidLevels[j]) {
+				return ValidLevels[j], true
+			}
+		}
+		for j := i - 1; j >= 0; j-- {
+			if available(ValidLevels[j]) {
+				return ValidLevels[j], true
+			}
+		}
+		break
+	}
+	return "", false
+}

@@ -420,8 +420,8 @@ func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, c
 					}
 					blocks = append(blocks, provider.Block{Type: "thinking", Thinking: b.Thinking.Thinking, ThinkingSignature: sig, Redacted: b.Thinking.Redacted != nil && *b.Thinking.Redacted})
 				case "toolCall":
-					if cfg.Model.API == "openai-responses" && b.Call.ArgumentsError != nil {
-						return provider.Request{}, fmt.Errorf("Responses replay refuses a tool call with invalid arguments")
+					if b.Call.ArgumentsError != nil {
+						return provider.Request{}, fmt.Errorf("provider replay refuses a tool call with invalid arguments")
 					}
 					namespace := ""
 					if b.Call.Namespace != nil {

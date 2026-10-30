@@ -154,9 +154,11 @@ func BuildCompletionsRequest(req Request) (map[string]any, error) {
 	if req.Thinking != "off" && !req.Model.Reasoning {
 		return nil, fmt.Errorf("model %q does not support thinking", req.Model.ID)
 	}
-	if mapped, exists := req.Model.ThinkingLevelMap[req.Thinking]; exists && mapped == nil && req.Thinking != "off" {
-		return nil, fmt.Errorf("model %q does not support thinking level %q", req.Model.ID, req.Thinking)
+	level, ok := clampModelThinkingLevel(req.Model, req.Thinking)
+	if !ok {
+		return nil, fmt.Errorf("model %q has no supported thinking level", req.Model.ID)
 	}
+	req.Thinking = level
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = req.Model.MaxTokens
@@ -271,6 +273,8 @@ func mappedEffort(model ModelMeta, level string) (string, bool) {
 }
 
 func convertCompletionsMessages(req Request, compat completionsCompat) ([]any, error) {
+	// IDs are normalized below with Completions' 40-character pipe-ID rule.
+	req.Messages = transformReplayMessages(req.Messages, req.Model, func(id string) string { return id })
 	messages := make([]any, 0, len(req.Messages)+1)
 	instructionRole := "system"
 	if req.Model.Reasoning && compat.supportsDeveloperRole {
@@ -281,6 +285,16 @@ func convertCompletionsMessages(req Request, compat completionsCompat) ([]any, e
 	}
 	toolIDMap := map[string]string{}
 	normalizedIDs := map[string]string{}
+	preserveIDs := map[string]bool{}
+	for _, message := range req.Messages {
+		if message.Role == "assistant" && message.Provider == req.Model.ProviderID() && message.API == req.Model.API && message.Model == req.Model.ID {
+			for _, block := range message.Content {
+				if block.Type == "toolCall" {
+					preserveIDs[block.ID] = true
+				}
+			}
+		}
+	}
 	normalizeID := func(id string) (string, error) {
 		if id == "" {
 			return "", fmt.Errorf("tool call is missing its ID")
@@ -289,7 +303,7 @@ func convertCompletionsMessages(req Request, compat completionsCompat) ([]any, e
 			return prior, nil
 		}
 		result := id
-		if strings.Contains(id, "|") {
+		if !preserveIDs[id] && strings.Contains(id, "|") {
 			separator := strings.IndexByte(id, '|')
 			callID := sanitizeToolID(id[:separator])
 			itemID := sanitizeToolID(id[separator+1:])
@@ -299,6 +313,7 @@ func convertCompletionsMessages(req Request, compat completionsCompat) ([]any, e
 			}
 			if len(combined) > 40 {
 				hash := piShortHash(id)
+				hash = hash[:min(len(hash), 8)]
 				prefixLen := 40 - len(hash) - 1
 				if prefixLen < 1 {
 					prefixLen = 1
@@ -381,6 +396,7 @@ func convertCompletionsMessages(req Request, compat completionsCompat) ([]any, e
 func completionsAssistantMessage(message Message, model ModelMeta, compat completionsCompat, sameModel bool, normalizeID func(string) (string, error)) (map[string]any, error) {
 	var textParts []string
 	var thinking []Block
+	var reasoningDetails, legacyDetails []completionReasoningDetail
 	var tools []any
 	for _, block := range message.Content {
 		switch block.Type {
@@ -389,10 +405,23 @@ func completionsAssistantMessage(message Message, model ModelMeta, compat comple
 				textParts = append(textParts, block.Text)
 			}
 		case "thinking":
+			if sameModel && len(reasoningDetails) == 0 {
+				reasoningDetails = parseCompletionReasoningDetails(block.ThinkingSignature)
+			}
 			if sameModel && strings.TrimSpace(block.Thinking) != "" && !block.Redacted {
 				thinking = append(thinking, block)
 			}
 		case "toolCall":
+			if sameModel && block.ThoughtSignature != "" {
+				if detail, valid := decodeCompletionReasoningDetail(json.RawMessage(block.ThoughtSignature)); valid {
+					kind, _ := reasoningString(detail, "type")
+					id, _ := reasoningString(detail, "id")
+					data, _ := reasoningString(detail, "data")
+					if kind == "reasoning.encrypted" && id != "" && data != "" {
+						legacyDetails = append(legacyDetails, detail)
+					}
+				}
+			}
 			if block.Name == "" {
 				return nil, fmt.Errorf("tool call is missing its name")
 			}
@@ -434,7 +463,13 @@ func completionsAssistantMessage(message Message, model ModelMeta, compat comple
 	if len(tools) > 0 {
 		assistant["tool_calls"] = tools
 	}
-	if len(thinking) > 0 {
+	if len(reasoningDetails) == 0 {
+		reasoningDetails = legacyDetails
+	}
+	if len(reasoningDetails) > 0 {
+		assistant["reasoning_details"] = reasoningDetails
+	}
+	if len(thinking) > 0 && len(reasoningDetails) == 0 {
 		signature := thinking[0].ThinkingSignature
 		if model.ProviderID() == "opencode-go" && signature == "reasoning" {
 			signature = "reasoning_content"
@@ -526,9 +561,9 @@ func toolResultText(blocks []Block, supportsImages bool) (string, bool) {
 
 func sanitizeToolID(id string) string {
 	var b strings.Builder
-	for _, r := range id {
+	for _, r := range utf16Units(id) {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
-			b.WriteRune(r)
+			b.WriteByte(byte(r))
 		} else {
 			b.WriteByte('_')
 		}

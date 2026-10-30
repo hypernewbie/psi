@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -422,6 +423,7 @@ func parseResponsesSSE(r io.Reader, idle time.Duration, ctx context.Context, onT
 		response.StopReason = "length"
 	}
 	indices := sortedResponseIndices(slots)
+	var finalText, finalThinking strings.Builder
 	seenItemIDs, seenCallIDs := make(map[string]bool), make(map[string]bool)
 	for _, index := range indices {
 		slot := slots[index]
@@ -448,11 +450,12 @@ func parseResponsesSSE(r io.Reader, idle time.Duration, ctx context.Context, onT
 		}
 		response.Content = append(response.Content, block)
 		if block.Type == "text" {
-			response.Text += block.Text
+			finalText.WriteString(block.Text)
 		} else if block.Type == "thinking" {
-			response.Thinking += block.Thinking
+			finalThinking.WriteString(block.Thinking)
 		}
 	}
+	response.Text, response.Thinking = finalText.String(), finalThinking.String()
 	if len(response.ToolCalls) > 0 && response.StopReason == "stop" {
 		response.StopReason = "toolUse"
 	}
@@ -666,10 +669,6 @@ func sortedResponseIndices(slots map[int]*responsesSlot) []int {
 	for index := range slots {
 		indices = append(indices, index)
 	}
-	for i := 1; i < len(indices); i++ {
-		for j := i; j > 0 && indices[j] < indices[j-1]; j-- {
-			indices[j], indices[j-1] = indices[j-1], indices[j]
-		}
-	}
+	sort.Ints(indices)
 	return indices
 }

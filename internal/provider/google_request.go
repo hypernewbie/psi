@@ -98,15 +98,15 @@ func BuildGoogleRequest(req Request) (map[string]any, error) {
 			}
 			generationConfig["thinkingConfig"] = thinking
 		} else {
+			level, err := resolveGoogleThinkingLevel(req.Model, req.Thinking)
+			if err != nil {
+				return nil, err
+			}
 			thinking := map[string]any{"includeThoughts": true}
 			if googleUsesThinkingLevel(req.Model.ID) {
-				level, err := resolveGoogleThinkingLevel(req.Model, req.Thinking)
-				if err != nil {
-					return nil, err
-				}
 				thinking["thinkingLevel"] = strings.ToUpper(level)
 			} else {
-				thinking["thinkingBudget"] = googleThinkingBudget(req.Model.ID, req.Thinking)
+				thinking["thinkingBudget"] = googleThinkingBudget(req.Model.ID, level)
 			}
 			generationConfig["thinkingConfig"] = thinking
 		}
@@ -149,6 +149,9 @@ func googleDisabledThinkingConfig(model ModelMeta) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("model %q has unsupported Google disabled-thinking fallback", model.ID)
 	}
+	if level == "off" {
+		return map[string]any{"thinkingBudget": 0}, nil
+	}
 	resolved, err := resolveGoogleThinkingLevel(model, level)
 	if err != nil {
 		return nil, err
@@ -157,48 +160,7 @@ func googleDisabledThinkingConfig(model ModelMeta) (map[string]any, error) {
 }
 
 func clampGoogleThinkingLevel(model ModelMeta, requested string) (string, bool) {
-	levels := []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
-	available := make(map[string]bool, len(levels))
-	for _, level := range levels {
-		if !model.Reasoning {
-			if level == "off" {
-				available[level] = true
-			}
-			continue
-		}
-		mapped, exists := model.ThinkingLevelMap[level]
-		if exists && mapped == nil {
-			continue
-		}
-		if level == "xhigh" || level == "max" {
-			if !exists {
-				continue
-			}
-		}
-		available[level] = true
-	}
-	for i, level := range levels {
-		if level != requested {
-			continue
-		}
-		for j := i; j < len(levels); j++ {
-			if available[levels[j]] {
-				return levels[j], true
-			}
-		}
-		for j := i - 1; j >= 0; j-- {
-			if available[levels[j]] {
-				return levels[j], true
-			}
-		}
-		break
-	}
-	for _, level := range levels {
-		if available[level] {
-			return level, true
-		}
-	}
-	return "", false
+	return clampModelThinkingLevel(model, requested)
 }
 
 func googleThinkingBudget(modelID, level string) int {
@@ -419,7 +381,7 @@ func convertGoogleMessages(req Request) ([]any, error) {
 					}
 					toolIDs[block.ID] = normalized
 					functionCall := map[string]any{"name": block.Name, "args": block.Arguments}
-					if functionCall["args"] == nil {
+					if block.Arguments == nil {
 						functionCall["args"] = map[string]any{}
 					}
 					if includeIDs {

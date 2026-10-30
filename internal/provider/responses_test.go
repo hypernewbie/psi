@@ -69,8 +69,8 @@ func TestResponsesRequestMatchesOpenCodeCatalogCapabilities(t *testing.T) {
 	if _, ok := body["tools"]; ok {
 		t.Fatalf("catalog additional_tools model also sent top-level tools: %#v", body)
 	}
-	if _, ok := body["max_output_tokens"]; ok {
-		t.Fatalf("default max_output_tokens should be omitted like Pi: %#v", body)
+	if body["max_output_tokens"] != model.MaxTokens {
+		t.Fatalf("default model output limit was lost: %#v", body)
 	}
 	if _, ok := responsesHaveStrictToolField(t, body); ok {
 		t.Fatal("default Responses compatibility unexpectedly enabled strict tools")

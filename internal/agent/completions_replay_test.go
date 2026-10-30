@@ -79,8 +79,8 @@ func TestDeepSeekAndOpenCodeCompletionsReplayAfterRestart(t *testing.T) {
 			}
 			calls := replay["tool_calls"].([]any)
 			callID := calls[0].(map[string]any)["id"].(string)
-			if len(callID) > 40 || callID == longToolID {
-				t.Fatalf("cross-API call ID not normalized: %q", callID)
+			if callID != longToolID {
+				t.Fatalf("same-model call ID changed: %q", callID)
 			}
 			var linked bool
 			for _, raw := range messages {
@@ -90,7 +90,7 @@ func TestDeepSeekAndOpenCodeCompletionsReplayAfterRestart(t *testing.T) {
 				}
 			}
 			if !linked {
-				t.Fatalf("tool result lost normalized call link: %#v", messages)
+				t.Fatalf("tool result lost its call link: %#v", messages)
 			}
 		})
 	}

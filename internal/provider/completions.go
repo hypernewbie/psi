@@ -114,6 +114,13 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 	var parts []completionStreamPart
 	textStarted, thinkingStarted := false, false
 	thinkingField := ""
+	var reasoningDetails completionReasoningStream
+	thinkingSignature := func() string {
+		if len(reasoningDetails.details) > 0 {
+			return reasoningDetails.signature()
+		}
+		return thinkingField
+	}
 	tools := map[int]*completionToolState{}
 	toolIDs := map[string]*completionToolState{}
 	nextToolIndex := 0
@@ -139,8 +146,8 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 					outText.WriteString(text.String())
 				}
 			case "thinking":
-				if thinking.Len() > 0 {
-					copy.Content = append(copy.Content, Block{Type: "thinking", Thinking: thinking.String(), ThinkingSignature: thinkingField})
+				if thinking.Len() > 0 || len(reasoningDetails.details) > 0 {
+					copy.Content = append(copy.Content, Block{Type: "thinking", Thinking: thinking.String(), ThinkingSignature: thinkingSignature()})
 					outThinking.WriteString(thinking.String())
 				}
 			}
@@ -164,8 +171,9 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 			return nil
 		}
 		var chunk struct {
-			ID      string `json:"id"`
-			Model   string `json:"model"`
+			Error   json.RawMessage `json:"error"`
+			ID      string          `json:"id"`
+			Model   string          `json:"model"`
 			Choices []struct {
 				Index        int                        `json:"index"`
 				Delta        map[string]json.RawMessage `json:"delta"`
@@ -177,6 +185,9 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 		decoder.UseNumber()
 		if !json.Valid([]byte(encoded)) || decoder.Decode(&chunk) != nil {
 			return fmt.Errorf("malformed OpenAI Completions SSE JSON")
+		}
+		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+			return fmt.Errorf("OpenAI Completions provider returned an error event")
 		}
 		if chunk.ID != "" && response.ResponseID == "" {
 			response.ResponseID = chunk.ID
@@ -206,6 +217,7 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 				return err
 			}
 			response.StopReason = stop
+			response.RawStopReason = reason
 			finishSeen = true
 		}
 		if wasFinished && len(choice.Delta) > 0 {
@@ -236,6 +248,22 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 			}
 			thinking.WriteString(delta)
 			break
+		}
+		if raw, ok := choice.Delta["reasoning_details"]; ok {
+			var details []json.RawMessage
+			if json.Unmarshal(raw, &details) == nil {
+				for _, encoded := range details {
+					detail, valid := decodeCompletionReasoningDetail(encoded)
+					if !valid {
+						continue
+					}
+					if !thinkingStarted {
+						thinkingStarted = true
+						parts = append(parts, completionStreamPart{kind: "thinking"})
+					}
+					reasoningDetails.append(detail)
+				}
+			}
 		}
 		if raw, ok := choice.Delta["content"]; ok && len(raw) > 0 && string(raw) != "null" {
 			var delta string
@@ -393,7 +421,7 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 			outText.WriteString(value)
 		case "thinking":
 			value := thinking.String()
-			response.Content = append(response.Content, Block{Type: "thinking", Thinking: value, ThinkingSignature: thinkingField})
+			response.Content = append(response.Content, Block{Type: "thinking", Thinking: value, ThinkingSignature: thinkingSignature()})
 			outThinking.WriteString(value)
 		case "tool":
 			state := part.tool

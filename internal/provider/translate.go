@@ -30,6 +30,11 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	if req.Model.ID == "" {
 		return nil, fmt.Errorf("model is required")
 	}
+	model, err := resolveAdditionalAnthropicCompat(req.Model)
+	if err != nil {
+		return nil, err
+	}
+	req.Model = model
 	if req.Thinking == "" {
 		req.Thinking = "off"
 	}

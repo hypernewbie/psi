@@ -72,8 +72,8 @@ func TestDeepSeekCompletionsRequestTranslationAndReplay(t *testing.T) {
 	calls := assistant["tool_calls"].([]any)
 	call := calls[0].(map[string]any)
 	callID := call["id"].(string)
-	if len(callID) > 40 || callID == longCallID {
-		t.Fatalf("cross-API call ID was not normalized: %q", callID)
+	if callID != longCallID {
+		t.Fatalf("same-model call ID changed: %q", callID)
 	}
 	toolResult := messages[3].(map[string]any)
 	if toolResult["tool_call_id"] != callID || toolResult["content"] != "file content" {
@@ -91,8 +91,8 @@ func TestDeepSeekCompletionsRequestTranslationAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := body["thinking"]; exists {
-		t.Fatalf("explicit DeepSeek off:null must omit thinking control: %#v", body)
+	if body["thinking"].(map[string]any)["type"] != "enabled" || body["reasoning_effort"] != "minimal" {
+		t.Fatalf("unsupported off must clamp to the next supported level: %#v", body)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestCompletionsThinkingDescriptionsReflectWireControls(t *testing.T) {
 	if got := ThinkingDescription(deepseek, "high"); got != "high (effective effort high)" {
 		t.Fatalf("DeepSeek thinking description = %q", got)
 	}
-	if got := ThinkingDescription(deepseek, "off"); !strings.Contains(got, "disabling reasoning unavailable") {
+	if got := ThinkingDescription(deepseek, "off"); !strings.Contains(got, "effective fallback minimal") {
 		t.Fatalf("DeepSeek off description = %q", got)
 	}
 	zai := ModelMeta{ID: "glm", API: "openai-completions", Provider: "zai", Reasoning: true,

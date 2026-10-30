@@ -93,6 +93,35 @@ G6-04 is locally supported by synthetic evidence and pinned-source review. This 
 - `./psi` SHA-256: `0f745e86230ee806e7ed307df8223df433db04777a9d46b2d35d3bc0261004e7`.
 - `go test ./internal/app -run 'TestActualAppPTYProviderToolCycleAndRestart|TestActualCopiedBinaryWithoutNodeUsesAllFourTools' -psi-test-binary="$PWD/psi" -count=1 -v` passed. Provider PTY journeys passed for MiniMax, OpenCode Go Responses, DeepSeek, Z.AI, and Google; copied-binary no-Node journey passed all four tools.
 
+## Review corrections
+
+The review started at `b7a5ec6`. Pinned Pi source informed the corrections. Optional executable comparisons used the installed public Pi 1.4.0 package, not a build from the pinned revision.
+
+- Shared thinking-level clamping excludes null mappings. The `xhigh` and `max` levels require explicit mappings. Google respects disabled thinking and mapped token budgets.
+- Google serializes missing function arguments as `{}`, not `null`.
+- Completions preserves same-model tool IDs. Cross-API IDs use Pi's hash suffix and UTF-16 sanitization. Interrupted tool history receives linked synthetic results.
+- Completions preserves structured `reasoning_details` and legacy encrypted signatures for same-model replay. Provider error events fail without exposing their message. Raw finish reasons survive settlement.
+- MiniMax and OpenCode Anthropic reject unknown, invalid, or unsupported required compatibility fields.
+- Agent replay refuses historical tool calls with `argumentsError` for every API.
+- Generic Responses uses the model output limit by default, unless compatibility metadata disables that field. A Pi payload comparison reproduced the previous omission.
+- Google buffers text and thought deltas. A tenfold stream increase previously allocated about 78 times as much memory. The corrected tests measured about tenfold growth.
+- Completions buffers textual reasoning details. Responses assembles final text with builders and sorts output indexes with the standard library.
+
+### Review evidence
+
+- `./scripts/check.sh` passed, including vet, ordinary tests, race tests, and builds.
+- Ten repeated race runs passed for the new provider and agent regressions.
+- Six optional Pi payload cases passed twice. They cover Google thinking, Completions clamping, and the default Responses output limit. The payload hook stops before SDK serialization or HTTP. A requested missing reference failed instead of skipping.
+- The existing Responses input comparison passed twice. The session continuation matrix passed all 20 directions against installed Pi 1.4.0.
+- `FuzzGoogleSSE` passed 79,123 executions in an 11-second run.
+- Cross-builds passed for Linux, macOS, and Windows, each on amd64 and arm64. These results do not establish native runtime acceptance.
+- The full app suite passed with `-psi-test-binary="$PWD/psi"`. This includes provider PTY journeys and the no-Node four-tool journey.
+- The review binary uses `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o ./psi ./cmd/psi`. Its SHA-256 is `0c374055184e6a43af674275d29436003a2039e99d163ffcb5b17fbee16b4779`. Earlier release hashes remain historical.
+- New regression files are `internal/provider/plan6_review_test.go`, `plan6_accumulation_test.go`, `plan6_reference_test.go`, and `internal/agent/plan6_review_test.go`.
+- Optional payload comparisons require `-psi-test-pi-ai-api-dir=<public-pi-ai-dist/api>`. Ordinary runs skip them. Requested references require Node and valid module files.
+
+No live provider request ran during this review. Vci remains unavailable because no client profile exists. No coordinator configuration changed.
+
 ## Remaining acceptance boundaries
 
 - Live-provider service acceptance is Blocked pending explicit operator approval and credentials. No live calls were made.
