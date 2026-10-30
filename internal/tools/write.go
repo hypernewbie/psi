@@ -38,10 +38,6 @@ func (t *WriteTool) doWriteFile(abs, content string) error {
 	return os.WriteFile(abs, []byte(content), 0o666)
 }
 
-func (t *WriteTool) Execute(inv Invocation) Result {
-	return t.ExecuteCtx(context.Background(), inv)
-}
-
 // ExecuteCtx checks cancellation between every filesystem step (F06): before
 // mkdir, after mkdir, and after the write. A cancelled write cannot be
 // rolled back, so the result reports cancellation truthfully without

@@ -41,12 +41,6 @@ type editItem struct {
 	New string
 }
 
-// Execute supports current {path, edits[]} plus legacy {oldText,newText} and
-// JSON-string edits (model normalization, Pi parity).
-func (t *EditTool) Execute(inv Invocation) Result {
-	return t.ExecuteCtx(context.Background(), inv)
-}
-
 // ExecuteCtx checks cancellation between read, transform, write, and result
 // settlement (F06). The shared mutation slot stays held until an in-flight
 // write settles, so a cancelled call never releases the next mutation early.

@@ -29,10 +29,6 @@ func (t *BashTool) shell() string {
 	return "bash"
 }
 
-func (t *BashTool) Execute(inv Invocation) Result {
-	return t.ExecuteCtx(context.Background(), inv)
-}
-
 // idleDrainGrace is the Pi-compatible post-exit grace: every stdout/stderr
 // chunk resets it (child-process.ts waitForChildProcess). A quiet inherited
 // pipe releases at the deadline with the leader exit status preserved.

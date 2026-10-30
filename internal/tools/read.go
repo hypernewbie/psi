@@ -25,8 +25,6 @@ var imageExts = map[string]string{
 	".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
 }
 
-func (t *ReadTool) Execute(inv Invocation) Result { return t.ExecuteCtx(context.Background(), inv) }
-
 func (t *ReadTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	path, ok := argString(inv.Arguments, "path")
 	if !ok || path == "" {
