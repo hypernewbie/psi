@@ -753,6 +753,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
+	var activeLoop *agent.Loop
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
@@ -953,6 +954,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
+		case event.SteeringDelivered:
+			// A delivered steering message is a normal user turn: swap the dim
+			// queued row for the standard user-message rendering.
+			if pending := activeLoop.PendingSteering(); len(pending) == 0 {
+				console.SetSteeringRows(nil)
+			} else {
+				console.SetSteeringRows(pending)
+			}
+			console.EnsureTranscriptGap()
+			for _, line := range terminal.FormatUserMessageWithDisplay(ev.Text, console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
+				fmt.Fprintln(out, line)
+			}
 		case event.RunEnd:
 			console.SetThinking(false)
 			runOutcome = ev.Outcome
@@ -968,7 +981,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.activeToolName, r.activeToolCallID, r.activeToolSummary = ev.ToolName, ev.ToolCallID, ev.Summary
 			display := presentationDisplay(r.settings)
 			console.SetToolRow(terminal.FormatToolRowWithDisplay(ev.Summary, ev.ToolName, "running", console.StatusWidth(), noColorEnvironment(), display, r.theme))
-			setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
+			setActivity("Working… (Esc/Ctrl+C cancel)")
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, "running", display, r.theme, noColorEnvironment())
 		case event.ToolEnd:
 			console.ClearToolRow()
@@ -977,7 +990,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			toolSpacing.pending = true
 			if r.state != StateCancelling {
 				r.state = StateWaiting
-				setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
+				setActivity("Working… (Esc/Ctrl+C cancel)")
 			}
 		case event.CompactionStart:
 			console.SetThinking(false)
@@ -987,7 +1000,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.CompactionEnd:
 			if r.state != StateCancelling {
 				r.state = StateWaiting
-				setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
+				setActivity("Working… (Esc/Ctrl+C cancel)")
 			}
 		}
 	}
@@ -1017,8 +1030,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
 		r.state = StateWaiting
-		console.ResetBusyNotice()
-		setActivity("Working… (Esc/Ctrl+C cancel, input paused)")
+		setActivity("Working… (Esc/Ctrl+C cancel)")
 		if compact {
 			r.state = StateCompacting
 			setActivity("Compacting context… (Esc/Ctrl+C cancel)")
@@ -1039,6 +1051,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			e.Generation, e.Seq, e.SessionID = gen, seq, r.store.Header().ID
 			events <- e
 		})
+		activeLoop = loop
 		go func() {
 			if compact {
 				done <- loop.Compact(ctx, cfg, focus)
@@ -1117,9 +1130,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				lastSpinner = time.Now()
 				console.Status(activityFrame())
 			}
-			if !busy {
-				console.Flush()
-			}
+			console.Flush()
 			_ = console.EndFrame()
 			_, afterFrames, _, _ := console.FrameStats()
 			r.timerFrames += afterFrames - beforeFrames
@@ -1169,6 +1180,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			cancel()
 			busy = false
+			// Undelivered steering returns to the editor, like Pi's
+			// restoreQueuedMessagesToEditor. Input is never lost.
+			var undelivered []string
+			if activeLoop != nil {
+				undelivered = activeLoop.ClearSteering()
+			}
+			activeLoop = nil
+			console.SetSteeringRows(nil)
+			if len(undelivered) > 0 {
+				combined := strings.Join(undelivered, "\n\n")
+				if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
+					combined += "\n\n" + current
+				}
+				console.Editor.RestoreDraft(combined, len([]rune(combined)))
+				console.RefreshCompletion()
+			}
 			stream.Close()
 			console.SetThinking(false)
 			console.ClearToolRow()
@@ -1401,6 +1428,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 			// Only durable user submissions belong to recall, never commands or selector answers.
 			refreshRecall()
 			if strings.TrimSpace(text) == "" {
+				r.draw(console)
+				continue
+			}
+			if busy {
+				// Pi's editor submits during a run by queueing a steering message
+				// that is delivered at the next turn boundary. Commands stay
+				// idle-only for now; their text returns to the editor, never lost.
+				if strings.HasPrefix(strings.TrimSpace(text), "/") {
+					console.Editor.RestoreDraft(text, len([]rune(text)))
+					console.RefreshCompletion()
+					r.draw(console)
+					continue
+				}
+				if activeLoop != nil {
+					activeLoop.Steer(text)
+					console.SetSteeringRows(activeLoop.PendingSteering())
+				}
 				r.draw(console)
 				continue
 			}

@@ -33,12 +33,14 @@ type Config struct {
 }
 
 type Loop struct {
-	mu      sync.Mutex
-	running bool
-	store   *session.Store
-	reg     *tools.Registry
-	prov    provider.Provider
-	sink    func(event.Event)
+	mu       sync.Mutex
+	running  bool
+	store    *session.Store
+	reg      *tools.Registry
+	prov     provider.Provider
+	sink     func(event.Event)
+	steerMu  sync.Mutex
+	steering []string
 }
 
 func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink func(event.Event)) *Loop {
@@ -46,6 +48,57 @@ func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink
 		sink = func(event.Event) {}
 	}
 	return &Loop{store: store, reg: reg, prov: prov, sink: sink}
+}
+
+// Steer queues a user message for delivery at the next turn boundary, like
+// Pi's steering queue: the message joins the running conversation after the
+// current turn's tool calls, before the next model request, and keeps the run
+// alive. It never interrupts the in-flight request.
+func (l *Loop) Steer(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	l.steerMu.Lock()
+	l.steering = append(l.steering, text)
+	l.steerMu.Unlock()
+}
+
+// PendingSteering returns queued, undelivered steering messages.
+func (l *Loop) PendingSteering() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	return append([]string(nil), l.steering...)
+}
+
+// ClearSteering takes and clears the queued steering messages.
+func (l *Loop) ClearSteering() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	out := l.steering
+	l.steering = nil
+	return out
+}
+
+// deliverSteering moves queued messages into the session and reports whether
+// anything was delivered. Delivered messages render as normal user messages.
+func (l *Loop) deliverSteering() bool {
+	l.steerMu.Lock()
+	msgs := l.steering
+	l.steering = nil
+	l.steerMu.Unlock()
+	for _, text := range msgs {
+		if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
+			// Storage failure stops the run like any other append failure; the
+			// message is not silently dropped.
+			l.steerMu.Lock()
+			l.steering = append([]string{text}, l.steering...)
+			l.steerMu.Unlock()
+			l.sink(event.Event{Type: event.Error, Text: fmt.Sprintf("storage failure, stopping: %v", err)})
+			return false
+		}
+		l.sink(event.Event{Type: event.SteeringDelivered, Text: text})
+	}
+	return len(msgs) > 0
 }
 
 func (l *Loop) Running() bool { l.mu.Lock(); defer l.mu.Unlock(); return l.running }
@@ -212,6 +265,9 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// Turn boundary: deliver steering queued while the previous turn ran,
+		// before the next model request (Pi's getSteeringMessages poll).
+		l.deliverSteering()
 		proj, err := l.store.Projection()
 		if err != nil {
 			return err
@@ -319,7 +375,11 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			return fmt.Errorf("model reached its output limit; response saved, tool calls were not executed")
 		}
 		if len(resp.ToolCalls) == 0 {
-			return nil
+			// A model that stops calling tools ends the run only when no
+			// steering arrived while it produced the final response.
+			if !l.deliverSteering() {
+				return nil
+			}
 		}
 		if err := l.runBatch(ctx, resp.ToolCalls, cfg.Tools); err != nil {
 			return err

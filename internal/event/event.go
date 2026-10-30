@@ -7,17 +7,18 @@ package event
 type Type string
 
 const (
-	TextDelta       Type = "text_delta"
-	AssistantStart  Type = "assistant_start"
-	RunStart        Type = "run_start"
-	RunEnd          Type = "run_end"
-	ToolStart       Type = "tool_start"
-	ToolEnd         Type = "tool_end"
-	Retry           Type = "retry"
-	CompactionStart Type = "compaction_start"
-	CompactionEnd   Type = "compaction_end"
-	Usage           Type = "usage"
-	Error           Type = "error"
+	TextDelta         Type = "text_delta"
+	AssistantStart    Type = "assistant_start"
+	RunStart          Type = "run_start"
+	RunEnd            Type = "run_end"
+	SteeringDelivered Type = "steering_delivered"
+	ToolStart         Type = "tool_start"
+	ToolEnd           Type = "tool_end"
+	Retry             Type = "retry"
+	CompactionStart   Type = "compaction_start"
+	CompactionEnd     Type = "compaction_end"
+	Usage             Type = "usage"
+	Error             Type = "error"
 )
 
 // Event is one bounded, observable unit with explicit ordering.

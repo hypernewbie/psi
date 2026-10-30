@@ -249,3 +249,78 @@ func TestCompactionFlow(t *testing.T) {
 		}
 	}
 }
+
+func TestSteeringDeliveredAtTurnBoundaryAndContinuesRun(t *testing.T) {
+	store, _, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{
+		{Text: "using a tool", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "call-steer-1", Name: "bash", Arguments: map[string]any{"command": "true"}}}},
+		{Text: "no tools here", StopReason: "stop"},
+		{Text: "done after steering", StopReason: "stop"},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.Submit(context.Background(), "start", Config{Model: modelMeta(), Tools: toolDefs()})
+	}()
+	// Wait for the tool call to settle, then steer while the run is alive.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, entry := range store.Entries() {
+			if entry.Kind == "message" && entry.Message != nil && entry.Message.Message.Role == "toolResult" {
+				loop.Steer("steered message")
+				select {
+				case err := <-done:
+					steeringAssertions(t, store, fake, loop, err)
+					return
+				case <-time.After(5 * time.Second):
+					t.Fatal("run did not finish after steering")
+				}
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("tool result never settled")
+}
+
+func steeringAssertions(t *testing.T, store *session.Store, fake *provider.Fake, loop *Loop, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("steering broke the run: %v", err)
+	}
+	// The no-tool second response must not end the run: delivered steering
+	// continues it, so the provider saw a third request.
+	if len(fake.Calls) != 3 {
+		t.Fatalf("provider calls = %d, want 3 (steering must continue the run)", len(fake.Calls))
+	}
+	last := fake.Calls[len(fake.Calls)-1]
+	found := false
+	for _, m := range last.Messages {
+		if m.Role == "user" && strings.Contains(fmt.Sprint(m.Content), "steered message") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("steering message never reached the model context: %+v", last.Messages)
+	}
+	userStored := false
+	for _, entry := range store.Entries() {
+		if entry.Kind == "message" && entry.Message != nil && entry.Message.Message.Role == "user" && strings.Contains(storeUserText(entry), "steered message") {
+			userStored = true
+		}
+	}
+	if !userStored {
+		t.Fatal("delivered steering message was not persisted as a user message")
+	}
+	if pending := loop.ClearSteering(); len(pending) != 0 {
+		t.Fatalf("steering queue not drained: %q", pending)
+	}
+}
+
+func storeUserText(entry *session.Entry) string {
+	if entry.Message == nil || entry.Message.Message.User == nil {
+		return ""
+	}
+	if text, ok := entry.Message.Message.User.Content.(string); ok {
+		return text
+	}
+	return ""
+}

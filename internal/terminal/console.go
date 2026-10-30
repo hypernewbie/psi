@@ -56,11 +56,10 @@ type Console struct {
 	writer  *Writer
 	decoder *Decoder
 
-	pasteActive     bool
-	pasteBuf        strings.Builder
-	pasteNotice     bool
-	inputLimitShown bool
-
+	pasteActive         bool
+	pasteBuf            strings.Builder
+	pasteNotice         bool
+	inputLimitShown     bool
 	lastDraft           string
 	lastCursor          int
 	lastW, lastH        int
@@ -77,8 +76,8 @@ type Console struct {
 	completionDismissed bool
 	picker              *pickerRegion
 	toolRow             string
+	steeringRows        []string
 	thinking            bool
-	busyNoticed         bool
 	dirty               bool
 	frameDepth          int
 	pendingAppend       strings.Builder
@@ -428,6 +427,8 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		return "", false, false, false
 	}
 	// Bracketed paste transaction: buffer separately, single insert+draw on end marker.
+	// Bracketed paste transaction: buffer separately, single insert+draw on end marker.
+	// A paste is a whole edit and never submits, so it applies during a run too.
 	if input.PasteStart {
 		c.pasteActive = true
 		c.pasteBuf.Reset()
@@ -449,10 +450,6 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			}
 			content := c.pasteBuf.String()
 			c.pasteBuf.Reset()
-			if busy {
-				// Pasted controls never cancel/submit during run.
-				return "", false, false, false
-			}
 			c.inputLimitShown = false
 			prev := c.Editor.Text()
 			if content != "" {
@@ -466,12 +463,12 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		}
 		return "", false, false, false
 	}
-	if busy {
-		// Cancellation only. Pi's Escape and psi's Ctrl+C cancel; all other input is ignored.
-		if len(input.Key) == 1 && (input.Key[0] == 3 || input.Key[0] == 27) {
-			return "", false, false, true
-		}
-		return "", false, false, false
+	// While a run is active the editor stays usable, like Pi's editor during
+	// streaming. Only the cancel keys are intercepted; every other key follows
+	// the normal editing path, and Enter returns the text so the application
+	// can queue it as a steering message.
+	if busy && len(input.Key) == 1 && (input.Key[0] == 3 || input.Key[0] == 27) {
+		return "", false, false, true
 	}
 	if len(input.Key) == 1 {
 		switch input.Key[0] {
@@ -754,6 +751,26 @@ func (c *Console) Flush() {
 	}
 }
 
+// SetSteeringRows shows the queued steering messages above the editor, like
+// Pi's pendingMessages container: one leading blank row, then one dim row per
+// queued message. An empty slice clears the block.
+func (c *Console) SetSteeringRows(texts []string) {
+	if len(texts) == 0 {
+		c.steeringRows = nil
+		c.Draw()
+		return
+	}
+	width := max(1, c.currentWidth()-1)
+	rows := make([]string, 0, len(texts)+1)
+	rows = append(rows, "")
+	for _, text := range texts {
+		row := StyledRow{Spans: []StyledSpan{{Text: "Steering: ", Token: TokenMuted}, {Text: TruncateToWidth(Sanitize(text), max(1, width-CellWidth("Steering: "))), Token: TokenMuted}}}
+		rows = append(rows, FormatStyledRow(row, width, c.presentation.NoColor, c.presentation.Theme))
+	}
+	c.steeringRows = rows
+	c.Draw()
+}
+
 // Status is the activity shown in Pi's editor top border. It remains owned by
 // the composed tail until the application clears or replaces it.
 // Status(text string) sets the transient activity shown in the editor's top
@@ -894,6 +911,10 @@ func (c *Console) emitComposed(appendText string) error {
 		fragmentRows = c.streamRows
 		hasStream = true
 	}
+	if len(c.steeringRows) > 0 {
+		// Pi mounts pendingMessages above the status row and editor.
+		fragmentRows = append(append([]string(nil), c.steeringRows...), fragmentRows...)
+	}
 	if c.thinking {
 		fragmentRows = append(append([]string(nil), fragmentRows...), FormatThinkingRow(width, c.presentation.NoColor, c.presentation.Display, c.presentation.Theme))
 	}
@@ -927,9 +948,6 @@ func (c *Console) emitComposed(appendText string) error {
 	c.lastW, c.lastH = width, height
 	return err
 }
-
-// ResetBusyNotice clears the one-notice flag at run start.
-func (c *Console) ResetBusyNotice() { c.busyNoticed = false }
 
 // RawOutput retains terminal line endings while raw input disables OPOST.
 type RawOutput struct{ W io.Writer }

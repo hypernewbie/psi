@@ -69,6 +69,9 @@ It rejects contradictory finals and does not execute their tools.
 Cancellation records known unstarted calls without executing them.
 A storage failure blocks further writes until the operator opens another checked session or creates a new session.
 
+During a run, the editor stays active and `Enter` queues a steering message, as in Pi.
+Two Pi behaviors remain open: slash commands do not execute mid-run (their text returns to the draft), and there is no separate follow-up queue (`Alt+Enter`).
+
 Context-limit recovery permits at most one compaction and retry before visible partial output.
 Synthetic loop/provider tests cover that path.
 Full compaction, provider, storage-fault, and actual-binary journeys remain incomplete acceptance requirements.
