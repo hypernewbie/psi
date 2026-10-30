@@ -55,15 +55,25 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 		turn := requests.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"synthetic\",\"model\":\"m\",\"usage\":{\"input_tokens\":1}}}\n\n")
-		if turn == 1 {
+		if turn == 1 || turn == 2 {
+			// Turn 1 issues the write alone: parallel batches give no cross-call
+			// ordering, so the file must settle before its readers. Turn 2 mixes
+			// the remaining three tools; each succeeds under any interleaving.
 			calls := []struct {
 				name string
 				args map[string]any
 			}{
 				{"write", map[string]any{"path": "standalone.sh", "content": "printf 'broken\\n'\n"}},
-				{"read", map[string]any{"path": "standalone.sh"}},
-				{"edit", map[string]any{"path": "standalone.sh", "oldText": "broken", "newText": "SYNTHETIC_TOOL_BODY_FIXED"}},
-				{"bash", map[string]any{"command": "bash standalone.sh"}},
+			}
+			if turn == 2 {
+				calls = []struct {
+					name string
+					args map[string]any
+				}{
+					{"read", map[string]any{"path": "standalone.sh"}},
+					{"edit", map[string]any{"path": "standalone.sh", "oldText": "broken", "newText": "SYNTHETIC_TOOL_BODY_FIXED"}},
+					{"bash", map[string]any{"command": "bash standalone.sh"}},
+				}
 			}
 			for i, call := range calls {
 				block, _ := json.Marshal(map[string]any{"index": i, "content_block": map[string]any{"type": "tool_use", "id": fmt.Sprintf("synthetic_call_%d", i), "name": call.name, "input": call.args}})
@@ -71,14 +81,14 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 			}
 			fmt.Fprint(w, "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n")
 		} else {
-			if turn != 2 {
+			if turn != 3 {
 				t.Error("unexpected provider retry")
 			}
 			messages := request["messages"].([]any)
 			last := messages[len(messages)-1].(map[string]any)
 			results := last["content"].([]any)
-			if len(results) != 4 {
-				t.Errorf("four tool results not grouped: %+v", results)
+			if len(results) != 3 {
+				t.Errorf("second batch must settle three results: %+v", results)
 			}
 			for _, entry := range results {
 				if result := entry.(map[string]any); result["type"] != "tool_result" || result["is_error"] != false {
@@ -101,7 +111,7 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
-	if requests.Load() != 2 {
+	if requests.Load() != 3 {
 		t.Fatalf("provider requests: %d", requests.Load())
 	}
 	script, err := os.ReadFile(filepath.Join(work, "standalone.sh"))
