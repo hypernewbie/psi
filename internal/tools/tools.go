@@ -1,8 +1,11 @@
 // Package tools implements the four built-in tools (Phase 7).
 //
-// Registry dispatches read/write/edit/bash sequentially in the first release.
-// Shared path/output behavior, truncation, and privacy rules live here.
-// Reference: temp/pi-mono/packages/coding-agent/src/core/tools/{read,write,edit,bash,truncate,path-utils}.ts
+// The registry dispatches one call at a time per invocation; the agent layer
+// runs eligible calls from one assistant response concurrently and settles
+// them in assistant order. Same-file write/edit mutations serialize through
+// the shared MutationQueue. Shared path/output behavior, truncation, and
+// privacy rules live here.
+// Reference: temp/pi-mono/packages/coding-agent/src/core/tools/{read,write,edit,bash,truncate,path-utils,file-mutation-queue}.ts
 package tools
 
 import (
@@ -56,7 +59,8 @@ func NewRegistry(cwd string) *Registry {
 	return &Registry{Cwd: cwd, Read: &ReadTool{Cwd: cwd}, Write: &WriteTool{Cwd: cwd, Mutations: mutations}, Edit: &EditTool{Cwd: cwd, Mutations: mutations}, Bash: &BashTool{Cwd: cwd}}
 }
 
-// Dispatch runs calls sequentially in assistant order.
+// Dispatch runs one invocation. Callers that execute a batch dispatch each
+// call themselves; same-file mutations serialize through the shared queue.
 func (r *Registry) Dispatch(inv Invocation) Result {
 	return r.DispatchCtx(context.Background(), inv)
 }

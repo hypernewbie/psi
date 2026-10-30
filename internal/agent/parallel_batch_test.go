@@ -3,11 +3,14 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"psi/internal/event"
 	"psi/internal/provider"
@@ -705,4 +708,136 @@ func TestParallelSteeringWaitsForBatchSettlement(t *testing.T) {
 	if !sawSteer {
 		t.Fatalf("steering never reached the next request: %+v", h.fake.Calls[1].Messages)
 	}
+}
+
+// TestParallelBatchSettlesImagesAndText: a batch with one image read and one
+// text read settles both content kinds with call/result linkage intact.
+func TestParallelBatchSettlesImagesAndText(t *testing.T) {
+	h := newParallelHarness(t, []*provider.Response{
+		batchResponse(readCall("img", "dot.png"), readCall("txt", "note.txt")),
+		{Text: "done", StopReason: "stop"},
+	})
+	// 1x1 transparent PNG.
+	png, err := os.ReadFile(filepath.Join("testdata", "dot.png"))
+	if err != nil {
+		png = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49,
+			0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00,
+			0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54,
+			0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4,
+			0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82}
+	}
+	if err := os.WriteFile(filepath.Join(h.ws, "dot.png"), png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFileFor(t, h.ws, "note.txt", "words")
+	h.openGate("dot.png")
+	h.openGate("note.txt")
+	if err := h.loop.Submit(context.Background(), "go", h.config()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.fake.Calls) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(h.fake.Calls))
+	}
+	var images, texts int
+	for _, m := range h.fake.Calls[1].Messages {
+		if m.Role != "toolResult" {
+			continue
+		}
+		for _, b := range m.Content {
+			switch b.Type {
+			case "image":
+				images++
+				if b.MimeType != "image/png" || b.Data == "" {
+					t.Fatalf("image block lost payload: %+v", b)
+				}
+			case "text":
+				texts++
+			}
+		}
+	}
+	if images != 1 || texts != 2 {
+		t.Fatalf("parallel batch content kinds: images=%d texts=%d", images, texts)
+	}
+	// Reopen the session file and continue: the JSONL prefix survives and the
+	// projection resolves both calls without repair.
+	reopened, err := session.OpenFile(h.store.File(), h.ws, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj, err := reopened.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.UnresolvedToolCalls(proj.Flat)) != 0 {
+		t.Fatal("reopened session left unresolved calls")
+	}
+	var settled []string
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" {
+			settled = append(settled, m.ToolResult.ToolCallID)
+		}
+	}
+	if len(settled) != 2 || settled[0] != "img" || settled[1] != "txt" {
+		t.Fatalf("reopened results out of order: %v", settled)
+	}
+}
+
+// TestParallelLargeBatchStaysBounded runs a 200-call read batch and records
+// heap growth. The batch coordinator must hold every worker result without
+// unbounded buffering; the ceiling documents the measured behavior.
+func TestParallelLargeBatchStaysBounded(t *testing.T) {
+	const calls = 200
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	body := strings.Repeat("x", 4096)
+	if err := os.WriteFile(filepath.Join(ws, "big.txt"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var batch []provider.Block
+	for i := 0; i < calls; i++ {
+		batch = append(batch, readCall(fmt.Sprintf("r%d", i), "big.txt"))
+	}
+	fake := &provider.Fake{Responses: []*provider.Response{
+		{ToolCalls: batch, StopReason: "toolUse"},
+		{Text: "done", StopReason: "stop"},
+	}}
+	loop := New(store, reg, fake, func(event.Event) {})
+	var before runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	if err := loop.Submit(context.Background(), "go", Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	grew := after.TotalAlloc - before.TotalAlloc
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := 0
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" {
+			settled++
+		}
+	}
+	if settled != calls {
+		t.Fatalf("settled %d of %d calls", settled, calls)
+	}
+	// Recorded profile: 200 x 4 KiB reads complete well under a second with
+	// tens of MiB of total allocation. The ceilings keep regressions visible
+	// without pinning exact numbers.
+	if grew > 256<<20 {
+		t.Fatalf("200-call batch allocated %d bytes", grew)
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("200-call batch took %s", elapsed)
+	}
+	t.Logf("batch=%d settled=%d alloc=%d bytes elapsed=%s", calls, settled, grew, elapsed)
 }

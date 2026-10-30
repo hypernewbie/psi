@@ -20,6 +20,30 @@ Per-tool approval, a permission-policy language, and automatic Git operations ar
 The shell tool intentionally inherits the psi process environment.
 Regression shell processes instead use an isolated environment.
 
+## Tool execution
+
+Tool calls from one assistant response run concurrently, like Pi's parallel default.
+A `read` can overlap a `write`, `edit`, or `bash` call.
+If one call depends on another call's result, the model must use separate turns.
+`write` and `edit` serialize per file through one shared queue, in registration order; mutations to different files overlap.
+A missing path keys by its resolved absolute path, matching Pi.
+`read` and `bash` calls never queue there.
+Results settle in assistant-call order behind a barrier the next model request cannot cross.
+
+Two psi deviations from Pi stay explicit:
+
+1. Internal control calls (`loop_control`) keep call order relative to each other, because their state transitions and continuation messages are order-sensitive. Unrelated calls in the same batch still overlap.
+2. Terminal success rows commit only after the corresponding result is durable. Pi emits tool completion events when a worker finishes, before result messages join the context.
+
+Cancellation during a batch admits nothing new, joins every started worker, records unstarted calls as `not_started`, and never labels a started call unstarted.
+A storage failure stops the batch without rolling back completed mutations, and unsaved results never reach a later request.
+
+The pinned reference trace for the shared behavior is `internal/agent/parallel_reference_test.go` (see `docs/reference-manifest.md`).
+These deviations and tests do not claim full Pi parity.
+
+Measured profile on the recorded Linux host: a 200-call read batch (4 KiB files) settled all calls in 31 ms with about 10.9 MiB of total allocation (`TestParallelLargeBatchStaysBounded`).
+The six Linux/macOS/Windows amd64/arm64 cross-builds passed after this change; macOS and Windows binaries were not executed.
+
 ## Authentication
 
 Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.

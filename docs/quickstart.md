@@ -60,6 +60,10 @@ Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/pic
 Cancel a run, then keep typing: `Ctrl+C` stops provider/tool/compact work with
 settled cleanup and truthful transcript; next prompt appears after persistence.
 
+Tool calls from one response run concurrently and settle in call order.
+Same-file writes and edits serialize; unrelated calls overlap.
+See `docs/limitations.md` for the execution model and Pi deviations.
+
 Recovery: truncated/malformed/locked sessions refuse writes with original bytes
 intact; use a copy, `/new`, or `/resume`. See `docs/recovery.md`.
 
