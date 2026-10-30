@@ -42,7 +42,7 @@ ancestor folders.
 | Instructions | user/project files | see below |
 | Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | bundled catalog and Pi cache; no network refresh |
 | Auth | `auth.json` entries, env refs | no `!command` execution |
-| Startup | `quietStartup` | inline only |
+| Startup | `quietStartup` | hides the Ψ banner, notes, and hint line; inline only |
 | Terminal | always inline | fullscreen and rich-display preferences are ignored |
 
 `theme` selects `system` by default, a built-in (`dark` or `light`), or an exact discovered theme name. `themes` is an array of additional local file or directory paths. `--use-theme` overrides the selection; repeat `--theme PATH` to add resources; `--no-themes` disables configured and discovered resources. Theme files are data only: schema URLs are not fetched and theme/package code is not run. Project theme bodies load only after project consent. `terminal.trueColor` accepts the booleans `true`/`false` or the string `auto`; `NO_COLOR` always disables generated SGR. `/reload` installs valid theme and display settings atomically; an invalid reload keeps the last valid snapshot. `/session` reports theme, appearance, color mode, source, and diagnostics.

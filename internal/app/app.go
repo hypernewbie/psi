@@ -214,7 +214,9 @@ func Run(args []string, version string) error {
 		grouped[d.Message]++
 	}
 	if !st.QuietStartup {
-		fmt.Fprintln(startupOut, terminal.Sanitize("psi v"+version))
+		for _, line := range terminal.PsiBanner(version, console.StatusWidth(), r.theme, noColorEnvironment()) {
+			fmt.Fprintln(startupOut, line)
+		}
 		for msg, n := range grouped {
 			if n > 1 {
 				fmt.Fprintln(startupOut, terminal.Sanitize(fmt.Sprintf("note: %s (x%d, see /session)", msg, n)))
