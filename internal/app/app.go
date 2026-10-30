@@ -2211,179 +2211,265 @@ func (r *runtime) modelArgumentKnown(arg string) bool {
 }
 
 func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
-	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
 	switch cmd.Name {
 	case "quit":
-		return true, nil
+		return r.handleQuitCommand(cmd.Arg, out)
 	case "help":
-		print(terminal.HelpText())
+		return r.handleHelpCommand(cmd.Arg, out)
 	case "hotkeys":
-		if strings.TrimSpace(cmd.Arg) != "" {
-			return false, fmt.Errorf("use /hotkeys")
-		}
-		print(terminal.HotkeysText())
+		return r.handleHotkeysCommand(cmd.Arg, out)
 	case "session":
-		proj, err := r.store.Projection()
-		if err != nil {
-			return false, err
-		}
-		accounting, err := r.store.Accounting()
-		if err != nil {
-			return false, err
-		}
-		returned := accounting.ReturnedModel
-		if returned == "" {
-			returned = "unknown (no stored response)"
-		}
-		nameLine := ""
-		if name := r.store.SessionName(); name != "" {
-			nameLine = "name " + name + "\n"
-		}
-		print(fmt.Sprintf("session %s\n%sfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, nameLine, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.EstimatedContext(proj, r.cfg), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
-		themeSource := "built-in"
-		if r.theme != nil && r.theme.SourcePath != "" {
-			themeSource = r.theme.SourcePath
-		}
-		print(fmt.Sprintf("theme %s (%s, %s, %s; %s)", r.themeName, r.themeAppearance, r.themeMode, themeSource, r.themeSetting))
-		if r.themeFallback != "" {
-			print("theme fallback: " + r.themeFallback)
-		}
+		return r.handleSessionCommand(cmd.Arg, out)
 	case "reload":
-		if strings.TrimSpace(cmd.Arg) != "" {
-			return false, fmt.Errorf("use /reload")
-		}
-		if err := r.reloadTheme(); err != nil {
-			return false, err
-		}
-		if r.lifecycle != nil && r.lifecycle.console != nil {
-			r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
-		}
-		print(fmt.Sprintf("theme reloaded: %s (%s, %s)", r.themeName, r.themeAppearance, r.themeMode))
+		return r.handleReloadCommand(cmd.Arg, out)
 	case "new":
-		next, err := session.New(session.OpenOptions{Cwd: r.store.Cwd(), SessionDir: r.store.Dir(), AgentDir: r.agentDir, Persist: r.store.Persistent()})
-		if err != nil {
-			return false, err
-		}
-		if err := r.replace(next); err != nil {
-			return false, err
-		}
-		r.generation++
-		// Reset recall and session-local state; keep prior scrollback (P2-048).
-		// New sessions start with empty recall.
-		print("new session " + next.Header().ID)
+		return r.handleNewCommand(cmd.Arg, out)
 	case "name":
-		// Pi's /name: no argument shows the current name, an argument appends a
-		// session_info entry. Newlines collapse to spaces; the latest entry wins.
-		arg := strings.TrimSpace(cmd.Arg)
-		if arg == "" {
-			if current := r.store.SessionName(); current != "" {
-				print("Session name: " + current)
-			} else {
-				for _, line := range terminal.FormatNotice(terminal.NoticeWarning, "Usage: /name <name>", 80, noColorEnvironment(), r.theme) {
-					fmt.Fprintln(out, line)
-				}
-			}
-			return false, nil
-		}
-		sanitized := strings.TrimSpace(newlineRun.ReplaceAllString(arg, " "))
-		if _, err := r.store.AppendSessionInfo(sanitized); err != nil {
-			return false, err
-		}
-		if sanitized != arg {
-			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, fmt.Sprintf("Session name was normalized from %q to %q", arg, sanitized), 80, noColorEnvironment(), r.theme) {
-				fmt.Fprintln(out, line)
-			}
-		}
-		print("Session name set: " + r.store.SessionName())
+		return r.handleNameCommand(cmd.Arg, out)
 	case "clone":
-		if strings.TrimSpace(cmd.Arg) != "" {
-			return false, fmt.Errorf("use /clone")
-		}
-		// Pi's /clone forks at the current leaf into a new session file.
-		if r.store.File() == "" || len(r.store.Entries()) == 0 {
-			print("Nothing to clone yet")
-			return false, nil
-		}
-		if _, err := os.Stat(r.store.File()); os.IsNotExist(err) {
-			print("Nothing to clone yet")
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
-		if err := r.cloneSession(print); err != nil {
-			return false, err
-		}
+		return r.handleCloneCommand(cmd.Arg, out)
 	case "history":
-		// /history [N|all]: append last N user spans or full active-branch history (P2-041).
-		// Display-only: no model request, no file change.
-		_, err := renderStoreHistory(r.store, cmd.Arg, func(s string) bool { fmt.Fprintln(out, s); return true }, r.theme)
-		if err != nil {
-			return false, err
-		}
+		return r.handleHistoryCommand(cmd.Arg, out)
 	case "model":
-		if strings.TrimSpace(cmd.Arg) == "" {
-			// The interactive loop opens the searchable picker for an empty
-			// argument, so this fallback never prints another result page.
-			print(fmt.Sprintf("current %s/%s thinking %s (use /model with a provider/model name)", r.ov.Provider, r.ov.Model, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking)))
-			return false, nil
-		}
-		next := r.ov
-		parts := strings.Fields(cmd.Arg)
-		if len(parts) == 1 {
-			if strings.Contains(parts[0], "/") {
-				pp := strings.SplitN(parts[0], "/", 2)
-				next.Provider, next.Model = pp[0], pp[1]
-			} else {
-				next.Model = parts[0]
-			}
-		} else if len(parts) == 2 {
-			next.Provider, next.Model = parts[0], parts[1]
-		} else {
-			return false, fmt.Errorf("use /model [provider/]model")
-		}
-		candidate := *r
-		candidate.prov = nil
-		if err := candidate.configure(next); err != nil {
-			return false, err
-		}
-		if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
-			candidate.prov.CloseIdle()
-			return false, err
-		}
-		r.installConfiguration(&candidate)
+		return r.handleModelCommand(cmd.Arg, out)
 	case "thinking":
-		if strings.TrimSpace(cmd.Arg) == "" {
-			print(fmt.Sprintf("thinking %s (supported: %s)", provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), provider.ThinkingChoices(r.cfg.Model)))
-			return false, nil
-		}
-		lvl := strings.TrimSpace(cmd.Arg)
-		found := false
-		for _, v := range config.ValidThinkingLevels {
-			if v == lvl {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false, fmt.Errorf("unsupported thinking level %q", lvl)
-		}
-		if lvl == r.ov.Thinking {
-			return false, nil
-		}
-		next := r.ov
-		next.Thinking = lvl
-		candidate := *r
-		candidate.prov = nil
-		if err := candidate.configure(next); err != nil {
-			return false, err
-		}
-		if _, err := r.store.AppendThinkingLevelChange(lvl); err != nil {
-			candidate.prov.CloseIdle()
-			return false, err
-		}
-		r.installConfiguration(&candidate)
+		return r.handleThinkingCommand(cmd.Arg, out)
 	default:
 		return false, fmt.Errorf("unknown command (see /help)")
 	}
+}
+
+func (r *runtime) handleQuitCommand(arg string, out io.Writer) (bool, error) {
+	return true, nil
+}
+
+func (r *runtime) handleHelpCommand(arg string, out io.Writer) (bool, error) {
+	fmt.Fprintln(out, terminal.Sanitize(terminal.HelpText()))
+	return false, nil
+}
+
+func (r *runtime) handleHotkeysCommand(arg string, out io.Writer) (bool, error) {
+	if strings.TrimSpace(arg) != "" {
+		return false, fmt.Errorf("use /hotkeys")
+	}
+	fmt.Fprintln(out, terminal.Sanitize(terminal.HotkeysText()))
+	return false, nil
+}
+
+func (r *runtime) handleSessionCommand(arg string, out io.Writer) (bool, error) {
+	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	proj, err := r.store.Projection()
+	if err != nil {
+		return false, err
+	}
+	accounting, err := r.store.Accounting()
+	if err != nil {
+		return false, err
+	}
+	returned := accounting.ReturnedModel
+	if returned == "" {
+		returned = "unknown (no stored response)"
+	}
+	nameLine := ""
+	if name := r.store.SessionName(); name != "" {
+		nameLine = "name " + name + "\n"
+	}
+	print(fmt.Sprintf("session %s\n%sfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, nameLine, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.EstimatedContext(proj, r.cfg), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
+	themeSource := "built-in"
+	if r.theme != nil && r.theme.SourcePath != "" {
+		themeSource = r.theme.SourcePath
+	}
+	print(fmt.Sprintf("theme %s (%s, %s, %s; %s)", r.themeName, r.themeAppearance, r.themeMode, themeSource, r.themeSetting))
+	if r.themeFallback != "" {
+		print("theme fallback: " + r.themeFallback)
+	}
+	return false, nil
+}
+
+func (r *runtime) handleReloadCommand(arg string, out io.Writer) (bool, error) {
+	if strings.TrimSpace(arg) != "" {
+		return false, fmt.Errorf("use /reload")
+	}
+	if err := r.reloadTheme(); err != nil {
+		return false, err
+	}
+	if r.lifecycle != nil && r.lifecycle.console != nil {
+		r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
+	}
+	fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("theme reloaded: %s (%s, %s)", r.themeName, r.themeAppearance, r.themeMode)))
+	return false, nil
+}
+
+func (r *runtime) handleNewCommand(arg string, out io.Writer) (bool, error) {
+	next, err := session.New(session.OpenOptions{Cwd: r.store.Cwd(), SessionDir: r.store.Dir(), AgentDir: r.agentDir, Persist: r.store.Persistent()})
+	if err != nil {
+		return false, err
+	}
+	if err := r.replace(next); err != nil {
+		return false, err
+	}
+	r.generation++
+	// Reset recall and session-local state; keep prior scrollback (P2-048).
+	// New sessions start with empty recall.
+	fmt.Fprintln(out, terminal.Sanitize("new session "+next.Header().ID))
+	return false, nil
+}
+
+func (r *runtime) handleNameCommand(arg string, out io.Writer) (bool, error) {
+	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	// Pi's /name: no argument shows the current name, an argument appends a
+	// session_info entry. Newlines collapse to spaces; the latest entry wins.
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		if current := r.store.SessionName(); current != "" {
+			print("Session name: " + current)
+		} else {
+			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, "Usage: /name <name>", 80, noColorEnvironment(), r.theme) {
+				fmt.Fprintln(out, line)
+			}
+		}
+		return false, nil
+	}
+	sanitized := strings.TrimSpace(newlineRun.ReplaceAllString(arg, " "))
+	if _, err := r.store.AppendSessionInfo(sanitized); err != nil {
+		return false, err
+	}
+	if sanitized != arg {
+		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, fmt.Sprintf("Session name was normalized from %q to %q", arg, sanitized), 80, noColorEnvironment(), r.theme) {
+			fmt.Fprintln(out, line)
+		}
+	}
+	print("Session name set: " + r.store.SessionName())
+	return false, nil
+}
+
+func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
+	if strings.TrimSpace(arg) != "" {
+		return false, fmt.Errorf("use /clone")
+	}
+	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	// Pi's /clone forks at the current leaf into a new session file.
+	if r.store.File() == "" {
+		print("Nothing to clone yet")
+		return false, nil
+	}
+	if _, err := os.Stat(r.store.File()); os.IsNotExist(err) {
+		print("Nothing to clone yet")
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if len(r.store.Entries()) == 0 {
+		print("Nothing to clone yet")
+		return false, nil
+	}
+	if err := r.cloneSession(print); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func (r *runtime) handleHistoryCommand(arg string, out io.Writer) (bool, error) {
+	// /history [N|all]: append last N user spans or full active-branch history (P2-041).
+	// Display-only: no model request, no file change.
+	_, err := renderStoreHistory(r.store, arg, func(s string) bool { fmt.Fprintln(out, s); return true }, r.theme)
+	if err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
+	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	if strings.TrimSpace(arg) == "" {
+		// The interactive loop opens the searchable picker for an empty
+		// argument, so this fallback never prints another result page.
+		print(fmt.Sprintf("current %s/%s thinking %s (use /model with a provider/model name)", r.ov.Provider, r.ov.Model, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking)))
+		return false, nil
+	}
+	next := r.ov
+	parts := strings.Fields(arg)
+	if len(parts) == 1 {
+		if strings.Contains(parts[0], "/") {
+			pp := strings.SplitN(parts[0], "/", 2)
+			next.Provider, next.Model = pp[0], pp[1]
+		} else {
+			next.Model = parts[0]
+		}
+	} else if len(parts) == 2 {
+		next.Provider, next.Model = parts[0], parts[1]
+	} else {
+		return false, fmt.Errorf("use /model [provider/]model")
+	}
+	if i := strings.LastIndexByte(next.Model, ':'); i >= 0 {
+		level := next.Model[i+1:]
+		for _, valid := range config.ValidThinkingLevels {
+			if level == valid {
+				next.Model = next.Model[:i]
+				next.Thinking = level
+				break
+			}
+		}
+	}
+	if strings.TrimSpace(next.Model) == "" {
+		return false, fmt.Errorf("use /model [provider/]model")
+	}
+	candidate := *r
+	candidate.prov = nil
+	if err := candidate.configure(next); err != nil {
+		return false, err
+	}
+	if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
+		if candidate.prov != nil {
+			candidate.prov.CloseIdle()
+		}
+		return false, err
+	}
+	if candidate.ov.Thinking != r.ov.Thinking {
+		if _, err := r.store.AppendThinkingLevelChange(candidate.ov.Thinking); err != nil {
+			if candidate.prov != nil {
+				candidate.prov.CloseIdle()
+			}
+			return false, err
+		}
+	}
+	r.installConfiguration(&candidate)
+	return false, nil
+}
+
+func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error) {
+	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
+	if strings.TrimSpace(arg) == "" {
+		print(fmt.Sprintf("thinking %s (supported: %s)", provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), provider.ThinkingChoices(r.cfg.Model)))
+		return false, nil
+	}
+	lvl := strings.TrimSpace(arg)
+	found := false
+	for _, v := range config.ValidThinkingLevels {
+		if v == lvl {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false, fmt.Errorf("unsupported thinking level %q", lvl)
+	}
+	if lvl == r.ov.Thinking {
+		return false, nil
+	}
+	next := r.ov
+	next.Thinking = lvl
+	candidate := *r
+	candidate.prov = nil
+	if err := candidate.configure(next); err != nil {
+		return false, err
+	}
+	if _, err := r.store.AppendThinkingLevelChange(lvl); err != nil {
+		if candidate.prov != nil {
+			candidate.prov.CloseIdle()
+		}
+		return false, err
+	}
+	r.installConfiguration(&candidate)
 	return false, nil
 }

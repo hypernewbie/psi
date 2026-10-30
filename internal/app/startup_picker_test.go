@@ -3,6 +3,9 @@
 package app
 
 import (
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
@@ -15,6 +18,8 @@ import (
 	"golang.org/x/term"
 
 	"psi/internal/session"
+	"psi/internal/terminal"
+	"psi/internal/testutil/leakcheck"
 )
 
 func TestInlineProjectTrustPickerDefaultsToDeny(t *testing.T) {
@@ -271,4 +276,319 @@ func TestActualSessionPickerSelectsAndCancelsInWorkspace(t *testing.T) {
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
+}
+
+func testPickerConsole(t *testing.T) (*terminal.Console, *os.File, *terminalLifecycle, func()) {
+	t.Helper()
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	console := terminal.NewConsole(inR, io.Discard)
+	console.SizeFunc = func() (int, int) { return 80, 24 }
+	lifecycle := &terminalLifecycle{console: console, signals: make(chan os.Signal, 10)}
+	cleanup := func() {
+		console.Close()
+		inR.Close()
+		inW.Close()
+	}
+	return console, inW, lifecycle, cleanup
+}
+
+func TestStartupPickerBootstrapSignal(t *testing.T) {
+	t.Cleanup(func() {
+		leakcheck.Verify(t)
+	})
+
+	t.Run("resize signal triggers redraw and remains active", func(t *testing.T) {
+		redrawn := false
+		done, err := handleBootstrapSignal(nil, syscall.SIGWINCH, func() { redrawn = true })
+		if done || err != nil || !redrawn {
+			t.Errorf("SIGWINCH: done=%v err=%v redrawn=%v", done, err, redrawn)
+		}
+	})
+
+	t.Run("resume signal triggers redraw and remains active", func(t *testing.T) {
+		redrawn := false
+		done, err := handleBootstrapSignal(nil, syscall.SIGCONT, func() { redrawn = true })
+		if done || err != nil || !redrawn {
+			t.Errorf("SIGCONT: done=%v err=%v redrawn=%v", done, err, redrawn)
+		}
+	})
+
+	t.Run("interrupt signal terminates without error", func(t *testing.T) {
+		redrawn := false
+		done, err := handleBootstrapSignal(nil, os.Interrupt, func() { redrawn = true })
+		if !done || err != nil || redrawn {
+			t.Errorf("SIGINT: done=%v err=%v redrawn=%v", done, err, redrawn)
+		}
+	})
+
+	t.Run("shutdown signals terminate with error", func(t *testing.T) {
+		for _, sig := range []os.Signal{syscall.SIGTERM, syscall.SIGHUP} {
+			done, err := handleBootstrapSignal(nil, sig, func() {})
+			if !done || err == nil || !strings.Contains(err.Error(), "startup interrupted by") {
+				t.Errorf("%s: done=%v err=%v", sig, done, err)
+			}
+		}
+	})
+
+	t.Run("suspend signal with unavailable lifecycle returns error", func(t *testing.T) {
+		done, err := handleBootstrapSignal(nil, syscall.SIGTSTP, func() {})
+		if !done || err == nil || !strings.Contains(err.Error(), "terminal lifecycle unavailable") {
+			t.Errorf("SIGTSTP without lifecycle: done=%v err=%v", done, err)
+		}
+	})
+
+	t.Run("unhandled signal is ignored", func(t *testing.T) {
+		redrawn := false
+		done, err := handleBootstrapSignal(nil, syscall.SIGURG, func() { redrawn = true })
+		if done || err != nil || redrawn {
+			t.Errorf("SIGURG: done=%v err=%v redrawn=%v", done, err, redrawn)
+		}
+	})
+}
+
+func TestStartupPickerSessionNavigationAndPaging(t *testing.T) {
+	t.Cleanup(func() {
+		leakcheck.Verify(t)
+	})
+
+	makeSessions := func(n int) []session.SessionInfo {
+		list := make([]session.SessionInfo, n)
+		for i := 0; i < n; i++ {
+			list[i] = session.SessionInfo{ID: fmt.Sprintf("session-%02d", i)}
+		}
+		return list
+	}
+
+	t.Run("selection navigation down and up", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(10), "")
+		// Down twice, Up once, Enter -> should select index 1 (session-01)
+		if _, err := inW.Write([]byte("\x1b[B\x1b[B\x1b[A\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil || cancelled || selected == nil {
+			t.Fatalf("runSessionPicker failed: cancelled=%v err=%v", cancelled, err)
+		}
+		if selected.ID != "session-01" {
+			t.Errorf("selected ID = %q, want session-01", selected.ID)
+		}
+	})
+
+	t.Run("paging with page down and page up prevpage", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(20), "")
+		// Page down (\x1b[6~), then page up / prevpage (\x1b[5~), down (\x1b[B), Enter
+		if _, err := inW.Write([]byte("\x1b[6~\x1b[5~\x1b[B\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil || cancelled || selected == nil {
+			t.Fatalf("runSessionPicker failed: cancelled=%v err=%v", cancelled, err)
+		}
+		if selected.ID != "session-01" {
+			t.Errorf("selected ID = %q, want session-01 after paging and down", selected.ID)
+		}
+	})
+
+	t.Run("search query typing and filter match", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(20), "")
+		// Type query "session-15" then Enter
+		if _, err := inW.Write([]byte("session-15\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil || cancelled || selected == nil {
+			t.Fatalf("runSessionPicker failed: cancelled=%v err=%v", cancelled, err)
+		}
+		if selected.ID != "session-15" {
+			t.Errorf("selected ID = %q, want session-15", selected.ID)
+		}
+	})
+
+	t.Run("cancellation with escape", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(5), "")
+		if _, err := inW.Write([]byte("\x1b")); err != nil {
+			t.Fatal(err)
+		}
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil || !cancelled || selected != nil {
+			t.Fatalf("expected cancel: cancelled=%v err=%v selected=%v", cancelled, err, selected)
+		}
+	})
+
+	t.Run("cancellation with ctrl-c", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(5), "")
+		if _, err := inW.Write([]byte{3}); err != nil {
+			t.Fatal(err)
+		}
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil || !cancelled || selected != nil {
+			t.Fatalf("expected cancel: cancelled=%v err=%v selected=%v", cancelled, err, selected)
+		}
+	})
+
+	t.Run("resize event preserves state and does not exit", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(5), "")
+		// Send resize signal, then Enter
+		lifecycle.signals <- syscall.SIGWINCH
+		if _, err := inW.Write([]byte("\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil || cancelled || selected == nil {
+			t.Fatalf("runSessionPicker failed after resize: cancelled=%v err=%v", cancelled, err)
+		}
+		if selected.ID != "session-00" {
+			t.Errorf("selected ID = %q, want session-00", selected.ID)
+		}
+	})
+
+	t.Run("shutdown signal terminates picker with error", func(t *testing.T) {
+		console, _, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(5), "")
+		lifecycle.signals <- syscall.SIGTERM
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err == nil || !cancelled || selected != nil {
+			t.Fatalf("expected shutdown error: cancelled=%v err=%v", cancelled, err)
+		}
+	})
+}
+
+func TestStartupPickerChoiceNavigationAndSignals(t *testing.T) {
+	t.Cleanup(func() {
+		leakcheck.Verify(t)
+	})
+
+	makeChoicePicker := func(count int, initial int) *terminal.ChoicePicker {
+		options := make([]terminal.ChoiceOption, count)
+		for i := 0; i < count; i++ {
+			options[i] = terminal.ChoiceOption{
+				Label:       fmt.Sprintf("Choice %d", i),
+				Description: fmt.Sprintf("Description for %d", i),
+			}
+		}
+		return &terminal.ChoicePicker{
+			Title:    "Confirm",
+			Options:  options,
+			Selected: initial,
+		}
+	}
+
+	t.Run("navigation down and enter selects item", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		picker := makeChoicePicker(3, 0)
+		if _, err := inW.Write([]byte("\x1b[B\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		idx, cancelled, err := runChoicePicker(console, lifecycle, picker)
+		if err != nil || cancelled {
+			t.Fatalf("runChoicePicker failed: cancelled=%v err=%v", cancelled, err)
+		}
+		if idx != 1 {
+			t.Errorf("selected index = %d, want 1", idx)
+		}
+	})
+
+	t.Run("paging with page down and page up", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		picker := makeChoicePicker(10, 0)
+		// Page down (\x1b[6~ moves +5), Page up (\x1b[5~ moves -5), Down (\x1b[B moves +1), Enter
+		if _, err := inW.Write([]byte("\x1b[6~\x1b[5~\x1b[B\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		idx, cancelled, err := runChoicePicker(console, lifecycle, picker)
+		if err != nil || cancelled {
+			t.Fatalf("runChoicePicker failed: cancelled=%v err=%v", cancelled, err)
+		}
+		if idx != 1 {
+			t.Errorf("selected index = %d, want 1", idx)
+		}
+	})
+
+	t.Run("escape cancels choice", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		picker := makeChoicePicker(3, 0)
+		if _, err := inW.Write([]byte("\x1b")); err != nil {
+			t.Fatal(err)
+		}
+
+		idx, cancelled, err := runChoicePicker(console, lifecycle, picker)
+		if err != nil || !cancelled || idx != -1 {
+			t.Fatalf("expected cancel: idx=%d cancelled=%v err=%v", idx, cancelled, err)
+		}
+	})
+
+	t.Run("signal resize redraws and shutdown signal errors", func(t *testing.T) {
+		console, _, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		picker := makeChoicePicker(3, 0)
+		lifecycle.signals <- syscall.SIGWINCH
+		lifecycle.signals <- syscall.SIGTERM
+
+		idx, cancelled, err := runChoicePicker(console, lifecycle, picker)
+		if err == nil || !cancelled || idx != -1 {
+			t.Fatalf("expected shutdown error: idx=%d cancelled=%v err=%v", idx, cancelled, err)
+		}
+	})
+}
+
+func TestStartupPickerInputEOFReturnsThroughLifecycleCleanup(t *testing.T) {
+	t.Cleanup(func() {
+		leakcheck.Verify(t)
+	})
+	input, output, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	console := terminal.NewConsole(input, io.Discard)
+	console.SizeFunc = func() (int, int) { return 80, 24 }
+	defer console.Close()
+	defer input.Close()
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle := &terminalLifecycle{console: console, signals: make(chan os.Signal, 1)}
+	selector := NewSelector([]session.SessionInfo{{ID: "synthetic"}}, "")
+	_, cancelled, err := runSessionPicker(console, lifecycle, selector)
+	if err == nil || !cancelled {
+		t.Fatalf("input EOF did not cancel startup picker: cancelled=%v err=%v", cancelled, err)
+	}
 }
