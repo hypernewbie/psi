@@ -290,10 +290,11 @@ func steeringAssertions(t *testing.T, store *session.Store, fake *provider.Fake,
 	}
 	// The no-tool second response must not end the run: delivered steering
 	// continues it, so the provider saw a third request.
-	if len(fake.Calls) != 3 {
-		t.Fatalf("provider calls = %d, want 3 (steering must continue the run)", len(fake.Calls))
+	if fake.CallCount() != 3 {
+		t.Fatalf("provider calls = %d, want 3 (steering must continue the run)", fake.CallCount())
 	}
-	last := fake.Calls[len(fake.Calls)-1]
+	reqs := fake.Requests()
+	last := reqs[len(reqs)-1]
 	found := false
 	for _, m := range last.Messages {
 		if m.Role == "user" && strings.Contains(fmt.Sprint(m.Content), "steered message") {
@@ -518,11 +519,11 @@ func TestSteerWhileStreamingAndBatchRunning(t *testing.T) {
 	}
 
 	// Provider received 2 calls: first with initial prompt, second with tool result and all 5 steering messages
-	if len(fake.Calls) != 2 {
-		t.Fatalf("expected 2 provider calls, got %d", len(fake.Calls))
+	if fake.CallCount() != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", fake.CallCount())
 	}
 
-	secondReq := fake.Calls[1]
+	secondReq := fake.Requests()[1]
 	steeredCount := 0
 	for _, m := range secondReq.Messages {
 		if m.Role == "user" {

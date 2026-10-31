@@ -170,7 +170,7 @@ func TestParallelReadsStartBeforeEitherCompletes(t *testing.T) {
 	if ends := h.eventsOf(event.ToolEnd); len(ends) != 0 {
 		t.Fatalf("settlement crossed the batch barrier: %+v", ends)
 	}
-	if n := len(h.fake.Calls); n != 1 {
+	if n := h.fake.CallCount(); n != 1 {
 		t.Fatalf("next request crossed the settlement barrier: %d requests", n)
 	}
 	h.releaseFile("a.txt")
@@ -199,11 +199,11 @@ func TestParallelReadsStartBeforeEitherCompletes(t *testing.T) {
 		t.Fatalf("stored results keep call order, got %v", stored)
 	}
 	// The next request carries both results in call order, exactly once.
-	if len(h.fake.Calls) != 2 {
-		t.Fatalf("expected two provider requests, got %d", len(h.fake.Calls))
+	if h.fake.CallCount() != 2 {
+		t.Fatalf("expected two provider requests, got %d", h.fake.CallCount())
 	}
 	var seen []string
-	for _, m := range h.fake.Calls[1].Messages {
+	for _, m := range h.fake.Requests()[1].Messages {
 		if m.Role == "toolResult" {
 			seen = append(seen, m.ToolCallID)
 		}
@@ -225,11 +225,11 @@ func TestParallelFailureKeepsSuccessfulResults(t *testing.T) {
 	if err := h.loop.Submit(context.Background(), "go", h.config()); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.fake.Calls) != 2 {
-		t.Fatalf("expected two requests, got %d", len(h.fake.Calls))
+	if h.fake.CallCount() != 2 {
+		t.Fatalf("expected two requests, got %d", h.fake.CallCount())
 	}
 	var good, bad int
-	for _, m := range h.fake.Calls[1].Messages {
+	for _, m := range h.fake.Requests()[1].Messages {
 		if m.Role == "toolResult" && m.ToolCallID == "good" {
 			good++
 			if m.IsError {
@@ -412,7 +412,7 @@ func TestParallelStorageFailureBlocksContinuation(t *testing.T) {
 	if !strings.Contains(err.Error(), "storage failure") {
 		t.Fatalf("run must report the storage failure, got %v", err)
 	}
-	if n := len(h.fake.Calls); n != 1 {
+	if n := h.fake.CallCount(); n != 1 {
 		t.Fatalf("unsaved results must not reach a next request, got %d requests", n)
 	}
 	ends := h.eventsOf(event.ToolEnd)
@@ -658,7 +658,7 @@ func TestParallelLoopControlMixesWithReads(t *testing.T) {
 	}
 	// The follow-up request carries both results in call order, then the
 	// hidden continuation as the final user message.
-	reqs := fake.Calls
+	reqs := fake.Requests()
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
 	}
@@ -689,7 +689,7 @@ func TestParallelSteeringWaitsForBatchSettlement(t *testing.T) {
 	<-aEntered
 	// The batch holds the barrier; steering queued now must not jump it.
 	h.loop.Steer("meanwhile")
-	if n := len(h.fake.Calls); n != 1 {
+	if n := h.fake.CallCount(); n != 1 {
 		t.Fatalf("steering crossed the settlement barrier: %d requests", n)
 	}
 	h.releaseFile("a.txt")
@@ -698,11 +698,11 @@ func TestParallelSteeringWaitsForBatchSettlement(t *testing.T) {
 	}
 	// The follow-up request carries the steering as a user message after the
 	// tool result.
-	if len(h.fake.Calls) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(h.fake.Calls))
+	if h.fake.CallCount() != 2 {
+		t.Fatalf("expected 2 requests, got %d", h.fake.CallCount())
 	}
 	var sawSteer bool
-	for _, m := range h.fake.Calls[1].Messages {
+	for _, m := range h.fake.Requests()[1].Messages {
 		if m.Role == "user" && containsBlockText(m.Content, "meanwhile") {
 			sawSteer = true
 		}
@@ -737,11 +737,11 @@ func TestParallelBatchSettlesImagesAndText(t *testing.T) {
 	if err := h.loop.Submit(context.Background(), "go", h.config()); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.fake.Calls) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(h.fake.Calls))
+	if h.fake.CallCount() != 2 {
+		t.Fatalf("expected 2 requests, got %d", h.fake.CallCount())
 	}
 	var images, texts int
-	for _, m := range h.fake.Calls[1].Messages {
+	for _, m := range h.fake.Requests()[1].Messages {
 		if m.Role != "toolResult" {
 			continue
 		}
@@ -1164,11 +1164,11 @@ func TestParallelBatch_OutOfOrderSettlementAppendsInAssistantOrder(t *testing.T)
 	}
 
 	// Invariant: provider request has tool results strictly in call order
-	if len(h.fake.Calls) != 2 {
-		t.Fatalf("expected 2 provider requests, got %d", len(h.fake.Calls))
+	if h.fake.CallCount() != 2 {
+		t.Fatalf("expected 2 provider requests, got %d", h.fake.CallCount())
 	}
 	var reqIDs []string
-	for _, m := range h.fake.Calls[1].Messages {
+	for _, m := range h.fake.Requests()[1].Messages {
 		if m.Role == "toolResult" {
 			reqIDs = append(reqIDs, m.ToolCallID)
 		}

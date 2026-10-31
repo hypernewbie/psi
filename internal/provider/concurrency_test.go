@@ -146,7 +146,7 @@ func TestFakeCloseIdleConcurrentWithSend(t *testing.T) {
 	wg.Wait()
 
 	fake.CloseIdle()
-	if len(fake.Calls) != count {
-		t.Fatalf("expected %d calls recorded, got %d", count, len(fake.Calls))
+	if fake.CallCount() != count {
+		t.Fatalf("expected %d calls recorded, got %d", count, fake.CallCount())
 	}
 }

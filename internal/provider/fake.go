@@ -19,13 +19,26 @@ func (f *Fake) Send(ctx context.Context, req Request, onText func(string)) (*Res
 	f.mu.Lock()
 	f.Calls = append(f.Calls, req)
 	idx := len(f.Calls) - 1
+
+	var deltas []string
+	if idx < len(f.TextDeltas) && f.TextDeltas[idx] != nil {
+		deltas = make([]string, len(f.TextDeltas[idx]))
+		copy(deltas, f.TextDeltas[idx])
+	}
+	var errVal error
+	if idx < len(f.Errors) {
+		errVal = f.Errors[idx]
+	}
+	var respVal *Response
+	hasResp := false
+	if idx < len(f.Responses) {
+		respVal = f.Responses[idx]
+		hasResp = true
+	}
 	f.mu.Unlock()
+
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
-	}
-	var deltas []string
-	if idx < len(f.TextDeltas) {
-		deltas = f.TextDeltas[idx]
 	}
 	for _, d := range deltas {
 		if ctx.Err() != nil {
@@ -35,13 +48,32 @@ func (f *Fake) Send(ctx context.Context, req Request, onText func(string)) (*Res
 			onText(d)
 		}
 	}
-	if idx < len(f.Errors) && f.Errors[idx] != nil {
-		return nil, f.Errors[idx]
+	if errVal != nil {
+		return nil, errVal
 	}
-	if idx < len(f.Responses) {
-		return f.Responses[idx], nil
+	if hasResp {
+		return respVal, nil
 	}
 	return nil, fmt.Errorf("fake provider: no scripted response %d", idx)
+}
+
+// Requests returns a copied snapshot of f.Calls under f.mu.
+func (f *Fake) Requests() []Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Calls == nil {
+		return nil
+	}
+	cp := make([]Request, len(f.Calls))
+	copy(cp, f.Calls)
+	return cp
+}
+
+// CallCount returns len(f.Calls) under f.mu.
+func (f *Fake) CallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.Calls)
 }
 
 func (f *Fake) CloseIdle() {

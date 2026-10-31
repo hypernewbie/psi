@@ -38,8 +38,9 @@ func TestFakeProvider(t *testing.T) {
 		if streamed.String() != "hello world" {
 			t.Fatalf("expected streamed %q, got %q", "hello world", streamed.String())
 		}
-		if len(fake.Calls) != 1 || fake.Calls[0].Model.ID != "fake-model" {
-			t.Fatalf("unexpected recorded calls: %+v", fake.Calls)
+		reqs := fake.Requests()
+		if len(reqs) != 1 || reqs[0].Model.ID != "fake-model" {
+			t.Fatalf("unexpected recorded calls: %+v", reqs)
 		}
 
 		// CloseIdle invocation
@@ -123,8 +124,92 @@ func TestFakeProvider(t *testing.T) {
 		}
 		wg.Wait()
 
-		if len(fake.Calls) != numCalls {
-			t.Fatalf("expected %d recorded calls, got %d", numCalls, len(fake.Calls))
+		if fake.CallCount() != numCalls {
+			t.Fatalf("expected %d recorded calls, got %d", numCalls, fake.CallCount())
+		}
+	})
+
+	t.Run("concurrent Send and Requests stress test", func(t *testing.T) {
+		const numWriters = 8
+		const callsPerWriter = 40
+		const totalCalls = numWriters * callsPerWriter
+		const numReaders = 4
+
+		responses := make([]*Response, totalCalls)
+		deltas := make([][]string, totalCalls)
+		for i := 0; i < totalCalls; i++ {
+			responses[i] = &Response{Text: fmt.Sprintf("resp-%d", i), StopReason: "stop"}
+			deltas[i] = []string{"d1-", fmt.Sprintf("%d", i)}
+		}
+
+		fake := &Fake{
+			Responses:  responses,
+			TextDeltas: deltas,
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+
+		// Concurrent readers polling Requests() and CallCount()
+		for r := 0; r < numReaders; r++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						reqs := fake.Requests()
+						count := fake.CallCount()
+						if len(reqs) > totalCalls {
+							t.Errorf("len(reqs)=%d exceeds totalCalls=%d", len(reqs), totalCalls)
+						}
+						if count > totalCalls {
+							t.Errorf("count=%d exceeds totalCalls=%d", count, totalCalls)
+						}
+					}
+				}
+			}()
+		}
+
+		// Concurrent writers calling Send with text streaming
+		var writersWg sync.WaitGroup
+		for w := 0; w < numWriters; w++ {
+			writersWg.Add(1)
+			go func(writerID int) {
+				defer writersWg.Done()
+				<-start
+				for i := 0; i < callsPerWriter; i++ {
+					req := Request{
+						Model: ModelMeta{ID: fmt.Sprintf("model-%d-%d", writerID, i)},
+					}
+					var streamed strings.Builder
+					resp, err := fake.Send(context.Background(), req, func(s string) {
+						streamed.WriteString(s)
+					})
+					if err != nil || resp == nil {
+						t.Errorf("Send failed for writer %d, iter %d: %v", writerID, i, err)
+					}
+				}
+			}(w)
+		}
+
+		close(start)
+		writersWg.Wait()
+		cancel()
+		wg.Wait()
+
+		if count := fake.CallCount(); count != totalCalls {
+			t.Fatalf("expected %d total calls, got %d", totalCalls, count)
+		}
+		reqs := fake.Requests()
+		if len(reqs) != totalCalls {
+			t.Fatalf("expected %d requests snapshot, got %d", totalCalls, len(reqs))
 		}
 	})
 }
