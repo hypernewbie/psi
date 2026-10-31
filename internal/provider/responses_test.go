@@ -289,7 +289,7 @@ func TestResponsesProviderErrorsAndMalformedStreamsDoNotLeakSecrets(t *testing.T
 		})
 	}
 	limitServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "maximum context window exceeded", http.StatusBadRequest)
+		http.Error(w, "Your input exceeds the context window of this model", http.StatusBadRequest)
 	}))
 	defer limitServer.Close()
 	client := NewResponsesClient(limitServer.URL, "synthetic-responses-secret", 0, time.Second)

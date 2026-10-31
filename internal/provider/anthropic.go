@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -207,27 +208,80 @@ func headerValues(headers map[string]string) []string {
 	return values
 }
 
+var nonOverflowPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^(?:Throttling(?: error|Exception)|Service unavailable):`),
+	regexp.MustCompile(`(?i)rate limit`),
+	regexp.MustCompile(`(?i)too many requests`),
+}
+
+var overflowPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)prompt (?:is )?too long`),
+	regexp.MustCompile(`(?i)prompt exceeds max length`),
+	regexp.MustCompile(`(?i)request_too_large`),
+	regexp.MustCompile(`(?i)input is too long for requested model`),
+	regexp.MustCompile(`(?i)exceeds the context window`),
+	regexp.MustCompile(`(?i)exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\d,]+ tokens?|\s*\([\d,]+\))`),
+	regexp.MustCompile(`(?i)input token count.*exceeds the maximum`),
+	regexp.MustCompile(`(?i)maximum prompt length is \d+`),
+	regexp.MustCompile(`(?i)reduce the length of the messages`),
+	regexp.MustCompile(`(?i)maximum context length is \d+ tokens`),
+	regexp.MustCompile(`(?i)exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?`),
+	regexp.MustCompile(`(?i)input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)`),
+	regexp.MustCompile(`(?i)exceeds the limit of \d+`),
+	regexp.MustCompile(`(?i)exceeds the available context size`),
+	regexp.MustCompile(`(?i)greater than the context length`),
+	regexp.MustCompile(`(?i)context window exceeds limit`),
+	regexp.MustCompile(`(?i)exceeded model token limit`),
+	regexp.MustCompile(`(?i)too large for model with \d+ maximum context length`),
+	regexp.MustCompile(`(?i)prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?`),
+	regexp.MustCompile(`(?i)model_context_window_exceeded`),
+	regexp.MustCompile(`(?i)prompt too long; exceeded (?:max )?context length`),
+	regexp.MustCompile(`(?i)range of input length should be`),
+	regexp.MustCompile(`(?i)context[_ ]length[_ ]exceeded`),
+	regexp.MustCompile(`(?i)too many tokens`),
+	regexp.MustCompile(`(?i)token limit exceeded`),
+}
+
+func extractErrorMessage(body string) string {
+	var env struct {
+		Error   any    `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(body), &env); err == nil {
+		if env.Message != "" {
+			return env.Message
+		}
+		switch v := env.Error.(type) {
+		case string:
+			return v
+		case map[string]any:
+			if msg, ok := v["message"].(string); ok && msg != "" {
+				return msg
+			}
+		}
+	}
+	return body
+}
+
 func isContextOverflow(status int, body string) bool {
+	msg := extractErrorMessage(body)
+	for _, p := range nonOverflowPatterns {
+		if p.MatchString(body) || p.MatchString(msg) {
+			return false
+		}
+	}
 	if status == http.StatusRequestEntityTooLarge { // 413
 		return true
 	}
 	if status != http.StatusBadRequest { // 400
 		return false
 	}
-	lower := strings.ToLower(body)
-	return strings.Contains(lower, "prompt is too long") ||
-		strings.Contains(lower, "prompt too long") ||
-		strings.Contains(lower, "prompt exceeds max length") ||
-		strings.Contains(lower, "request_too_large") ||
-		strings.Contains(lower, "context window") ||
-		strings.Contains(lower, "maximum context") ||
-		strings.Contains(lower, "max context length") ||
-		strings.Contains(lower, "exceeded context length") ||
-		strings.Contains(lower, "exceeds the limit") ||
-		strings.Contains(lower, "context_length_exceeded") ||
-		strings.Contains(lower, "too many tokens") ||
-		strings.Contains(lower, "token limit exceeded") ||
-		(strings.Contains(lower, "input token count") && strings.Contains(lower, "exceeds the maximum"))
+	for _, p := range overflowPatterns {
+		if p.MatchString(body) || p.MatchString(msg) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyHTTPError(resp *http.Response) *ProviderError {
