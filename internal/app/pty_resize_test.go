@@ -112,6 +112,27 @@ func TestActualAppPTYResize(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	waitVisible := func(want string) {
+		t.Helper()
+		deadline := time.NewTimer(8 * time.Second)
+		defer deadline.Stop()
+		for {
+			all := append(append([]string(nil), screen.Scrollback...), strings.Split(screen.Text(), "\n")...)
+			if strings.Contains(strings.Join(strings.Fields(strings.Join(all, " ")), ""), want) {
+				return
+			}
+			select {
+			case chunk, ok := <-chunks:
+				if !ok {
+					t.Fatalf("process exited waiting for visible %q", want)
+				}
+				pending += chunk
+				screen.Feed([]byte(chunk))
+			case <-deadline.C:
+				t.Fatalf("timeout waiting for visible %q: %q", want, screen.Text())
+			}
+		}
+	}
 	waitEditor := func() { waitForEditorScreen(t, chunks, screen, &pending) }
 	wait("/ commands")
 	waitEditor()
@@ -180,8 +201,31 @@ func TestActualAppPTYResize(t *testing.T) {
 	}
 
 	releaseStreamFn()
-	wait("STREAM_DONE")
+	waitVisible("STREAM_DONE")
 	waitEditor()
+
+	// Rebuild once more after settlement. The completed assistant block must
+	// survive a full main-screen clear and reappear from retained source.
+	if err := pty.Setsize(master, &pty.Winsize{Rows: 16, Cols: 60}); err != nil {
+		t.Fatal(err)
+	}
+	screen.Resize(60, 16)
+	beforeResize := screen.WriteCalls
+	deadline := time.NewTimer(4 * time.Second)
+	for screen.WriteCalls == beforeResize {
+		select {
+		case chunk, ok := <-chunks:
+			if !ok {
+				t.Fatal("process exited on settled-conversation resize")
+			}
+			pending += chunk
+			screen.Feed([]byte(chunk))
+		case <-deadline.C:
+			t.Fatalf("settled-conversation resize did not redraw: screen=%q", screen.Text())
+		}
+	}
+	deadline.Stop()
+	waitVisible("STREAM_STARTSTREAM_DONE")
 
 	// Phase 3: Resize while model picker is open
 	write("/model\r")
@@ -216,7 +260,7 @@ func TestActualAppPTYResize(t *testing.T) {
 
 	write("\x1b") // Cancel picker
 	timer := time.NewTimer(4 * time.Second)
-	for strings.Contains(screen.Text(), "Models ·") {
+	for strings.Contains(screen.Text(), "Models ·") || strings.Contains(screen.Text(), "select ·") {
 		select {
 		case chunk, ok := <-chunks:
 			if !ok {

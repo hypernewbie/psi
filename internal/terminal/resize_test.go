@@ -7,6 +7,27 @@ import (
 	"time"
 )
 
+func TestParseCursorPositionReport(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		row   int
+		col   int
+		ok    bool
+	}{
+		{"\x1b[6;21R", 6, 21, true},
+		{"\x1b[1;1R", 1, 1, true},
+		{"\x1b[0;1R", 0, 0, false},
+		{"\x1b[6R", 0, 0, false},
+		{"\x1b[?1;2R", 0, 0, false},
+		{"\x1b]11;rgb:0000/0000/0000\x07", 0, 0, false},
+	} {
+		row, col, ok := ParseCursorPositionReport([]byte(tc.input))
+		if row != tc.row || col != tc.col || ok != tc.ok {
+			t.Errorf("ParseCursorPositionReport(%q)=(%d,%d,%v), want (%d,%d,%v)", tc.input, row, col, ok, tc.row, tc.col, tc.ok)
+		}
+	}
+}
+
 func TestConsoleResizeWatcherOnlyPostsValidChanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -1,7 +1,9 @@
 package terminal
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -146,6 +148,79 @@ func TestMaintainedVTTallPickerShrinkRedrawsOwnedTail(t *testing.T) {
 		if !found {
 			t.Fatalf("resize to %dx%d erased committed history", width, height)
 		}
+	}
+}
+
+func TestMaintainedVTResizeUsesCursorReportWithoutScrolling(t *testing.T) {
+	model := vt.NewEmulator(80, 24)
+	defer model.Close()
+	model.WriteString("COMMITTED_SENTINEL\r\n")
+	var trace bytes.Buffer
+	writer := NewWriter(io.MultiWriter(model, &trace))
+	oldTail := []string{"", strings.Repeat("─", 79), "draft", "footer"}
+	if err := writer.Emit(Frame{Tail: oldTail, CursorRow: 2, CursorCol: 3, Width: 80, Height: 24}); err != nil {
+		t.Fatal(err)
+	}
+	model.Resize(80, 6)
+	cursor := model.CursorPosition()
+	writer.InvalidateTail()
+	writer.SetResizeCursorPosition(cursor.Y, cursor.X)
+	trace.Reset()
+	newTail := []string{"", strings.Repeat("─", 79), "draft", "footer"}
+	if err := writer.Emit(Frame{Tail: newTail, CursorRow: 2, CursorCol: 3, Width: 80, Height: 6}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(trace.String(), "\r\n") {
+		t.Fatalf("resize redraw used line feeds: %q", trace.String())
+	}
+	visible := model.String()
+	if !strings.Contains(visible, "draft") {
+		t.Fatalf("resize lost active tail: %q", visible)
+	}
+	foundSentinel := strings.Contains(visible, "COMMITTED_SENTINEL")
+	for y := 0; y < model.ScrollbackLen() && !foundSentinel; y++ {
+		var line strings.Builder
+		for x := 0; x < 80; x++ {
+			if cell := model.ScrollbackCellAt(x, y); cell != nil {
+				line.WriteString(cell.Content)
+			}
+		}
+		foundSentinel = strings.Contains(line.String(), "COMMITTED_SENTINEL")
+	}
+	if !foundSentinel {
+		t.Fatalf("resize lost committed history: screen=%q scrollback=%d", visible, model.ScrollbackLen())
+	}
+	if got := model.CursorPosition(); got.Y != cursor.Y {
+		t.Fatalf("cursor row after resize = %d, want %d: %q", got.Y, cursor.Y, model.String())
+	}
+}
+
+func TestMaintainedVTResizeReportClearsTailShrink(t *testing.T) {
+	model := vt.NewEmulator(80, 24)
+	defer model.Close()
+	model.WriteString("COMMITTED_SENTINEL\r\n")
+	writer := NewWriter(model)
+	oldTail := []string{"", strings.Repeat("─", 79), "draft", "old-footer", "old-status"}
+	if err := writer.Emit(Frame{Tail: oldTail, CursorRow: 2, CursorCol: 3, Width: 80, Height: 24}); err != nil {
+		t.Fatal(err)
+	}
+	model.Resize(80, 8)
+	cursor := model.CursorPosition()
+	writer.InvalidateTail()
+	writer.SetResizeCursorPosition(cursor.Y, cursor.X)
+	newTail := []string{"", strings.Repeat("─", 79), "draft"}
+	if err := writer.Emit(Frame{Tail: newTail, CursorRow: 2, CursorCol: 3, Width: 80, Height: 8}); err != nil {
+		t.Fatal(err)
+	}
+	visible := model.String()
+	if strings.Contains(visible, "old-footer") || strings.Contains(visible, "old-status") {
+		t.Fatalf("stale tail rows remain after CPR redraw: %q", visible)
+	}
+	if !strings.Contains(visible, "draft") || !strings.Contains(visible, "COMMITTED_SENTINEL") {
+		t.Fatalf("CPR redraw lost draft or committed output: %q", visible)
+	}
+	if got := model.CursorPosition(); got.Y != cursor.Y {
+		t.Fatalf("cursor row after tail shrink = %d, want %d", got.Y, cursor.Y)
 	}
 }
 

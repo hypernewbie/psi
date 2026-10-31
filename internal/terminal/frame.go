@@ -7,11 +7,14 @@ import (
 	"strings"
 )
 
-// Frame appends committed text and replaces only the bounded, owned tail.
+// Frame represents one inline main-screen update. Ordinary frames append source
+// and replace only the bounded active tail; FullRedraw replaces the retained document.
 // Content is sanitized before composition. Cursor coordinates are tail-relative.
 type Frame struct {
-	Append string
-	Tail   []string
+	Append       string
+	DocumentRows []string
+	FullRedraw   bool
+	Tail         []string
 	// TailCellWidth carries plain-text cell widths when Tail rows contain
 	// trusted presentation SGR. Content width must never count ANSI bytes.
 	TailCellWidth []int
@@ -21,13 +24,17 @@ type Frame struct {
 	HideCursor    bool
 	ShowCursor    bool
 	Height        int
+	Width         int
 }
 
 // Writer is owned by the application event loop. No other writer may move its cursor.
 type Writer struct {
 	Out                          io.Writer
 	prevTail                     []string
+	prevTailCellWidth            []int
 	prevCursorRow, prevCursorCol int
+	resizeCursorRow              int
+	resizeCursorKnown            bool
 	writes, frames, bytes        int
 	unchanged                    int
 	invalidTail                  bool
@@ -35,10 +42,16 @@ type Writer struct {
 
 func NewWriter(out io.Writer) *Writer { return &Writer{Out: out} }
 
-// InvalidateTail discards differential row assumptions after native resize or
-// reflow. Unlike Pi's whole-document resize path, only psi's owned tail is
-// redrawn; committed conversation is never cleared or replayed.
+// InvalidateTail discards differential row assumptions for the compatibility
+// path that redraws only an owned tail. Full-document reflow uses Frame.FullRedraw.
 func (w *Writer) InvalidateTail() { w.invalidTail = true }
+
+// SetResizeCursorPosition supplies a cursor position for the owned-tail
+// compatibility path. Coordinates are zero-based screen cells.
+func (w *Writer) SetResizeCursorPosition(row, _ int) {
+	w.resizeCursorRow = max(0, row)
+	w.resizeCursorKnown = true
+}
 
 func (w *Writer) Stats() (writes, frames, bytes, unchanged int) {
 	return w.writes, w.frames, w.bytes, w.unchanged
@@ -46,9 +59,15 @@ func (w *Writer) Stats() (writes, frames, bytes, unchanged int) {
 
 func (w *Writer) Emit(f Frame) error {
 	w.frames++
+	if f.FullRedraw {
+		return w.emitFullDocument(f)
+	}
 	if !w.invalidTail && f.Append == "" && equalRows(w.prevTail, f.Tail) && f.CursorRow == w.prevCursorRow && f.CursorCol == w.prevCursorCol && !f.HideCursor && !f.ShowCursor {
 		w.unchanged++
 		return nil
+	}
+	if w.invalidTail && w.resizeCursorKnown && f.Width > 0 && f.Height > 0 {
+		return w.emitResizedFrame(f)
 	}
 	var b bytes.Buffer
 	row, col := w.prevCursorRow, w.prevCursorCol
@@ -190,8 +209,200 @@ func (w *Writer) Emit(f Frame) error {
 	w.writes++
 	w.bytes += b.Len()
 	w.prevTail = append([]string(nil), f.Tail...)
+	w.prevTailCellWidth = append([]int(nil), f.TailCellWidth...)
 	w.prevCursorRow, w.prevCursorCol = f.CursorRow, f.CursorCol
 	return nil
+}
+
+func (w *Writer) emitFullDocument(f Frame) error {
+	width := max(1, f.Width)
+	w.invalidTail = true
+	write := func(s string) error {
+		if s == "" {
+			return nil
+		}
+		if err := WriteBounded(w.Out, []byte(s)); err != nil {
+			return err
+		}
+		w.bytes += len(s)
+		return nil
+	}
+	endSync := func() {
+		const end = "\x1b[?2026l"
+		if err := WriteBounded(w.Out, []byte(end)); err == nil {
+			w.bytes += len(end)
+		}
+	}
+	fail := func(err error) error {
+		endSync()
+		return err
+	}
+	if err := write("\x1b[?2026h"); err != nil {
+		return fail(err)
+	}
+	// Match Pi's main-screen rebuild: clear the viewport, home the cursor, then
+	// erase native scrollback before writing the retained document.
+	if err := write("\x1b[2J\x1b[H\x1b[3J"); err != nil {
+		return fail(err)
+	}
+	for _, line := range f.DocumentRows {
+		if err := write(line + "\r\n"); err != nil {
+			return fail(err)
+		}
+	}
+	tailRows := len(f.Tail)
+	if tailRows > 0 {
+		for i, line := range f.Tail {
+			if err := write(line); err != nil {
+				return fail(err)
+			}
+			if i+1 < tailRows {
+				if err := write("\r\n"); err != nil {
+					return fail(err)
+				}
+			}
+		}
+		cursorRow := min(tailRows-1, max(0, f.CursorRow))
+		if delta := tailRows - 1 - cursorRow; delta > 0 {
+			if err := write(fmt.Sprintf("\x1b[%dA", delta)); err != nil {
+				return fail(err)
+			}
+		}
+		if err := write("\r"); err != nil {
+			return fail(err)
+		}
+		if col := min(width-1, max(0, f.CursorCol)); col > 0 {
+			if err := write(fmt.Sprintf("\x1b[%dC", col)); err != nil {
+				return fail(err)
+			}
+		}
+	}
+	if f.HideCursor {
+		if err := write("\x1b[?25l"); err != nil {
+			return fail(err)
+		}
+	}
+	if f.ShowCursor {
+		if err := write("\x1b[?25h"); err != nil {
+			return fail(err)
+		}
+	}
+	if err := write("\x1b[?2026l"); err != nil {
+		return fail(err)
+	}
+	w.invalidTail = false
+	w.resizeCursorKnown = false
+	w.writes++
+	w.prevTail = append([]string(nil), f.Tail...)
+	w.prevTailCellWidth = append([]int(nil), f.TailCellWidth...)
+	w.prevCursorRow, w.prevCursorCol = f.CursorRow, f.CursorCol
+	return nil
+}
+
+func (w *Writer) emitResizedFrame(f Frame) error {
+	width, height := max(1, f.Width), max(1, f.Height)
+	oldVisualRows := visualRowsAfterResize(w.prevTail, w.prevTailCellWidth, width)
+	oldCursorOffset := visualCursorOffset(w.prevTail, w.prevTailCellWidth, w.prevCursorRow, w.prevCursorCol, width)
+	oldAnchor := max(0, w.resizeCursorRow-oldCursorOffset)
+	anchor := max(oldAnchor, w.resizeCursorRow-f.CursorRow)
+	anchor = min(height-1, anchor)
+
+	var b bytes.Buffer
+	cup := func(row, col int) {
+		fmt.Fprintf(&b, "\x1b[%d;%dH", row+1, col+1)
+	}
+
+	for logicalRow := 0; logicalRow < oldVisualRows; logicalRow++ {
+		screenRow := oldAnchor + logicalRow
+		if screenRow >= 0 && screenRow < height {
+			cup(screenRow, 0)
+			b.WriteString("\x1b[K")
+		}
+	}
+
+	if f.Append != "" {
+		appendRow := max(0, oldAnchor)
+		if appendRow >= height {
+			appendRow = height - 1
+		}
+		cup(appendRow, 0)
+		b.WriteString(f.Append)
+		anchor = min(height-1, appendRow+appendVisualRows(f.Append, width))
+		if !strings.HasSuffix(f.Append, "\n") {
+			anchor = max(appendRow, anchor-1)
+		}
+	}
+
+	rows := max(oldVisualRows, len(f.Tail))
+	for logicalRow := max(0, -anchor); logicalRow < rows; logicalRow++ {
+		screenRow := anchor + logicalRow
+		if screenRow < 0 || screenRow >= height {
+			continue
+		}
+		cup(screenRow, 0)
+		if logicalRow < len(f.Tail) {
+			b.WriteString(f.Tail[logicalRow])
+		}
+		b.WriteString("\x1b[K")
+	}
+
+	cursorRow := max(0, min(height-1, anchor+f.CursorRow))
+	cursorCol := max(0, min(width-1, f.CursorCol))
+	cup(cursorRow, cursorCol)
+	if f.HideCursor {
+		b.WriteString("\x1b[?25l")
+	}
+	if f.ShowCursor {
+		b.WriteString("\x1b[?25h")
+	}
+	if err := WriteBounded(w.Out, b.Bytes()); err != nil {
+		return err
+	}
+	w.invalidTail = false
+	w.resizeCursorKnown = false
+	w.writes++
+	w.bytes += b.Len()
+	w.prevTail = append([]string(nil), f.Tail...)
+	w.prevTailCellWidth = append([]int(nil), f.TailCellWidth...)
+	w.prevCursorRow, w.prevCursorCol = f.CursorRow, f.CursorCol
+	return nil
+}
+
+func visualRowsAfterResize(rows []string, widths []int, width int) int {
+	total := 0
+	for i, row := range rows {
+		cells := CellWidth(row)
+		if i < len(widths) {
+			cells = widths[i]
+		}
+		total += max(1, (cells+width-1)/width)
+	}
+	return total
+}
+
+func visualCursorOffset(rows []string, widths []int, cursorRow, cursorCol, width int) int {
+	offset := 0
+	for i := 0; i < min(cursorRow, len(rows)); i++ {
+		cells := CellWidth(rows[i])
+		if i < len(widths) && widths[i] > 0 {
+			cells = widths[i]
+		}
+		offset += max(1, (cells+width-1)/width)
+	}
+	return offset + max(0, cursorCol)/width
+}
+
+func appendVisualRows(text string, width int) int {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	parts := strings.Split(normalized, "\n")
+	rows := strings.Count(normalized, "\n")
+	for _, part := range parts {
+		cells := CellWidth(part)
+		if cells > 0 {
+			rows += (cells - 1) / width
+		}
+	}
+	return rows
 }
 
 func frameTailWidth(f Frame, row int) int {

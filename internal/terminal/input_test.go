@@ -9,6 +9,14 @@ import (
 	"psi/internal/testutil/leakcheck"
 )
 
+func TestInputDecoderSeparatesEscapeFromFollowingControlKey(t *testing.T) {
+	d := NewDecoder()
+	out := d.Feed([]byte("\x1b\x15"))
+	if len(out) != 2 || string(out[0].Key) != "\x1b" || string(out[1].Key) != "\x15" {
+		t.Fatalf("expected Escape then Ctrl+U, got %+v", out)
+	}
+}
+
 func TestInputDecoderTimeoutAndEscapes(t *testing.T) {
 	defer leakcheck.Verify(t)
 

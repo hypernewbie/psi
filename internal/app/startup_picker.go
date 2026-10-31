@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"psi/internal/session"
 	"psi/internal/terminal"
@@ -19,6 +20,49 @@ type terminalLifecycle struct {
 	console *terminal.Console
 	signals chan os.Signal
 }
+
+type resizeRedrawWait struct {
+	console *terminal.Console
+	timer   *time.Timer
+	timeout <-chan time.Time
+}
+
+func newResizeRedrawWait(console *terminal.Console) *resizeRedrawWait {
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	return &resizeRedrawWait{console: console, timer: timer}
+}
+
+func (r *resizeRedrawWait) Request() {
+	r.console.RequestFullRedraw()
+	if !r.timer.Stop() {
+		select {
+		case <-r.timer.C:
+		default:
+		}
+	}
+	r.timer.Reset(150 * time.Millisecond)
+	r.timeout = r.timer.C
+}
+
+func (r *resizeRedrawWait) Fallback() bool {
+	r.timeout = nil
+	return true
+}
+
+func (r *resizeRedrawWait) stopTimer() {
+	if !r.timer.Stop() {
+		select {
+		case <-r.timer.C:
+		default:
+		}
+	}
+	r.timeout = nil
+}
+
+func (r *resizeRedrawWait) Close() { r.stopTimer() }
 
 func (l *terminalLifecycle) Suspend() error {
 	if l == nil || l.tty == nil || l.console == nil {
@@ -70,17 +114,24 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 		lifecycle.redrawPicker(func(width int) []string { return picker.Rows(width, snapshot.NoColor, snapshot.Theme) })
 	}
 	console.Editor.Clear()
+	resizeWait := newResizeRedrawWait(console)
+	defer resizeWait.Close()
 	draw()
 	if err := console.Err(); err != nil {
 		return -1, true, err
 	}
 	defer func() {
+		resizeWait.Fallback()
 		console.ClearPickerRows()
 		console.Editor.Clear()
 		console.Draw()
 	}()
 	for {
 		select {
+		case <-resizeWait.timeout:
+			if resizeWait.Fallback() {
+				draw()
+			}
 		case input, ok := <-console.Inputs:
 			if !ok {
 				return -1, true, errors.New("terminal input closed during startup choice")
@@ -92,7 +143,7 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 				continue
 			}
 			if input.Resize {
-				draw()
+				resizeWait.Request()
 				continue
 			}
 			if input.Paste || input.PasteStart || input.PasteEnd {
@@ -120,6 +171,10 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 				return -1, true, err
 			}
 		case sig := <-lifecycle.signals:
+			if isResize(sig) {
+				resizeWait.Request()
+				continue
+			}
 			done, signalErr := handleBootstrapSignal(lifecycle, sig, draw)
 			if signalErr != nil {
 				return -1, true, signalErr
@@ -144,17 +199,24 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 		console.Draw()
 	}
 	console.Editor.Clear()
+	resizeWait := newResizeRedrawWait(console)
+	defer resizeWait.Close()
 	draw()
 	if err := console.Err(); err != nil {
 		return nil, true, err
 	}
 	defer func() {
+		resizeWait.Fallback()
 		console.ClearPickerRows()
 		console.Editor.Clear()
 		console.Draw()
 	}()
 	for {
 		select {
+		case <-resizeWait.timeout:
+			if resizeWait.Fallback() {
+				draw()
+			}
 		case input, ok := <-console.Inputs:
 			if !ok {
 				return nil, true, errors.New("terminal input closed during session selection")
@@ -166,7 +228,7 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 				continue
 			}
 			if input.Resize {
-				draw()
+				resizeWait.Request()
 				continue
 			}
 			if !input.Paste && !input.PasteStart && !input.PasteEnd {
@@ -216,6 +278,10 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 				return nil, true, err
 			}
 		case sig := <-lifecycle.signals:
+			if isResize(sig) {
+				resizeWait.Request()
+				continue
+			}
 			done, signalErr := handleBootstrapSignal(lifecycle, sig, draw)
 			if signalErr != nil {
 				return nil, true, signalErr

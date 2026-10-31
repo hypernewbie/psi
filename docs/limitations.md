@@ -73,10 +73,7 @@ Word navigation groups adjacent CJK ideographs without the ICU dictionary segmen
 Emoji and symbols no longer count as letters.
 Session decoders use exact field names, including nested usage fields.
 Prompts and bracketed pastes have a 256 KiB UTF-8 budget.
-The terminal writer changes only its owned tail and uses writes of at most 64 KiB.
-Stream output coalesces at scheduled frames and flushes at semantic boundaries.
-Assistant Markdown commits stable blocks and code lines to native scrollback.
-Only the unresolved block stays in the bounded active tail; live and replay output use the same formatter.
+The terminal writer uses differential writes for ordinary same-size updates and bounds writes to 64 KiB. Stream output coalesces at scheduled frames and flushes at semantic boundaries. It retains display source for the complete displayed conversation. A geometry change rebuilds the main-screen document from that source with Pi's `CSI 2J`, home, `CSI 3J` sequence. This can erase earlier shell scrollback and change selection or scroll position. The active Markdown parser remains bounded; the retained display ledger is separate from model context.
 
 Regression tests cover startup history, `/history all`, Backspace, nonduplicated submission, and `/new` recall reset.
 Actual-app PTY tests cover Ctrl+Z/SIGCONT and terminal-attribute restoration.

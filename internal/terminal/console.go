@@ -29,10 +29,9 @@ type Input struct {
 	Rejected bool
 }
 
-// Console owns only the active prompt. Completed lines remain native scrollback.
+// Console owns the inline terminal document and its active prompt. Completed
+// display blocks retain safe source so a resize can rebuild the main screen.
 // All drawing occurs in the application's event-loop goroutine through one Writer.
-// Reference: temp/pi-mono/packages/tui/src/tui-main-screen.ts (differential,
-// append-only scrollback, no screen/scrollback clear) and editor-component.ts.
 const maxActiveFragmentBytes = 64 * 1024
 
 type Console struct {
@@ -77,12 +76,19 @@ type Console struct {
 	picker              *pickerRegion
 	toolRow             string
 	steeringRows        []string
+	steeringTexts       []string
 	loopRows            []string
+	loopText            string
 	thinking            bool
 	dirty               bool
 	frameDepth          int
 	pendingAppend       strings.Builder
 	transcriptSpacing   transcriptSpacing
+	documentBlocks      []DocumentBlock
+	documentToolPending bool
+	fullDocumentRedraw  bool
+	streamDocumentIndex int
+	streamDocumentLive  bool
 	lastDraw            time.Time
 	// Completion sources (no exec/scan/provider).
 	Commands               []string
@@ -178,14 +184,79 @@ func (c *Console) emit(f Frame) error {
 // Write routes transcript, command, and status output through the same owner as
 // the editor. RawOutput performs newline conversion before this boundary.
 func (c *Console) Write(p []byte) (int, error) {
-	if err := c.emitComposed(string(p)); err != nil {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	text := string(p)
+	block := DocumentBlock{Kind: DocumentRaw, Text: text}
+	if strings.Trim(text, "\r\n") == "" && strings.ContainsAny(text, "\r\n") {
+		block = DocumentBlock{Kind: DocumentGap}
+	}
+	if err := c.emitDocumentBlock(block, text); err != nil {
 		return 0, err
 	}
 	return len(p), nil
 }
 
-// StreamWrite keeps the final incomplete assistant line in the owned tail.
-// Complete lines move to native scrollback, while the editor/footer stay live.
+func (c *Console) emitDocumentBlock(block DocumentBlock, text string) error {
+	start, wasToolPending := len(c.documentBlocks), c.documentToolPending
+	prefix := c.recordDocumentBlock(block)
+	if err := c.emitComposed(prefix + text); err != nil {
+		c.documentBlocks = c.documentBlocks[:start]
+		c.documentToolPending = wasToolPending
+		return err
+	}
+	return nil
+}
+
+// AppendTranscriptBlock adds one semantic display occurrence and emits its
+// current layout. Resize rebuilds use the retained source and latest geometry.
+func (c *Console) AppendTranscriptBlock(block DocumentBlock) error {
+	rows := FormatDocumentBlock(block, c.currentWidth(), c.presentation)
+	return c.emitDocumentBlock(block, rowsAppend(rows))
+}
+
+// FinishTranscriptGroup records the blank separator after a compact tool batch.
+func (c *Console) FinishTranscriptGroup() error {
+	return c.AppendTranscriptBlock(DocumentBlock{Kind: DocumentGap})
+}
+
+func (c *Console) recordDocumentBlock(block DocumentBlock) string {
+	prefix := ""
+	if block.Kind != DocumentTool && block.Kind != DocumentGap && c.documentToolPending {
+		c.documentBlocks = append(c.documentBlocks, DocumentBlock{Kind: DocumentGap})
+		c.documentToolPending = false
+		prefix = "\r\n"
+	}
+	c.documentBlocks = append(c.documentBlocks, block)
+	if block.Kind == DocumentTool {
+		c.documentToolPending = true
+	} else if block.Kind == DocumentGap {
+		c.documentToolPending = false
+	}
+	return prefix
+}
+
+func rowsAppend(rows []string) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	return strings.Join(rows, "\r\n") + "\r\n"
+}
+
+// AppendDocumentBlock is the structured counterpart to Write for callers that
+// own a RawOutput wrapper.
+func (w RawOutput) AppendDocumentBlock(block DocumentBlock) error {
+	if sink, ok := w.W.(interface{ AppendTranscriptBlock(DocumentBlock) error }); ok {
+		return sink.AppendTranscriptBlock(block)
+	}
+	rows := FormatDocumentBlock(block, w.StatusWidth(), PresentationSnapshot{NoColor: true})
+	_, err := io.WriteString(w, rowsAppend(rows))
+	return err
+}
+
+// StreamWrite keeps the final incomplete assistant line in the active tail.
+// Semantic Markdown streams retain their complete display source for resize reflow.
 func (c *Console) StreamWrite(p []byte) (int, error) {
 	text := Sanitize(string(p))
 	text = strings.ReplaceAll(text, "\r\n", "\n")
@@ -425,7 +496,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		return "", false, true, busy
 	}
 	if input.Resize {
-		c.Draw()
+		c.RequestFullRedraw()
 		return "", false, false, false
 	}
 	if len(input.Reply) > 0 {
@@ -698,6 +769,11 @@ func (c *Console) inputLimit() {
 	c.Draw()
 }
 
+func (c *Console) RequestFullRedraw() {
+	c.fullDocumentRedraw = true
+	c.dirty = true
+}
+
 // drawIfChanged draws only when visible state changes.
 func (c *Console) drawIfChanged(force bool) {
 	draft, pos := c.Editor.Text(), c.Editor.Pos()
@@ -760,33 +836,39 @@ func (c *Console) Flush() {
 // Pi's pendingMessages container: one leading blank row, then one dim row per
 // queued message. An empty slice clears the block.
 func (c *Console) SetSteeringRows(texts []string) {
-	if len(texts) == 0 {
+	c.steeringTexts = append(c.steeringTexts[:0], texts...)
+	c.Draw()
+}
+
+func (c *Console) renderSteeringRows(width int) {
+	if len(c.steeringTexts) == 0 {
 		c.steeringRows = nil
-		c.Draw()
 		return
 	}
-	width := max(1, c.currentWidth()-1)
-	rows := make([]string, 0, len(texts)+1)
+	width = max(1, width-1)
+	rows := make([]string, 0, len(c.steeringTexts)+1)
 	rows = append(rows, "")
-	for _, text := range texts {
+	for _, text := range c.steeringTexts {
 		row := StyledRow{Spans: []StyledSpan{{Text: "Steering: ", Token: TokenMuted}, {Text: TruncateToWidth(Sanitize(text), max(1, width-CellWidth("Steering: "))), Token: TokenMuted}}}
 		rows = append(rows, FormatStyledRow(row, width, c.presentation.NoColor, c.presentation.Theme))
 	}
 	c.steeringRows = rows
-	c.Draw()
 }
 
 // SetLoopStatus shows the active loop state above the editor.
 func (c *Console) SetLoopStatus(text string) {
-	if strings.TrimSpace(text) == "" {
+	c.loopText = text
+	c.Draw()
+}
+
+func (c *Console) renderLoopRows(width int) {
+	if strings.TrimSpace(c.loopText) == "" {
 		c.loopRows = nil
-		c.Draw()
 		return
 	}
-	width := max(1, c.currentWidth()-1)
-	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth(Sanitize(text), width), Token: TokenAccent}}}
+	width = max(1, width-1)
+	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth(Sanitize(c.loopText), width), Token: TokenAccent}}}
 	c.loopRows = []string{FormatStyledRow(row, width, c.presentation.NoColor, c.presentation.Theme)}
-	c.Draw()
 }
 
 // Status is the activity shown in Pi's editor top border. It remains owned by
@@ -846,9 +928,19 @@ func (c *Console) MarkdownWrite(p []byte) (int, error) {
 		c.markdownStream.SetTheme(c.presentation.Theme)
 		c.markdownStream.SetDisplay(c.presentation.Display)
 	}
+	appendTextPrefix := ""
+	if !c.streamDocumentLive {
+		streamPrefix := c.recordDocumentBlock(DocumentBlock{Kind: DocumentAssistant, Streaming: true})
+		c.streamDocumentIndex = len(c.documentBlocks) - 1
+		c.streamDocumentLive = true
+		if streamPrefix != "" {
+			appendTextPrefix = streamPrefix
+		}
+	}
 	stable, _ := c.markdownStream.Feed(string(p))
+	c.documentBlocks[c.streamDocumentIndex].Text = c.markdownStream.CommittedSource()
 	c.streamRows = c.markdownStream.DisplayTail()
-	appendText := markdownRowsAppend(stable)
+	appendText := appendTextPrefix + markdownRowsAppend(stable)
 	if err := c.emitComposed(appendText); err != nil {
 		return 0, err
 	}
@@ -860,10 +952,19 @@ func (c *Console) CloseMarkdown() error {
 	if c.markdownStream == nil {
 		return c.err
 	}
-	hadOutput := c.markdownStream.HasOutput()
 	rows := c.markdownStream.Finish()
+	hadOutput := c.markdownStream.HasOutput()
+	if c.streamDocumentLive {
+		block := &c.documentBlocks[c.streamDocumentIndex]
+		block.Text = c.markdownStream.TakeFinishedSource()
+		block.Streaming = false
+		if !hadOutput {
+			c.documentBlocks = append(c.documentBlocks[:c.streamDocumentIndex], c.documentBlocks[c.streamDocumentIndex+1:]...)
+		}
+	}
 	clear(c.streamRows)
 	c.streamRows = nil
+	c.streamDocumentLive = false
 	for _, row := range rows {
 		hadOutput = hadOutput || strings.TrimSpace(Sanitize(row)) != ""
 	}
@@ -901,11 +1002,24 @@ func (c *Console) EndFrame() error {
 }
 
 func (c *Console) emitComposed(appendText string) error {
+	width, height := c.size()
+	if c.lastW > 0 && (c.lastW != width || c.lastH != height) {
+		c.fullDocumentRedraw = true
+	}
 	if c.deferDraw {
-		if appendText == "" {
+		if !c.fullDocumentRedraw && appendText == "" {
 			return c.err
 		}
 		c.lastDraw = time.Now()
+		if c.fullDocumentRedraw {
+			err := c.emit(Frame{FullRedraw: true, DocumentRows: FormatDocument(c.documentBlocks, width, c.presentation),
+				Width: width, Height: height})
+			if err == nil {
+				c.fullDocumentRedraw = false
+				c.lastW, c.lastH = width, height
+			}
+			return err
+		}
 		return c.emit(Frame{Append: appendText})
 	}
 	if c.frameDepth > 0 {
@@ -916,16 +1030,19 @@ func (c *Console) emitComposed(appendText string) error {
 		return c.err
 	}
 	c.lastDraw = time.Now()
-	width, height := c.size()
-	var view EditorView
+	c.renderSteeringRows(width)
+	c.renderLoopRows(width)
+	if c.lastW != width && len(c.completionItems) > 0 {
+		c.renderCompletionRows()
+	}
+	if c.markdownStream != nil && c.markdownWidth != width {
+		c.markdownWidth = width
+		c.markdownStream.SetWidth(width)
+		c.streamRows = c.markdownStream.DisplayTail()
+	}
 	var fragmentRows []string
 	hasStream := false
 	if c.markdownStream != nil && len(c.streamRows) > 0 {
-		if c.markdownWidth != width {
-			c.markdownWidth = width
-			c.markdownStream.SetWidth(width)
-			c.streamRows = c.markdownStream.DisplayTail()
-		}
 		fragmentRows = c.streamRows
 		hasStream = true
 	}
@@ -933,21 +1050,17 @@ func (c *Console) emitComposed(appendText string) error {
 		fragmentRows = append(append([]string(nil), c.loopRows...), fragmentRows...)
 	}
 	if len(c.steeringRows) > 0 {
-		// Pi mounts pendingMessages above the status row and editor.
 		fragmentRows = append(append([]string(nil), c.steeringRows...), fragmentRows...)
 	}
 	if c.thinking {
 		fragmentRows = append(append([]string(nil), fragmentRows...), FormatThinkingRow(width, c.presentation.NoColor, c.presentation.Display, c.presentation.Theme))
 	}
 	if c.toolRow != "" {
-		// Pi keeps the active tool row above the editor and below the
-		// assistant fragment.
 		fragmentRows = append(append([]string(nil), fragmentRows...), c.toolRow)
 	}
+	var view EditorView
 	switch {
 	case c.picker != nil:
-		// Pi replaces the editor component with the selector. The picker owns
-		// the region, so the editor block is not rendered underneath it.
 		view = ComposeConsoleViewPicker(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.picker.rows, c.picker.mode)
 	default:
 		if !hasStream && len(c.streamFragment) > 0 && width > 3 {
@@ -956,18 +1069,28 @@ func (c *Console) emitComposed(appendText string) error {
 		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.completionRows)
 	}
 	hideCursor := c.activity != "" || (c.picker != nil && c.picker.mode == PickerChoice)
-	f := Frame{Append: appendText, Tail: view.Rows, TailCellWidth: view.CellWidth,
+	fullRedraw := c.fullDocumentRedraw
+	if fullRedraw {
+		appendText = ""
+	}
+	var documentRows []string
+	if fullRedraw {
+		documentRows = FormatDocument(c.documentBlocks, width, c.presentation)
+	}
+	f := Frame{Append: appendText, FullRedraw: fullRedraw,
+		DocumentRows: documentRows,
+		Tail:         view.Rows, TailCellWidth: view.CellWidth,
 		CursorRow: view.CursorRow, CursorCol: view.CursorCol,
 		ShowCursor: c.hidden && !hideCursor, HideCursor: hideCursor,
-		Height: height}
-	if c.lastW > 0 && (c.lastW != width || c.lastH != height) {
-		c.writer.InvalidateTail()
-	}
+		Height: height, Width: width}
 	err := c.emit(f)
+	if err == nil {
+		c.fullDocumentRedraw = false
+		c.lastW, c.lastH = width, height
+	}
 	c.hidden = hideCursor
 	c.visibleTail = view.Rows
 	c.lastDraft, c.lastCursor = c.Editor.Text(), c.Editor.Pos()
-	c.lastW, c.lastH = width, height
 	return err
 }
 

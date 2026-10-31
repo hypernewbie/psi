@@ -56,7 +56,7 @@ func FormatSettledStatus(name string, st ToolState, terminalWidth int) string {
 }
 
 // StatusWriter commits one settled line. A running state belongs to the owned
-// live tail, not to immutable scrollback.
+// live tail; settled summaries remain as structured display source for reflow.
 type StatusWriter struct {
 	w    io.Writer
 	last map[string]ToolState
@@ -77,6 +77,11 @@ func (s *StatusWriter) UpdateSummary(name, callID string, summary event.ToolSumm
 	}
 	s.last[key] = st
 	if st == ToolRunning {
+		return
+	}
+	block := DocumentBlock{Kind: DocumentTool, ToolName: name, ToolState: state, CallID: callID, Summary: summary}
+	if sink, ok := s.w.(interface{ AppendDocumentBlock(DocumentBlock) error }); ok {
+		_ = sink.AppendDocumentBlock(block)
 		return
 	}
 	width := 80

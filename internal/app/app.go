@@ -1226,9 +1226,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	out := terminal.RawOutput{W: console}
 	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
 	notice := func(kind terminal.NoticeKind, text string) {
-		for _, line := range terminal.FormatNotice(kind, text, console.StatusWidth(), noColorEnvironment(), r.theme) {
-			fmt.Fprintln(out, line)
-		}
+		_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentNotice, Text: text, NoticeKind: kind})
 	}
 	var themeChanges <-chan struct{}
 	var watch *themeWatch
@@ -1261,7 +1259,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var visibleRunText bool
 	var toolSpacing toolBatchSpacing
 	finishTools := func() {
-		toolSpacing.finish(func(line string) bool { _, err := fmt.Fprintln(out, line); return err == nil })
+		if toolSpacing.pending {
+			toolSpacing.pending = false
+			_ = console.FinishTranscriptGroup()
+		}
 	}
 	var submittedDraft string
 	var submittedCursor int
@@ -1361,51 +1362,55 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.Skills = append(console.Skills, skill.Name)
 		console.CompletionDescriptions["/skill:"+skill.Name] = skill.Description
 	}
-	emitReplay := func(text string) bool {
-		for _, batch := range terminal.Batches(text+"\n", 64*1024) {
-		inputScan:
-			for i := 0; i < 64; i++ {
-				select {
-				case input, ok := <-inputs:
-					if !ok || input.Err != nil {
-						exiting = true
-						return false
-					}
-					if len(input.Reply) > 0 {
-						r.handleTerminalReply(console, input.Reply)
-						continue
-					}
-					if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
-						return false
-					}
-					if len(pendingInputs) >= 8192 || pendingInputBytes+len(input.Key) > 256*1024 {
-						pendingInputs = append(pendingInputs, input)
-						pendingInputBytes += len(input.Key)
-						return false
-					}
+	emitReplayBlock := func(block terminal.DocumentBlock) bool {
+		for checked := 0; checked < 64; checked++ {
+			select {
+			case input, ok := <-inputs:
+				if !ok || input.Err != nil {
+					exiting = true
+					return false
+				}
+				if len(input.Reply) > 0 {
+					r.handleTerminalReply(console, input.Reply)
+					continue
+				}
+				if input.Resize {
+					console.RequestFullRedraw()
+					continue
+				}
+				if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
+					return false
+				}
+				if len(pendingInputs) >= 8192 || pendingInputBytes+len(input.Key) > 256*1024 {
 					pendingInputs = append(pendingInputs, input)
 					pendingInputBytes += len(input.Key)
-				case sig := <-signals:
-					switch {
-					case sig == syscall.SIGINT:
-						return false
-					case isShutdown(sig):
-						exiting = true
-						return false
-					case isSuspend(sig):
-						suspendPending = true
-						return false
-					}
-				default:
-					break inputScan
+					return false
 				}
-			}
-			fmt.Fprint(out, batch)
-			if console.Err() != nil {
-				return false
+				pendingInputs = append(pendingInputs, input)
+				pendingInputBytes += len(input.Key)
+			case sig := <-signals:
+				if isResize(sig) {
+					console.RequestFullRedraw()
+					continue
+				}
+				switch {
+				case sig == syscall.SIGINT:
+					return false
+				case isShutdown(sig):
+					exiting = true
+					return false
+				case isSuspend(sig):
+					suspendPending = true
+					return false
+				}
+			default:
+				if err := console.AppendTranscriptBlock(block); err != nil {
+					return false
+				}
+				return true
 			}
 		}
-		return true
+		return console.AppendTranscriptBlock(block) == nil
 	}
 	stoppedReplay := func() {
 		if !exiting {
@@ -1417,7 +1422,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// Startup activation: display current view before the next editable prompt (P2-035).
 	// Same projector + replay engine as /resume (P2-036).
 	if act, err := PrepareActivation(r.store); err == nil {
-		if !replayActivationAtWidthWithDisplayAndColor(emitReplay, act, true, "", console.StatusWidth(), presentationDisplay(r.settings), noColorEnvironment(), r.theme) {
+		if !replayActivationDocument(emitReplayBlock, act, true, "") {
 			stoppedReplay()
 		}
 		console.Editor.SetHistory(act.Recall)
@@ -1466,9 +1471,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.SetSteeringRows(pending)
 			}
 			console.EnsureTranscriptGap()
-			for _, line := range terminal.FormatUserMessageWithDisplay(ev.Text, console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
-				fmt.Fprintln(out, line)
-			}
+			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: ev.Text})
 		case event.RunEnd:
 			console.SetThinking(false)
 			runOutcome = ev.Outcome
@@ -1541,9 +1544,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		if strings.TrimSpace(display) != "" {
 			console.EnsureTranscriptGap()
-			for _, line := range terminal.FormatUserMessageWithDisplay(display, console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
-				fmt.Fprintln(out, line)
-			}
+			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: display})
 		}
 		runOutcome, visibleRunText = "", false
 		ctx, stop := context.WithCancel(context.Background())
@@ -1644,6 +1645,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 		initialMessages = initialMessages[1:]
 		start(message, message, "", "", "", false)
 	}
+	resizeTimer := time.NewTimer(time.Hour)
+	if !resizeTimer.Stop() {
+		<-resizeTimer.C
+	}
+	defer resizeTimer.Stop()
+	var resizeTimeout <-chan time.Time
+	requestResizeDraw := func() {
+		console.RequestFullRedraw()
+		if !resizeTimer.Stop() {
+			select {
+			case <-resizeTimer.C:
+			default:
+			}
+		}
+		resizeTimer.Reset(150 * time.Millisecond)
+		resizeTimeout = resizeTimer.C
+	}
 	for {
 		if exiting && !busy {
 			return console.Err()
@@ -1678,6 +1696,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			frameTick = frameTimer.C
 		}
 		select {
+		case <-resizeTimeout:
+			resizeTimeout = nil
+			r.draw(console)
 		case <-themeChanges:
 			if err := r.reloadTheme(); err != nil {
 				if err.Error() != lastThemeWatchError {
@@ -1707,7 +1728,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.timerFrames += afterFrames - beforeFrames
 		case sig := <-signals:
 			if isResize(sig) {
-				r.draw(console)
+				requestResizeDraw()
 				continue
 			}
 			if isSuspend(sig) {
@@ -1877,7 +1898,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if input.Resize {
-				r.draw(console)
+				requestResizeDraw()
 				continue
 			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
@@ -1960,7 +1981,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						print("resumed " + r.store.Header().ID)
 						r.generation++
-						if !replayActivationAtWidthWithDisplayAndColor(emitReplay, act, false, oldID, console.StatusWidth(), presentationDisplay(r.settings), noColorEnvironment(), r.theme) {
+						if !replayActivationDocument(emitReplayBlock, act, false, oldID) {
 							stoppedReplay()
 						}
 						console.Editor.SetHistory(act.Recall)
@@ -2100,7 +2121,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if cmd.Name == "history" {
-					complete, err := renderStoreHistoryAtWidthWithDisplayAndColor(r.store, cmd.Arg, emitReplay, console.StatusWidth(), presentationDisplay(r.settings), noColorEnvironment(), r.theme)
+					complete, err := renderHistoryDocument(r.store, cmd.Arg, emitReplayBlock)
 					if err != nil {
 						print("error: " + err.Error())
 					} else if !complete {
@@ -2368,6 +2389,17 @@ func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
 func (r *runtime) handleHistoryCommand(arg string, out io.Writer) (bool, error) {
 	// /history [N|all]: append last N user spans or full active-branch history (P2-041).
 	// Display-only: no model request, no file change.
+	if structured, ok := out.(interface {
+		AppendDocumentBlock(terminal.DocumentBlock) error
+	}); ok {
+		_, err := renderHistoryDocument(r.store, arg, func(block terminal.DocumentBlock) bool {
+			return structured.AppendDocumentBlock(block) == nil
+		})
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
 	_, err := renderStoreHistory(r.store, arg, func(s string) bool { fmt.Fprintln(out, s); return true }, r.theme)
 	if err != nil {
 		return false, err

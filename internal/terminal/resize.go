@@ -2,8 +2,27 @@ package terminal
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 )
+
+func ParseCursorPositionReport(data []byte) (row, col int, ok bool) {
+	text := string(data)
+	if !strings.HasPrefix(text, "\x1b[") || !strings.HasSuffix(text, "R") {
+		return 0, 0, false
+	}
+	parts := strings.Split(text[2:len(text)-1], ";")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	row, errRow := strconv.Atoi(parts[0])
+	col, errCol := strconv.Atoi(parts[1])
+	if errRow != nil || errCol != nil || row < 1 || col < 1 {
+		return 0, 0, false
+	}
+	return row, col, true
+}
 
 // watchConsoleResize supplies the resize notifications that Pi receives from
 // stdout's resize event. Windows has no SIGWINCH, and a pending console ReadFile

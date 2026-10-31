@@ -46,6 +46,9 @@ type MarkdownStream struct {
 	seenOutput     bool
 	tailRows       []string
 	tailCells      int
+	source         strings.Builder
+	finishedSource string
+	finishedOutput bool
 }
 
 func NewMarkdownStream(width int, noColor bool) *MarkdownStream {
@@ -55,8 +58,11 @@ func NewMarkdownStream(width int, noColor bool) *MarkdownStream {
 // Feed returns stable rows and a borrowed active-tail slice. The tail remains
 // valid only until the next call that changes this stream.
 func (m *MarkdownStream) Feed(chunk string) (stable, tail []string) {
+	m.finishedSource = ""
+	m.finishedOutput = false
 	generation := m.blockGeneration
 	text := m.normalizeNewlines(m.filter.Feed(chunk))
+	m.source.WriteString(text)
 	m.consume([]byte(text), &stable)
 	m.updateTail(generation)
 	return stable, m.tailRows
@@ -68,6 +74,7 @@ func (m *MarkdownStream) Finish() []string {
 	var rows []string
 	if m.pendingCR {
 		m.pendingCR = false
+		m.source.WriteByte('\n')
 		m.consume([]byte{'\n'}, &rows)
 	}
 	m.filter.pendingUTF8 = ""
@@ -92,6 +99,9 @@ func (m *MarkdownStream) Finish() []string {
 	if m.fallback && m.fenceByte != 0 {
 		m.commitFenceEnd(&rows)
 	}
+	m.finishedSource = m.source.String()
+	m.source.Reset()
+	m.finishedOutput = m.seenOutput
 	m.reset()
 	return rows
 }
@@ -125,7 +135,27 @@ func (m *MarkdownStream) BufferedBytes() int {
 	return len(m.pending) + len(m.fallbackLine) + len(m.fallbackLineStart)
 }
 
-func (m *MarkdownStream) HasOutput() bool { return m.seenOutput }
+func (m *MarkdownStream) HasOutput() bool { return m.seenOutput || m.finishedOutput }
+
+// Source returns the sanitized, newline-normalized source received so far.
+func (m *MarkdownStream) Source() string { return m.source.String() }
+
+// TakeFinishedSource returns source settled by the last Finish call.
+func (m *MarkdownStream) TakeFinishedSource() string {
+	source := m.finishedSource
+	m.finishedSource = ""
+	return source
+}
+
+// CommittedSource returns the prefix already moved out of the active tail.
+func (m *MarkdownStream) CommittedSource() string {
+	source := m.source.String()
+	active := string(m.previewSource())
+	if active != "" && strings.HasSuffix(source, active) {
+		return source[:len(source)-len(active)]
+	}
+	return source
+}
 
 func (m *MarkdownStream) Tail() []string { return append([]string(nil), m.tailRows...) }
 

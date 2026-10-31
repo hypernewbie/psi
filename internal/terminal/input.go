@@ -230,6 +230,9 @@ func splitUnit(p []byte) ([]byte, int) {
 		if len(p) < 2 {
 			return nil, 0
 		}
+		if p[1] < 0x20 || p[1] == 0x7f {
+			return p[:1], 1
+		}
 		if p[1] == ']' {
 			for size := 2; size < len(p); size++ {
 				if p[size] == 0x07 {

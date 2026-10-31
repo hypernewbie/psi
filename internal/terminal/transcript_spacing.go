@@ -37,6 +37,7 @@ func (c *Console) EnsureTranscriptGap() error {
 		spacing.observe(c.pendingAppend.String())
 	}
 	if gap := spacing.gap(); gap != "" {
+		c.recordDocumentBlock(DocumentBlock{Kind: DocumentGap})
 		return c.emitComposed(gap)
 	}
 	return c.err
