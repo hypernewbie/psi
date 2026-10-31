@@ -134,3 +134,17 @@ func (l Layout) VisualRunePos(buf []rune, row, col int) int {
 	}
 	return pos
 }
+
+// VisibleWidth returns the visual cell width of a string.
+func VisibleWidth(s string) int {
+	return CellWidth(s)
+}
+
+// RowWidth returns the visual width (maxVisualCol) of a visual row.
+func (l Layout) RowWidth(row int) int {
+	if row < 0 || row >= len(l.Rows) {
+		return 0
+	}
+	return VisibleWidth(l.Rows[row])
+}
+

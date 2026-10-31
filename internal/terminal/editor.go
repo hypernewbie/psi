@@ -295,6 +295,32 @@ func (e *Editor) End() {
 func (e *Editor) DocStart() { e.pos, e.prefCol = 0, -1 }
 func (e *Editor) DocEnd()   { e.pos, e.prefCol = len(e.buf), -1 }
 
+// computeVerticalMoveColumn computes the target visual column for vertical cursor movement,
+// implementing pi's 7-case sticky column decision table.
+func computeVerticalMoveColumn(prefCol *int, currentVisualCol, sourceMaxVisualCol, targetMaxVisualCol int) int {
+	hasPreferred := *prefCol >= 0
+	cursorInMiddle := currentVisualCol < sourceMaxVisualCol
+	targetTooShort := targetMaxVisualCol < currentVisualCol
+
+	if !hasPreferred || cursorInMiddle {
+		if targetTooShort {
+			*prefCol = currentVisualCol
+			return targetMaxVisualCol
+		}
+		*prefCol = -1
+		return currentVisualCol
+	}
+
+	targetCantFitPreferred := targetMaxVisualCol < *prefCol
+	if targetTooShort || targetCantFitPreferred {
+		return targetMaxVisualCol
+	}
+
+	result := *prefCol
+	*prefCol = -1
+	return result
+}
+
 // MoveUp moves through visual draft rows; returns false when already on first row.
 // It preserves the preferred visual column (pi sticky column).
 func (e *Editor) MoveUp(width int) bool {
@@ -303,12 +329,10 @@ func (e *Editor) MoveUp(width int) bool {
 		return false
 	}
 	target := layout.CursorRow - 1
-	col := layout.CursorCol
-	if e.prefCol >= 0 {
-		col = e.prefCol
-	} else {
-		e.prefCol = col
-	}
+	currentVisualCol := layout.CursorCol
+	sourceMaxVisualCol := layout.RowWidth(layout.CursorRow)
+	targetMaxVisualCol := layout.RowWidth(target)
+	col := computeVerticalMoveColumn(&e.prefCol, currentVisualCol, sourceMaxVisualCol, targetMaxVisualCol)
 	e.pos = layout.VisualRunePos(e.buf, target, col)
 	return true
 }
@@ -320,12 +344,10 @@ func (e *Editor) MoveDown(width int) bool {
 		return false
 	}
 	target := layout.CursorRow + 1
-	col := layout.CursorCol
-	if e.prefCol >= 0 {
-		col = e.prefCol
-	} else {
-		e.prefCol = col
-	}
+	currentVisualCol := layout.CursorCol
+	sourceMaxVisualCol := layout.RowWidth(layout.CursorRow)
+	targetMaxVisualCol := layout.RowWidth(target)
+	col := computeVerticalMoveColumn(&e.prefCol, currentVisualCol, sourceMaxVisualCol, targetMaxVisualCol)
 	e.pos = layout.VisualRunePos(e.buf, target, col)
 	return true
 }
