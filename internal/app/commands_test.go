@@ -255,22 +255,47 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 		t.Errorf("/model mismatch: provider=%q model=%q", r.ov.Provider, r.ov.Model)
 	}
 
-	// /model: model with thinking level suffix (provider/model:high)
-	quit, err = r.command(&terminal.Command{Name: "model", Arg: "anthropic/m:high"}, &out)
+	// Set thinking level to low to verify /model leaves thinking level unchanged
+	quit, err = r.command(&terminal.Command{Name: "thinking", Arg: "low"}, &out)
 	if err != nil || quit {
-		t.Errorf("/model anthropic/m:high failed: quit=%v, err=%v", quit, err)
+		t.Fatalf("/thinking low failed: %v", err)
 	}
-	if r.ov.Provider != "anthropic" || r.ov.Model != "m" || r.ov.Thinking != "high" {
-		t.Errorf("/model with thinking suffix mismatch: provider=%q model=%q thinking=%q", r.ov.Provider, r.ov.Model, r.ov.Thinking)
+	if r.ov.Thinking != "low" {
+		t.Fatalf("expected thinking low, got %q", r.ov.Thinking)
 	}
+	entriesBeforeModel := len(r.store.Entries())
 
-	// /model: switching provider to openai-codex
+	// /model: exact model match switching provider to openai-codex leaves thinking level unchanged
 	quit, err = r.command(&terminal.Command{Name: "model", Arg: "openai-codex/gpt-5.6-luna"}, &out)
 	if err != nil || quit {
 		t.Errorf("/model openai-codex/gpt-5.6-luna failed: quit=%v, err=%v", quit, err)
 	}
 	if r.ov.Provider != "openai-codex" || r.ov.Model != "gpt-5.6-luna" {
 		t.Errorf("provider switch mismatch: provider=%q model=%q", r.ov.Provider, r.ov.Model)
+	}
+	if r.ov.Thinking != "low" {
+		t.Errorf("/model exact match must leave thinking level unchanged: got %q, want %q", r.ov.Thinking, "low")
+	}
+	if len(r.store.Entries()) != entriesBeforeModel+1 {
+		t.Errorf("/model appended unexpected number of entries: got %d, want %d", len(r.store.Entries()), entriesBeforeModel+1)
+	}
+	if lastEntry := r.store.Entries()[len(r.store.Entries())-1]; lastEntry.Kind != "model_change" {
+		t.Errorf("/model should only append model_change, got %q", lastEntry.Kind)
+	}
+
+	// /model: model reference with suffix like claude-3-7-sonnet:high is not stripped
+	_, err = r.command(&terminal.Command{Name: "model", Arg: "anthropic/claude-3-7-sonnet:high"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "claude-3-7-sonnet:high") {
+		t.Errorf("/model with thinking suffix should not be stripped: got err %v", err)
+	}
+	if r.ov.Provider != "openai-codex" || r.ov.Model != "gpt-5.6-luna" || r.ov.Thinking != "low" {
+		t.Errorf("failed model reference lookup mutated state: provider=%q model=%q thinking=%q", r.ov.Provider, r.ov.Model, r.ov.Thinking)
+	}
+
+	// /model: bare model reference with suffix like claude-3-7-sonnet:high is not stripped
+	_, err = r.command(&terminal.Command{Name: "model", Arg: "claude-3-7-sonnet:high"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "claude-3-7-sonnet:high") {
+		t.Errorf("/model bare model with thinking suffix should not be stripped: got err %v", err)
 	}
 
 	// /model: unknown provider error

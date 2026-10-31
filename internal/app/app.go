@@ -2401,16 +2401,6 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 	} else {
 		return false, fmt.Errorf("use /model [provider/]model")
 	}
-	if i := strings.LastIndexByte(next.Model, ':'); i >= 0 {
-		level := next.Model[i+1:]
-		for _, valid := range config.ValidThinkingLevels {
-			if level == valid {
-				next.Model = next.Model[:i]
-				next.Thinking = level
-				break
-			}
-		}
-	}
 	if strings.TrimSpace(next.Model) == "" {
 		return false, fmt.Errorf("use /model [provider/]model")
 	}
@@ -2424,14 +2414,6 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
-	}
-	if candidate.ov.Thinking != r.ov.Thinking {
-		if _, err := r.store.AppendThinkingLevelChange(candidate.ov.Thinking); err != nil {
-			if candidate.prov != nil {
-				candidate.prov.CloseIdle()
-			}
-			return false, err
-		}
 	}
 	r.installConfiguration(&candidate)
 	return false, nil
