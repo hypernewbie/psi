@@ -3,6 +3,8 @@ package terminal
 import (
 	"strings"
 	"testing"
+
+	"github.com/rivo/uniseg"
 )
 
 // P2-022: Tab completes slash-commands + skill names, no exec/scan/provider.
@@ -948,4 +950,129 @@ func TestEditorBudgetAndRecallRejection(t *testing.T) {
 	if e.Text() != "hello /model world" {
 		t.Fatalf("replace token: text=%q", e.Text())
 	}
+}
+
+// referenceUnisegSnapByte is the reference implementation without the fast path.
+func referenceUnisegSnapByte(s string, off int) int {
+	if off <= 0 {
+		return 0
+	}
+	if off >= len(s) {
+		return len(s)
+	}
+	gr := uniseg.NewGraphemes(s)
+	for gr.Next() {
+		start, _ := gr.Positions()
+		if start >= off {
+			return start
+		}
+	}
+	return len(s)
+}
+
+// referenceUnisegPrevBoundary is the reference implementation without the fast path.
+func referenceUnisegPrevBoundary(s string, boff int) int {
+	if boff <= 0 {
+		return 0
+	}
+	gr := uniseg.NewGraphemes(s)
+	prev := 0
+	for gr.Next() {
+		start, _ := gr.Positions()
+		if start >= boff {
+			return prev
+		}
+		prev = start
+	}
+	return prev
+}
+
+// referenceUnisegNextBoundary is the reference implementation without the fast path.
+func referenceUnisegNextBoundary(s string, boff int) int {
+	if boff >= len(s) {
+		return len(s)
+	}
+	gr := uniseg.NewGraphemes(s)
+	for gr.Next() {
+		start, _ := gr.Positions()
+		if start > boff {
+			return start
+		}
+	}
+	return len(s)
+}
+
+func TestGraphemeBoundariesASCIIFastPath(t *testing.T) {
+	testCases := []string{
+		"",
+		"a",
+		"ab",
+		"abc",
+		"hello world",
+		"The quick brown fox jumps over the lazy dog 1234567890!@#$%^&*()",
+		"\r\n",
+		"a\r\nb",
+		"\r\n\r\n",
+		"foo\r\nbar\r\nbaz",
+		"e\u0301x",                 // combining accent
+		"hello \U0001F30D world", // emoji
+		"あいうえお",                  // CJK
+		"a\tb\nc\rd",
+		"👨‍👩‍👧‍👦",   // family emoji (ZWJ sequence)
+		"🏳️‍🌈",    // flag
+		"🇺🇸🇩🇪", // regional indicator flags
+		"prefix \U0001F469\U0001F3FD\u200D\U0001F91D\u200D\U0001F468\U0001F3FB suffix",
+		"mix_123_αβγ_456",
+		"\r",
+		"\n",
+		"\n\r",
+	}
+
+	for _, s := range testCases {
+		for off := -3; off <= len(s)+4; off++ {
+			wantSnap := referenceUnisegSnapByte(s, off)
+			gotSnap := snapByte(s, off)
+			if gotSnap != wantSnap {
+				t.Fatalf("snapByte(%q, %d): got %d, want %d", s, off, gotSnap, wantSnap)
+			}
+
+			wantPrev := referenceUnisegPrevBoundary(s, off)
+			gotPrev := prevGraphemeBoundary(s, off)
+			if gotPrev != wantPrev {
+				t.Fatalf("prevGraphemeBoundary(%q, %d): got %d, want %d", s, off, gotPrev, wantPrev)
+			}
+
+			wantNext := referenceUnisegNextBoundary(s, off)
+			gotNext := nextGraphemeBoundary(s, off)
+			if gotNext != wantNext {
+				t.Fatalf("nextGraphemeBoundary(%q, %d): got %d, want %d", s, off, gotNext, wantNext)
+			}
+		}
+	}
+}
+
+func BenchmarkGraphemeBoundariesASCIIFastPath(b *testing.B) {
+	s := strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789 ", 100) // 3700 bytes of ASCII
+	mid := len(s) / 2
+
+	b.Run("prevGraphemeBoundary", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = prevGraphemeBoundary(s, mid)
+		}
+	})
+
+	b.Run("nextGraphemeBoundary", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = nextGraphemeBoundary(s, mid)
+		}
+	})
+
+	b.Run("snapByte", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = snapByte(s, mid)
+		}
+	})
 }

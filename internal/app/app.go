@@ -1896,11 +1896,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 					case "\x1b", string([]byte{3}):
 						closeSelector(true)
 						continue
-					case "\x1b[A":
+					case "\x1b[A", "\x1bOA":
 						r.selector.Move(-1)
 						r.draw(console)
 						continue
-					case "\x1b[B":
+					case "\x1b[B", "\x1bOB":
 						r.selector.Move(1)
 						r.draw(console)
 						continue

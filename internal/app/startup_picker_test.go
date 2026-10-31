@@ -381,6 +381,25 @@ func TestStartupPickerSessionNavigationAndPaging(t *testing.T) {
 		}
 	})
 
+	t.Run("selection navigation down and up with application keypad sequences", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		selector := NewSelector(makeSessions(10), "")
+		// Down twice with \x1bOB, Up once with \x1bOA, Enter -> should select index 1 (session-01)
+		if _, err := inW.Write([]byte("\x1bOB\x1bOB\x1bOA\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+		if err != nil || cancelled || selected == nil {
+			t.Fatalf("runSessionPicker failed: cancelled=%v err=%v", cancelled, err)
+		}
+		if selected.ID != "session-01" {
+			t.Errorf("selected ID = %q, want session-01", selected.ID)
+		}
+	})
+
 	t.Run("paging with page down and page up prevpage", func(t *testing.T) {
 		console, inW, lifecycle, cleanup := testPickerConsole(t)
 		defer cleanup()
@@ -528,6 +547,24 @@ func TestStartupPickerChoiceNavigationAndSignals(t *testing.T) {
 		picker := makeChoicePicker(10, 0)
 		// Page down (\x1b[6~ moves +5), Page up (\x1b[5~ moves -5), Down (\x1b[B moves +1), Enter
 		if _, err := inW.Write([]byte("\x1b[6~\x1b[5~\x1b[B\r")); err != nil {
+			t.Fatal(err)
+		}
+
+		idx, cancelled, err := runChoicePicker(console, lifecycle, picker)
+		if err != nil || cancelled {
+			t.Fatalf("runChoicePicker failed: cancelled=%v err=%v", cancelled, err)
+		}
+		if idx != 1 {
+			t.Errorf("selected index = %d, want 1", idx)
+		}
+	})
+
+	t.Run("application keypad navigation down and up selects item", func(t *testing.T) {
+		console, inW, lifecycle, cleanup := testPickerConsole(t)
+		defer cleanup()
+
+		picker := makeChoicePicker(3, 0)
+		if _, err := inW.Write([]byte("\x1bOB\x1bOB\x1bOA\r")); err != nil {
 			t.Fatal(err)
 		}
 

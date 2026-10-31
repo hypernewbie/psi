@@ -101,10 +101,10 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 			switch string(input.Key) {
 			case "\x1b", string([]byte{3}), string([]byte{4}):
 				return -1, true, nil
-			case "\x1b[A":
+			case "\x1b[A", "\x1bOA":
 				picker.Move(-1)
 				draw()
-			case "\x1b[B":
+			case "\x1b[B", "\x1bOB":
 				picker.Move(1)
 				draw()
 			case "\x1b[5~":
@@ -173,11 +173,11 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 				switch string(input.Key) {
 				case "\x1b", string([]byte{3}):
 					return nil, true, nil
-				case "\x1b[A":
+				case "\x1b[A", "\x1bOA":
 					selector.Move(-1)
 					draw()
 					continue
-				case "\x1b[B":
+				case "\x1b[B", "\x1bOB":
 					selector.Move(1)
 					draw()
 					continue

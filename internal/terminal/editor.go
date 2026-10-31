@@ -64,6 +64,12 @@ func snapByte(s string, off int) int {
 	if off >= len(s) {
 		return len(s)
 	}
+	if s[off-1] < 0x80 && s[off] < 0x80 {
+		if s[off-1] == '\r' && s[off] == '\n' {
+			return off + 1
+		}
+		return off
+	}
 	gr := uniseg.NewGraphemes(s)
 	for gr.Next() {
 		start, _ := gr.Positions()
@@ -79,6 +85,17 @@ func prevGraphemeBoundary(s string, boff int) int {
 	if boff <= 0 {
 		return 0
 	}
+	if boff > len(s) {
+		boff = len(s)
+	}
+	if boff > 0 && s[boff-1] < 0x80 {
+		if s[boff-1] == '\n' && boff >= 2 && s[boff-2] == '\r' {
+			return boff - 2
+		}
+		if boff == 1 || s[boff-2] < 0x80 {
+			return boff - 1
+		}
+	}
 	gr := uniseg.NewGraphemes(s)
 	prev := 0
 	for gr.Next() {
@@ -93,8 +110,19 @@ func prevGraphemeBoundary(s string, boff int) int {
 
 // nextGraphemeBoundary returns the nearest byte offset of a grapheme boundary strictly after boff.
 func nextGraphemeBoundary(s string, boff int) int {
+	if boff < 0 {
+		return 0
+	}
 	if boff >= len(s) {
 		return len(s)
+	}
+	if s[boff] < 0x80 {
+		if s[boff] == '\r' && boff+1 < len(s) && s[boff+1] == '\n' {
+			return boff + 2
+		}
+		if boff+1 == len(s) || s[boff+1] < 0x80 {
+			return boff + 1
+		}
 	}
 	gr := uniseg.NewGraphemes(s)
 	for gr.Next() {

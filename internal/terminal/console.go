@@ -516,9 +516,9 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 	}
 	// Completion navigation precedes editor visual/history navigation.
 	s := string(input.Key)
-	if len(c.completionItems) > 0 && (s == "\x1b[A" || s == "\x1b[B") {
+	if len(c.completionItems) > 0 && (s == "\x1b[A" || s == "\x1bOA" || s == "\x1b[B" || s == "\x1bOB") {
 		delta := -1
-		if s == "\x1b[B" {
+		if s == "\x1b[B" || s == "\x1bOB" {
 			delta = 1
 		}
 		c.moveCompletion(delta)
@@ -527,7 +527,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 	}
 	// Up/Down with real width: visual rows first, history at outer rows (3.4).
 	w, _ := c.size()
-	if s == "\x1b[A" {
+	if s == "\x1b[A" || s == "\x1bOA" {
 		if c.Editor.MoveUp(w) {
 			c.drawIfChanged(false)
 		} else {
@@ -536,7 +536,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.drawIfChanged(false)
 		}
 		return "", false, false, false
-	} else if s == "\x1b[B" {
+	} else if s == "\x1b[B" || s == "\x1bOB" {
 		if c.Editor.MoveDown(w) {
 			c.drawIfChanged(false)
 		} else {
