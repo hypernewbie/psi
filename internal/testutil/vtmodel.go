@@ -16,6 +16,8 @@ type VTModel struct {
 	Rows          [][]rune
 	CursorRow     int
 	CursorCol     int
+	savedRow      int
+	savedCol      int
 	Scrollback    []string
 	EraseOps      []string
 	WriteCalls    int
@@ -209,6 +211,10 @@ func (m *VTModel) csi(params string, final byte) {
 	case 'H', 'f':
 		m.CursorRow = min(m.Height-1, param(0, 1)-1)
 		m.CursorCol = min(m.Width-1, param(1, 1)-1)
+	case 's':
+		m.savedRow, m.savedCol = m.CursorRow, m.CursorCol
+	case 'u':
+		m.CursorRow, m.CursorCol = min(m.Height-1, m.savedRow), min(m.Width-1, m.savedCol)
 	case 'K':
 		m.EraseOps = append(m.EraseOps, "EL"+params)
 		mode := param(0, 0)

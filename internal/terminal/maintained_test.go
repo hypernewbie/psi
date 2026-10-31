@@ -149,6 +149,24 @@ func TestMaintainedVTTallPickerShrinkRedrawsOwnedTail(t *testing.T) {
 	}
 }
 
+func TestMaintainedVTInvalidatedTailShrinkErasesOldTail(t *testing.T) {
+	model := vt.NewEmulator(40, 8)
+	defer model.Close()
+	model.WriteString("COMMITTED_SENTINEL\r\n")
+	writer := NewWriter(model)
+	if err := writer.Emit(Frame{Tail: []string{"row0", "row1", "row2", "row3", "row4"}}); err != nil {
+		t.Fatal(err)
+	}
+	writer.InvalidateTail()
+	if err := writer.Emit(Frame{Tail: []string{"new0", "new1"}}); err != nil {
+		t.Fatal(err)
+	}
+	visible := model.String()
+	if strings.Contains(visible, "row2") || strings.Contains(visible, "row3") || strings.Contains(visible, "row4") {
+		t.Fatalf("stale rows retained after tail shrink: %q", visible)
+	}
+}
+
 func TestMaintainedVTInvalidatedAppendErasesOnlyOldTailSuffixes(t *testing.T) {
 	model := vt.NewEmulator(40, 8)
 	defer model.Close()

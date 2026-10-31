@@ -28,3 +28,16 @@ func TestPlan4ResponsiveTailAcrossFixtureSizes(t *testing.T) {
 		}
 	}
 }
+
+func TestComposeViewHeightFallbackCursorTracking(t *testing.T) {
+	draft := []rune("my editable draft")
+	completions := []string{"comp1", "comp2", "comp3", "comp4"}
+	snapshot := PresentationSnapshot{NoColor: true}
+
+	// Short height with completions where len(rows) > height
+	viewShort := ComposeConsoleViewComponents(80, 5, draft, len(draft), snapshot, "", nil, completions)
+	shortDraftText := viewShort.Rows[viewShort.CursorRow]
+	if !strings.Contains(shortDraftText, "my editable draft") {
+		t.Fatalf("short view cursor not on draft (shifted to %d): %q (all rows: %q)", viewShort.CursorRow, shortDraftText, viewShort.Rows)
+	}
+}

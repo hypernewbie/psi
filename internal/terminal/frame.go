@@ -20,6 +20,7 @@ type Frame struct {
 	CursorVisible bool
 	HideCursor    bool
 	ShowCursor    bool
+	Height        int
 }
 
 // Writer is owned by the application event loop. No other writer may move its cursor.
@@ -66,12 +67,19 @@ func (w *Writer) Emit(f Frame) error {
 		row, col = r, c
 	}
 	old := w.prevTail
-	if w.invalidTail && len(old) > 0 {
+	invalidated := w.invalidTail
+	oldLen := len(old)
+	if invalidated && f.Height > 0 && oldLen > f.Height {
+		oldLen = f.Height
+	}
+	staleRows := oldLen
+	if invalidated {
+		if f.Height > 0 && row >= f.Height {
+			row = f.Height - 1
+		}
 		move(0, 0)
-		// Reallocate rows with CRLF. Differential CSI-down movement clamps at
-		// the bottom when the old tail is taller than the resized viewport.
-		// Each rewritten row erases only its own stale suffix.
 		old = nil
+		oldLen = 0
 	}
 	if f.Append != "" {
 		if len(old) > 0 {
@@ -104,13 +112,21 @@ func (w *Writer) Emit(f Frame) error {
 			b.WriteString(f.Append)
 		}
 		old = nil
+		oldLen = 0
 		row, col = 0, 0
 	}
-	for i := 0; i < max(len(old), len(f.Tail)); i++ {
-		if i < len(old) && i < len(f.Tail) && old[i] == f.Tail[i] {
+	maxRows := max(max(oldLen, staleRows), len(f.Tail))
+	if invalidated && f.Height > 0 && maxRows > f.Height {
+		maxRows = f.Height
+	}
+	for i := 0; i < maxRows; i++ {
+		if invalidated && i >= len(f.Tail) {
+			continue // Clear stale rows after restoring the new cursor position.
+		}
+		if !w.invalidTail && i < len(old) && i < len(f.Tail) && old[i] == f.Tail[i] {
 			continue
 		}
-		if i >= len(old) && i > 0 {
+		if i >= oldLen && i > 0 {
 			// CSI down clamps at the screen edge. CRLF allocates a new row
 			// and lets the terminal scroll naturally instead.
 			move(i-1, 0)
@@ -123,27 +139,39 @@ func (w *Writer) Emit(f Frame) error {
 			b.WriteString(f.Tail[i])
 			col = frameTailWidth(f, i)
 		}
-		if i < len(old) || w.invalidTail {
+		if i < oldLen || w.invalidTail {
 			b.WriteString("\x1b[K")
 		}
 	}
 	if len(f.Tail) > 0 {
+		targetCursorRow := f.CursorRow
+		if invalidated && f.Height > 0 && targetCursorRow >= f.Height {
+			targetCursorRow = f.Height - 1
+		}
 		// Always use the target column, not a signed column delta.
-		if !equalRows(old, f.Tail) {
+		if w.invalidTail || !equalRows(old, f.Tail) {
 			// Keep the initial prompt positioning explicit as well.
-			if row != f.CursorRow {
-				move(f.CursorRow, 0)
+			if row != targetCursorRow {
+				move(targetCursorRow, 0)
 			}
 			b.WriteByte('\r')
 			if f.CursorCol > 0 {
 				fmt.Fprintf(&b, "\x1b[%dC", f.CursorCol)
 			}
-			row, col = f.CursorRow, f.CursorCol
+			row, col = targetCursorRow, f.CursorCol
 		} else {
-			move(f.CursorRow, f.CursorCol)
+			move(targetCursorRow, f.CursorCol)
 		}
 	} else if f.Append == "" && len(old) > 0 {
 		move(0, 0)
+	}
+	if invalidated && staleRows > len(f.Tail) {
+		b.WriteString("\x1b[s")
+		for i := len(f.Tail); i < min(staleRows, maxRows); i++ {
+			move(i, 0)
+			b.WriteString("\x1b[K")
+		}
+		b.WriteString("\x1b[u")
 	}
 	if f.HideCursor {
 		b.WriteString("\x1b[?25l")

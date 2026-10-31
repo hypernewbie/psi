@@ -424,6 +424,10 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 	if input.Err != nil {
 		return "", false, true, busy
 	}
+	if input.Resize {
+		c.Draw()
+		return "", false, false, false
+	}
 	if len(input.Reply) > 0 {
 		return "", false, false, false
 	}
@@ -954,7 +958,8 @@ func (c *Console) emitComposed(appendText string) error {
 	hideCursor := c.activity != "" || (c.picker != nil && c.picker.mode == PickerChoice)
 	f := Frame{Append: appendText, Tail: view.Rows, TailCellWidth: view.CellWidth,
 		CursorRow: view.CursorRow, CursorCol: view.CursorCol,
-		ShowCursor: c.hidden && !hideCursor, HideCursor: hideCursor}
+		ShowCursor: c.hidden && !hideCursor, HideCursor: hideCursor,
+		Height: height}
 	if c.lastW > 0 && (c.lastW != width || c.lastH != height) {
 		c.writer.InvalidateTail()
 	}
