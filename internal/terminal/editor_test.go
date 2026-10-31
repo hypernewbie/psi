@@ -1014,13 +1014,13 @@ func TestGraphemeBoundariesASCIIFastPath(t *testing.T) {
 		"a\r\nb",
 		"\r\n\r\n",
 		"foo\r\nbar\r\nbaz",
-		"e\u0301x",                 // combining accent
+		"e\u0301x",               // combining accent
 		"hello \U0001F30D world", // emoji
 		"あいうえお",                  // CJK
 		"a\tb\nc\rd",
-		"👨‍👩‍👧‍👦",   // family emoji (ZWJ sequence)
+		"👨‍👩‍👧‍👦", // family emoji (ZWJ sequence)
 		"🏳️‍🌈",    // flag
-		"🇺🇸🇩🇪", // regional indicator flags
+		"🇺🇸🇩🇪",    // regional indicator flags
 		"prefix \U0001F469\U0001F3FD\u200D\U0001F91D\u200D\U0001F468\U0001F3FB suffix",
 		"mix_123_αβγ_456",
 		"\r",

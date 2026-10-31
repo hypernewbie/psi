@@ -147,4 +147,3 @@ func (l Layout) RowWidth(row int) int {
 	}
 	return VisibleWidth(l.Rows[row])
 }
-
