@@ -27,7 +27,11 @@ func (s *Sanitizer) feed(text string, foldCR bool) string {
 			s.pendingUTF8 = text
 			break
 		}
+		rawByte := text[0]
 		r, size := utf8.DecodeRuneInString(text)
+		if r == utf8.RuneError && size == 1 && rawByte >= 0x80 && rawByte <= 0x9f {
+			r = rune(rawByte)
+		}
 		text = text[size:]
 		switch s.state {
 		case 'e':
@@ -75,16 +79,10 @@ func (s *Sanitizer) feed(text string, foldCR bool) string {
 			continue
 		case 't':
 			switch r {
-			case '\\':
+			case '\\', 0x07, 0x9c, 0x18, 0x1a:
 				s.state = 0
 			case 27:
 				s.state = 't'
-			case '[':
-				s.state = 'c'
-			case ']':
-				s.state = 'o'
-			case 'P', 'X', '^', '_':
-				s.state = 's'
 			default:
 				s.state = 's'
 			}
@@ -108,7 +106,7 @@ func (s *Sanitizer) feed(text string, foldCR bool) string {
 			out.WriteByte(' ')
 			continue
 		}
-		if (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) {
+		if (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) || isInterlinearAnnotation(r) {
 			continue
 		}
 		if r == utf8.RuneError && size == 1 {
@@ -138,7 +136,7 @@ func requiresSanitization(text string) bool {
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(text[i:])
-		if (r == utf8.RuneError && size == 1) || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) {
+		if (r == utf8.RuneError && size == 1) || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) || isInterlinearAnnotation(r) {
 			return true
 		}
 		i += size
@@ -152,6 +150,10 @@ func isBidiControl(r rune) bool {
 		return true
 	}
 	return false
+}
+
+func isInterlinearAnnotation(r rune) bool {
+	return r >= 0xfff9 && r <= 0xfffb
 }
 
 func HasEscape(s string) bool { return Sanitize(s) != s }
@@ -180,7 +182,7 @@ func SanitizeStatusRow(s string) string {
 		case '\n', '\r', '\t':
 			b.WriteByte(' ')
 		default:
-			if r < 0x20 || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) {
+			if r < 0x20 || (r >= 0x7f && r <= 0x9f) || isBidiControl(r) || isInterlinearAnnotation(r) {
 				continue
 			}
 			b.WriteRune(r)

@@ -97,6 +97,9 @@ func verifySanitizeInvariant(t *testing.T, label, raw, sanitized string) {
 		if isBidiControl(r) {
 			t.Fatalf("%s: bidi control U+%04X leaked at index %d in %q (raw %q)", label, r, i, sanitized, raw)
 		}
+		if isInterlinearAnnotation(r) {
+			t.Fatalf("%s: interlinear annotation U+%04X leaked at index %d in %q (raw %q)", label, r, i, sanitized, raw)
+		}
 	}
 }
 
@@ -155,6 +158,19 @@ func TestSanitizeEscapeSequenceInjections(t *testing.T) {
 		{"triple ESC to APC", "\x1b\x1b\x1b_secret\x1b\\safe", "safe"},
 		{"CAN/SUB interrupt in OSC", "\x1b]52;evil\x18cancelled", "cancelled"},
 		{"CAN/SUB interrupt in CSI", "\x1b[12\x1acancelled", "cancelled"},
+
+		// OSC smuggling prevention
+		{"OSC smuggling hyperlink", "\x1b]8;;http://evil\x1b[mLEAKED\x07", ""},
+		{"OSC smuggling with visible text", "\x1b]8;;http://evil\x1b[mLEAKED\x07visible", "visible"},
+		{"OSC smuggling complex CSI", "\x1b]8;;http://evil\x1b[31;1mLEAKED\x07visible", "visible"},
+		{"OSC with ESC BEL terminator", "\x1b]0;title\x1b\x07visible", "visible"},
+		{"OSC with ESC C1 ST terminator", "\x1b]0;title\x1b\x9cvisible", "visible"},
+
+		// Interlinear annotation controls U+FFF9..U+FFFB
+		{"interlinear annotation anchor", "hello\ufff9world", "helloworld"},
+		{"interlinear annotation separator", "hello\ufffaworld", "helloworld"},
+		{"interlinear annotation terminator", "hello\ufffbworld", "helloworld"},
+		{"all interlinear annotations", "\ufff9ruby\ufffaannotation\ufffbtext", "rubyannotationtext"},
 	}
 
 	for _, tc := range tests {
@@ -187,6 +203,7 @@ func TestSanitizeInvariantFuzzing(t *testing.T) {
 		"\u009b", "\u009d", "\u009c", "\u0090", "\u009f",
 		"\x00", "\x07", "\x08", "\r", "\x0b", "\x0c", "\x7f",
 		"\u202a", "\u202e", "\u2066", "\u200e",
+		"\ufff9", "\ufffa", "\ufffb",
 		"\xff", "\xfe", "\xc0\xaf",
 	}
 
@@ -220,5 +237,161 @@ func TestSanitizeInvariantFuzzing(t *testing.T) {
 			chunkOut.WriteString(chunkSan.Feed(raw[i:end]))
 		}
 		verifySanitizeInvariant(t, "fuzz chunked", raw, chunkOut.String())
+	}
+}
+
+func TestOSCSmugglingPrevention(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "OSC 8 hyperlink with embedded CSI",
+			in:   "\x1b]8;;http://evil\x1b[mLEAKED\x07",
+			want: "",
+		},
+		{
+			name: "OSC 8 hyperlink with embedded CSI followed by text",
+			in:   "\x1b]8;;http://evil\x1b[mLEAKED\x07visible",
+			want: "visible",
+		},
+		{
+			name: "OSC 0 title with embedded CSI color",
+			in:   "\x1b]0;evil\x1b[31;1mINJECTED\x07safe",
+			want: "safe",
+		},
+		{
+			name: "OSC with ESC BEL terminator",
+			in:   "\x1b]0;title\x1b\x07visible",
+			want: "visible",
+		},
+		{
+			name: "OSC with ESC C1 ST terminator",
+			in:   "\x1b]0;title\x1b\x9cvisible",
+			want: "visible",
+		},
+		{
+			name: "OSC with standard ST",
+			in:   "\x1b]0;title\x1b\\visible",
+			want: "visible",
+		},
+		{
+			name: "OSC with C1 ST",
+			in:   "\x1b]0;title\u009cvisible",
+			want: "visible",
+		},
+		{
+			name: "OSC with BEL",
+			in:   "\x1b]0;title\x07visible",
+			want: "visible",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Sanitize(tc.in)
+			if got != tc.want {
+				t.Errorf("Sanitize(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			verifySanitizeInvariant(t, tc.name, tc.in, got)
+
+			// Also verify chunked feeding does not leak across any split boundary
+			for splitAt := 1; splitAt < len(tc.in); splitAt++ {
+				var s Sanitizer
+				chunked := s.Feed(tc.in[:splitAt]) + s.Feed(tc.in[splitAt:])
+				if chunked != tc.want {
+					t.Errorf("Sanitizer split at %d (%q + %q) = %q, want %q",
+						splitAt, tc.in[:splitAt], tc.in[splitAt:], chunked, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestInterlinearAnnotationStripping(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"anchor U+FFF9", "hello\ufff9world", "helloworld"},
+		{"separator U+FFFA", "hello\ufffaworld", "helloworld"},
+		{"terminator U+FFFB", "hello\ufffbworld", "helloworld"},
+		{"all annotation controls", "\ufff9base\ufffaannotation\ufffb", "baseannotation"},
+		{"status row annotation controls", "status:\ufff9info\ufffaextra\ufffb", "status:infoextra"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Sanitize(tc.in)
+			if got != tc.want {
+				t.Errorf("Sanitize(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			verifySanitizeInvariant(t, tc.name, tc.in, got)
+
+			rowGot := SanitizeStatusRow(tc.in)
+			verifyStatusRowInvariant(t, tc.name+" statusRow", tc.in, rowGot)
+		})
+	}
+
+	// Status row newline folding with interlinear annotations
+	statusGot := SanitizeStatusRow("status:\ufff9info\ufffaextra\ufffb\nline")
+	statusWant := "status:infoextra line"
+	if statusGot != statusWant {
+		t.Errorf("SanitizeStatusRow() = %q, want %q", statusGot, statusWant)
+	}
+}
+
+func TestPiCompatibilityInputs(t *testing.T) {
+	knownCases := []struct {
+		in   string
+		want string
+	}{
+		{"plain", "plain"},
+		{"a\x1b[31mred\x1b[0mz", "aredz"},
+		{"a\x1b]8;;https://example.com\x07link\x1b]8;;\x07z", "alinkz"},
+		{"a\x1b]unterminated", "a"},
+		{"a\x1b]funterminated", "a"},
+		{"a\x1bPabc\x1b\\z", "az"},
+		{"a\x1b^abc\x07z", "az"},
+		{"a\x1b_abc\x9cz", "az"},
+		{"a\x90abc\x9cz", "az"},
+		{"a\x9dabc\x9cz", "az"},
+		{"a\x9b31mred", "ared"},
+		{"a\x1b(0x", "ax"},
+		{"a\x1b*0x", "ax"},
+		{"a\x1b+c", "a"},
+		{"a\x1b/0x", "ax"},
+		{"a\x1bcok", "aok"},
+		{"a\x1b\\ok", "aok"},
+	}
+	for _, tc := range knownCases {
+		got := Sanitize(tc.in)
+		if got != tc.want {
+			t.Errorf("Sanitize(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		verifySanitizeInvariant(t, "pi-known", tc.in, got)
+	}
+
+	// Combinatorial inputs matching pi's getCompatibilityInputs()
+	chars := []string{
+		"a", "f", "0", "1", ";", ":", "[", "]", "(", ")",
+		"#", "?", "m", "P", "_", "\\", "\x07", "\x1b",
+		"\x9b", "\x9c", "\x90", "\x9d",
+	}
+
+	var generated []string
+	for _, char := range chars {
+		generated = append(generated, "x\x1b"+char+"y")
+		generated = append(generated, "x\x9b"+char+"y")
+		for index := 0; index < len(chars); index += 3 {
+			generated = append(generated, "x\x1b"+char+chars[index]+"y")
+		}
+	}
+
+	for _, input := range generated {
+		sanitized := Sanitize(input)
+		verifySanitizeInvariant(t, "pi-compat", input, sanitized)
+		statusRow := SanitizeStatusRow(input)
+		verifyStatusRowInvariant(t, "pi-compat statusRow", input, statusRow)
 	}
 }
