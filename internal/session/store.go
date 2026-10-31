@@ -814,16 +814,7 @@ func userText(u *UserMessage) string {
 
 // FindMostRecent returns the most recently modified session file matching cwd ("" = any).
 func FindMostRecent(sessionDir, cwd string) (string, error) {
-	infos, err := Discover(sessionDir)
-	if err != nil {
-		return "", err
-	}
-	for _, info := range infos {
-		if cwd == "" || info.Cwd == cwd {
-			return info.Path, nil
-		}
-	}
-	return "", nil
+	return findRecentFast(sessionDir, cwd)
 }
 
 func newSessionID() string {
