@@ -1468,3 +1468,208 @@ func TestParallelBatch_ToolPanicDoesNotWedgeBatch(t *testing.T) {
 		t.Errorf("r2 result should be success, got error: %+v", results["r2"])
 	}
 }
+
+// TestParallelBatch_PreflightCompletesBeforeAnyWorkerBody asserts that for a batch
+// with multiple tool calls, every ToolStart event and Prepare call completes before
+// the first worker body executes.
+func TestParallelBatch_PreflightCompletesBeforeAnyWorkerBody(t *testing.T) {
+	defer leakcheck.Verify(t)
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	writeFileFor(t, ws, "f1.txt", "content1")
+	writeFileFor(t, ws, "f2.txt", "content2")
+
+	var (
+		mu                  sync.Mutex
+		preflightStarts     []string
+		preflightPrepares   []string
+		firstWorkerStarts   []string
+		firstWorkerPrepares []string
+		workerEnteredCount  int
+	)
+
+	onPrepareHook = func(inv tools.Invocation) {
+		mu.Lock()
+		defer mu.Unlock()
+		preflightPrepares = append(preflightPrepares, inv.ID)
+	}
+	defer func() { onPrepareHook = nil }()
+
+	gate := make(chan struct{})
+	recordWorkerEntry := func() {
+		mu.Lock()
+		if workerEnteredCount == 0 {
+			firstWorkerStarts = append([]string(nil), preflightStarts...)
+			firstWorkerPrepares = append([]string(nil), preflightPrepares...)
+		}
+		workerEnteredCount++
+		mu.Unlock()
+		<-gate
+	}
+
+	reg.Read.AfterOpen = func(path string) {
+		recordWorkerEntry()
+	}
+	reg.Write.WriteFile = func(path string, data []byte, perm os.FileMode) error {
+		recordWorkerEntry()
+		return os.WriteFile(path, data, perm)
+	}
+
+	batchCalls := []provider.Block{
+		readCall("r1", "f1.txt"),
+		readCall("r2", "f2.txt"),
+		writeCall("w1", "f3.txt", "content3"),
+	}
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(batchCalls...),
+		{Text: "done", StopReason: "stop"},
+	}}
+
+	loop := New(store, reg, fake, func(e event.Event) {
+		if e.Type == event.ToolStart {
+			mu.Lock()
+			preflightStarts = append(preflightStarts, e.ToolCallID)
+			mu.Unlock()
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.Submit(context.Background(), "go", Config{Model: modelMeta(), Tools: toolDefs()})
+	}()
+
+	// Wait until at least one worker has entered its body
+	for {
+		mu.Lock()
+		c := workerEnteredCount
+		mu.Unlock()
+		if c > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Release workers
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	wantCalls := []string{"r1", "r2", "w1"}
+	if len(firstWorkerStarts) != len(wantCalls) {
+		t.Fatalf("at first worker entry, starts count = %d, want %d (%v)", len(firstWorkerStarts), len(wantCalls), firstWorkerStarts)
+	}
+	for i, want := range wantCalls {
+		if firstWorkerStarts[i] != want {
+			t.Errorf("firstWorkerStarts[%d] = %q, want %q", i, firstWorkerStarts[i], want)
+		}
+	}
+
+	// Builtin calls r1, r2, w1 all call Prepare
+	if len(firstWorkerPrepares) != len(wantCalls) {
+		t.Fatalf("at first worker entry, prepares count = %d, want %d (%v)", len(firstWorkerPrepares), len(wantCalls), firstWorkerPrepares)
+	}
+	for i, want := range wantCalls {
+		if firstWorkerPrepares[i] != want {
+			t.Errorf("firstWorkerPrepares[%d] = %q, want %q", i, firstWorkerPrepares[i], want)
+		}
+	}
+}
+
+// TestParallelBatch_PanicRecoveryFormatting asserts that panic recovery formats
+// error and string panic values directly without custom prefixes.
+func TestParallelBatch_PanicRecoveryFormatting(t *testing.T) {
+	defer leakcheck.Verify(t)
+	ws := t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws)
+	writeFileFor(t, ws, "err.txt", "err")
+	writeFileFor(t, ws, "str.txt", "str")
+	writeFileFor(t, ws, "ok.txt", "ok")
+
+	reg.Read.AfterOpen = func(path string) {
+		if strings.Contains(path, "err.txt") {
+			panic(errors.New("builtin error message"))
+		}
+		if strings.Contains(path, "str.txt") {
+			panic("builtin string message")
+		}
+	}
+
+	batchCalls := []provider.Block{
+		readCall("r1", "err.txt"),
+		readCall("r2", "str.txt"),
+		{Type: "toolCall", ID: "i1", Name: "err_internal", Arguments: map[string]any{}},
+		{Type: "toolCall", ID: "i2", Name: "str_internal", Arguments: map[string]any{}},
+		readCall("r3", "ok.txt"),
+	}
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		batchResponse(batchCalls...),
+		{Text: "done after panics", StopReason: "stop"},
+	}}
+
+	cfg := Config{
+		Model: modelMeta(), Tools: toolDefs(),
+		InternalTools: map[string]InternalToolHandler{
+			"err_internal": func(context.Context, tools.Invocation) tools.Result {
+				panic(errors.New("internal error message"))
+			},
+			"str_internal": func(context.Context, tools.Invocation) tools.Result {
+				panic("internal string message")
+			},
+		},
+	}
+
+	loop := New(store, reg, fake, func(event.Event) {})
+	if err := loop.Submit(context.Background(), "go", cfg); err != nil {
+		t.Fatalf("submit failed: %v", err)
+	}
+
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(map[string]*session.ToolResultMessage)
+	for _, m := range proj.Flat {
+		if m.Role == "toolResult" && m.ToolResult != nil {
+			results[m.ToolResult.ToolCallID] = m.ToolResult
+		}
+	}
+
+	if len(results) != 5 {
+		t.Fatalf("expected 5 tool results, got %d", len(results))
+	}
+
+	// Builtin panic formatting
+	if res := results["r1"]; !res.IsError || res.Content[0].Text.Text != "builtin error message" {
+		t.Errorf("r1 (builtin error panic) = %+v, want 'builtin error message'", res)
+	}
+	if res := results["r2"]; !res.IsError || res.Content[0].Text.Text != "builtin string message" {
+		t.Errorf("r2 (builtin string panic) = %+v, want 'builtin string message'", res)
+	}
+
+	// Internal panic formatting
+	if res := results["i1"]; !res.IsError || res.Content[0].Text.Text != "internal error message" {
+		t.Errorf("i1 (internal error panic) = %+v, want 'internal error message'", res)
+	}
+	if res := results["i2"]; !res.IsError || res.Content[0].Text.Text != "internal string message" {
+		t.Errorf("i2 (internal string panic) = %+v, want 'internal string message'", res)
+	}
+
+	// Successful call
+	if res := results["r3"]; res.IsError {
+		t.Errorf("r3 should have succeeded, got: %+v", res)
+	}
+}

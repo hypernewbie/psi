@@ -45,6 +45,7 @@ type batchPlan struct {
 	invocation tools.Invocation
 	kind       batchKind
 	internal   InternalToolHandler
+	runner     func(context.Context) tools.Result
 	summary    event.ToolSummary
 	// notStarted marks a call the batch never admitted (psiOutcome
 	// "not_started"); started calls keep truthful results.
@@ -67,6 +68,9 @@ type batch struct {
 	outstanding int
 }
 
+// onPrepareHook is an optional test hook called during preflight for builtin tools.
+var onPrepareHook func(tools.Invocation)
+
 // runBatch preflights calls in order, executes them concurrently, and settles
 // results in order. The next model request waits behind this settlement
 // barrier; the caller only proceeds when runBatch returns.
@@ -87,8 +91,8 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 
 	b := &batch{loop: l, cfg: cfg, completions: make(chan batchCompletion, len(calls))}
 	b.plans = make([]*batchPlan, len(calls))
-	// Internal control calls chain in call order among themselves.
-	prevInternal := closedChain()
+
+	// Preflight phase: populate plans, prepare builtin tools, and emit ToolStart in call order.
 	for i, tc := range calls {
 		plan := &batchPlan{
 			invocation: tools.Invocation{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments},
@@ -107,6 +111,19 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 		b.plans[i] = plan
 		// Preflight emits every start in call order, like Pi.
 		l.sink(event.Event{Type: event.ToolStart, ToolName: tc.Name, ToolCallID: tc.ID, State: "running", Summary: plan.summary})
+		if plan.kind == batchBuiltin {
+			if onPrepareHook != nil {
+				onPrepareHook(plan.invocation)
+			}
+			plan.runner = b.loop.reg.Prepare(plan.invocation)
+		}
+	}
+
+	// Dispatch phase: only after all calls in the batch have completed preflight
+	// and emitted ToolStart, launch worker goroutines.
+	// Internal control calls chain in call order among themselves.
+	prevInternal := closedChain()
+	for i, plan := range b.plans {
 		switch plan.kind {
 		case batchInternal:
 			chain := make(chan struct{})
@@ -114,8 +131,7 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 			prevInternal = chain
 			b.outstanding++
 		case batchBuiltin:
-			runner := b.loop.reg.Prepare(plan.invocation)
-			go b.runBuiltinCall(batchCtx, plan, runner, i)
+			go b.runBuiltinCall(batchCtx, plan, plan.runner, i)
 			b.outstanding++
 		}
 	}
@@ -141,10 +157,14 @@ func closedChain() chan struct{} {
 func (b *batch) runBuiltinCall(ctx context.Context, plan *batchPlan, runner func(context.Context) tools.Result, index int) {
 	defer func() {
 		if r := recover(); r != nil {
+			msg := fmt.Sprint(r)
+			if err, ok := r.(error); ok {
+				msg = err.Error()
+			}
 			b.completions <- batchCompletion{
 				index:   index,
 				started: true,
-				result:  tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("tool panicked: %v", r)}}},
+				result:  tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: msg}}},
 			}
 		}
 	}()
@@ -165,10 +185,14 @@ func (b *batch) runInternalCall(ctx context.Context, plan *batchPlan, wait, done
 	defer close(done)
 	defer func() {
 		if r := recover(); r != nil {
+			msg := fmt.Sprint(r)
+			if err, ok := r.(error); ok {
+				msg = err.Error()
+			}
 			b.completions <- batchCompletion{
 				index:   index,
 				started: true,
-				result:  tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("internal tool panicked: %v", r)}}},
+				result:  tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: msg}}},
 			}
 		}
 	}()
