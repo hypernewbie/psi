@@ -274,6 +274,23 @@ func (s *Store) ActivePath() ([]*Entry, error) {
 	return s.loadEntriesLocked(path)
 }
 
+// ActiveCustomEntries loads only custom entries of the given type on the active branch.
+func (s *Store) ActiveCustomEntries(customType string) ([]*Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := BuildPath(s.entries, s.leafID)
+	if err != nil {
+		return nil, err
+	}
+	var selected []*Entry
+	for _, entry := range path {
+		if entry.Kind == "custom" && entry.Custom != nil && entry.Custom.CustomType == customType {
+			selected = append(selected, entry)
+		}
+	}
+	return s.loadEntriesLocked(selected)
+}
+
 // Projection builds the provenance-preserving context.
 func (s *Store) Projection() (*Projection, error) {
 	s.mu.Lock()

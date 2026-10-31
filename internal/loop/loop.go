@@ -211,7 +211,7 @@ func (c *Controller) reconstructLocked() error {
 	if c.store == nil {
 		return nil
 	}
-	path, err := c.store.ActivePath()
+	path, err := c.store.ActiveCustomEntries(StateEntryType)
 	if err != nil {
 		return err
 	}

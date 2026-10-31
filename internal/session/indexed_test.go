@@ -239,3 +239,47 @@ func TestIndexedDurabilityFailuresDoNotAdvanceLogicalState(t *testing.T) {
 		}
 	}
 }
+
+func TestActiveCustomEntriesLoadsOnlyMatchingActiveBranch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	piFixture(t, path)
+	s, err := OpenFile(path, "/tmp/ws", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.AppendCustomEntry("psi.loop.state", map[string]int{"step": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AppendCustomEntry("other", map[string]int{"step": 99}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AppendCustomEntry("psi.loop.state", map[string]int{"step": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenFile(path, "/tmp/ws", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loaded []string
+	s.LoadHook = func(meta RecordMeta) { loaded = append(loaded, meta.ID) }
+	got, err := s.ActiveCustomEntries("psi.loop.state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID() != first || got[1].ID() != second || !reflect.DeepEqual(loaded, []string{first, second}) {
+		t.Fatalf("entries=%v loaded=%v", got, loaded)
+	}
+	if string(got[1].Custom.Data) != `{"step":2}` {
+		t.Fatalf("data=%s", got[1].Custom.Data)
+	}
+	if err := s.Branch(first); err != nil {
+		t.Fatal(err)
+	}
+	loaded = nil
+	got, err = s.ActiveCustomEntries("psi.loop.state")
+	if err != nil || len(got) != 1 || got[0].ID() != first || !reflect.DeepEqual(loaded, []string{first}) {
+		t.Fatalf("branched entries=%v loaded=%v err=%v", got, loaded, err)
+	}
+}
