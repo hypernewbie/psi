@@ -127,10 +127,19 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	}
 	out.Reset()
 
-	// /clone: empty session (no entries yet)
-	quit, err = r.command(&terminal.Command{Name: "clone"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "Nothing to clone yet") {
-		t.Errorf("/clone on empty session failed: quit=%v, err=%v, out=%q", quit, err, out.String())
+	// /clone: empty session produces "Nothing to clone yet" without accessing disk
+	sessionDir := filepath.Dir(r.store.File())
+	if err := os.Chmod(sessionDir, 0000); err == nil {
+		quit, err = r.command(&terminal.Command{Name: "clone"}, &out)
+		_ = os.Chmod(sessionDir, 0700)
+		if err != nil || quit || !strings.Contains(out.String(), "Nothing to clone yet") {
+			t.Errorf("/clone on empty session failed without disk access: quit=%v, err=%v, out=%q", quit, err, out.String())
+		}
+	} else {
+		quit, err = r.command(&terminal.Command{Name: "clone"}, &out)
+		if err != nil || quit || !strings.Contains(out.String(), "Nothing to clone yet") {
+			t.Errorf("/clone on empty session failed: quit=%v, err=%v, out=%q", quit, err, out.String())
+		}
 	}
 	out.Reset()
 
@@ -143,7 +152,6 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	}
 
 	// /clone: file stat error
-	sessionDir := filepath.Dir(r.store.File())
 	if err := os.Chmod(sessionDir, 0000); err == nil {
 		out.Reset()
 		_, statErr := r.command(&terminal.Command{Name: "clone"}, &out)
@@ -678,4 +686,42 @@ func TestCLIParsingFlags(t *testing.T) {
 			t.Errorf("Parse(@file) expected error, got %v", err)
 		}
 	})
+}
+
+func TestCloneCommandPreconditions(t *testing.T) {
+	t.Cleanup(func() {
+		leakcheck.Verify(t)
+	})
+	r := testRuntime(t)
+	var out bytes.Buffer
+
+	// Empty session produces "Nothing to clone yet" without accessing disk
+	sessionDir := filepath.Dir(r.store.File())
+	if err := os.Chmod(sessionDir, 0000); err != nil {
+		t.Skipf("chmod 0000 not supported: %v", err)
+	}
+	quit, err := r.command(&terminal.Command{Name: "clone"}, &out)
+	_ = os.Chmod(sessionDir, 0700)
+	if err != nil || quit || !strings.Contains(out.String(), "Nothing to clone yet") {
+		t.Fatalf("/clone on empty session should return 'Nothing to clone yet' without accessing disk: quit=%v, err=%v, out=%q", quit, err, out.String())
+	}
+	out.Reset()
+
+	// Append a message to make session non-empty
+	if _, err := r.store.AppendMessage(session.AgentMessage{
+		Role: "user",
+		User: &session.UserMessage{Role: "user", Content: "clonable content"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-empty session with inaccessible file propagates stat error
+	if err := os.Chmod(sessionDir, 0000); err != nil {
+		t.Fatal(err)
+	}
+	_, statErr := r.command(&terminal.Command{Name: "clone"}, &out)
+	_ = os.Chmod(sessionDir, 0700)
+	if statErr == nil {
+		t.Fatalf("expected stat error on inaccessible file, got nil")
+	}
 }

@@ -2349,7 +2349,7 @@ func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
 	}
 	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
 	// Pi's /clone forks at the current leaf into a new session file.
-	if r.store.File() == "" {
+	if r.store.File() == "" || (len(r.store.Entries()) == 0 && r.store.EntryCount() == 0) {
 		print("Nothing to clone yet")
 		return false, nil
 	}
@@ -2358,10 +2358,6 @@ func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
 		return false, nil
 	} else if err != nil {
 		return false, err
-	}
-	if len(r.store.Entries()) == 0 {
-		print("Nothing to clone yet")
-		return false, nil
 	}
 	if err := r.cloneSession(print); err != nil {
 		return false, err
