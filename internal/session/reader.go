@@ -28,25 +28,18 @@ func ReadFileEntries(path string) (*SessionHeader, []*Entry, [][]byte, error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if !st.Mode().IsRegular() || st.Size() > 256*1024*1024 {
-		return nil, nil, nil, fmt.Errorf("session must be a regular file no larger than 256 MiB: %s", path)
+	if !st.Mode().IsRegular() {
+		return nil, nil, nil, fmt.Errorf("session must be a regular file: %s", path)
 	}
 	return DecodeEntries(f, path)
 }
 
-// readRecord enforces the bound while reading, not after an unbounded allocation.
+// readRecord reads one JSONL record without imposing an application-level
+// record-size limit. The caller already owns the file and the record must be
+// materialized for JSON decoding, so its size is naturally bounded by the
+// available address space.
 func readRecord(br *bufio.Reader) ([]byte, error) {
-	var record []byte
-	for {
-		part, err := br.ReadSlice('\n')
-		if len(record)+len(part) > MaxRecordBytes+2 {
-			return nil, fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)
-		}
-		record = append(record, part...)
-		if err != bufio.ErrBufferFull {
-			return record, err
-		}
-	}
+	return br.ReadBytes('\n')
 }
 
 func DecodeEntries(r io.Reader, path string) (*SessionHeader, []*Entry, [][]byte, error) {
@@ -61,9 +54,6 @@ func DecodeEntries(r io.Reader, path string) (*SessionHeader, []*Entry, [][]byte
 		}
 		line = bytes.TrimSuffix(line, []byte("\n"))
 		line = bytes.TrimSuffix(line, []byte("\r"))
-		if len(line) > MaxRecordBytes {
-			return nil, nil, nil, &ParseError{Path: path, Line: lineNo, Err: fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)}
-		}
 		if len(bytes.TrimSpace(line)) > 0 {
 			fe, parseErr := UnmarshalFileEntry(line)
 			if parseErr != nil {
@@ -88,8 +78,9 @@ func DecodeEntries(r io.Reader, path string) (*SessionHeader, []*Entry, [][]byte
 	}
 }
 
-// HasIncompleteTail accepts a complete final JSON record without a newline,
-// including records larger than 64 KiB. It never accepts trailing JSON garbage.
+// HasIncompleteTail accepts a complete final JSON record without a newline.
+// It locates the final physical record from the end of the file instead of
+// using a fixed-size tail window.
 func HasIncompleteTail(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -97,8 +88,11 @@ func HasIncompleteTail(path string) (bool, error) {
 	}
 	defer f.Close()
 	st, err := f.Stat()
-	if err != nil || st.Size() == 0 {
+	if err != nil {
 		return false, err
+	}
+	if st.Size() == 0 {
+		return false, nil
 	}
 	size := st.Size()
 	var last [1]byte
@@ -108,19 +102,18 @@ func HasIncompleteTail(path string) (bool, error) {
 	if last[0] == '\n' {
 		return false, nil
 	}
-	off := max(int64(0), size-int64(MaxRecordBytes)-1)
-	buf := make([]byte, size-off)
-	if _, err := f.ReadAt(buf, off); err != nil {
+
+	start, err := lastRecordOffset(f, size)
+	if err != nil {
 		return false, err
 	}
-	if buf[len(buf)-1] == '\n' {
-		return false, nil
+	length := size - start
+	if length < 0 || uint64(length) > uint64(maxInt()) {
+		return false, fmt.Errorf("final record is too large for this platform")
 	}
-	lastNL := bytes.LastIndexByte(buf, '\n')
-	if lastNL >= 0 {
-		buf = buf[lastNL+1:]
-	} else if off > 0 || len(buf) > MaxRecordBytes {
-		return false, fmt.Errorf("final record exceeds %d bytes", MaxRecordBytes)
+	buf := make([]byte, int(length))
+	if _, err := io.ReadFull(io.NewSectionReader(f, start, length), buf); err != nil {
+		return false, err
 	}
 	buf = bytes.TrimSpace(buf)
 	if len(buf) == 0 {
@@ -128,3 +121,30 @@ func HasIncompleteTail(path string) (bool, error) {
 	}
 	return !json.Valid(buf), nil
 }
+
+func lastRecordOffset(f *os.File, size int64) (int64, error) {
+	// This is an I/O buffer size, not a record limit. The scan continues until
+	// it finds the previous newline, regardless of record size.
+	const scanBufferSize = 64 * 1024
+	buf := make([]byte, scanBufferSize)
+	for end := size; end > 0; {
+		start := end - int64(len(buf))
+		if start < 0 {
+			start = 0
+		}
+		n := int(end - start)
+		read, err := f.ReadAt(buf[:n], start)
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		if read > 0 {
+			if i := bytes.LastIndexByte(buf[:read], '\n'); i >= 0 {
+				return start + int64(i+1), nil
+			}
+		}
+		end = start
+	}
+	return 0, nil
+}
+
+func maxInt() int { return int(^uint(0) >> 1) }

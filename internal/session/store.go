@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,7 +118,17 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	}
 	idx, err := BuildIndex(path)
 	if err != nil {
-		return nil, err
+		var parseErr *ParseError
+		if !errors.As(err, &parseErr) || !errors.Is(err, errInvalidJSONRecord) {
+			return nil, err
+		}
+		// A crashed writer can leave one torn JSONL record in the middle of an
+		// otherwise usable Pi session. Keep valid records after it visible, but
+		// never append to the damaged file.
+		idx, err = buildIndexRecovering(path)
+		if err != nil {
+			return nil, err
+		}
 	}
 	header := idx.Header
 	var entries []*Entry
@@ -148,6 +159,9 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
 	s := &Store{header: header, entries: entries, records: records, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
+	if len(idx.Issues) > 0 {
+		s.writeErr = fmt.Errorf("session contains %d invalid record(s); writes are disabled (first: %v)", len(idx.Issues), idx.Issues[0])
+	}
 	s.rebuildIndex()
 	s.knownInfo, err = os.Stat(path)
 	if err != nil {
@@ -588,9 +602,6 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
-	}
-	if len(data) > MaxRecordBytes {
-		return fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)
 	}
 	thin, err := metadataEntry(data)
 	if err != nil {

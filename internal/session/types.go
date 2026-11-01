@@ -15,12 +15,6 @@ import (
 // CurrentSessionVersion matches Pi CURRENT_SESSION_VERSION at the pinned revision.
 const CurrentSessionVersion = 3
 
-// MaxRecordBytes bounds a single JSONL record. Pi streams with a 1 MiB buffer
-// and must handle image-bearing records; Go's scanner default (64 KiB) is too
-// small, so we read explicitly. 32 MiB is a deliberate bound: larger records
-// are refused with an actionable error instead of unbounded memory growth.
-const MaxRecordBytes = 32 * 1024 * 1024
-
 // ---- Content blocks (packages/ai/src/types.ts) ----
 
 type TextContent struct {

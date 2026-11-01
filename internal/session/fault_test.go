@@ -242,7 +242,7 @@ func TestTruncatedFileSweep(t *testing.T) {
 		hdr, entries, _, readErr := ReadFileEntries(testFile)
 		if readErr != nil {
 			var pe *ParseError
-			if !errors.As(readErr, &pe) && !strings.Contains(readErr.Error(), "record exceeds") {
+			if !errors.As(readErr, &pe) {
 				t.Fatalf("cut %d: unexpected ReadFileEntries error type: %v", cut, readErr)
 			}
 		} else {

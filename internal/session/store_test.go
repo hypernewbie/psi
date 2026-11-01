@@ -16,6 +16,37 @@ import (
 	"psi/internal/testutil/leakcheck"
 )
 
+func TestOpenFileRecoversPastTornInteriorRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "damaged.jsonl")
+	first := msgLine("m1", nil, "user", "first")
+	second := msgLine("m2", "m1", "user", "second")
+	content := headerLine("s1", "/tmp") + "\n" + first + "\n" +
+		`{"type":"message","id":"torn","message":{"role":"assistant","content":[{"type":"toolCall","id":"call` + "\n" +
+		second + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenFile(path, "/tmp", true)
+	if err != nil {
+		t.Fatalf("OpenFile should recover valid records after a torn line: %v", err)
+	}
+	if store.EntryCount() != 2 {
+		t.Fatalf("entry count = %d, want 2", store.EntryCount())
+	}
+	if store.WriteError() == nil {
+		t.Fatal("recovered session must block writes")
+	}
+	pathEntries, err := store.MetadataPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pathEntries) != 2 || pathEntries[1].ID() != "m2" {
+		t.Fatalf("metadata path = %v, want m1 -> m2", pathEntries)
+	}
+}
+
 func TestHeaderVersionChecks(t *testing.T) {
 	dir := t.TempDir()
 	// Missing version (v1) refused.

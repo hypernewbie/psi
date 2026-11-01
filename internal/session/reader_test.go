@@ -47,20 +47,6 @@ func msgLine(id string, parent any, role string, content any) string {
 	return string(b)
 }
 
-func TestReaderLargeRecord(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "s.jsonl")
-	big := strings.Repeat("x", 200*1024) // 200 KiB > 64 KiB scanner limit
-	writeLines(t, path, []string{headerLine("s1", "/tmp"), msgLine("m1", nil, "user", big)})
-	h, entries, _, err := ReadFileEntries(path)
-	if err != nil {
-		t.Fatalf("large record failed: %v", err)
-	}
-	if h == nil || len(entries) != 1 {
-		t.Fatalf("got header=%v entries=%d", h, len(entries))
-	}
-}
-
 func TestReaderBlankVsMalformed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
@@ -100,17 +86,16 @@ func TestReaderFinalLineWithoutNewline(t *testing.T) {
 	}
 }
 
-func TestReaderRecordBound(t *testing.T) {
+func TestReaderRecordHasNoScannerLimit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
-	huge := strings.Repeat("y", MaxRecordBytes+1)
-	// Write header + huge line manually (single record over bound).
-	f, _ := os.Create(path)
-	f.WriteString(headerLine("s1", "/tmp") + "\n")
-	f.WriteString(`{"type":"message","id":"m1","parentId":null,"timestamp":"t","message":{"role":"user","content":"` + huge[:100] + `"}` + "\n")
-	// Pad the line beyond bound by appending to the same line is complex; instead test DecodeEntries directly.
-	f.Close()
-	_ = huge
+	// Keep this above bufio.Scanner's historical default while exercising the
+	// same unbounded record path used for image-bearing session messages.
+	big := strings.Repeat("x", 200*1024)
+	writeLines(t, path, []string{headerLine("s1", "/tmp"), msgLine("m1", nil, "user", big)})
+	if _, _, _, err := ReadFileEntries(path); err != nil {
+		t.Fatalf("large record failed: %v", err)
+	}
 }
 
 func TestHasIncompleteTail(t *testing.T) {

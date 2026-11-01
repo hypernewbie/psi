@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -14,6 +15,7 @@ type RecordIndex struct {
 	Records []RecordMeta
 	Path    string
 	Header  *SessionHeader
+	Issues  []ParseError
 }
 type RecordMeta struct {
 	Offset, Length     int64
@@ -46,7 +48,27 @@ func BuildIndex(path string) (*RecordIndex, error) {
 	}
 	return BuildIndexFrom(f, path)
 }
+func buildIndexRecovering(path string) (*RecordIndex, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("session must be a regular file: %s", path)
+	}
+	return buildIndexFrom(f, path, true)
+}
+
 func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
+	return buildIndexFrom(r, path, false)
+}
+
+func buildIndexFrom(r io.Reader, path string, recoverInvalid bool) (*RecordIndex, error) {
 	idx := &RecordIndex{Path: path}
 	br := bufio.NewReaderSize(r, 64*1024)
 	var offset int64
@@ -57,12 +79,17 @@ func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
 		}
 		length := int64(len(line))
 		data := trimRecord(line)
-		if len(data) > MaxRecordBytes {
-			return nil, &ParseError{Path: path, Line: lineNo, Err: fmt.Errorf("record exceeds %d bytes", MaxRecordBytes)}
-		}
 		if len(bytes.TrimSpace(data)) > 0 {
 			e, header, parseErr := metadataRecord(data)
 			if parseErr != nil {
+				if recoverInvalid && idx.Header != nil && errors.Is(parseErr, errInvalidJSONRecord) {
+					idx.Issues = append(idx.Issues, ParseError{Path: path, Line: lineNo, Err: parseErr})
+					offset += length
+					if err == io.EOF {
+						break
+					}
+					continue
+				}
 				return nil, &ParseError{Path: path, Line: lineNo, Err: parseErr}
 			}
 			meta := RecordMeta{Offset: offset, Length: length, Hash: recordHash(data)}
@@ -94,6 +121,7 @@ func BuildIndexFrom(r io.Reader, path string) (*RecordIndex, error) {
 	}
 	return idx, nil
 }
+
 func (idx *RecordIndex) ActivePathIDs(leaf string) map[string]bool {
 	byID := map[string]RecordMeta{}
 	for _, m := range idx.Records {
@@ -121,10 +149,13 @@ func (idx *RecordIndex) ActivePathIDs(leaf string) map[string]bool {
 	return out
 }
 func loadRecord(f *os.File, meta RecordMeta) (*Entry, error) {
-	if meta.Offset < 0 || meta.Length <= 0 || meta.Length > MaxRecordBytes+2 {
+	if meta.Offset < 0 || meta.Length <= 0 {
 		return nil, fmt.Errorf("invalid indexed record bounds")
 	}
-	buf := make([]byte, meta.Length)
+	if meta.Length > int64(maxInt()) {
+		return nil, fmt.Errorf("indexed record is too large for this platform")
+	}
+	buf := make([]byte, int(meta.Length))
 	if _, err := f.ReadAt(buf, meta.Offset); err != nil {
 		return nil, err
 	}
@@ -152,7 +183,7 @@ func loadRecord(f *os.File, meta RecordMeta) (*Entry, error) {
 	return loaded, nil
 }
 func (idx *RecordIndex) LoadEntry(meta RecordMeta) (*Entry, error) {
-	if meta.Offset < 0 || meta.Length <= 0 || meta.Length > MaxRecordBytes+2 {
+	if meta.Offset < 0 || meta.Length <= 0 {
 		return nil, fmt.Errorf("invalid indexed record bounds")
 	}
 	f, err := os.Open(idx.Path)

@@ -3,7 +3,6 @@ package session
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,30 +80,12 @@ func TestTimelineUsesInputProvenanceWithoutChangingContext(t *testing.T) {
 	}
 }
 
-type repeatedByteReader struct{ count int64 }
-
-func (r *repeatedByteReader) Read(p []byte) (int, error) {
-	for i := range p {
-		p[i] = 'x'
-	}
-	r.count += int64(len(p))
-	return len(p), nil
-}
-
-func TestIndexBoundsWhileReadingAndRejectsMalformedRecords(t *testing.T) {
-	r := &repeatedByteReader{}
-	_, err := BuildIndexFrom(io.LimitReader(r, MaxRecordBytes+1024*1024), "synthetic.jsonl")
-	if err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatal(err)
-	}
-	if r.count > MaxRecordBytes+64*1024+2 {
-		t.Fatalf("unbounded record allocation: read %d", r.count)
-	}
+func TestIndexRejectsMalformedRecordsAndInvalidBounds(t *testing.T) {
 	if _, err := BuildIndexFrom(strings.NewReader("{bad json}\n"), "synthetic.jsonl"); err == nil {
 		t.Fatal("malformed index accepted")
 	}
 	idx := &RecordIndex{Path: filepath.Join(t.TempDir(), "absent.jsonl")}
-	for _, meta := range []RecordMeta{{Length: -1}, {Length: MaxRecordBytes + 3}, {Offset: -1, Length: 1}} {
+	for _, meta := range []RecordMeta{{Length: -1}, {Length: 0}, {Offset: -1, Length: 1}} {
 		if _, err := idx.LoadEntry(meta); err == nil || !strings.Contains(err.Error(), "bounds") {
 			t.Fatal(err)
 		}

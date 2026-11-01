@@ -8,12 +8,15 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 )
+
+var errInvalidJSONRecord = errors.New("invalid JSON record or nesting exceeds limit")
 
 type metadataObjectView map[string][]byte
 
@@ -337,7 +340,7 @@ func handScanRecord(data []byte) (*Entry, *SessionHeader, error) {
 	// This also enforces the eager decoder's depth bound before any view
 	// function operates, including for unknown or hidden payload values.
 	if !json.Valid(data) {
-		return nil, nil, fmt.Errorf("invalid JSON record or nesting exceeds limit")
+		return nil, nil, errInvalidJSONRecord
 	}
 	obj, err := metadataObject(data)
 	if err != nil {
