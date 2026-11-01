@@ -35,10 +35,10 @@ Resume (every form shows current-view history before the next prompt):
 ./psi --no-session
 ```
 
-Inline commands: `/help /hotkeys /new /resume /model /thinking /compact /loop /loop-stop /session /history /name /clone /skill:name /quit`.
+Inline commands: `/help /hotkeys /new /resume /model /thinking /compact /ac /autocompact /loop /loop-stop /session /history /name /clone /skill:name /quit`.
 `/name [name]` sets or shows the session display name. `/clone` copies the current branch to a new session file.
 `/resume [filter]` opens the searchable workspace picker; use arrows or PageUp/PageDown, Enter to select, Escape to cancel.
-`/history [N|all]` is display-only (default 20). `/loop goal <description>`, `/loop forever <task>`, and `/loop <N> <task>` repeat work. `/loop-stop` ends the active loop. Ctrl+X stops the loop and aborts its active turn.
+`/history [N|all]` is display-only (default 20). `/ac status` shows adaptive compaction state; `/ac threshold`, `/ac end-turn`, and `/ac end-turn-delay` change session-local policy. By default, `/ac` targets the lower of 50% of context or 230K tokens, with growth forecasting, and checks completed runs at max(200K, 40%) after ten minutes. `/autocompact` is an alias. `/ac compact` entered during a run waits for it to settle, compacts, then resumes the task. `/loop goal <description>`, `/loop forever <task>`, and `/loop <N> <task>` repeat work. `/loop-stop` ends the active loop. Ctrl+X stops the loop and aborts its active turn.
 
 Initial prompts are interactive. Run `./psi "Review this change"` to start a run. Psi returns to the editor when the run ends.
 

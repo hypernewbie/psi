@@ -54,7 +54,7 @@ Additional storage rules:
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | `read,bash,edit,write` with replacement and `+`/`-` | four tools only |
 | `skills` | `skills`, `enableSkillCommands` selector + path subset | instructions only, no install/run at discovery |
-| `compaction` | `compaction.enabled,reserveTokens,keepRecentTokens` | compatible entries, bounded summary |
+| `compaction` | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides[provider/model].reserveTokens` | compatible entries, bounded summary; model-specific reserve |
 | `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |
 | `network` | idle timeout + bounded retries | one HTTP transport |
 | instructions | `AGENTS.override.md`, `AGENTS.md`, fallbacks, `SYSTEM.md`, `APPEND_SYSTEM.md` | documented discovery + consent |
@@ -68,7 +68,13 @@ Additional storage rules:
 Unsupported package/extension declarations never trigger install or code loading.
 Unknown harmless UI prefs need no per-key warning.
 
+## Native loop and adaptive compaction controls
+
+Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it does not load TypeScript extensions. `/loop` and `/loop-stop` control goal/pass/forever runs. `/ac` and `/autocompact` provide adaptive thresholds, predicted-growth compaction, completed-run compaction, and a session-local summary-model choice. See `internal/ac/README.md` for `/ac` defaults and commands. `/ac` settings reset when the session changes and are not written to `settings.json`.
+
 ## Provider
+
+
 
 - **Anthropic Messages** uses `ANTHROPIC_API_KEY`; **MiniMax** uses `MINIMAX_API_KEY` and its `/anthropic` base path. Both use the Anthropic Messages stream format. MiniMax thinking controls and OpenCode `allowEmptySignature` follow model metadata.
 - **OpenCode Go** uses `OPENCODE_API_KEY`. Each model selects one registered API: Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses. Its catalog endpoint path is model-specific. Requests add `x-opencode-session` unless an explicit case-insensitive header overrides it.

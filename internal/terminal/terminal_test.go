@@ -112,7 +112,7 @@ func TestEditor(t *testing.T) {
 }
 
 func TestCommands(t *testing.T) {
-	for _, c := range []string{"/help", "/new", "/resume", "/model a b", "/thinking high", "/compact focus", "/session", "/quit", "/skill:do arg"} {
+	for _, c := range []string{"/help", "/new", "/resume", "/model a b", "/thinking high", "/compact focus", "/ac status", "/autocompact help", "/session", "/quit", "/skill:do arg"} {
 		if _, ok := ParseCommand(c); !ok {
 			t.Errorf("command %q not parsed", c)
 		}
@@ -124,7 +124,7 @@ func TestCommands(t *testing.T) {
 	if !strings.HasPrefix(cmd.Name, "unknown:") {
 		t.Errorf("unknown must be distinct: %+v", cmd)
 	}
-	if !strings.Contains(HelpText(), "/compact") {
+	if !strings.Contains(HelpText(), "/compact") || !strings.Contains(HelpText(), "/ac") {
 		t.Errorf("help")
 	}
 }

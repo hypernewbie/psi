@@ -53,6 +53,8 @@ const (
 	CompactionManual    = "manual"
 	CompactionThreshold = "threshold"
 	CompactionOverflow  = "overflow"
+	CompactionAdaptive  = "adaptive"
+	CompactionEndTurn   = "end-of-turn"
 )
 
 const (

@@ -2,7 +2,7 @@
 //
 // Supported keys (COMPATIBILITY.md): defaultProvider, defaultModel,
 // defaultThinkingLevel, sessionDir, defaultTools, skills, enableSkillCommands,
-// compaction{enabled,reserveTokens,keepRecentTokens}, shellPath,
+// compaction{enabled,reserveTokens,keepRecentTokens,modelOverrides}, shellPath,
 // shellCommandPrefix, network timeouts/retries, instructions, models.json
 // endpoint metadata, auth env refs, quietStartup. Everything else is
 // ignored (harmless UI prefs) or rejected (active providers/credentials).
@@ -49,11 +49,28 @@ func validThinking(s string) bool {
 	return false
 }
 
+func validCompactionModelKey(key string) bool {
+	parts := strings.SplitN(key, "/", 2)
+	return len(parts) == 2 && strings.TrimSpace(parts[0]) == parts[0] && parts[0] != "" && strings.TrimSpace(parts[1]) == parts[1] && parts[1] != ""
+}
+
 // Compaction settings subset.
 type CompactionConfig struct {
 	Enabled          bool
 	ReserveTokens    int
 	KeepRecentTokens int
+	ModelOverrides   map[string]CompactionModelOverride
+}
+
+type CompactionModelOverride struct {
+	ReserveTokens *int
+}
+
+func (c CompactionConfig) ReserveForModel(providerID, modelID string) int {
+	if override, ok := c.ModelOverrides[providerID+"/"+modelID]; ok && override.ReserveTokens != nil {
+		return *override.ReserveTokens
+	}
+	return c.ReserveTokens
 }
 
 // Settings is the supported configuration subset with resolution bases.
@@ -125,6 +142,9 @@ type rawSettings struct {
 		Enabled          *bool `json:"enabled"`
 		ReserveTokens    *int  `json:"reserveTokens"`
 		KeepRecentTokens *int  `json:"keepRecentTokens"`
+		ModelOverrides   map[string]struct {
+			ReserveTokens *int `json:"reserveTokens"`
+		} `json:"modelOverrides"`
 	} `json:"compaction"`
 	ShellPath          *string `json:"shellPath"`
 	ShellCommandPrefix *string `json:"shellCommandPrefix"`
@@ -146,7 +166,7 @@ type LoadResult struct {
 
 // LoadSettings reads user settings.json then project .pi/settings.json.
 // Project overrides user for supported scalars; defaultTools uses Pi's
-// replacement and +/- semantics; compaction merges per-field.
+// replacement and +/- semantics; compaction merges per-field and by model.
 func LoadSettings(userPath, projectPath string, projectConsent bool) (LoadResult, error) {
 	merged := defaultSettings()
 	sources := map[string]string{}
@@ -385,6 +405,26 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 			}
 			out.Compaction.KeepRecentTokens = *raw.Compaction.KeepRecentTokens
 			set("compaction.keepRecentTokens", "set")
+		}
+		if raw.Compaction.ModelOverrides != nil {
+			if out.Compaction.ModelOverrides == nil {
+				out.Compaction.ModelOverrides = make(map[string]CompactionModelOverride)
+			}
+			for modelKey, rawOverride := range raw.Compaction.ModelOverrides {
+				if !validCompactionModelKey(modelKey) {
+					return fmt.Errorf("compaction.modelOverrides key %q must be provider/model", modelKey)
+				}
+				override := out.Compaction.ModelOverrides[modelKey]
+				if rawOverride.ReserveTokens != nil {
+					if *rawOverride.ReserveTokens < 0 {
+						return fmt.Errorf("compaction.modelOverrides[%q].reserveTokens must be >= 0", modelKey)
+					}
+					value := *rawOverride.ReserveTokens
+					override.ReserveTokens = &value
+				}
+				out.Compaction.ModelOverrides[modelKey] = override
+			}
+			set("compaction.modelOverrides", "set")
 		}
 	}
 	if raw.ShellPath != nil {

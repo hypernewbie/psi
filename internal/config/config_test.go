@@ -135,6 +135,39 @@ func TestLoadMergePrecedence(t *testing.T) {
 	}
 }
 
+func TestCompactionModelOverrideMergeAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	user := filepath.Join(dir, "user.json")
+	project := filepath.Join(dir, "project.json")
+	writeJSON(t, user, `{"compaction":{"reserveTokens":100,"modelOverrides":{"anthropic/m":{"reserveTokens":300},"openai-codex/gpt-test":{"reserveTokens":900}}}}`)
+	writeJSON(t, project, `{"compaction":{"modelOverrides":{"anthropic/m":{"reserveTokens":500}}}}`)
+	loaded, err := LoadSettings(user, project, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compaction := loaded.Settings.Compaction
+	if got := compaction.ReserveForModel("anthropic", "m"); got != 500 {
+		t.Fatalf("project override reserve = %d, want 500", got)
+	}
+	if got := compaction.ReserveForModel("openai-codex", "gpt-test"); got != 900 {
+		t.Fatalf("unmodified model override reserve = %d, want 900", got)
+	}
+	if got := compaction.ReserveForModel("anthropic", "other"); got != 100 {
+		t.Fatalf("global reserve fallback = %d, want 100", got)
+	}
+
+	for _, raw := range []string{
+		`{"compaction":{"modelOverrides":{"bad-key":{"reserveTokens":10}}}}`,
+		`{"compaction":{"modelOverrides":{"anthropic/m":{"reserveTokens":-1}}}}`,
+	} {
+		path := filepath.Join(dir, "invalid.json")
+		writeJSON(t, path, raw)
+		if _, err := LoadSettings(path, "", false); err == nil {
+			t.Errorf("accepted invalid compaction override %s", raw)
+		}
+	}
+}
+
 func TestMalformedDiagnostics(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.json")

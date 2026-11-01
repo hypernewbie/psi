@@ -104,7 +104,7 @@ func formatRetryActivity(attempt, maximum int, delay time.Duration) string {
 
 func compactionActivity(state string) string {
 	switch state {
-	case event.CompactionThreshold:
+	case event.CompactionThreshold, event.CompactionAdaptive, event.CompactionEndTurn:
 		return "Auto-compacting… (Esc/Ctrl+C cancel)"
 	case event.CompactionOverflow:
 		return "Context overflow detected, Auto-compacting… (Esc/Ctrl+C cancel)"

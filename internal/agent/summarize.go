@@ -105,6 +105,29 @@ Do NOT continue the conversation. Do NOT respond to any questions in the convers
 // Compact generates a real summary before appending any context-changing entry.
 // Provider errors, empty summaries, and cancellation leave the context intact.
 func (l *Loop) Compact(ctx context.Context, cfg Config, focus string) error {
+	return l.compactAndContinue(ctx, cfg, focus, "")
+}
+
+// CompactAndResume is the /ac compact behavior when it interrupts active work:
+// compact the settled session, then submit one continuation message.
+func (l *Loop) CompactAndResume(ctx context.Context, cfg Config, focus string) error {
+	return l.compactAndContinue(ctx, cfg, focus, "Continue the current task from the compacted context. Do not repeat completed work.")
+}
+
+// ContinuePending drains a message that arrived after a run's final queue poll
+// but before the application processed its settled event.
+func (l *Loop) ContinuePending(ctx context.Context, cfg Config) error {
+	if err := l.begin(); err != nil {
+		return err
+	}
+	defer l.end()
+	if !l.deliverSteering() {
+		return nil
+	}
+	return l.run(ctx, cfg)
+}
+
+func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resumePrompt string) error {
 	if err := l.begin(); err != nil {
 		return err
 	}
@@ -112,8 +135,15 @@ func (l *Loop) Compact(ctx context.Context, cfg Config, focus string) error {
 	if err := l.compactWithReason(ctx, cfg, focus, event.CompactionManual); err != nil {
 		return err
 	}
-	// Deliver messages queued while compaction ran against the compacted context.
-	if l.deliverSteering() {
+	queued := l.deliverSteering()
+	if resumePrompt != "" {
+		if _, err := l.store.AppendMessage(userMsg(resumePrompt)); err != nil {
+			return fmt.Errorf("storage failure, stopping: %w", err)
+		}
+		l.sink(event.Event{Type: event.SteeringDelivered, Text: resumePrompt})
+		return l.run(ctx, cfg)
+	}
+	if queued {
 		return l.run(ctx, cfg)
 	}
 	return nil
@@ -155,19 +185,65 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	if err != nil {
 		return err
 	}
+	if cfg.ACPolicy != nil {
+		cfg.ACPolicy.SetCompacting(true)
+	}
 	l.sink(event.Event{Type: event.CompactionStart, State: reason})
 	defer l.sink(event.Event{Type: event.CompactionEnd, State: reason})
-	return l.compactPrepared(ctx, cfg, focus, prepared)
+
+	summaryProvider, summaryModel := l.prov, cfg.Model
+	cleanup := func() {}
+	if cfg.CompactionProvider != nil {
+		resolvedProvider, resolvedModel, closeProvider, resolveErr := cfg.CompactionProvider()
+		if resolveErr != nil {
+			if cfg.ACPolicy != nil {
+				cfg.ACPolicy.RecordCompaction(false, compactionSourceName(reason), prepared.TokensBefore)
+			}
+			return resolveErr
+		}
+		if resolvedProvider != nil {
+			summaryProvider = resolvedProvider
+		}
+		if resolvedModel.ID != "" {
+			summaryModel = resolvedModel
+		}
+		if closeProvider != nil {
+			cleanup = closeProvider
+		}
+	}
+	defer cleanup()
+	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel)
+	if cfg.ACPolicy != nil {
+		cfg.ACPolicy.RecordCompaction(err == nil, compactionSourceName(reason), prepared.TokensBefore)
+	}
+	return err
 }
 
-func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, prepared CompactionPreparation) error {
+func compactionSourceName(reason string) string {
+	switch reason {
+	case event.CompactionManual:
+		return "command"
+	case event.CompactionAdaptive, event.CompactionThreshold:
+		return "automatic"
+	case event.CompactionEndTurn:
+		return "end-of-turn"
+	case event.CompactionOverflow:
+		return "overflow"
+	default:
+		return reason
+	}
+}
+
+func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, prepared CompactionPreparation, summaryProvider provider.Provider, summaryModel provider.ModelMeta) error {
 	if prepared.Disposition != CompactionEligible {
 		return &CompactionNoWorkError{Disposition: prepared.Disposition}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	maxOutput := min(4096, cfg.Model.MaxTokens)
+	summaryCfg := cfg
+	summaryCfg.Model = summaryModel
+	maxOutput := min(4096, summaryCfg.Model.MaxTokens)
 	if maxOutput <= 0 {
 		maxOutput = 4096
 	}
@@ -179,7 +255,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 		if strings.TrimSpace(transcript) == "" {
 			return fmt.Errorf("no conversation text to summarize; original context is unchanged")
 		}
-		resp, err := l.requestSummary(ctx, cfg, focus, transcript, prepared.PreviousSummary, false, maxOutput)
+		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, prepared.PreviousSummary, false, maxOutput)
 		if err != nil {
 			return err
 		}
@@ -197,16 +273,16 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 		transcript := summaryTranscript(session.ConvertToLLM(prepared.TurnPrefix))
 		if strings.TrimSpace(transcript) == "" {
 			if hasHistoryUsage {
-				if persistErr := l.persistCompactionUsage(cfg, historyUsage, "history summary completed but turn prefix was empty"); persistErr != nil {
+				if persistErr := l.persistCompactionUsage(summaryCfg, historyUsage, "history summary completed but turn prefix was empty"); persistErr != nil {
 					return persistErr
 				}
 			}
 			return fmt.Errorf("no turn-prefix conversation to summarize; original context is unchanged")
 		}
-		resp, err := l.requestSummary(ctx, cfg, focus, transcript, "", true, maxOutput)
+		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, "", true, maxOutput)
 		if err != nil {
 			if hasHistoryUsage {
-				if persistErr := l.persistCompactionUsage(cfg, historyUsage, "history summary completed; split-turn summary did not complete"); persistErr != nil {
+				if persistErr := l.persistCompactionUsage(summaryCfg, historyUsage, "history summary completed; split-turn summary did not complete"); persistErr != nil {
 					return persistErr
 				}
 			}
@@ -225,7 +301,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	}
 	if err := ctx.Err(); err != nil {
 		if hasHistoryUsage {
-			if persistErr := l.persistCompactionUsage(cfg, historyUsage, "summary completed but compaction was cancelled before commit"); persistErr != nil {
+			if persistErr := l.persistCompactionUsage(summaryCfg, historyUsage, "summary completed but compaction was cancelled before commit"); persistErr != nil {
 				return persistErr
 			}
 		}
@@ -236,7 +312,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	return err
 }
 
-func (l *Loop) requestSummary(ctx context.Context, cfg Config, focus, transcript, previous string, turnPrefix bool, maxOutput int) (*provider.Response, error) {
+func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Provider, cfg Config, focus, transcript, previous string, turnPrefix bool, maxOutput int) (*provider.Response, error) {
 	var prompt string
 	if turnPrefix {
 		prompt = "# Conversation\n" + transcript + "\n\n# Instructions\n" + turnPrefixSummaryPrompt
@@ -260,7 +336,7 @@ func (l *Loop) requestSummary(ctx context.Context, cfg Config, focus, transcript
 	if cfg.Model.ContextWindow > 0 && len(prompt)/3+maxOutput+2000 >= cfg.Model.ContextWindow {
 		return nil, fmt.Errorf("history is too large for a safe summary request; original context is unchanged")
 	}
-	resp, err := l.prov.Send(ctx, provider.Request{
+	resp, err := summaryProvider.Send(ctx, provider.Request{
 		Model: cfg.Model, Thinking: "off", MaxTokens: maxOutput, System: summarizationSystemPrompt,
 		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: prompt}}}},
 	}, nil)

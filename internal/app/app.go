@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/term"
 
+	"psi/internal/ac"
 	"psi/internal/agent"
 	"psi/internal/config"
 	"psi/internal/event"
@@ -545,6 +546,7 @@ func Run(args []string, version string) error {
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
 		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
 		loops: loop.NewController(store),
+		ac:    ac.NewController(),
 	}
 	defer func() {
 		r.store.Unlock()
@@ -641,6 +643,8 @@ type runtime struct {
 	themeDiagnostics         []pitheme.Diagnostic
 	projectTrusted           bool
 	loops                    *loop.Controller
+	ac                       *ac.Controller
+	cancelACEndTurn          func()
 	reportedColorScheme      string
 	// activeTools holds the running calls of the current batch in start
 	// order. Parallel batches keep several; the live row shows the newest.
@@ -712,7 +716,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	}
 	pm := providerModel(ov.Provider, meta)
 	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt,
-		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveTokens, KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
+		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveForModel(ov.Provider, ov.Model), KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
 	if _, err := provider.BuildRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
 		return err
 	}
@@ -777,6 +781,35 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	r.reg.Bash.ShellPrefix = r.settings.ShellPrefix
 	r.reg.Read.BlockImages = !meta.InputImage
 	return nil
+}
+
+func (r *runtime) compactionProvider(reference string) (provider.Provider, provider.ModelMeta, func(), error) {
+	if reference == "" {
+		return nil, provider.ModelMeta{}, nil, nil
+	}
+	parts := strings.SplitN(reference, "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return nil, provider.ModelMeta{}, nil, fmt.Errorf("invalid compactor model %q; use provider/model", reference)
+	}
+	if parts[0] == r.ov.Provider && parts[1] == r.ov.Model {
+		return nil, provider.ModelMeta{}, nil, nil
+	}
+	if r.models == nil {
+		return nil, provider.ModelMeta{}, nil, fmt.Errorf("model catalog is unavailable")
+	}
+	next := r.ov
+	next.Provider, next.Model, next.Thinking = parts[0], parts[1], "off"
+	candidate := *r
+	candidate.prov = nil
+	if err := candidate.configure(next); err != nil {
+		return nil, provider.ModelMeta{}, nil, fmt.Errorf("compactor model %s: %w", reference, err)
+	}
+	if candidate.authErr != nil {
+		candidate.prov.CloseIdle()
+		return nil, provider.ModelMeta{}, nil, fmt.Errorf("compactor model %s: %w", reference, candidate.authErr)
+	}
+	client, model := candidate.prov, candidate.cfg.Model
+	return client, model, client.CloseIdle, nil
 }
 
 func envMap() map[string]string {
@@ -1116,6 +1149,12 @@ func (r *runtime) replace(next *session.Store) error {
 	}
 	r.installConfiguration(&candidate)
 	r.store = next
+	if r.cancelACEndTurn != nil {
+		r.cancelACEndTurn()
+	}
+	if r.ac != nil {
+		r.ac.ResetSession()
+	}
 	if r.lifecycle != nil && r.lifecycle.console != nil && r.loops != nil {
 		r.lifecycle.console.SetLoopStatus(r.loops.StatusLine())
 	}
@@ -1217,6 +1256,9 @@ func (r *runtime) draw(console *terminal.Console) {
 func (r *runtime) repl(console *terminal.Console) error {
 	// Some embedded callers construct runtime directly instead of going through
 	// Run. Keep the loop feature safe for those callers as well.
+	if r.ac == nil {
+		r.ac = ac.NewController()
+	}
 	if r.loops == nil && r.store != nil {
 		r.loops = loop.NewController(r.store)
 		if err := r.loops.Reconstruct(); err != nil {
@@ -1254,6 +1296,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
 	var activeLoop *agent.Loop
+	var pendingACCompactFocus *string
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
@@ -1357,6 +1400,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 	console.CompletionDescriptions = make(map[string]string)
 	for _, spec := range terminal.CommandMetadata() {
 		console.CompletionDescriptions["/"+spec.Name] = spec.Description
+	}
+	for command, description := range map[string]string{
+		"help": "show AC help and session status", "status": "show context and compaction settings",
+		"compact": "compact now", "threshold": "set the adaptive target",
+		"end-turn": "set the completed-run threshold", "end-turn-delay": "set the delay in minutes",
+		"compactor": "select or clear the summary model", "enable": "enable proactive compaction",
+		"disable": "disable proactive compaction",
+	} {
+		console.CompletionDescriptions[command] = description
 	}
 	for _, skill := range r.skills {
 		console.Skills = append(console.Skills, skill.Name)
@@ -1526,7 +1578,34 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		}
 	}
+	acEndTurnTimer := time.NewTimer(time.Hour)
+	if !acEndTurnTimer.Stop() {
+		<-acEndTurnTimer.C
+	}
+	var acEndTurnTimeout <-chan time.Time
+	cancelACEndTurn := func() {
+		if !acEndTurnTimer.Stop() {
+			select {
+			case <-acEndTurnTimer.C:
+			default:
+			}
+		}
+		acEndTurnTimeout = nil
+	}
+	r.cancelACEndTurn = cancelACEndTurn
+	defer func() {
+		cancelACEndTurn()
+		r.cancelACEndTurn = nil
+	}()
+	var compactionCountAtStart uint64
+	var resumeAfterCompaction bool
+	var activeConfig agent.Config
 	start := func(text, display, focus, invocation, source string, compact bool) {
+		resumeThisCompaction := compact && resumeAfterCompaction
+		if compact {
+			resumeAfterCompaction = false
+		}
+		cancelACEndTurn()
 		if err := r.store.WriteError(); err != nil {
 			r.state = StateStorageBlocked
 			notice(terminal.NoticeError, "Storage is blocked: "+err.Error()+" (open a checked copy or /new)")
@@ -1549,6 +1628,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		runOutcome, visibleRunText = "", false
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
+		compactionCountAtStart = r.ac.Snapshot().CompactionCount
 		r.state = StateWaiting
 		setActivity("Working… (Esc/Ctrl+C cancel)")
 		if compact {
@@ -1557,6 +1637,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
+		cfg.ACPolicy = r.ac
+		cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
+			return r.compactionProvider(r.ac.Snapshot().CompactorModel)
+		}
 		cfg.DynamicConfig = func() (string, []provider.ToolDef) {
 			state := r.loops.Snapshot()
 			definitions := tools.Definitions(r.settings.DefaultTools)
@@ -1595,6 +1679,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					RetryAttempt: info.Attempt, RetryMaximum: info.Maximum, RetryDelayMs: int64(info.Delay / time.Millisecond), RetryClass: info.Class}
 			})
 		}
+		activeConfig = cfg
 		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
 			seq++
 			e.Generation, e.Seq, e.SessionID = gen, seq, r.store.Header().ID
@@ -1603,13 +1688,73 @@ func (r *runtime) repl(console *terminal.Console) error {
 		activeLoop = loop
 		go func() {
 			if compact {
-				done <- loop.Compact(ctx, cfg, focus)
+				if resumeThisCompaction {
+					done <- loop.CompactAndResume(ctx, cfg, focus)
+				} else {
+					done <- loop.Compact(ctx, cfg, focus)
+				}
 			} else if invocation != "" {
 				done <- loop.SubmitWithProvenance(ctx, text, invocation, source, cfg)
 			} else {
 				done <- loop.Submit(ctx, text, cfg)
 			}
 		}()
+	}
+	checkAndStartCompact := func(focus string, explicit, resume bool) {
+		if writeErr := r.store.WriteError(); writeErr != nil {
+			notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
+			return
+		}
+		checker := agent.New(r.store, r.reg, r.prov, nil)
+		_, checkErr := checker.CheckCompaction(r.cfg)
+		var noWork *agent.CompactionNoWorkError
+		if errors.As(checkErr, &noWork) {
+			if explicit {
+				message := "Nothing to compact yet. Recent conversation is already within the retained budget."
+				switch noWork.Disposition {
+				case agent.CompactionEmpty:
+					message = "Nothing to compact yet. The session has no conversation history."
+				case agent.CompactionAlreadyDone:
+					message = "Nothing to compact yet. This session is already compacted."
+				}
+				notice(terminal.NoticeInfo, message)
+			}
+			return
+		}
+		if checkErr != nil {
+			notice(terminal.NoticeError, checkErr.Error())
+			return
+		}
+		resumeAfterCompaction = resume
+		start("", "", focus, "", "", true)
+	}
+	endTurnReady := func() bool {
+		if busy || exiting || r.state != StateIdle || r.selector != nil {
+			return false
+		}
+		proj, err := r.store.Projection()
+		if err != nil {
+			return false
+		}
+		tokens := agent.EstimatedContext(proj, r.cfg)
+		return r.ac.ShouldCompactAtEndOfTurn(tokens, r.cfg.Model.ContextWindow, r.settings.Compaction.Enabled, true, false)
+	}
+	scheduleEndTurn := func() {
+		cancelACEndTurn()
+		if !endTurnReady() {
+			return
+		}
+		delay := r.ac.Snapshot().EndOfTurnDelay
+		if delay <= 0 {
+			checkAndStartCompact("", false, false)
+			return
+		}
+		acEndTurnTimer.Reset(delay)
+		acEndTurnTimeout = acEndTurnTimer.C
+	}
+	acCommand := func(args string) {
+		r.handleACCommand(args, out, func(focus string) { checkAndStartCompact(focus, true, false) }, cancelACEndTurn,
+			func() bool { return acEndTurnTimeout != nil }, scheduleEndTurn)
 	}
 	stopLoopCommand := func() {
 		if r.loops == nil {
@@ -1699,6 +1844,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case <-resizeTimeout:
 			resizeTimeout = nil
 			r.draw(console)
+		case <-acEndTurnTimeout:
+			acEndTurnTimeout = nil
+			if endTurnReady() {
+				checkAndStartCompact("", false, false)
+			}
 		case <-themeChanges:
 			if err := r.reloadTheme(); err != nil {
 				if err.Error() != lastThemeWatchError {
@@ -1772,14 +1922,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			cancel()
 			busy = false
-			// Undelivered steering returns to the editor, like Pi's
-			// restoreQueuedMessagesToEditor. Input is never lost.
+			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
+			// Undelivered steering normally returns to the editor. If it arrived
+			// in the narrow interval after compaction's final queue poll, keep the
+			// settled loop and run that message on the compacted context.
 			var undelivered []string
+			var lateSteeringLoop *agent.Loop
 			if activeLoop != nil {
-				undelivered = activeLoop.ClearSteering()
+				if compactionCommitted && len(activeLoop.PendingSteering()) > 0 {
+					lateSteeringLoop = activeLoop
+				} else {
+					undelivered = activeLoop.ClearSteering()
+				}
 			}
-			activeLoop = nil
-			console.SetSteeringRows(nil)
+			if lateSteeringLoop != nil {
+				activeLoop = lateSteeringLoop
+				console.SetSteeringRows(activeLoop.PendingSteering())
+			} else {
+				activeLoop = nil
+				console.SetSteeringRows(nil)
+			}
 			if len(undelivered) > 0 {
 				combined := strings.Join(undelivered, "\n\n")
 				if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
@@ -1829,7 +1991,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				default:
 					notice(terminal.NoticeError, err.Error())
 				}
-			} else if compacting {
+			} else if compacting || compactionCommitted {
 				for _, line := range terminal.FormatMetadataMessage("[compaction] ", "Context compacted", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
 					fmt.Fprintln(out, line)
 				}
@@ -1861,6 +2023,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 				message := initialMessages[0]
 				initialMessages = initialMessages[1:]
 				start(message, message, "", "", "", false)
+			}
+			if lateSteeringLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
+				ctx, stop := context.WithCancel(context.Background())
+				cancel = stop
+				busy = true
+				compacting = false
+				r.state = StateWaiting
+				setActivity("Working… (Esc/Ctrl+C cancel)")
+				activeLoop = lateSteeringLoop
+				compactionCountAtStart = r.ac.Snapshot().CompactionCount
+				lateLoop, cfg := lateSteeringLoop, activeConfig
+				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
+				r.draw(console)
+			}
+			if pendingACCompactFocus != nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
+				focus := *pendingACCompactFocus
+				pendingACCompactFocus = nil
+				checkAndStartCompact(focus, true, true)
+			}
+			if err == nil && lateSteeringLoop == nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting && r.ac.Snapshot().CompactionCount == compactionCountAtStart {
+				scheduleEndTurn()
 			}
 			_, doneFramesAfter, _, _ := console.FrameStats()
 			r.eventFrames += doneFramesAfter - doneFramesBefore
@@ -2041,10 +2224,30 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if busy {
-				// Pi's editor submits during a run by queueing a steering message
-				// that is delivered at the next turn boundary. Commands stay
-				// idle-only for now; their text returns to the editor, never lost.
+				// Pi's editor stays live while a run is active. AC policy commands
+				// can update session-local settings; /ac compact waits for this run
+				// to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
+					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "ac" || cmd.Name == "autocompact") {
+						parts := strings.Fields(cmd.Arg)
+						if len(parts) > 0 && strings.EqualFold(parts[0], "compact") {
+							if compacting {
+								notice(terminal.NoticeInfo, "Compaction is already running.")
+							} else if pendingACCompactFocus != nil {
+								notice(terminal.NoticeInfo, "An /ac compact request is already queued.")
+							} else {
+								focus := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cmd.Arg), parts[0]))
+								pendingACCompactFocus = &focus
+								notice(terminal.NoticeInfo, "Compaction queued until the active run settles; it will resume the task afterward.")
+							}
+							console.Editor.Clear()
+							r.draw(console)
+							continue
+						}
+						acCommand(cmd.Arg)
+						r.draw(console)
+						continue
+					}
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "loop-stop" {
 						if strings.TrimSpace(cmd.Arg) != "" {
 							notice(terminal.NoticeError, "use /loop-stop")
@@ -2118,6 +2321,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						start(expanded, text, "", invocation, "skill", false)
 					}
+					continue
+				}
+				if cmd.Name == "ac" || cmd.Name == "autocompact" {
+					acCommand(cmd.Arg)
+					r.draw(console)
 					continue
 				}
 				if cmd.Name == "history" {
@@ -2444,6 +2652,9 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 		return false, err
 	}
 	r.installConfiguration(&candidate)
+	if r.ac != nil {
+		r.ac.ResetGrowth()
+	}
 	return false, nil
 }
 

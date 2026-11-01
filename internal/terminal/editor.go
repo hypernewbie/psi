@@ -397,7 +397,7 @@ func Complete(draft string, pos int, commands []string, skills []string) (candid
 	}
 	token := string(runes[start:pos])
 	if !startsWith(token, "/") {
-		return nil, false
+		return completeACArguments(string(runes[:start]), token)
 	}
 	// Strip leading / and optional skill: prefix handling.
 	var pool []string
@@ -410,6 +410,37 @@ func Complete(draft string, pos int, commands []string, skills []string) (candid
 	for _, p := range pool {
 		if startsWith(p, token) && p != token {
 			candidates = append(candidates, p)
+		}
+	}
+	return candidates, len(candidates) > 1
+}
+
+func completeACArguments(before, token string) ([]string, bool) {
+	parts := strings.Fields(before)
+	if len(parts) == 0 || (parts[0] != "/ac" && parts[0] != "/autocompact") {
+		return nil, false
+	}
+	commands := []string{"help", "status", "compact", "threshold", "end-turn", "end-turn-delay", "compactor", "enable", "disable"}
+	var options []string
+	switch len(parts) {
+	case 1:
+		options = commands
+	case 2:
+		switch parts[1] {
+		case "threshold":
+			options = []string{"default", "off", "50", "60", "70", "80", "90", "100"}
+		case "end-turn":
+			options = []string{"default", "off", "80%", "90%", "120000"}
+		case "end-turn-delay":
+			options = []string{"0", "1", "5", "10"}
+		case "compactor":
+			options = []string{"current", "clear"}
+		}
+	}
+	var candidates []string
+	for _, option := range options {
+		if startsWith(option, token) && option != token {
+			candidates = append(candidates, option)
 		}
 	}
 	return candidates, len(candidates) > 1

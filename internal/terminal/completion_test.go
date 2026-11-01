@@ -39,6 +39,30 @@ func TestSlashCompletionLivesInFiveRowEditorTail(t *testing.T) {
 	}
 }
 
+func TestACSubcommandCompletion(t *testing.T) {
+	c, _ := completionConsole()
+	c.Editor.RestoreDraft("/ac th", len([]rune("/ac th")))
+	c.refreshCompletion()
+	if !strings.EqualFold(strings.Join(c.completionItems, ","), "threshold") {
+		t.Fatalf("/ac subcommands = %q", c.completionItems)
+	}
+	if !c.applyCompletion() || c.Editor.Text() != "/ac threshold" {
+		t.Fatalf("subcommand completion draft = %q", c.Editor.Text())
+	}
+	c, _ = completionConsole()
+	c.Editor.RestoreDraft("/autocompact compactor c", len([]rune("/autocompact compactor c")))
+	c.refreshCompletion()
+	if got := strings.Join(c.completionItems, ","); got != "current,clear" {
+		t.Fatalf("compactor values = %q", got)
+	}
+	c, _ = completionConsole()
+	c.Editor.RestoreDraft("/ac end-turn-delay ", len([]rune("/ac end-turn-delay ")))
+	c.refreshCompletion()
+	if !strings.Contains(strings.Join(c.completionItems, ","), "0") {
+		t.Fatalf("delay values = %q", c.completionItems)
+	}
+}
+
 func TestSlashCompletionEscapeAndEnterPrecedence(t *testing.T) {
 	c, _ := completionConsole()
 	c.Handle(Input{Key: []byte("/th")}, false)

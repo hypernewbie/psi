@@ -34,7 +34,7 @@ ancestor folders.
 | Sessions | `sessionDir` | CLI > env (`PI_CODING_AGENT_SESSION_DIR`) > settings > default |
 | Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |
 | Skills | `skills`, `enableSkillCommands` | paths + selector |
-| Compaction | `compaction.enabled,reserveTokens,keepRecentTokens` | bounded summaries |
+| Compaction | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides` | bounded summaries; per-model reserve overrides; `/ac` controls are session-local |
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
 | Display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | bounded inline spacing and code-block indent |
 | Shell | `shellPath`, `shellCommandPrefix` | consent for project executables |
@@ -44,6 +44,21 @@ ancestor folders.
 | Auth | `auth.json` entries, env refs | no `!command` execution |
 | Startup | `quietStartup` | hides the Ψ banner, notes, and hint line; inline only |
 | Terminal | always inline | fullscreen and rich-display preferences are ignored |
+
+Model-specific compaction reserves use the exact `provider/model` key. For example:
+
+```json
+{
+  "compaction": {
+    "reserveTokens": 16384,
+    "modelOverrides": {
+      "anthropic/claude-example": { "reserveTokens": 32768 }
+    }
+  }
+}
+```
+
+`/ac` policy controls are in-memory and reset when psi opens another session.
 
 `theme` selects `system` by default, a built-in (`dark` or `light`), or an exact discovered theme name. `themes` is an array of additional local file or directory paths. `--use-theme` overrides the selection; repeat `--theme PATH` to add resources; `--no-themes` disables configured and discovered resources. Theme files are data only: schema URLs are not fetched and theme/package code is not run. Project theme bodies load only after project consent. `terminal.trueColor` accepts the booleans `true`/`false` or the string `auto`; `NO_COLOR` always disables generated SGR. `/reload` installs valid theme and display settings atomically; an invalid reload keeps the last valid snapshot. `/session` reports theme, appearance, color mode, source, and diagnostics.
 

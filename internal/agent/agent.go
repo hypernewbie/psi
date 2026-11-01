@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"psi/internal/ac"
 	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
@@ -35,8 +36,11 @@ type Config struct {
 	DynamicConfig func() (string, []provider.ToolDef)
 	InternalTools map[string]InternalToolHandler
 	AfterToolCall func(context.Context, tools.Invocation, tools.Result) error
-	// ContinueOnEnd may return a hidden user message while a control loop stays active.
 	ContinueOnEnd func() (messageType, content string, ok bool)
+	ACPolicy      *ac.Controller
+	// CompactionProvider optionally supplies a separate model/provider for the
+	// summary call. The normal provider remains active for resumed user work.
+	CompactionProvider func() (provider.Provider, provider.ModelMeta, func(), error)
 }
 
 type Loop struct {
@@ -412,17 +416,48 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 					if _, err := l.store.AppendCustomMessage(messageType, content, false, nil); err != nil {
 						return fmt.Errorf("storage failure, stopping: %w", err)
 					}
+					if err := l.maybeAdaptiveCompact(ctx, cfg, true, deliveredSteering); err != nil {
+						return err
+					}
 					continue
 				}
 			}
 			if !deliveredSteering {
+				if err := l.maybeAdaptiveCompact(ctx, cfg, false, false); err != nil {
+					return err
+				}
 				return nil
+			}
+			// Record growth, but let the queued user message receive the next
+			// request before predictive compaction is considered again.
+			if err := l.maybeAdaptiveCompact(ctx, cfg, true, true); err != nil {
+				return err
 			}
 		}
 		if err := l.runBatch(ctx, resp.ToolCalls, cfg); err != nil {
 			return err
 		}
+		if len(resp.ToolCalls) > 0 {
+			if err := l.maybeAdaptiveCompact(ctx, cfg, true, len(l.PendingSteering()) > 0); err != nil {
+				return err
+			}
+		}
 	}
+}
+
+func (l *Loop) maybeAdaptiveCompact(ctx context.Context, cfg Config, canContinue, hasPendingMessages bool) error {
+	if cfg.ACPolicy == nil {
+		return nil
+	}
+	proj, err := l.store.Projection()
+	if err != nil {
+		return err
+	}
+	tokens := EstimatedContext(proj, cfg)
+	if !cfg.ACPolicy.ObserveTurn(tokens, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact, canContinue, hasPendingMessages) {
+		return nil
+	}
+	return l.compactWithReason(ctx, cfg, "", event.CompactionAdaptive)
 }
 
 // The app's 64-item event queue retains at most 512 KiB of text payload.

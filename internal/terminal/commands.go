@@ -26,6 +26,8 @@ var commandSpecs = []CommandSpec{
 	{Name: "model", Syntax: "/model [provider/]model", Description: "select or set a session-local model"},
 	{Name: "thinking", Syntax: "/thinking [level]", Description: "select or set thinking level"},
 	{Name: "compact", Syntax: "/compact [focus]", Description: "real cancellable summary with settled outcome"},
+	{Name: "ac", Syntax: "/ac [help|status|command]", Description: "adaptive automatic compaction controls"},
+	{Name: "autocompact", Syntax: "/autocompact [help|status|command]", Description: "alias for /ac"},
 	{Name: "loop", Syntax: "/loop goal|forever|<N> <task>", Description: "repeat work until goal, count, or user stop"},
 	{Name: "loop-stop", Syntax: "/loop-stop", Description: "stop the active loop"},
 	{Name: "session", Syntax: "/session", Description: "identity, workspace, provider/model, thinking, usage"},
@@ -103,6 +105,6 @@ func HelpText() string {
 		"Unknown /commands never become prompts; command errors preserve the draft.",
 		"",
 		"Examples:",
-		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /loop goal improve tests · /name Refactor auth · /skill:review fix login")
+		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /ac status · /loop goal improve tests · /name Refactor auth · /skill:review fix login")
 	return strings.Join(lines, "\n")
 }
