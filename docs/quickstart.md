@@ -64,7 +64,8 @@ Tool calls from one response run concurrently and settle in call order.
 Same-file writes and edits serialize; unrelated calls overlap.
 See `docs/limitations.md` for the execution model and Pi deviations.
 
-Recovery: truncated/malformed/locked sessions refuse writes with original bytes
-intact; use a copy, `/new`, or `/resume`. See `docs/recovery.md`.
+Recovery: interrupted interior records are skipped and the session continues after
+that gap. Truncated tails and locked sessions preserve original bytes; use a copy,
+`/new`, or `/resume` when recovery is needed. See `docs/recovery.md`.
 
 See `COMPATIBILITY.md` for the pinned baseline, `docs/keyboard.md` for key precedence, and `docs/ui-acceptance.md` for UI evidence and remaining gates.

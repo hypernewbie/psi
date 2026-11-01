@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,6 +40,12 @@ func inspectSessionMetadata(path string) (*SessionInfo, error) {
 		if len(bytes.TrimSpace(line)) > 0 {
 			entry, header, err := metadataRecord(trimRecord(line))
 			if err != nil {
+				if info.ID != "" && errors.Is(err, errRecordGap) {
+					if readErr == io.EOF {
+						break
+					}
+					continue
+				}
 				return unavailable(err)
 			}
 			if info.ID == "" {

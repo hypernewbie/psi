@@ -35,15 +35,18 @@ func TestOpenFileRecoversPastTornInteriorRecord(t *testing.T) {
 	if store.EntryCount() != 2 {
 		t.Fatalf("entry count = %d, want 2", store.EntryCount())
 	}
-	if store.WriteError() == nil {
-		t.Fatal("recovered session must block writes")
+	if store.WriteError() != nil {
+		t.Fatalf("recovered session should continue normally: %v", store.WriteError())
+	}
+	if _, err := store.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "after the gap"}}); err != nil {
+		t.Fatalf("append after recovered gap failed: %v", err)
 	}
 	pathEntries, err := store.MetadataPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pathEntries) != 2 || pathEntries[1].ID() != "m2" {
-		t.Fatalf("metadata path = %v, want m1 -> m2", pathEntries)
+	if len(pathEntries) != 3 || pathEntries[1].ID() != "m2" {
+		t.Fatalf("metadata path = %v, want m1 -> m2 -> new message", pathEntries)
 	}
 }
 

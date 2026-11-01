@@ -55,7 +55,7 @@ psi has no login interface, does not support Anthropic OAuth, and does not execu
 Sessions use Pi JSONL v3 without an application-level record or whole-file size cutoff.
 The live store indexes offsets and small metadata without loading the whole file.
 It decodes the selected context on demand and streams history one record at a time.
-If a crashed writer left an invalid interior record, psi can show the remaining valid history but disables writes for that session.
+If a crashed writer left an interrupted interior record, psi keeps the remaining history visible and continues after the recovered gap.
 The 512 MiB compacted fixture passed the 3-second and 160 MiB RSS limits on the recorded local profile.
 A large active context still requires memory for its decoded payloads.
 

@@ -15,7 +15,6 @@ type RecordIndex struct {
 	Records []RecordMeta
 	Path    string
 	Header  *SessionHeader
-	Issues  []ParseError
 }
 type RecordMeta struct {
 	Offset, Length     int64
@@ -82,8 +81,7 @@ func buildIndexFrom(r io.Reader, path string, recoverInvalid bool) (*RecordIndex
 		if len(bytes.TrimSpace(data)) > 0 {
 			e, header, parseErr := metadataRecord(data)
 			if parseErr != nil {
-				if recoverInvalid && idx.Header != nil && errors.Is(parseErr, errInvalidJSONRecord) {
-					idx.Issues = append(idx.Issues, ParseError{Path: path, Line: lineNo, Err: parseErr})
+				if recoverInvalid && idx.Header != nil && errors.Is(parseErr, errRecordGap) {
 					offset += length
 					if err == io.EOF {
 						break

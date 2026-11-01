@@ -1,9 +1,9 @@
 package session
 
 // Metadata reads share the eager reader's Go schemas, but never decode hidden
-// payload strings. The standard JSON scanner owns syntax and depth checks.
-// Object views keep raw slices only for this record, use exact keys, and apply
-// last-key-wins before schema checks or extraction. No view escapes into Entry.
+// payload strings. Object views keep raw slices only for this record, use exact
+// keys, and apply last-key-wins before schema checks or extraction. No view
+// escapes into Entry.
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 	"sync"
 )
 
-var errInvalidJSONRecord = errors.New("invalid JSON record or nesting exceeds limit")
+var errRecordGap = errors.New("session record boundary")
 
 type metadataObjectView map[string][]byte
 
@@ -86,7 +86,7 @@ func metadataStringEnd(b []byte, start int) int {
 		}
 		i = j + 1
 	}
-	panic("metadata view received invalid JSON string")
+	panic("metadata view string boundary")
 }
 
 func metadataValueEnd(b []byte, start int) int {
@@ -119,7 +119,7 @@ func metadataValueEnd(b []byte, start int) int {
 		}
 		return len(b)
 	}
-	panic("metadata view received invalid JSON container")
+	panic("metadata view container boundary")
 }
 
 func metadataSkipSpace(b []byte, i int) int {
@@ -336,11 +336,16 @@ func metadataUsage(b []byte) Usage {
 	return usage
 }
 
-func handScanRecord(data []byte) (*Entry, *SessionHeader, error) {
-	// This also enforces the eager decoder's depth bound before any view
-	// function operates, including for unknown or hidden payload values.
+func handScanRecord(data []byte) (entry *Entry, header *SessionHeader, err error) {
+	// Treat a damaged physical record as an invisible gap. The surrounding
+	// session remains readable and the writer stays disabled.
+	defer func() {
+		if recover() != nil {
+			entry, header, err = nil, nil, errRecordGap
+		}
+	}()
 	if !json.Valid(data) {
-		return nil, nil, errInvalidJSONRecord
+		return nil, nil, errRecordGap
 	}
 	obj, err := metadataObject(data)
 	if err != nil {

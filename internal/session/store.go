@@ -119,12 +119,12 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	idx, err := BuildIndex(path)
 	if err != nil {
 		var parseErr *ParseError
-		if !errors.As(err, &parseErr) || !errors.Is(err, errInvalidJSONRecord) {
+		if !errors.As(err, &parseErr) || !errors.Is(err, errRecordGap) {
 			return nil, err
 		}
-		// A crashed writer can leave one torn JSONL record in the middle of an
-		// otherwise usable Pi session. Keep valid records after it visible, but
-		// never append to the damaged file.
+		// A crashed writer can leave one interrupted record in the middle of an
+		// otherwise usable Pi session. Keep the valid records visible and let
+		// subsequent writes continue after the recovered gap.
 		idx, err = buildIndexRecovering(path)
 		if err != nil {
 			return nil, err
@@ -159,9 +159,6 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
 	s := &Store{header: header, entries: entries, records: records, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
-	if len(idx.Issues) > 0 {
-		s.writeErr = fmt.Errorf("session contains %d invalid record(s); writes are disabled (first: %v)", len(idx.Issues), idx.Issues[0])
-	}
 	s.rebuildIndex()
 	s.knownInfo, err = os.Stat(path)
 	if err != nil {
