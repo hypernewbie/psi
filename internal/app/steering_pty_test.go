@@ -135,6 +135,78 @@ func TestActualAppCancelRestoresSteeringToEditor(t *testing.T) {
 	q.finish()
 }
 
+func TestActualAppSteeringDuringManualCompaction(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	var mu sync.Mutex
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(raw))
+		requestNumber := len(bodies)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		emit := func(name string, data any) {
+			b, _ := json.Marshal(data)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Keep the manual summary request open long enough to queue editor input.
+		time.Sleep(500 * time.Millisecond)
+		text := "MANUAL_COMPACT_CONTINUED"
+		if requestNumber == 1 {
+			text = "MANUAL_COMPACT_SUMMARY"
+		}
+		emit("message_start", map[string]any{"message": map[string]any{"id": fmt.Sprintf("manual-%d", requestNumber), "model": "m", "usage": map[string]any{"input_tokens": 1}}})
+		emit("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+		emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
+		emit("content_block_stop", map[string]any{"index": 0})
+		emit("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 2}})
+		emit("message_stop", map[string]any{})
+	}))
+	defer server.Close()
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false,"keepRecentTokens":50},"outputPad":0}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":22000}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-key"}}`)
+	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("seed")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "m", StopReason: "stop", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: strings.Repeat("prior ", 6000)}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
+	q.prompt()
+	q.write("/compact\r")
+	q.wait("Compacting context")
+	q.write("STEER_MANUAL_COMPACT\r")
+	q.wait("Steering: STEER_MANUAL_COMPACT")
+	q.wait("MANUAL_COMPACT_CONTINUED")
+	q.prompt()
+	rows := append(append([]string{}, q.screen.Scrollback...), strings.Split(q.screen.Text(), "\n")...)
+	joined := strings.Join(rows, "\n")
+	if !strings.Contains(joined, "› STEER_MANUAL_COMPACT") {
+		t.Fatalf("queued message was not delivered after manual compaction: %q", rows)
+	}
+	mu.Lock()
+	if len(bodies) != 2 {
+		t.Fatalf("provider requests = %d, want summary and post-compaction continuation", len(bodies))
+	}
+	last := bodies[1]
+	mu.Unlock()
+	if !strings.Contains(last, "STEER_MANUAL_COMPACT") {
+		t.Fatalf("post-compaction request lost queued input: %s", last)
+	}
+	q.write("/quit\r")
+	q.finish()
+}
+
 // Compaction runs inside a busy run: the editor stays active, and a steering
 // message queued while compaction streams is delivered at the next turn
 // boundary, after the summary, before the next model request.

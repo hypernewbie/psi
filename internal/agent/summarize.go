@@ -109,7 +109,14 @@ func (l *Loop) Compact(ctx context.Context, cfg Config, focus string) error {
 		return err
 	}
 	defer l.end()
-	return l.compactWithReason(ctx, cfg, focus, event.CompactionManual)
+	if err := l.compactWithReason(ctx, cfg, focus, event.CompactionManual); err != nil {
+		return err
+	}
+	// Deliver messages queued while compaction ran against the compacted context.
+	if l.deliverSteering() {
+		return l.run(ctx, cfg)
+	}
+	return nil
 }
 
 // CheckCompaction performs the same read-only preparation used by Compact.

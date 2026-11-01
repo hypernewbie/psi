@@ -211,27 +211,31 @@ func TestCompactionWithSteeringArrivingConcurrently(t *testing.T) {
 		t.Fatalf("compaction failed: %v", err)
 	}
 
-	// Invariant: steering was queued behind compaction and is still pending for the next turn
-	pending := loop.PendingSteering()
-	if len(pending) != 1 || pending[0] != "steered during compaction" {
-		t.Fatalf("pending steering = %v, want ['steered during compaction']", pending)
+	// The queued message must be delivered on the compacted context before
+	// Compact returns, rather than being stranded for an unrelated later turn.
+	if pending := loop.PendingSteering(); len(pending) != 0 {
+		t.Fatalf("steering was left queued after compaction: %v", pending)
+	}
+	if fake.CallCount() != 2 {
+		t.Fatalf("provider calls = %d, want summary plus one continuation", fake.CallCount())
+	}
+	last := fake.Calls[1]
+	found := false
+	for _, message := range last.Messages {
+		if message.Role == "user" && strings.Contains(fmt.Sprint(message.Content), "steered during compaction") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("post-compaction request lost queued message: %+v", last.Messages)
 	}
 
-	// Verify session tree has valid compaction entry and is continuable
+	// Verify session tree has valid compaction entry and is continuable.
 	proj, err := store.Projection()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
 		t.Fatalf("session invalid after compaction: %v", err)
-	}
-
-	// Running a subsequent turn delivers steering cleanly
-	loop.prov = fake
-	if err := loop.Submit(context.Background(), "proceed", cfg); err != nil {
-		t.Fatalf("subsequent submit failed: %v", err)
-	}
-	if p := loop.PendingSteering(); len(p) != 0 {
-		t.Fatalf("steering not drained after submit: %v", p)
 	}
 }
