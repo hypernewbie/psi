@@ -89,6 +89,7 @@ func TestSteeringRowsRenderAboveEditorLikePendingMessages(t *testing.T) {
 	c.SetPresentation(PresentationSnapshot{NoColor: true})
 	c.Draw()
 	c.SetSteeringRows([]string{"first steer", "second steer"})
+	c.SetFollowUpRows([]string{"later follow-up"})
 	rows := append(append([]string{}, vt.Scrollback...), strings.Split(vt.Text(), "\n")...)
 	border := -1
 	for i, row := range rows {
@@ -97,13 +98,14 @@ func TestSteeringRowsRenderAboveEditorLikePendingMessages(t *testing.T) {
 			break
 		}
 	}
-	if border < 4 {
-		t.Fatalf("steering rows or borders missing: %q", rows)
+	if border < 5 {
+		t.Fatalf("queued rows or borders missing: %q", rows)
 	}
-	if strings.TrimSpace(rows[border-4]) != "" || !strings.Contains(rows[border-3], "Steering: first steer") || !strings.Contains(rows[border-2], "Steering: second steer") || strings.TrimSpace(rows[border-1]) != "" {
-		t.Fatalf("steering block does not match Pi's pending rows: %q", rows)
+	if strings.TrimSpace(rows[border-5]) != "" || !strings.Contains(rows[border-4], "Steering: first steer") || !strings.Contains(rows[border-3], "Steering: second steer") || !strings.Contains(rows[border-2], "Follow-up: later follow-up") || strings.TrimSpace(rows[border-1]) != "" {
+		t.Fatalf("queued block does not match Pi's pending rows: %q", rows)
 	}
 	c.SetSteeringRows(nil)
+	c.SetFollowUpRows(nil)
 	rows = append(append([]string{}, vt.Scrollback...), strings.Split(vt.Text(), "\n")...)
 	for _, row := range rows {
 		if strings.Contains(row, "Steering:") {

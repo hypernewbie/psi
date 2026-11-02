@@ -338,6 +338,57 @@ func steeringAssertions(t *testing.T, store *session.Store, fake *provider.Fake,
 	}
 }
 
+func TestFollowUpWaitsForRunEndAndDeliversOneAtATime(t *testing.T) {
+	store, _, fake, _, _ := testSetup(t)
+	fake.Responses = []*provider.Response{
+		{Text: "first answer", StopReason: "stop"},
+		{Text: "follow-up one answer", StopReason: "stop"},
+		{Text: "follow-up two answer", StopReason: "stop"},
+	}
+	var loop *Loop
+	var starts int
+	var delivered []string
+	loop = New(store, tools.NewRegistry(store.Cwd()), fake, func(e event.Event) {
+		switch e.Type {
+		case event.AssistantStart:
+			starts++
+			if starts == 1 {
+				loop.FollowUp("follow-up one")
+				loop.FollowUp("follow-up two")
+			}
+		case event.FollowUpDelivered:
+			delivered = append(delivered, e.Text)
+		}
+	})
+	if err := loop.Submit(context.Background(), "initial", Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.CallCount() != 3 {
+		t.Fatalf("provider calls = %d, want initial plus two follow-ups", fake.CallCount())
+	}
+	requests := fake.Requests()
+	contains := func(req provider.Request, text string) bool {
+		for _, message := range req.Messages {
+			if message.Role == "user" && strings.Contains(fmt.Sprint(message.Content), text) {
+				return true
+			}
+		}
+		return false
+	}
+	if contains(requests[0], "follow-up one") || contains(requests[1], "follow-up two") {
+		t.Fatal("follow-up arrived before the preceding run turn finished")
+	}
+	if !contains(requests[1], "follow-up one") || !contains(requests[2], "follow-up one") || !contains(requests[2], "follow-up two") {
+		t.Fatalf("follow-ups were not delivered one at a time: %+v", requests)
+	}
+	if strings.Join(delivered, ",") != "follow-up one,follow-up two" {
+		t.Fatalf("delivery order = %q", delivered)
+	}
+	if pending := loop.PendingFollowUp(); len(pending) != 0 {
+		t.Fatalf("undelivered follow-ups remain: %q", pending)
+	}
+}
+
 func storeUserText(entry *session.Entry) string {
 	if entry.Message == nil || entry.Message.Message.User == nil {
 		return ""

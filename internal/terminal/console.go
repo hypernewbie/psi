@@ -16,9 +16,10 @@ import (
 )
 
 type Input struct {
-	Key   []byte
-	Reply []byte // bounded terminal reply, never interpreted as editor input
-	Err   error
+	Key      []byte
+	FollowUp bool   // Alt+Enter; when idle, behaves like Enter
+	Reply    []byte // bounded terminal reply, never interpreted as editor input
+	Err      error
 	// Resize is a viewport change, never an editor key or pasted content.
 	Resize bool
 	// Paste transaction markers from the bounded decoder.
@@ -77,6 +78,7 @@ type Console struct {
 	toolRow             string
 	steeringRows        []string
 	steeringTexts       []string
+	followUpTexts       []string
 	loopRows            []string
 	loopText            string
 	thinking            bool
@@ -441,7 +443,7 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 					}
 					continue
 				}
-				if !send(Input{Key: d.Key}) {
+				if !send(Input{Key: d.Key, FollowUp: d.FollowUp}) {
 					return
 				}
 			}
@@ -481,7 +483,7 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 				}
 				continue
 			}
-			if !send(Input{Key: d.Key}) {
+			if !send(Input{Key: d.Key, FollowUp: d.FollowUp}) {
 				return
 			}
 		}
@@ -539,10 +541,20 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		}
 		return "", false, false, false
 	}
+	if input.FollowUp {
+		if busy {
+			c.inputLimitShown = false
+			text := c.Editor.Submit()
+			c.clearCompletion(false)
+			c.Draw()
+			return text, true, false, false
+		}
+		input.Key = []byte{'\r'}
+	}
 	// While a run is active the editor stays usable, like Pi's editor during
 	// streaming. Only the cancel keys are intercepted; every other key follows
 	// the normal editing path, and Enter returns the text so the application
-	// can queue it as a steering message.
+	// can queue it as a steering or follow-up message.
 	if busy && len(input.Key) == 1 && (input.Key[0] == 3 || input.Key[0] == 27) {
 		return "", false, false, true
 	}
@@ -840,17 +852,29 @@ func (c *Console) SetSteeringRows(texts []string) {
 	c.Draw()
 }
 
+// SetFollowUpRows shows queued messages that wait for the current run to end.
+func (c *Console) SetFollowUpRows(texts []string) {
+	c.followUpTexts = append(c.followUpTexts[:0], texts...)
+	c.Draw()
+}
+
 func (c *Console) renderSteeringRows(width int) {
-	if len(c.steeringTexts) == 0 {
+	if len(c.steeringTexts)+len(c.followUpTexts) == 0 {
 		c.steeringRows = nil
 		return
 	}
 	width = max(1, width-1)
-	rows := make([]string, 0, len(c.steeringTexts)+1)
+	rows := make([]string, 0, len(c.steeringTexts)+len(c.followUpTexts)+1)
 	rows = append(rows, "")
-	for _, text := range c.steeringTexts {
-		row := StyledRow{Spans: []StyledSpan{{Text: "Steering: ", Token: TokenMuted}, {Text: TruncateToWidth(Sanitize(text), max(1, width-CellWidth("Steering: "))), Token: TokenMuted}}}
+	appendRow := func(label, text string) {
+		row := StyledRow{Spans: []StyledSpan{{Text: label, Token: TokenMuted}, {Text: TruncateToWidth(Sanitize(text), max(1, width-CellWidth(label))), Token: TokenMuted}}}
 		rows = append(rows, FormatStyledRow(row, width, c.presentation.NoColor, c.presentation.Theme))
+	}
+	for _, text := range c.steeringTexts {
+		appendRow("Steering: ", text)
+	}
+	for _, text := range c.followUpTexts {
+		appendRow("Follow-up: ", text)
 	}
 	c.steeringRows = rows
 }

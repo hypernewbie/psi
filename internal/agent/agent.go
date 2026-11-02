@@ -44,14 +44,15 @@ type Config struct {
 }
 
 type Loop struct {
-	mu       sync.Mutex
-	running  bool
-	store    *session.Store
-	reg      *tools.Registry
-	prov     provider.Provider
-	sink     func(event.Event)
-	steerMu  sync.Mutex
-	steering []string
+	mu        sync.Mutex
+	running   bool
+	store     *session.Store
+	reg       *tools.Registry
+	prov      provider.Provider
+	sink      func(event.Event)
+	steerMu   sync.Mutex
+	steering  []string
+	followUps []string
 }
 
 func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink func(event.Event)) *Loop {
@@ -81,12 +82,38 @@ func (l *Loop) PendingSteering() []string {
 	return append([]string(nil), l.steering...)
 }
 
+// FollowUp queues a message until the current run has no more tools or steering.
+func (l *Loop) FollowUp(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	l.steerMu.Lock()
+	l.followUps = append(l.followUps, text)
+	l.steerMu.Unlock()
+}
+
+// PendingFollowUp returns queued messages that have not been delivered yet.
+func (l *Loop) PendingFollowUp() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	return append([]string(nil), l.followUps...)
+}
+
 // ClearSteering takes and clears the queued steering messages.
 func (l *Loop) ClearSteering() []string {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
 	out := l.steering
 	l.steering = nil
+	return out
+}
+
+// ClearFollowUp takes and clears the queued follow-up messages.
+func (l *Loop) ClearFollowUp() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	out := l.followUps
+	l.followUps = nil
 	return out
 }
 
@@ -110,6 +137,27 @@ func (l *Loop) deliverSteering() bool {
 		l.sink(event.Event{Type: event.SteeringDelivered, Text: text})
 	}
 	return len(msgs) > 0
+}
+
+// deliverFollowUp persists one queued message at the point when the current
+// run would otherwise finish. One-at-a-time matches Pi's default queue mode.
+func (l *Loop) deliverFollowUp() (bool, error) {
+	l.steerMu.Lock()
+	if len(l.followUps) == 0 {
+		l.steerMu.Unlock()
+		return false, nil
+	}
+	text := l.followUps[0]
+	l.followUps = l.followUps[1:]
+	l.steerMu.Unlock()
+	if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
+		l.steerMu.Lock()
+		l.followUps = append([]string{text}, l.followUps...)
+		l.steerMu.Unlock()
+		return false, fmt.Errorf("storage failure, stopping: %w", err)
+	}
+	l.sink(event.Event{Type: event.FollowUpDelivered, Text: text})
+	return true, nil
 }
 
 func (l *Loop) Running() bool { l.mu.Lock(); defer l.mu.Unlock(); return l.running }
@@ -401,9 +449,21 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			return fmt.Errorf("model reached its output limit; response saved, tool calls were not executed")
 		}
 		if len(resp.ToolCalls) == 0 {
-			// Deliver user steering first. An active loop then adds its hidden
-			// continuation so the next request keeps both messages in order.
+			// Deliver steering before follow-ups. Follow-ups wait until the
+			// current run has no more tool calls or steering messages.
 			deliveredSteering := l.deliverSteering()
+			if !deliveredSteering {
+				deliveredFollowUp, deliverErr := l.deliverFollowUp()
+				if deliverErr != nil {
+					return deliverErr
+				}
+				if deliveredFollowUp {
+					if err := l.maybeAdaptiveCompact(ctx, cfg, true, true); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if cfg.ContinueOnEnd != nil {
 				messageType, content, ok := cfg.ContinueOnEnd()
 				if ok {

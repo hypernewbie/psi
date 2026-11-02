@@ -121,7 +121,15 @@ func (l *Loop) ContinuePending(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer l.end()
-	if !l.deliverSteering() {
+	delivered := l.deliverSteering()
+	if !delivered {
+		var err error
+		delivered, err = l.deliverFollowUp()
+		if err != nil {
+			return err
+		}
+	}
+	if !delivered {
 		return nil
 	}
 	return l.run(ctx, cfg)
@@ -142,6 +150,13 @@ func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resume
 		}
 		l.sink(event.Event{Type: event.SteeringDelivered, Text: resumePrompt})
 		return l.run(ctx, cfg)
+	}
+	if !queued {
+		var err error
+		queued, err = l.deliverFollowUp()
+		if err != nil {
+			return err
+		}
 	}
 	if queued {
 		return l.run(ctx, cfg)

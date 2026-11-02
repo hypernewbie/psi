@@ -11,6 +11,7 @@ func TestEventConstants(t *testing.T) {
 		RunStart:          "run_start",
 		RunEnd:            "run_end",
 		SteeringDelivered: "steering_delivered",
+		FollowUpDelivered: "follow_up_delivered",
 		ToolStart:         "tool_start",
 		ToolEnd:           "tool_end",
 		Retry:             "retry",

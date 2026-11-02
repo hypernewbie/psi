@@ -12,6 +12,7 @@ const (
 	RunStart          Type = "run_start"
 	RunEnd            Type = "run_end"
 	SteeringDelivered Type = "steering_delivered"
+	FollowUpDelivered Type = "follow_up_delivered"
 	ToolStart         Type = "tool_start"
 	ToolEnd           Type = "tool_end"
 	Retry             Type = "retry"

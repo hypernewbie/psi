@@ -1514,13 +1514,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
-		case event.SteeringDelivered:
-			// A delivered steering message is a normal user turn: swap the dim
-			// queued row for the standard user-message rendering.
-			if pending := activeLoop.PendingSteering(); len(pending) == 0 {
-				console.SetSteeringRows(nil)
-			} else {
-				console.SetSteeringRows(pending)
+		case event.SteeringDelivered, event.FollowUpDelivered:
+			// A delivered queued message becomes a normal user turn. Remove it
+			// from the appropriate dim queue and append its durable transcript row.
+			if activeLoop != nil {
+				console.SetSteeringRows(activeLoop.PendingSteering())
+				console.SetFollowUpRows(activeLoop.PendingFollowUp())
 			}
 			console.EnsureTranscriptGap()
 			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: ev.Text})
@@ -1923,24 +1922,28 @@ func (r *runtime) repl(console *terminal.Console) error {
 			cancel()
 			busy = false
 			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
-			// Undelivered steering normally returns to the editor. If it arrived
-			// in the narrow interval after compaction's final queue poll, keep the
-			// settled loop and run that message on the compacted context.
+			// Queued input can arrive after the run's last queue poll but before
+			// its settled event reaches this loop. Continue it after a clean run;
+			// on cancellation or failure, restore it to the editor instead.
 			var undelivered []string
-			var lateSteeringLoop *agent.Loop
+			var lateQueueLoop *agent.Loop
 			if activeLoop != nil {
-				if compactionCommitted && len(activeLoop.PendingSteering()) > 0 {
-					lateSteeringLoop = activeLoop
+				pendingSteering := activeLoop.PendingSteering()
+				pendingFollowUp := activeLoop.PendingFollowUp()
+				if err == nil && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
+					lateQueueLoop = activeLoop
 				} else {
-					undelivered = activeLoop.ClearSteering()
+					undelivered = append(activeLoop.ClearSteering(), activeLoop.ClearFollowUp()...)
 				}
 			}
-			if lateSteeringLoop != nil {
-				activeLoop = lateSteeringLoop
+			if lateQueueLoop != nil {
+				activeLoop = lateQueueLoop
 				console.SetSteeringRows(activeLoop.PendingSteering())
+				console.SetFollowUpRows(activeLoop.PendingFollowUp())
 			} else {
 				activeLoop = nil
 				console.SetSteeringRows(nil)
+				console.SetFollowUpRows(nil)
 			}
 			if len(undelivered) > 0 {
 				combined := strings.Join(undelivered, "\n\n")
@@ -2024,16 +2027,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 				initialMessages = initialMessages[1:]
 				start(message, message, "", "", "", false)
 			}
-			if lateSteeringLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
+			if lateQueueLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
 				ctx, stop := context.WithCancel(context.Background())
 				cancel = stop
 				busy = true
 				compacting = false
 				r.state = StateWaiting
 				setActivity("Working… (Esc/Ctrl+C cancel)")
-				activeLoop = lateSteeringLoop
+				activeLoop = lateQueueLoop
 				compactionCountAtStart = r.ac.Snapshot().CompactionCount
-				lateLoop, cfg := lateSteeringLoop, activeConfig
+				lateLoop, cfg := lateQueueLoop, activeConfig
 				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
 				r.draw(console)
 			}
@@ -2042,7 +2045,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				pendingACCompactFocus = nil
 				checkAndStartCompact(focus, true, true)
 			}
-			if err == nil && lateSteeringLoop == nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting && r.ac.Snapshot().CompactionCount == compactionCountAtStart {
+			if err == nil && lateQueueLoop == nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting && r.ac.Snapshot().CompactionCount == compactionCountAtStart {
 				scheduleEndTurn()
 			}
 			_, doneFramesAfter, _, _ := console.FrameStats()
@@ -2263,8 +2266,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if activeLoop != nil {
-					activeLoop.Steer(text)
-					console.SetSteeringRows(activeLoop.PendingSteering())
+					if input.FollowUp {
+						activeLoop.FollowUp(text)
+						console.SetFollowUpRows(activeLoop.PendingFollowUp())
+					} else {
+						activeLoop.Steer(text)
+						console.SetSteeringRows(activeLoop.PendingSteering())
+					}
 				}
 				r.draw(console)
 				continue

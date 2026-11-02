@@ -9,6 +9,31 @@ import (
 	"psi/internal/testutil/leakcheck"
 )
 
+func TestInputDecoderRecognizesAltEnterFollowUpChord(t *testing.T) {
+	now := time.Now()
+	d := NewDecoder()
+	d.SetClock(func() time.Time { return now })
+	if out := d.Feed([]byte{27}); len(out) != 0 {
+		t.Fatalf("Escape should remain pending: %+v", out)
+	}
+	now = now.Add(20 * time.Millisecond)
+	out := d.Feed([]byte{'\r'})
+	if len(out) != 1 || !out[0].FollowUp || len(out[0].Key) != 0 {
+		t.Fatalf("Alt+Enter = %+v", out)
+	}
+
+	d = NewDecoder()
+	d.SetClock(func() time.Time { return now })
+	if out := d.Feed([]byte{27}); len(out) != 0 {
+		t.Fatalf("Escape should remain pending: %+v", out)
+	}
+	now = now.Add(escapeTimeout)
+	out = d.Feed([]byte{'\r'})
+	if len(out) != 2 || string(out[0].Key) != "\x1b" || string(out[1].Key) != "\r" {
+		t.Fatalf("timed-out Escape plus Enter must remain separate: %+v", out)
+	}
+}
+
 func TestInputDecoderSeparatesEscapeFromFollowingControlKey(t *testing.T) {
 	d := NewDecoder()
 	out := d.Feed([]byte("\x1b\x15"))

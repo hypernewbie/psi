@@ -101,7 +101,7 @@ func HelpText() string {
 		"",
 		HotkeysText(),
 		"",
-		"Busy input stays active: Enter queues steering; Esc/Ctrl+C cancels; undelivered steering returns to the draft.",
+		"Busy input: Enter queues steering; Alt+Enter queues a follow-up; Esc/Ctrl+C cancels and restores queued text.",
 		"Unknown /commands never become prompts; command errors preserve the draft.",
 		"",
 		"Examples:",

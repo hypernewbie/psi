@@ -33,6 +33,6 @@ Commands (bounded inline, searchable editor pickers, no fullscreen):
 - `/skill:name [args]` — resolve, persist reproducible input (`psi.input`), show invocation once
 - `/quit` — settle work, restore terminal
 
-Busy: the editor stays active during a run, like Pi. `Enter` queues a steering message (dim `Steering: …` row) that is delivered at the next turn boundary and keeps the run going; `Esc`/`Ctrl+C` cancel the run and return any undelivered steering to the draft. Slash commands run only when idle; their text returns to the draft during a run.
+Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
 Unknown `/commands` error locally, never become prompts.
 Every command works after resume and after cancellation; draft preserved on errors.

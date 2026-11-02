@@ -23,6 +23,7 @@ const (
 
 type Decoded struct {
 	Key        []byte // single key unit (paste content delivered as chunks with Paste=true)
+	FollowUp   bool   // legacy Alt+Enter chord
 	Paste      bool   // inside bracketed paste content
 	PasteStart bool
 	PasteEnd   bool
@@ -79,6 +80,13 @@ func (d *Decoder) Feed(data []byte) []Decoded {
 }
 
 func (d *Decoder) feedByte(b byte) []Decoded {
+	// Legacy terminals encode Alt+Enter as ESC followed by carriage return.
+	// Keep ordinary Escape handling unchanged when the timeout has elapsed.
+	if len(d.pending) == 1 && d.pending[0] == 27 && b == '\r' && d.now().Sub(d.pendingAt) < escapeTimeout {
+		d.pending = nil
+		d.pendingAt = time.Time{}
+		return []Decoded{{FollowUp: true}}
+	}
 	// Inside paste: buffer until end marker, normalize, enforce budget.
 	if d.inPaste {
 		d.pasteBuf = append(d.pasteBuf, b)
