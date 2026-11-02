@@ -451,6 +451,9 @@ func Boundary(path []*session.Entry, keepRecent int) (firstKeptID string, err er
 	// Walk back keepRecent user-visible messages, then extend to a safe point.
 	// Safe = not between a tool call and its results.
 	n := len(path)
+	if keepRecent <= 0 {
+		return "", fmt.Errorf("no useful compaction boundary fits")
+	}
 	start := n - keepRecent
 	if start < 0 {
 		start = 0

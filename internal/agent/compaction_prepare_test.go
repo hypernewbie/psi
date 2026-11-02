@@ -161,6 +161,49 @@ func TestCheckCompactionRecoversInterruptedToolCall(t *testing.T) {
 	}
 }
 
+func TestLegacyBoundaryRejectsNonpositiveRetention(t *testing.T) {
+	store, _, _, _, _ := testSetup(t)
+	if _, err := store.AppendMessage(userMsg("request")); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, keepRecent := range []int{0, -1, -100} {
+		if _, err := Boundary(path, keepRecent); err == nil {
+			t.Errorf("Boundary(path, %d) unexpectedly succeeded", keepRecent)
+		}
+	}
+}
+
+func TestLegacyBoundaryKeepsToolCallWithItsResult(t *testing.T) {
+	store, _, _, _, _ := testSetup(t)
+	requestID, err := store.AppendMessage(userMsg("request"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", Content: []session.ContentBlock{{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: "call-1", Name: "read"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{
+		Role: "toolResult", ToolCallID: "call-1", ToolName: "read",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Boundary(path, 1)
+	if err != nil || got != requestID {
+		t.Fatalf("Boundary() = (%q, %v), want turn-start entry %q", got, err, requestID)
+	}
+}
+
 func TestPrepareCompactionKeepsToolCallWithTrailingResult(t *testing.T) {
 	store, _, _, _, _ := testSetup(t)
 	if _, err := store.AppendMessage(userMsg("older request")); err != nil {

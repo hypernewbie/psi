@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"psi/internal/event"
@@ -255,10 +256,6 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	}
 	summaryCfg := cfg
 	summaryCfg.Model = summaryModel
-	maxOutput := min(4096, summaryCfg.Model.MaxTokens)
-	if maxOutput <= 0 {
-		maxOutput = 4096
-	}
 	historyText := prepared.PreviousSummary
 	var historyUsage provider.Usage
 	hasHistoryUsage := false
@@ -267,7 +264,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 		if strings.TrimSpace(transcript) == "" {
 			return fmt.Errorf("no conversation text to summarize; original context is unchanged")
 		}
-		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, prepared.PreviousSummary, false, maxOutput)
+		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, prepared.PreviousSummary, false)
 		if err != nil {
 			return err
 		}
@@ -291,7 +288,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 			}
 			return fmt.Errorf("no turn-prefix conversation to summarize; original context is unchanged")
 		}
-		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, "", true, maxOutput)
+		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, "", true)
 		if err != nil {
 			if hasHistoryUsage {
 				if persistErr := l.persistCompactionUsage(summaryCfg, historyUsage, "history summary completed; split-turn summary did not complete"); persistErr != nil {
@@ -324,7 +321,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	return err
 }
 
-func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Provider, cfg Config, focus, transcript, previous string, turnPrefix bool, maxOutput int) (*provider.Response, error) {
+func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Provider, cfg Config, focus, transcript, previous string, turnPrefix bool) (*provider.Response, error) {
 	var prompt string
 	if turnPrefix {
 		prompt = "# Conversation\n" + transcript + "\n\n# Instructions\n" + turnPrefixSummaryPrompt
@@ -345,9 +342,7 @@ func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Prov
 		}
 		prompt += base
 	}
-	if cfg.Model.ContextWindow > 0 && len(prompt)/3+maxOutput+2000 >= cfg.Model.ContextWindow {
-		return nil, fmt.Errorf("history is too large for a safe summary request; original context is unchanged")
-	}
+	maxOutput := summaryOutputTokenLimit(cfg.Model, prompt)
 	resp, err := summaryProvider.Send(ctx, provider.Request{
 		Model: cfg.Model, Thinking: "off", MaxTokens: maxOutput, System: summarizationSystemPrompt,
 		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: prompt}}}},
@@ -359,15 +354,77 @@ func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Prov
 		}
 		return nil, fmt.Errorf("summary failed; original context is unchanged: %w", err)
 	}
-	if resp == nil || strings.TrimSpace(resp.Text) == "" || len(resp.ToolCalls) > 0 || (resp.StopReason != "stop" && resp.StopReason != "") {
-		if resp != nil {
-			if err := l.persistCompactionUsage(cfg, resp.Usage, "incomplete compaction summary; original context unchanged"); err != nil {
-				return nil, err
+	if resp == nil {
+		return nil, fmt.Errorf("summary provider returned no response; original context is unchanged")
+	}
+	if resp.StopReason == "length" {
+		if err := l.persistCompactionUsage(cfg, resp.Usage, "incomplete compaction summary; original context unchanged"); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("summary hit the output token limit and is incomplete; original context is unchanged")
+	}
+	if resp.StopReason == "error" {
+		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary stopped with an error"); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("summary provider reported an error; original context is unchanged")
+	}
+
+	text := resp.Text
+	hasToolCall := len(resp.ToolCalls) > 0
+	if len(resp.Content) > 0 {
+		var textContent strings.Builder
+		for _, block := range resp.Content {
+			switch block.Type {
+			case "text":
+				textContent.WriteString(block.Text)
+			case "toolCall":
+				hasToolCall = true
 			}
 		}
-		return nil, fmt.Errorf("summary is incomplete; original context is unchanged")
+		text = textContent.String()
+	}
+	if hasToolCall {
+		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary attempted a tool call"); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("summary attempted to call a tool; original context is unchanged")
+	}
+	if strings.TrimSpace(text) == "" {
+		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary returned no text"); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("summary returned no text; original context is unchanged")
+	}
+	if resp.StopReason != "stop" && resp.StopReason != "" {
+		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary stopped before completion"); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("summary stopped before completion (%s); original context is unchanged", resp.StopReason)
+	}
+	if text != resp.Text {
+		copy := *resp
+		copy.Text = text
+		resp = &copy
 	}
 	return resp, nil
+}
+
+// summaryOutputTokenLimit mirrors Pi's default maxTokens policy: use the model's
+// output limit, then reduce it only when the prompt plus Pi's 4096-token context
+// safety margin would exceed the model context window.
+func summaryOutputTokenLimit(model provider.ModelMeta, prompt string) int {
+	limit := model.MaxTokens
+	if model.ContextWindow <= 0 {
+		return limit
+	}
+	inputChars := piStringChars(summarizationSystemPrompt) + piStringChars(prompt)
+	inputTokens := int(math.Ceil(float64(inputChars) / 3.5))
+	available := max(1, model.ContextWindow-inputTokens-4096)
+	if limit <= 0 || available < limit {
+		return available
+	}
+	return limit
 }
 
 func (l *Loop) persistCompactionUsage(cfg Config, usage provider.Usage, note string) error {
@@ -459,9 +516,23 @@ func summaryTranscript(messages []session.AgentMessage) string {
 }
 
 func truncateSummaryText(s string) string {
-	r := []rune(s)
-	if len(r) <= 2000 {
+	const maxChars = 2000
+	totalChars := piStringChars(s)
+	if totalChars <= maxChars {
 		return s
 	}
-	return string(r[:2000]) + " [truncated for summary]"
+	var prefix strings.Builder
+	usedChars := 0
+	for _, r := range s {
+		width := 1
+		if r > 0xFFFF {
+			width = 2
+		}
+		if usedChars+width > maxChars {
+			break
+		}
+		prefix.WriteRune(r)
+		usedChars += width
+	}
+	return fmt.Sprintf("%s\n\n[... %d more characters truncated]", prefix.String(), totalChars-usedChars)
 }
