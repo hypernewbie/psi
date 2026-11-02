@@ -20,8 +20,9 @@ const (
 	StateExiting        State = "exiting"
 )
 
-// Allowed actions per state. Submission is rejected during replay, cancellation,
-// unsettled replacement, and active runs (cancellation only).
+// Allowed actions per state. New submissions are rejected during replay,
+// cancellation, unsettled replacement, and active runs. Active runs still accept
+// steering messages through the dedicated queue.
 func (s State) CanSubmit() bool { return s == StateIdle || s == StateOffline }
 
 // CanCancel reports whether Ctrl+C cancels an owned operation.

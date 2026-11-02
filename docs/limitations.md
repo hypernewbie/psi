@@ -84,7 +84,7 @@ Linux, WSL2, and SSH acceptance still require the complete platform matrix.
 
 History hides reasoning, tool arguments, tool results, diffs, and image payloads.
 Tool outcomes use explicit result flags and cancellation metadata, not guesses from output text.
-Unresolved calls remain interrupted rather than successful.
+An interrupted call stays unresolved in the saved transcript; API replay adds Pi's synthetic error result without saving it or rerunning the tool.
 
 The agent reconciles authoritative final text and saves visible interrupted text.
 It rejects contradictory finals and does not execute their tools.
@@ -92,7 +92,7 @@ Cancellation records known unstarted calls without executing them.
 A storage failure blocks further writes until the operator opens another checked session or creates a new session.
 
 During a run, the editor stays active and `Enter` queues a steering message, as in Pi.
-Two Pi behaviors remain open: slash commands do not execute mid-run (their text returns to the draft), and there is no separate follow-up queue (`Alt+Enter`).
+`/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft. Psi has no separate follow-up queue (`Alt+Enter`).
 
 Context-limit recovery permits at most one compaction and retry before visible partial output.
 Synthetic loop/provider tests cover that path.
