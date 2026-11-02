@@ -116,6 +116,24 @@ func TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget(t *testing.T) {
 	}
 }
 
+func TestSummaryTranscriptDoesNotApplyAPIReplayRepairs(t *testing.T) {
+	messages := []session.AgentMessage{{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", StopReason: "aborted",
+		Content: []session.ContentBlock{
+			{Type: "text", Text: &session.TextContent{Type: "text", Text: "partial response"}},
+			{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: "orphan", Name: "read", Arguments: map[string]any{"path": "fixture.txt"}}},
+		},
+	}}}
+
+	transcript := summaryTranscript(messages)
+	if !strings.Contains(transcript, "partial response") || !strings.Contains(transcript, "Tool call: read") {
+		t.Fatalf("summary transcript filtered the interrupted attempt: %q", transcript)
+	}
+	if strings.Contains(transcript, "No result provided") || strings.Contains(transcript, "[Tool result:") {
+		t.Fatalf("summary transcript applied API-only orphan repair: %q", transcript)
+	}
+}
+
 func TestCheckCompactionRecoversInterruptedToolCall(t *testing.T) {
 	store, _, _, loop, _ := testSetup(t)
 	if _, err := store.AppendMessage(userMsg("continue this work")); err != nil {

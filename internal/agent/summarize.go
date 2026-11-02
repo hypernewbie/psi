@@ -416,7 +416,6 @@ func IsCompactionNoWork(err error) bool {
 }
 
 func summaryTranscript(messages []session.AgentMessage) string {
-	messages = session.TransformMessagesForAPI(messages)
 	var out strings.Builder
 	for _, m := range messages {
 		switch m.Role {
