@@ -204,18 +204,6 @@ func PrepareCompaction(path []*session.Entry, proj *session.Projection, keepRece
 	}
 
 	cut := cutPoints[0]
-	if keepRecentTokens == 0 {
-		// psi's established explicit retain-none mode is an intentional deviation
-		// from Pi's ordinary cut-point policy. Keep it readable and tested.
-		prepared.Messages = append([]session.AgentMessage(nil), proj.Flat...)
-		if summaryTranscript(session.ConvertToLLM(prepared.Messages)) == "" {
-			prepared.Messages = nil
-			return prepared, nil
-		}
-		prepared.Disposition = CompactionEligible
-		return prepared, nil
-	}
-
 	accumulated := 0
 	exceededBudget := false
 	for i := end - 1; i >= start; i-- {

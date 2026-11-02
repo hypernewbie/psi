@@ -87,6 +87,14 @@ func TestManualCompactionEmitsStartAndEndReason(t *testing.T) {
 	if _, err := store.AppendMessage(userMsg("older request")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "older answer"}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(userMsg("current request")); err != nil {
+		t.Fatal(err)
+	}
 	fake.Responses = []*provider.Response{{Text: "summary", StopReason: "stop"}}
 	var phases []event.Event
 	loop := New(store, reg, fake, func(e event.Event) {
@@ -157,19 +165,63 @@ func TestAutomaticCompactionEmitsThresholdReason(t *testing.T) {
 	}
 }
 
-func TestZeroRecentBudgetWritesRetainNoneCompaction(t *testing.T) {
+func TestZeroRecentBudgetMatchesPiCutPoint(t *testing.T) {
 	store, _, fake, loop, _ := testSetup(t)
-	if _, err := store.AppendMessage(userMsg("old request")); err != nil {
+	if _, err := store.AppendMessage(userMsg("older request")); err != nil {
 		t.Fatal(err)
 	}
-	fake.Responses = []*provider.Response{{Text: "summary", StopReason: "stop"}}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "older answer"}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(userMsg("current request")); err != nil {
+		t.Fatal(err)
+	}
+	latestID, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "current answer"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareCompaction(path, projection, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Disposition != CompactionEligible || !prepared.SplitTurn || prepared.FirstKeptEntryID != latestID {
+		t.Fatalf("zero-budget cut differs from Pi: %+v, latest=%s", prepared, latestID)
+	}
+	if len(prepared.Messages) != 2 || len(prepared.TurnPrefix) != 1 || prepared.TurnPrefix[0].User == nil {
+		t.Fatalf("wrong zero-budget compaction split: %+v", prepared)
+	}
+
+	fake.Responses = []*provider.Response{
+		{Text: "older-history summary", StopReason: "stop"},
+		{Text: "current-turn summary", StopReason: "stop"},
+	}
 	if err := loop.Compact(context.Background(), Config{Model: modelMeta(), KeepRecentTokens: 0}, ""); err != nil {
 		t.Fatal(err)
 	}
 	entries := store.Entries()
-	last := entries[len(entries)-1]
-	if last.Compaction == nil || last.Compaction.FirstKeptEntryID != last.ID() {
-		t.Fatal("zero budget did not honor retain-none semantics")
+	compaction := entries[len(entries)-1].Compaction
+	if compaction == nil || compaction.FirstKeptEntryID != latestID {
+		t.Fatalf("zero-budget compaction did not keep Pi's latest cut point: %+v", compaction)
+	}
+	post, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := summaryTranscript(session.ConvertToLLM(post.Flat))
+	if !strings.Contains(transcript, "current answer") || strings.Contains(transcript, "older request") {
+		t.Fatalf("zero-budget replay retained wrong context: %q", transcript)
 	}
 }
 

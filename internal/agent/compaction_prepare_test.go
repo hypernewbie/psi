@@ -133,9 +133,13 @@ func TestCheckCompactionRecoversInterruptedToolCall(t *testing.T) {
 	if prepared.Disposition != CompactionEligible {
 		t.Fatalf("compaction disposition = %q", prepared.Disposition)
 	}
-	transcript := summaryTranscript(session.ConvertToLLM(prepared.Messages))
-	if !strings.Contains(transcript, "No result provided") {
-		t.Fatalf("summary transcript missing Pi-style synthetic result: %q", transcript)
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiMessages := session.TransformMessagesForAPI(session.ConvertToLLM(proj.Flat))
+	if len(session.UnresolvedToolCalls(apiMessages)) != 0 {
+		t.Fatal("API replay did not repair the interrupted tool call")
 	}
 }
 
