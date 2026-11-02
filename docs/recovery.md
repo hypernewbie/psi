@@ -1,10 +1,10 @@
 # Recovery
 
-Interrupted sessions: psi detects unresolved tool calls before submission and
-stops instead of rerunning uncertain side effects. Use `/new` for a fresh
-session, or inspect a copy in Pi and use its branch tools. Psi does not provide
-a branch-navigation UI and cannot determine whether an interrupted side effect
-already happened.
+Interrupted sessions: psi follows Pi's replay behavior. It adds a synthetic
+error result for each tool call with no saved result, then continues without
+rerunning that tool. The synthetic result is sent only as model context and is
+not written to the session. Psi cannot determine whether an interrupted side
+effect already happened.
 
 Truncated tail: psi refuses to append after an incomplete final record. Recover
 from a copy:

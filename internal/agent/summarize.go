@@ -166,9 +166,6 @@ func (l *Loop) CheckCompaction(cfg Config) (CompactionPreparation, error) {
 	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
 		return CompactionPreparation{}, err
 	}
-	if len(session.UnresolvedToolCalls(session.ConvertToLLM(proj.Flat))) > 0 {
-		return CompactionPreparation{}, fmt.Errorf("cannot compact unresolved tool calls")
-	}
 	prepared, err := PrepareCompaction(path, proj, cfg.KeepRecentTokens)
 	if err != nil {
 		return CompactionPreparation{}, err
@@ -404,6 +401,7 @@ func IsCompactionNoWork(err error) bool {
 }
 
 func summaryTranscript(messages []session.AgentMessage) string {
+	messages = session.TransformMessagesForAPI(messages)
 	var out strings.Builder
 	for _, m := range messages {
 		switch m.Role {

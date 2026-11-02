@@ -116,6 +116,29 @@ func TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget(t *testing.T) {
 	}
 }
 
+func TestCheckCompactionRecoversInterruptedToolCall(t *testing.T) {
+	store, _, _, loop, _ := testSetup(t)
+	if _, err := store.AppendMessage(userMsg("continue this work")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", StopReason: "toolUse", Content: []session.ContentBlock{{Type: "toolCall", Call: &session.ToolCall{Type: "toolCall", ID: "orphan", Name: "bash", Arguments: map[string]any{"command": "pwd"}}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := loop.CheckCompaction(Config{Model: modelMeta(), KeepRecentTokens: 0})
+	if err != nil {
+		t.Fatalf("compaction should repair interrupted tool flow: %v", err)
+	}
+	if prepared.Disposition != CompactionEligible {
+		t.Fatalf("compaction disposition = %q", prepared.Disposition)
+	}
+	transcript := summaryTranscript(session.ConvertToLLM(prepared.Messages))
+	if !strings.Contains(transcript, "No result provided") {
+		t.Fatalf("summary transcript missing Pi-style synthetic result: %q", transcript)
+	}
+}
+
 func TestPrepareCompactionKeepsToolCallWithTrailingResult(t *testing.T) {
 	store, _, _, _, _ := testSetup(t)
 	if _, err := store.AppendMessage(userMsg("older request")); err != nil {

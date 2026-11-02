@@ -145,9 +145,6 @@ func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
 	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
 		return err
 	}
-	if missing := session.UnresolvedToolCalls(session.ConvertToLLM(proj.Flat)); len(missing) > 0 {
-		return fmt.Errorf("unresolved tool calls from interrupted session (%d); start a new session or recover a copy before continuing", len(missing))
-	}
 	// Validate provider input before any durable mutation or billable call.
 	if cfg.Thinking == "" {
 		cfg.Thinking = "off"
@@ -191,9 +188,6 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 	}
 	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
 		return err
-	}
-	if missing := session.UnresolvedToolCalls(session.ConvertToLLM(proj.Flat)); len(missing) > 0 {
-		return fmt.Errorf("unresolved tool calls from interrupted session (%d); start a new session or recover a copy before continuing", len(missing))
 	}
 	if cfg.Thinking == "" {
 		cfg.Thinking = "off"
@@ -504,6 +498,7 @@ func (l *Loop) persistStreamUsage(cfg Config, err error) error {
 }
 
 func (l *Loop) buildRequest(llm []session.AgentMessage, _ *session.Projection, cfg Config) (provider.Request, error) {
+	llm = session.TransformMessagesForAPI(llm)
 	var msgs []provider.Message
 	for _, m := range llm {
 		switch m.Role {

@@ -131,9 +131,9 @@ func TestEmptySubmissionRejected(t *testing.T) {
 	}
 }
 
-func TestInterruptedRecovery(t *testing.T) {
+func TestInterruptedRecoveryUsesSyntheticToolResult(t *testing.T) {
 	store, _, fake, loop, _ := testSetup(t)
-	// Seed an unresolved assistant tool call directly.
+	// Seed a tool call whose execution result was not durably recorded.
 	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "hi", Timestamp: 1}}); err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +143,28 @@ func TestInterruptedRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.Responses = []*provider.Response{{Text: "x", StopReason: "stop"}}
-	if err := loop.Submit(context.Background(), "next", Config{Model: modelMeta()}); err == nil || !strings.Contains(err.Error(), "unresolved") {
-		t.Errorf("interrupted must stop before rerun, got %v", err)
+	cfg := Config{Model: modelMeta(), Tools: toolDefs()}
+	if err := loop.Submit(context.Background(), "next", cfg); err != nil {
+		t.Fatalf("interrupted history should continue: %v", err)
+	}
+	requests := fake.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("provider requests = %d, want one", len(requests))
+	}
+	var synthetic *provider.Message
+	for i := range requests[0].Messages {
+		if requests[0].Messages[i].Role == "toolResult" && requests[0].Messages[i].ToolCallID == "cx" {
+			synthetic = &requests[0].Messages[i]
+			break
+		}
+	}
+	if synthetic == nil || !synthetic.IsError || len(synthetic.Content) != 1 || synthetic.Content[0].Text != "No result provided" {
+		t.Fatalf("provider replay missing synthetic result: %+v", requests[0].Messages)
+	}
+	for _, entry := range store.Entries() {
+		if entry.Kind == "message" && entry.Message.Message.ToolResult != nil && entry.Message.Message.ToolResult.ToolCallID == "cx" {
+			t.Fatal("synthetic recovery result must not be persisted")
+		}
 	}
 }
 

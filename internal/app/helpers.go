@@ -81,9 +81,6 @@ func continuable(proj *session.Projection) string {
 	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
 		return "blocked: " + err.Error()
 	}
-	if len(session.UnresolvedToolCalls(proj.Flat)) > 0 {
-		return "blocked: unresolved tool calls (inspect, then new session or copy)"
-	}
 	return "ok"
 }
 
