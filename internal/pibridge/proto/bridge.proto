@@ -1,0 +1,650 @@
+// Canonical Phi ↔ Pi bridge contract.
+//
+// One service, one bidirectional stream per provisioned Pi runtime.
+// Phi owns the server on a local IPC listener (Unix-domain socket or
+// Windows named pipe). Pi's bundled extension is the only client.
+//
+// Compatibility rules: field numbers are stable; removed numbers and names
+// must be reserved; new fields must be optional-compatible. Unknown fields
+// are accepted and ignored by both peers, but a missing oneof payload is a
+// protocol error. See PROTOCOL.md for bounds and status mappings.
+syntax = "proto3";
+
+package phi.pi.v1;
+
+option go_package = "github.com/hypernewbie/phi/internal/pibridge/pb;pibridgepb";
+
+// Connect is the only RPC. Pi initiates one long-lived stream per runtime.
+service Integration {
+  rpc Connect(stream PiToPhi) returns (stream PhiToPi);
+}
+
+// ---------------------------------------------------------------------------
+// Envelopes
+// ---------------------------------------------------------------------------
+
+// Envelope for every Pi → Phi message. The identity fields are repeated on
+// each message so a single frame is self-describing after a reconnect.
+message PiToPhi {
+  string pane_id = 1;
+  string process_id = 2;
+  uint64 runtime_generation = 3;
+  reserved 14, 15, 16;
+  reserved "summary_result", "command_error", "cancel_acknowledged";
+  oneof payload {
+    Hello hello = 10;
+    AgentStarted agent_started = 11;
+    AgentSettled agent_settled = 12;
+    StateSnapshot state_snapshot = 13;
+    HistoryResponse history_response = 17;
+    ModelsResponse models_response = 18;
+    SetModelAck set_model_ack = 19;
+    ThinkingLevelsResponse thinking_levels_response = 20;
+    SetThinkingAck set_thinking_ack = 21;
+    CompactResult compact_result = 22;
+    SkillsResponse skills_response = 23;
+    InvokeSkillAck invoke_skill_ack = 24;
+    ReloadAck reload_ack = 25;
+    SyncboardRequest syncboard_request = 26;
+    AttachmentPromptAck attachment_prompt_ack = 27;
+    TranscriptSearchResponse transcript_search_response = 28;
+  }
+}
+
+// Envelope for every Phi → Pi message.
+message PhiToPi {
+  string pane_id = 1;
+  string process_id = 2;
+  uint64 runtime_generation = 3;
+  reserved 11, 12;
+  reserved "summarize", "cancel";
+  oneof payload {
+    Accepted accepted = 10;
+    ProtocolError protocol_error = 13;
+    HistoryRequest history_request = 14;
+    ModelsRequest models_request = 15;
+    SetModelRequest set_model_request = 16;
+    ThinkingLevelsRequest thinking_levels_request = 17;
+    SetThinkingRequest set_thinking_request = 18;
+    CompactRequest compact_request = 19;
+    SkillsRequest skills_request = 20;
+    InvokeSkillRequest invoke_skill_request = 21;
+    ReloadRequest reload_request = 22;
+    SyncboardResponse syncboard_response = 23;
+    AttachmentPromptRequest attachment_prompt_request = 24;
+    StateRequest state_request = 25;
+    TranscriptSearchRequest transcript_search_request = 26;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+
+// Hello is the first application message on every stream. Protocol version,
+// identities, capabilities, and the replay range of the retained journal.
+message Hello {
+  uint32 protocol_version = 1;
+  reserved 2, 3;
+  reserved "package_version", "host_version";
+  string session_id = 4;
+  string runtime_id = 5;
+  repeated string capabilities = 6;
+  StateSnapshot current_state = 7;
+  uint64 journal_first_sequence = 8;
+  uint64 journal_last_sequence = 9;
+}
+
+// Accepted confirms the negotiated version, the accepted capability set, and
+// the runtime identity Phi bound to this generation.
+message Accepted {
+  uint32 protocol_version = 1;
+  repeated string capabilities = 2;
+  uint64 runtime_generation = 3;
+  string runtime_id = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+// Logical run outcome at settlement. UNSPECIFIED means explicitly unknown:
+// never guess success or cancellation from absent evidence.
+enum RunOutcome {
+  RUN_OUTCOME_UNSPECIFIED = 0;
+  RUN_OUTCOME_COMPLETED = 1;
+  RUN_OUTCOME_ERROR = 2;
+  RUN_OUTCOME_ABORTED = 3;
+}
+
+// Logical agent state. RUNNING covers every low-level start before the
+// matching settlement; IDLE is the settled baseline.
+enum LogicalState {
+  LOGICAL_STATE_UNSPECIFIED = 0;
+  LOGICAL_STATE_IDLE = 1;
+  LOGICAL_STATE_RUNNING = 2;
+}
+
+// AgentStarted opens or continues a logical run. A second start before
+// settlement belongs to the same run (retry, queued continuation, recovery).
+message AgentStarted {
+  uint64 event_sequence = 1;
+  uint64 run_id = 2;
+}
+
+// AgentSettled closes the logical run. Neither turn_end nor agent_end is a
+// settlement; only this message is the ready-for-input boundary.
+message AgentSettled {
+  uint64 event_sequence = 1;
+  uint64 run_id = 2;
+  RunOutcome outcome = 3;
+}
+
+// One retained lifecycle edge for replay. event_sequence values are
+// monotonic within a runtime and never reused.
+message LifecycleRecord {
+  uint64 event_sequence = 1;
+  uint64 run_id = 2;
+  bool settled = 3;
+  RunOutcome outcome = 4;
+}
+
+// Active model identity for lifecycle snapshots.
+message ModelSnapshot {
+  string provider = 1;
+  string model = 2;
+}
+
+// Authoritative current state, sent on attach, reconnect, and transitions.
+message StateSnapshot {
+  LogicalState state = 1;
+  string session_id = 2;
+  string leaf_id = 3;
+  ModelSnapshot model = 4;
+  repeated LifecycleRecord journal = 5;
+  bool journal_gap = 6;
+  uint64 state_revision = 7;
+  reserved 8;
+  reserved "outstanding_summaries";
+  // Empty means unknown; it is never inferred to mean off.
+  string thinking_level = 9;
+  // Optional context telemetry, sampled from the host's
+  // getContextUsage. Absent when the pi.context.v1 API is
+  // unavailable or the latest sampling was undefined/invalid.
+  // Absent never means zero usage; see ContextUsageSnapshot.
+  ContextUsageSnapshot context_usage = 10;
+  // Optional compaction readiness, sampled from the host's
+  // isIdle/hasPendingMessages plus local compaction tracking.
+  // Absent when the pi.compact.v1 APIs are unavailable.
+  CompactReadiness compact_readiness = 11;
+  // Optional native Reload readiness. Missing counters mean unknown;
+  // they are never inferred to be zero.
+  ReloadReadiness reload_readiness = 12;
+  // Optional Pi attachment readiness. It is independent of Compact APIs.
+  // Absence means unavailable, never idle.
+  AttachmentReadiness attachment_readiness = 14;
+  // Correlates a live refresh requested with pi.state.v2. Empty on
+  // unsolicited lifecycle/telemetry snapshots and Hello baselines.
+  string request_id = 13;
+}
+
+// Read-only live refresh. The runtime samples identities and readiness,
+// then answers with a StateSnapshot echoing request_id. Never dispatches input.
+message StateRequest {
+  string request_id = 1;
+}
+
+// Optional context telemetry. Scalar presence is explicit: an absent
+// tokens/percent means the host reports unknown (null), never zero.
+// context_window stays present when known, including right after a
+// compaction whose token count is still unknown. Consumers must keep
+// unknown distinct from a zero measurement and from an absent
+// capability. No transcripts, prompts, summaries, or costs travel here.
+message ContextUsageSnapshot {
+  // Estimated context tokens; absent when unknown. When present it
+  // is a finite nonnegative number within the safe-integer magnitude.
+  optional double tokens = 1;
+  // Model context window; present when known. When present it is a
+  // finite positive number within the safe-integer magnitude.
+  optional double context_window = 2;
+  // Usage percent of the window; absent when tokens are unknown.
+  // When present it is a finite nonnegative number.
+  optional double percent = 3;
+}
+
+// Optional compaction readiness for the existing Compact control
+// states. All fields are a point-in-time sample, not a promise that
+// a later dispatch still passes admission.
+message CompactReadiness {
+  // The host reports idle: no agent run and no compaction active.
+  bool idle = 1;
+  // The host reports queued messages waiting.
+  bool has_pending_messages = 2;
+  // A native compaction start was observed without its end.
+  bool compaction_active = 3;
+  // This Pi process owns an unresolved bridge compaction.
+  bool bridge_pending = 4;
+}
+
+// ---------------------------------------------------------------------------
+// On-demand history reads
+// ---------------------------------------------------------------------------
+
+// HistoryRequest asks the extension for the live editor history.
+// request_id correlates exactly one HistoryResponse; the extension
+// echoes it verbatim. Best-effort: the answer may be unavailable,
+// or never arrive, without disturbing lifecycle traffic.
+message HistoryRequest {
+  string request_id = 1;
+}
+
+// HistoryResponse carries one history snapshot for request_id.
+// entries is newest-first; it is ignored when unavailable is set.
+// unavailable means the reader cannot reach a history-shaped editor
+// or the snapshot exceeds the message bound. Phi falls back to its
+// pre-bridge behavior in both cases.
+message HistoryResponse {
+  string request_id = 1;
+  repeated string entries = 2;
+  bool unavailable = 3;
+}
+
+// ---------------------------------------------------------------------------
+// On-demand model list and switching
+// ---------------------------------------------------------------------------
+
+// One catalog entry. provider/model matches ModelSnapshot naming; the
+// Phi UI maps model to its own id field at the edge.
+message ModelRef {
+  string provider = 1;
+  string model = 2;
+}
+
+// ModelsRequest asks the extension for the session's selectable models.
+// request_id correlates exactly one ModelsResponse; the extension
+// echoes it verbatim. Best-effort like history: the answer may be
+// unavailable, or never arrive, without disturbing lifecycle traffic.
+message ModelsRequest {
+  string request_id = 1;
+}
+
+// ModelsResponse carries one model list for request_id. models honors
+// the session's scoped allowlist when scoping is configured. truncated
+// means the list hit the entry cap and is partial; unavailable means
+// the answer exceeds the message bound. Phi surfaces unavailable as
+// an in-picker row and keeps truncated lists usable with a
+// partial-list footer.
+message ModelsResponse {
+  string request_id = 1;
+  repeated ModelRef models = 2;
+  bool truncated = 3;
+  bool unavailable = 4;
+}
+
+// SetModelRequest asks the extension to switch the session model.
+// provider/model name one catalog entry; request_id correlates
+// exactly one SetModelAck, echoed verbatim.
+message SetModelRequest {
+  string request_id = 1;
+  string provider = 2;
+  string model = 3;
+}
+
+// SetModelAck reports one switch outcome for request_id. ok means Pi
+// accepted the switch; reason is empty then. reason is 'no-auth'
+// when the provider has no configured credentials, 'unknown-model'
+// when the entry is not selectable (unknown, or outside the
+// session scope). A successful switch emits model_select, so the
+// current-model snapshot follows on its own.
+message SetModelAck {
+  string request_id = 1;
+  bool ok = 2;
+  string reason = 3;
+}
+
+// ThinkingLevelsRequest asks for levels supported by the live session model.
+message ThinkingLevelsRequest {
+  string request_id = 1;
+}
+
+// ThinkingLevelsResponse carries the supported levels and source model.
+// unavailable means the model or native helper could not be read safely.
+message ThinkingLevelsResponse {
+  string request_id = 1;
+  repeated string levels = 2;
+  string provider = 3;
+  string model = 4;
+  bool unavailable = 5;
+}
+
+// SetThinkingRequest sets one supported level on the expected live model.
+message SetThinkingRequest {
+  string request_id = 1;
+  string level = 2;
+  string provider = 3;
+  string model = 4;
+}
+
+// SetThinkingAck reports an effective native readback. reason is only
+// unsupported-level, model-changed, or empty for an unknown outcome.
+message SetThinkingAck {
+  string request_id = 1;
+  bool ok = 2;
+  string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Native compaction
+// ---------------------------------------------------------------------------
+
+// CompactRequest asks the extension to run one native compaction via
+// the host's public compact({ onComplete, onError }). Best-effort
+// like history: the answer may never arrive without disturbing
+// lifecycle traffic, and an expired wait means an unknown outcome,
+// never permission to replay. At most one native compaction runs per
+// Pi process; a second request while one is unresolved is refused.
+message CompactRequest {
+  // Monotonic server-allocated ID, opaque to browser consumers.
+  // Positive canonical decimal uint64 syntax: a leading digit 1-9
+  // followed by up to 19 digits (no leading zeroes, no sign, no
+  // whitespace), numeric value at most 18446744073709551615.
+  // The extension echoes it verbatim and rejects duplicate/older
+  // IDs against a process high-water mark before host invocation.
+  string request_id = 1;
+  // Expected host identity, captured from the current server lease.
+  // The extension rechecks it against a live host read immediately
+  // before invocation and refuses on any mismatch or unreadable
+  // identity. Each is at most 256 chars.
+  string expected_session_id = 2;
+  string expected_leaf_id = 3;
+  // Expected model; absent means the server expects NO model and
+  // the extension refuses when the live host holds one. A model
+  // that appears or changes after the server snapshot must not
+  // bypass the admission fence. All three fences apply at
+  // admission only; native success changes the leaf, so completion
+  // never requires the old leaf.
+  ModelSnapshot expected_model = 4;
+}
+
+// Terminal compaction outcome. UNSPECIFIED means genuinely unknown:
+// never guess success, failure, or cancellation from absent evidence.
+// REFUSED means rejected before host invocation; FAILED and CANCELLED
+// arrive only from the host completion callback after invocation.
+// Exactly one terminal result is emitted per accepted operation.
+enum CompactOutcome {
+  COMPACT_OUTCOME_UNSPECIFIED = 0;
+  COMPACT_OUTCOME_COMPLETED = 1;
+  COMPACT_OUTCOME_REFUSED = 2;
+  COMPACT_OUTCOME_FAILED = 3;
+  COMPACT_OUTCOME_CANCELLED = 4;
+}
+
+// CompactResult reports one terminal outcome for request_id, echoed
+// verbatim. reason is a fixed safe vocabulary, never raw host or
+// provider text, never a transcript or summary:
+//
+//   "" (empty)        no detail (COMPLETED, or UNSPECIFIED)
+//   "duplicate"        older/duplicate ID (REFUSED)
+//   "stale"            expected identity mismatch or unreadable (REFUSED)
+//   "busy"             host not idle (REFUSED)
+//   "queued"           pending messages queued (REFUSED)
+//   "compaction-active" native compaction already active (REFUSED)
+//   "pending"          another bridge compaction unresolved (REFUSED)
+//   "unavailable"      compact APIs missing (REFUSED, defensive)
+//   "cancelled"        host reports cancellation (CANCELLED)
+//   "already-compacted" host reports nothing to compact (FAILED)
+//   "error"            host reports failure (FAILED)
+//   "uncertain"        sync throw without a callback; the process
+//                      latch stays unresolved (UNSPECIFIED)
+message CompactResult {
+  string request_id = 1;
+  CompactOutcome outcome = 2;
+  string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Native resource reload
+// ---------------------------------------------------------------------------
+
+// ReloadRequest asks Pi's native interactive editor to run its fixed
+// /reload command. Identity/readiness are rechecked immediately before
+// callback entry. A lost receipt means unknown, never permission to retry.
+message ReloadRequest {
+  string request_id = 1;
+  string expected_session_id = 2;
+  string expected_leaf_id = 3;
+  ModelSnapshot expected_model = 4;
+  optional uint64 expected_run_id = 5;
+  optional uint64 expected_context_revision = 6;
+}
+
+enum ReloadDispatchOutcome {
+  RELOAD_DISPATCH_OUTCOME_UNSPECIFIED = 0;
+  RELOAD_DISPATCH_OUTCOME_DISPATCHED = 1;
+  RELOAD_DISPATCH_OUTCOME_REFUSED = 2;
+}
+
+// ReloadAck reports callback entry only. DISPATCHED does not mean that
+// Pi completed the reload. reason uses a bounded safe vocabulary.
+message ReloadAck {
+  string request_id = 1;
+  ReloadDispatchOutcome outcome = 2;
+  string reason = 3;
+}
+
+// ReloadReadiness carries exact current identity fences and process-owned
+// mutation state. Counter presence distinguishes known zero from unknown.
+message ReloadReadiness {
+  optional uint64 run_id = 1;
+  optional uint64 context_revision = 2;
+  bool idle = 3;
+  bool has_pending_messages = 4;
+  bool compaction_active = 5;
+  bool compact_pending = 6;
+  bool reload_pending = 7;
+  optional uint64 high_water = 8;
+}
+
+// ---------------------------------------------------------------------------
+// On-demand skill list and invocation
+// ---------------------------------------------------------------------------
+
+// One skill entry. name is the bare Pi skill name without the "skill:"
+// command prefix. Both fields are UTF-8 byte bounds enforced by the
+// bridge, not by Pi: name <= 64 bytes, description <= 1024 bytes. Pi
+// validates character counts and only warns, so an entry that Pi loaded
+// can still be unrepresentable here.
+message SkillRef {
+  string name = 1;
+  string description = 2;
+}
+
+// SkillsRequest asks the extension for the skills the session knows.
+// request_id correlates exactly one SkillsResponse; the extension echoes
+// it verbatim. Best-effort like history and models: the answer may be
+// unavailable, or never arrive, without disturbing lifecycle traffic.
+message SkillsRequest {
+  string request_id = 1;
+}
+
+// SkillsResponse carries one skill list for request_id. truncated means
+// the list hit the entry cap and is partial. unavailable means the
+// answer cannot be represented on the wire: one entry breaks the byte
+// bounds, or the answer exceeds the message bound. Entries are never
+// silently omitted, so a partial list is never shown as complete.
+message SkillsResponse {
+  string request_id = 1;
+  repeated SkillRef skills = 2;
+  bool truncated = 3;
+  bool unavailable = 4;
+}
+
+// InvokeSkillRequest asks the extension to send one skill to Pi. name is
+// the bare skill name; request_id correlates exactly one InvokeSkillAck,
+// echoed verbatim.
+message InvokeSkillRequest {
+  string request_id = 1;
+  string name = 2;
+}
+
+// InvokeSkillAck reports one invocation outcome for request_id. ok means
+// the request was dispatched to the Pi host; it never means the agent
+// accepted or completed it. reason is empty then, or one of
+// 'unknown-skill' when the session does not know the name,
+// 'unavailable' when the host call is missing or failed, and 'error' for
+// any other refused dispatch. Later Pi-side failures (no model, no
+// credentials) are not observable here.
+message InvokeSkillAck {
+  string request_id = 1;
+  bool ok = 2;
+  string reason = 3;
+}
+
+// Optional readiness for native attachment dispatch. This sample is
+// independent of compact_readiness and is refreshed at lifecycle edges.
+message AttachmentReadiness {
+  bool idle = 1;
+  bool has_pending_messages = 2;
+  bool compaction_active = 3;
+  bool bridge_pending = 4;
+  optional bool image_available = 5;
+}
+
+// One checked process-scoped handoff reference. basename is a generated
+// leaf name, never a browser path. The host verifies size, type, and digest.
+message AttachmentRef {
+  string basename = 1;
+  uint64 size_bytes = 2;
+  string mime_type = 3;
+  string kind = 4;
+  string sha256 = 5;
+}
+
+// One user-triggered attachment prompt. The host rechecks identity and
+// readiness immediately before its synchronous sendUserMessage call.
+message AttachmentPromptRequest {
+  string request_id = 1;
+  string expected_session_id = 2;
+  string expected_leaf_id = 3;
+  ModelSnapshot expected_model = 4;
+  string text = 5;
+  repeated AttachmentRef attachments = 6;
+}
+
+enum AttachmentPromptOutcome {
+  ATTACHMENT_PROMPT_OUTCOME_UNSPECIFIED = 0;
+  ATTACHMENT_PROMPT_OUTCOME_REFUSED = 1;
+  ATTACHMENT_PROMPT_OUTCOME_DISPATCHED = 2;
+  ATTACHMENT_PROMPT_OUTCOME_UNKNOWN = 3;
+}
+
+// DISPATCHED means the public host call returned synchronously and its
+// matching acknowledgment was emitted. It does not mean model receipt.
+message AttachmentPromptAck {
+  string request_id = 1;
+  AttachmentPromptOutcome outcome = 2;
+  string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Native Syncboard tool
+// ---------------------------------------------------------------------------
+
+// SyncboardOperation selects one fixed Syncboard API operation. The
+// request never carries a URL or an arbitrary HTTP path.
+enum SyncboardOperation {
+  SYNCBOARD_OPERATION_UNSPECIFIED = 0;
+  SYNCBOARD_OPERATION_LIST = 1;
+  SYNCBOARD_OPERATION_GET = 2;
+  SYNCBOARD_OPERATION_UPSERT = 3;
+  SYNCBOARD_OPERATION_DELETE = 4;
+}
+
+// SyncboardOutcome distinguishes a complete API response from a request
+// that did not start or one whose outcome cannot be established.
+enum SyncboardOutcome {
+  SYNCBOARD_OUTCOME_UNSPECIFIED = 0;
+  SYNCBOARD_OUTCOME_HTTP_RESPONSE = 1;
+  SYNCBOARD_OUTCOME_NOT_SENT = 2;
+  SYNCBOARD_OUTCOME_UNKNOWN = 3;
+}
+
+// SyncboardRequest asks the owning Phi process to perform one bounded
+// Syncboard operation against its configured coordinator.
+message SyncboardRequest {
+  string request_id = 1;
+  SyncboardOperation operation = 2;
+  string key = 3;
+  bytes value_json = 4;
+}
+
+// SyncboardResponse carries one bounded result for request_id. Error
+// reasons use a fixed safe vocabulary and never contain HTTP bodies.
+message SyncboardResponse {
+  string request_id = 1;
+  SyncboardOutcome outcome = 2;
+  uint32 http_status = 3;
+  bytes body_json = 4;
+  string reason = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Bounded active-branch transcript search
+// ---------------------------------------------------------------------------
+
+// TranscriptSearchRequest searches one frozen active-branch snapshot.
+// Initial requests use start_index 0 and an empty anchor; the extension
+// captures the live leaf. Continuations echo the returned session and
+// anchor and resume at next_index. The host refuses an anchor that is no
+// longer on the active branch.
+message TranscriptSearchRequest {
+  string request_id = 1;
+  string query = 2;
+  string session_id = 3;
+  string anchor_leaf_id = 4;
+  uint32 start_index = 5;
+  bool initial = 6;
+}
+
+// One safe transcript match. role is exactly user, assistant, or
+// toolResult. snippet is bounded plain text; no hidden state, tool-call
+// arguments, or images are included.
+message TranscriptSearchMatch {
+  string entry_id = 1;
+  string role = 2;
+  string snippet = 3;
+}
+
+// TranscriptSearchResponse echoes request_id. One response examines no
+// more than 256 branch entries and returns no more than 50 matches.
+// next_index counts branch entries inspected, so an empty page with
+// complete=false still makes bounded forward progress. unavailable
+// invalidates the whole read; partial matches must then be empty.
+message TranscriptSearchResponse {
+  string request_id = 1;
+  string session_id = 2;
+  string anchor_leaf_id = 3;
+  uint32 next_index = 4;
+  repeated TranscriptSearchMatch matches = 5;
+  bool complete = 6;
+  bool unavailable = 7;
+}
+
+// ---------------------------------------------------------------------------
+// Protocol failures
+// ---------------------------------------------------------------------------
+
+enum ProtocolErrorCode {
+  PROTOCOL_ERROR_UNSPECIFIED = 0;
+  PROTOCOL_ERROR_UNSUPPORTED_VERSION = 1;
+  PROTOCOL_ERROR_BAD_IDENTITY = 2;
+  PROTOCOL_ERROR_DUPLICATE_RUNTIME = 3;
+  PROTOCOL_ERROR_STALE_GENERATION = 4;
+  PROTOCOL_ERROR_BAD_PAYLOAD = 5;
+}
+
+// Terminal protocol-level rejection. Ends the stream attempt.
+message ProtocolError {
+  ProtocolErrorCode code = 1;
+  string safe_message = 2;
+}
