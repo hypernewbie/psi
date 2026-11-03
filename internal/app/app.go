@@ -25,6 +25,7 @@ import (
 
 	"psi/internal/ac"
 	"psi/internal/agent"
+	"psi/internal/buildinfo"
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/loop"
@@ -542,7 +543,7 @@ func Run(args []string, version string) error {
 		return err
 	}
 	r := &runtime{
-		store: store, options: o, settings: st, models: models, skills: sk, prompt: prompt, agentDir: agentDir,
+		store: store, version: version, options: o, settings: st, models: models, skills: sk, prompt: prompt, agentDir: agentDir,
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
 		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
@@ -611,6 +612,7 @@ var newlineRun = regexp.MustCompile(`[\r\n]+`)
 
 type runtime struct {
 	store                    *session.Store
+	version                  string
 	reg                      *tools.Registry
 	options                  Options
 	settings                 config.Settings
@@ -2517,6 +2519,8 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return r.handleHotkeysCommand(cmd.Arg, out)
 	case "session":
 		return r.handleSessionCommand(cmd.Arg, out)
+	case "version":
+		return r.handleVersionCommand(cmd.Arg, out)
 	case "reload":
 		return r.handleReloadCommand(cmd.Arg, out)
 	case "new":
@@ -2550,6 +2554,16 @@ func (r *runtime) handleHotkeysCommand(arg string, out io.Writer) (bool, error) 
 		return false, fmt.Errorf("use /hotkeys")
 	}
 	fmt.Fprintln(out, terminal.Sanitize(terminal.HotkeysText()))
+	return false, nil
+}
+
+func (r *runtime) handleVersionCommand(arg string, out io.Writer) (bool, error) {
+	if strings.TrimSpace(arg) != "" {
+		return false, fmt.Errorf("use /version")
+	}
+	for _, line := range buildinfo.Read(r.version).Lines() {
+		fmt.Fprintln(out, terminal.Sanitize(line))
+	}
 	return false, nil
 }
 
