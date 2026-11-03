@@ -28,7 +28,7 @@ Commands (bounded inline, searchable editor pickers, no fullscreen):
 - `/thinking` — searchable supported-level picker with Pi's `→` pointer; `/thinking [level]` applies a direct session-local choice
 - `/compact [focus]` — real cancellable summary, start/settled outcome
 - `/session` — identity, workspace, provider/API/model, thinking, continuation, usage, and theme diagnostics (no secrets, no invented $0.00)
-- `/version` — psi release, git commit and commit time, and Go toolchain/platform as stamped at build time; `(dirty)` marks a tree with uncommitted or untracked changes at build time. Pi has no in-session equivalent, only `pi --version`
+- `/version` — psi release, git commit and commit time, and Go toolchain/platform as stamped at build time; `(dirty)` marks a tree with uncommitted or untracked changes at build time. Pi has no such command: it shows its version in the startup header and through `pi --version`
 - `/reload` — reload supported display/theme settings and resources without replaying committed scrollback
 - `/history [N|all]` — last N user spans (default 20) or full history, display-only, no mutation
 - `/skill:name [args]` — resolve, persist reproducible input (`psi.input`), show invocation once
