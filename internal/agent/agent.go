@@ -51,8 +51,16 @@ type Loop struct {
 	prov      provider.Provider
 	sink      func(event.Event)
 	steerMu   sync.Mutex
-	steering  []string
+	steering  []queuedInput
 	followUps []string
+}
+
+// queuedInput is one undelivered steering message. Provenance rides with the
+// content so a queued skill keeps the invocation it was dispatched from.
+type queuedInput struct {
+	text       string
+	invocation string
+	source     string
 }
 
 func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink func(event.Event)) *Loop {
@@ -67,11 +75,17 @@ func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink
 // current turn's tool calls, before the next model request, and keeps the run
 // alive. It never interrupts the in-flight request.
 func (l *Loop) Steer(text string) {
+	l.SteerWithProvenance(text, "", "")
+}
+
+// SteerWithProvenance queues a user message plus the invocation that produced
+// it, so a dispatched skill keeps its provenance through late delivery.
+func (l *Loop) SteerWithProvenance(text, invocation, source string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 	l.steerMu.Lock()
-	l.steering = append(l.steering, text)
+	l.steering = append(l.steering, queuedInput{text: text, invocation: invocation, source: source})
 	l.steerMu.Unlock()
 }
 
@@ -79,7 +93,11 @@ func (l *Loop) Steer(text string) {
 func (l *Loop) PendingSteering() []string {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
-	return append([]string(nil), l.steering...)
+	out := make([]string, len(l.steering))
+	for i, msg := range l.steering {
+		out[i] = msg.text
+	}
+	return out
 }
 
 // FollowUp queues a message until the current run has no more tools or steering.
@@ -103,7 +121,10 @@ func (l *Loop) PendingFollowUp() []string {
 func (l *Loop) ClearSteering() []string {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
-	out := l.steering
+	out := make([]string, len(l.steering))
+	for i, msg := range l.steering {
+		out[i] = msg.text
+	}
 	l.steering = nil
 	return out
 }
@@ -120,23 +141,42 @@ func (l *Loop) ClearFollowUp() []string {
 // deliverSteering moves queued messages into the session and reports whether
 // anything was delivered. Delivered messages render as normal user messages.
 func (l *Loop) deliverSteering() bool {
+	delivered, err := l.deliverQueuedSteering()
+	if err != nil {
+		// Storage failure stops the run like any other append failure; the
+		// undelivered messages stay queued and are not silently dropped.
+		l.sink(event.Event{Type: event.Error, Text: fmt.Sprintf("storage failure, stopping: %v", err)})
+		return false
+	}
+	return delivered
+}
+
+// deliverQueuedSteering appends queued messages in order and restores the
+// remainder on failure, so a retry cannot duplicate or reorder input.
+func (l *Loop) deliverQueuedSteering() (bool, error) {
 	l.steerMu.Lock()
 	msgs := l.steering
 	l.steering = nil
 	l.steerMu.Unlock()
-	for i, text := range msgs {
-		if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
-			// Storage failure stops the run like any other append failure; the
-			// message is not silently dropped.
+	for i, msg := range msgs {
+		uid, err := l.store.AppendMessage(userMsg(msg.text))
+		if err != nil {
 			l.steerMu.Lock()
 			l.steering = append(msgs[i:], l.steering...)
 			l.steerMu.Unlock()
-			l.sink(event.Event{Type: event.Error, Text: fmt.Sprintf("storage failure, stopping: %v", err)})
-			return false
+			return false, fmt.Errorf("storage failure, stopping: %w", err)
 		}
-		l.sink(event.Event{Type: event.SteeringDelivered, Text: text})
+		if msg.invocation != "" {
+			if _, err := l.store.AppendProvenance(uid, msg.invocation, msg.source); err != nil {
+				l.steerMu.Lock()
+				l.steering = append(msgs[i+1:], l.steering...)
+				l.steerMu.Unlock()
+				return false, fmt.Errorf("storage failure, stopping: %w", err)
+			}
+		}
+		l.sink(event.Event{Type: event.SteeringDelivered, Text: msg.text})
 	}
-	return len(msgs) > 0
+	return len(msgs) > 0, nil
 }
 
 // deliverFollowUp persists one queued message at the point when the current

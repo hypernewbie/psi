@@ -24,14 +24,26 @@ value cannot send the token off-host.
 
 ## Capabilities
 
-Only two capabilities are advertised:
+Nine capabilities are advertised:
 
 - `pi.lifecycle.v1`: run start and settle edges plus a bounded 64-record
   journal that reconnects replay.
-- `pi.state.v2`: state snapshots (session, leaf, model, thinking) and replies
-  to `StateRequest`.
+- `pi.state.v2`: state snapshots (session, leaf, model, thinking, optional
+  context telemetry, optional compact readiness) and replies to
+  `StateRequest`.
+- `pi.models.v1`: list the resolved catalog and switch the live model.
+- `pi.thinking.v1`: list the live model's thinking levels and switch.
+- `pi.history.v1`: read editor recall, newest first.
+- `pi.context.v1`: token/window/percent telemetry, present only when known.
+- `pi.skills.v1`: list session skills and dispatch one through the native
+  `/skill:` path, including during an active run (queued with provenance).
+- `pi.transcript-search.v2`: bounded visible-text search of the active
+  branch, paginated by anchor and index.
+- `pi.compact.v1`: readiness reporting and one admitted native compaction
+  per request id.
 
-Phi keeps its own fallbacks for every other capability.
+Phi keeps its own fallbacks for the capabilities a pane does not advertise.
+Attachments and reload remain Phi-side work.
 
 ## Failure behavior
 
@@ -45,8 +57,14 @@ The bridge is silent: errors never reach the TUI.
 - A missing `Accepted` within 4 s counts as transient. Phi's own hello
   deadline is 5 s, and its exceeded status is terminal, so the local timer
   fires first and keeps the retry.
+- A stream write blocked past 5 s is a local transport fault, not Phi's
+  verdict: the stream is dropped and reconnected.
+- Capability requests are forwarded to the host loop; a full request queue
+  answers unavailable instead of blocking the stream. Replies queue in a
+  bounded outbox so a Phi that stops reading cannot stall the host.
 - Reconnects reuse the runtime id and resend the retained journal, so Phi
-  merges a gap once and ignores duplicate sequences.
+  merges a gap once and ignores duplicate sequences. Requests and replies
+  from a lost stream are never replayed.
 - A new runtime generation (new session, replay, or clone) rotates the runtime
   id, resets the journal, and rebinds the stream.
 
@@ -59,9 +77,8 @@ managed only when both sides support it; otherwise it stays plain.
 ## Limits
 
 - Windows panes stay plain: Phi uses a named pipe and psi has no pipe dialer.
-- Only the two capabilities above exist. Editor history, model switching,
-  thinking controls, compaction, skills, attachments, reload, and transcript
-  search remain Phi fallbacks.
+- Only the capabilities above exist. Attachments and reload remain Phi
+  fallbacks; syncboard is not bridged.
 - psi output is not streamed to Phi. The pane renders its own PTY.
 
 ## Contract

@@ -37,6 +37,15 @@ type fakePhi struct {
 	cutAfter  int
 	onFrame   func(srv pibridgepb.Integration_ConnectServer, frame *pibridgepb.PiToPhi)
 	requestID string
+	// caps overrides the accepted capability set; nil accepts everything the
+	// client offered.
+	caps []string
+	// inject carries server messages to send after the handshake.
+	inject chan *pibridgepb.PhiToPi
+	// acceptRuntime overrides the runtime id echoed in Accepted.
+	acceptRuntime string
+	// cutAfterSend drops the stream after that many injected messages.
+	cutAfterSend int
 }
 
 func startFakePhi(t *testing.T) *fakePhi {
@@ -93,14 +102,23 @@ func (f *fakePhi) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	if mutes > 0 {
 		return nil
 	}
+	f.mu.Lock()
+	caps, runtimeID := f.caps, f.acceptRuntime
+	f.mu.Unlock()
+	if caps == nil {
+		caps = first.GetHello().GetCapabilities()
+	}
+	if runtimeID == "" {
+		runtimeID = first.GetHello().GetRuntimeId()
+	}
 	if err := stream.Send(&pibridgepb.PhiToPi{
 		PaneId: first.GetPaneId(), ProcessId: first.GetProcessId(),
 		RuntimeGeneration: first.GetRuntimeGeneration(),
 		Payload: &pibridgepb.PhiToPi_Accepted{Accepted: &pibridgepb.Accepted{
 			ProtocolVersion:   protocolVersion,
-			Capabilities:      []string{capLifecycle, capState},
+			Capabilities:      caps,
 			RuntimeGeneration: first.GetRuntimeGeneration(),
-			RuntimeId:         first.GetHello().GetRuntimeId(),
+			RuntimeId:         runtimeID,
 		}},
 	}); err != nil {
 		return err
@@ -114,25 +132,67 @@ func (f *fakePhi) Connect(stream pibridgepb.Integration_ConnectServer) error {
 			return err
 		}
 	}
+	frames := make(chan *pibridgepb.PiToPhi, 4)
+	recvErr := make(chan error, 1)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			frame, err := stream.Recv()
+			if err != nil {
+				select {
+				case recvErr <- err:
+				default:
+				}
+				return
+			}
+			select {
+			case frames <- frame:
+			case <-done:
+				return
+			}
+		}
+	}()
 	for {
-		frame, err := stream.Recv()
-		if err != nil {
+		select {
+		case err := <-recvErr:
 			return err
-		}
-		f.mu.Lock()
-		f.frames = append(f.frames, frame)
-		hook := f.onFrame
-		cutNow := false
-		if f.cutAfter > 0 {
-			f.cutAfter--
-			cutNow = f.cutAfter == 0
-		}
-		f.mu.Unlock()
-		if hook != nil {
-			hook(stream, frame)
-		}
-		if cutNow {
-			return status.Error(codes.Unavailable, "cut")
+		case frame := <-frames:
+			f.mu.Lock()
+			hook := f.onFrame
+			cutNow := false
+			if f.cutAfter > 0 {
+				f.cutAfter--
+				cutNow = f.cutAfter == 0
+			}
+			// A cut frame is not recorded: the stream died before Phi
+			// could use it, which is what a lost receipt looks like.
+			if !cutNow {
+				f.frames = append(f.frames, frame)
+			}
+			f.mu.Unlock()
+			if hook != nil {
+				hook(stream, frame)
+			}
+			if cutNow {
+				return status.Error(codes.Unavailable, "cut")
+			}
+		case msg := <-f.inject:
+			msg.PaneId, msg.ProcessId = first.GetPaneId(), first.GetProcessId()
+			msg.RuntimeGeneration = first.GetRuntimeGeneration()
+			if err := stream.Send(msg); err != nil {
+				return err
+			}
+			f.mu.Lock()
+			cutSent := false
+			if f.cutAfterSend > 0 {
+				f.cutAfterSend--
+				cutSent = f.cutAfterSend == 0
+			}
+			f.mu.Unlock()
+			if cutSent {
+				return status.Error(codes.Unavailable, "cut")
+			}
 		}
 	}
 }
@@ -228,8 +288,13 @@ func TestHelloCarriesIdentityMetadataAndCapabilities(t *testing.T) {
 	if h.GetProtocolVersion() != 1 || h.GetRuntimeId() == "" || h.GetSessionId() != "session-7" {
 		t.Fatalf("hello mismatch: %+v", h)
 	}
-	if got := h.GetCapabilities(); len(got) != 2 || got[0] != capLifecycle || got[1] != capState {
+	if got := h.GetCapabilities(); len(got) != len(hostCapabilities) {
 		t.Fatalf("capabilities: %v", got)
+	}
+	for i, name := range hostCapabilities {
+		if h.GetCapabilities()[i] != name {
+			t.Fatalf("capabilities: %v", h.GetCapabilities())
+		}
 	}
 	state := h.GetCurrentState()
 	if state.GetState() != pibridgepb.LogicalState_LOGICAL_STATE_IDLE || state.GetLeafId() != "leaf-7" ||
@@ -279,6 +344,20 @@ func TestServesEdgesSnapshotsAndStateRequests(t *testing.T) {
 		}
 		return false
 	})
+	// State refreshes are served on the host loop, because only the host
+	// knows the current identity. A client that answered them itself would
+	// risk publishing a stale snapshot under a fresh request id.
+	select {
+	case req := <-c.Requests():
+		if req.Kind() != RequestState || req.RequestID() != "req-1" {
+			t.Fatalf("unexpected request: %s %q", req.Kind(), req.RequestID())
+		}
+		if !req.ReplyState() {
+			t.Fatal("state reply rejected")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("state request was not forwarded to the host")
+	}
 	f.waitFor(t, "state request reply", func(_ int, _, frames []*pibridgepb.PiToPhi) bool {
 		for _, fr := range frames {
 			if s := fr.GetStateSnapshot(); s != nil && s.GetRequestId() == "req-1" {
@@ -496,7 +575,7 @@ func TestMessageBounds(t *testing.T) {
 	for i := 0; i < journalLimit; i++ {
 		c.jrn.open(uint64(i + 1))
 	}
-	hello, _, ok := c.hello()
+	hello, _, _, ok := c.hello()
 	if !ok {
 		t.Fatal("no hello")
 	}

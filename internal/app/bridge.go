@@ -1,17 +1,26 @@
 package app
 
 import (
+	"math"
+
 	"psi/internal/event"
 	"psi/internal/pibridge"
 )
 
-// bridgeSnapshot publishes pane identity only. The client owns the runtime
-// id, the running state, and the snapshot revision.
+// bridgeSnapshot publishes pane identity and context telemetry. The client
+// owns the runtime id, the running state, and the snapshot revision.
 func bridgeSnapshot(r *runtime) pibridge.Snapshot {
 	snap := pibridge.Snapshot{
 		Provider: r.ov.Provider,
 		Model:    r.ov.Model,
 		Thinking: r.ov.Thinking,
+	}
+	// Tokens are only ever sampled together with a positive window, so an
+	// absent window means no estimate exists: publishing a lone present zero
+	// would turn unknown into a measurement.
+	if safeContextValue(r.contextWindow) && r.contextWindow > 0 && safeContextValue(r.contextTokens) {
+		snap.ContextTokens, snap.HasContextTokens = r.contextTokens, true
+		snap.ContextWindow, snap.HasContextWindow = r.contextWindow, true
 	}
 	if r.generation > 0 {
 		snap.Generation = uint64(r.generation)
@@ -19,6 +28,22 @@ func bridgeSnapshot(r *runtime) pibridge.Snapshot {
 	if r.store != nil {
 		snap.SessionID = r.store.Header().ID
 		snap.LeafID = r.store.LeafID()
+	}
+	// Readiness is copied, never inferred: an idle app that owns a pending
+	// compaction or an active one is not ready for another.
+	// Unresolved bridge preparation can still install a configuration, so it
+	// counts against readiness the same way an active run does.
+	prepWork := r.bridgeWork != nil && r.bridgeWork()
+	snap.HasCompact = true
+	queued := r.compactPending
+	if r.queuedInputs != nil && r.queuedInputs() > 0 {
+		queued = true
+	}
+	snap.Compact = pibridge.CompactReadiness{
+		Idle:       r.state == StateIdle && !r.compactActive && !r.compactPending && !prepWork,
+		HasPending: queued,
+		Active:     r.compactActive,
+		Pending:    r.compactPending,
 	}
 	return snap
 }
@@ -64,6 +89,12 @@ func (r *runtime) bridgeRunSettled(outcome pibridge.Outcome) {
 		return
 	}
 	r.bridge.RunSettled(outcome)
+}
+
+// safeContextValue rejects the values a consumer must never see as a
+// measurement: negative, non-finite, or beyond exact integer precision.
+func safeContextValue(v float64) bool {
+	return v >= 0 && v <= 1<<53 && !math.IsInf(v, 0) && !math.IsNaN(v)
 }
 
 // runOutcomeOf maps one settlement event to the wire outcome. Interruption
