@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,6 +35,12 @@ func BuildPath(entries []*Entry, leafID string) ([]*Entry, error) {
 		}
 		byID[id] = e
 	}
+	return buildPathByID(byID, entries, leafID)
+}
+
+// buildPathByID walks an already-built identity map. Store keeps byID current,
+// so metadata-only paths do not rebuild a full map on every footer/activation.
+func buildPathByID(byID map[string]*Entry, entries []*Entry, leafID string) ([]*Entry, error) {
 	var leaf *Entry
 	if leafID != "" {
 		var ok bool
@@ -105,6 +112,15 @@ func RestoreModelState(path []*Entry) ModelState {
 		}
 	}
 	return st
+}
+
+// ContextTokens matches Pi's calculateContextTokens: native totalTokens wins,
+// otherwise sum the component counters.
+func ContextTokens(u Usage) int {
+	if u.TotalTokens > 0 {
+		return int(u.TotalTokens)
+	}
+	return int(u.Input + u.Output + u.CacheRead + u.CacheWrite)
 }
 
 // EntryToContextMessages projects one entry to model-visible messages.
@@ -460,7 +476,10 @@ func CheckContinuable(flat []AgentMessage, entries []*Entry) error {
 	}
 	// Deferred/background runtime state is preserved but refuses continuation.
 	for _, e := range entries {
-		if e.Kind == "message" && e.Message.Message.Assistant != nil {
+		if e.Kind == "message" && e.Message != nil && e.Message.Message.Assistant != nil {
+			if e.deferred {
+				return fmt.Errorf("session contains deferred/background runtime state: refuse continuation")
+			}
 			// Assistant Raw may carry deferred handles; detect via raw JSON.
 			var probe struct {
 				Message struct {
@@ -473,6 +492,125 @@ func CheckContinuable(flat []AgentMessage, entries []*Entry) error {
 		}
 	}
 	return nil
+}
+
+// CheckContinuableMetadata is the activation-time continuation check over
+// BuildContextEntries output (latest compaction first). It reads only indexed
+// metadata: roles, content block types, assistant stop reasons, deferred
+// markers, and context edits. A null edit drops the target's messages exactly
+// as applyEdit does; a non-null edit repairs only editable roles.
+func CheckContinuableMetadata(entries []*Entry) error {
+	edits := map[string]*ContextEditEntry{}
+	latestCompaction := -1
+	for i, e := range entries {
+		if e.ContextEdit != nil {
+			edits[e.ContextEdit.TargetID] = e.ContextEdit
+		}
+		// BuildContextEntries places the latest checkpoint first; any later
+		// compaction is an older retained entry with no model-visible messages.
+		if e.Kind == "compaction" && latestCompaction < 0 {
+			latestCompaction = i
+		}
+	}
+	for i, e := range entries {
+		if e.ContextEdit != nil {
+			continue
+		}
+		// Older retained compactions contribute no messages to the projection;
+		// only the latest checkpoint and summary are model-visible.
+		if e.Kind == "compaction" && i != latestCompaction {
+			continue
+		}
+		issue := e.contentIssue
+		if edit, ok := edits[e.ID()]; ok {
+			if replaced, replacementIssue := replacementContinuationIssue(e, edit.Replacement); replaced {
+				issue = replacementIssue
+			}
+		}
+		if issue != "" {
+			return errors.New(issue)
+		}
+		if e.deferred {
+			return errors.New("session contains deferred/background runtime state: refuse continuation")
+		}
+	}
+	return nil
+}
+
+// replacementContinuationIssue mirrors applyEdit/replaceContent normalization.
+// It reports whether the edit actually replaces the target and, if so, whether
+// the replacement payload itself is unsafe. A structurally invalid replacement
+// leaves the original content in place, so the caller keeps the original issue.
+func replacementContinuationIssue(e *Entry, replacement json.RawMessage) (bool, string) {
+	if len(replacement) == 0 || string(replacement) == "null" {
+		return true, ""
+	}
+	role := ""
+	switch e.Kind {
+	case "message":
+		if e.Message == nil {
+			return false, ""
+		}
+		role = e.Message.Message.Role
+	case "custom_message":
+		role = "custom"
+	default:
+		return false, ""
+	}
+	switch role {
+	case "user", "custom", "assistant", "toolResult":
+	default:
+		return false, ""
+	}
+	if role == "assistant" && e.Message.Message.Assistant != nil {
+		switch e.Message.Message.Assistant.StopReason {
+		case "deferred", "pending":
+			return true, "unfinished/deferred assistant response: refuse continuation"
+		}
+	}
+	var rep struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(replacement, &rep); err != nil {
+		return false, ""
+	}
+	var asString string
+	isString := json.Unmarshal(rep.Content, &asString) == nil
+	switch role {
+	case "user":
+		var blocks []UserContentBlock
+		if json.Unmarshal(rep.Content, &blocks) == nil {
+			return true, metadataContentIssue(rep.Content, "user")
+		}
+		if isString {
+			return true, ""
+		}
+	case "custom":
+		if isString {
+			return true, ""
+		}
+		var value any
+		if json.Unmarshal(rep.Content, &value) == nil {
+			return true, metadataContentIssue(rep.Content, "custom")
+		}
+	case "assistant":
+		if isString {
+			return true, ""
+		}
+		var blocks []ContentBlock
+		if json.Unmarshal(rep.Content, &blocks) == nil {
+			return true, metadataContentIssue(rep.Content, "assistant")
+		}
+	case "toolResult":
+		if isString {
+			return true, ""
+		}
+		var blocks []UserContentBlock
+		if json.Unmarshal(rep.Content, &blocks) == nil {
+			return true, metadataContentIssue(rep.Content, "toolResult")
+		}
+	}
+	return false, ""
 }
 
 // UnresolvedToolCalls returns assistant tool calls without matching results.

@@ -299,6 +299,33 @@ func TestDiscoveryAndLifecycles(t *testing.T) {
 	}
 }
 
+func TestContinueMatchesSymlinkedCwd(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	dir := filepath.Join(root, "sessions")
+	store, err := New(OpenOptions{Cwd: alias, SessionDir: dir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "continue through symlink", Timestamp: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	continued, err := Continue(real, dir, "", true)
+	if err != nil {
+		t.Fatalf("continue through symlinked cwd: %v", err)
+	}
+	if continued.File() != store.File() {
+		t.Fatalf("continued wrong session: %s != %s", continued.File(), store.File())
+	}
+}
+
 func TestExclusiveLock(t *testing.T) {
 	dir := t.TempDir()
 	s1, _ := New(OpenOptions{Cwd: "/tmp", SessionDir: dir, Persist: true})

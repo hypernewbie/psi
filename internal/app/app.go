@@ -529,7 +529,7 @@ func Run(args []string, version string) error {
 	if err != nil {
 		return err
 	}
-	if o.SessionPath != "" && !sameDir(store.Header().Cwd, cwd) {
+	if o.SessionPath != "" && !session.SameDir(store.Header().Cwd, cwd) {
 		confirmed, err := confirmWorkspaceMismatch(console, lifecycle, store.Header().Cwd, cwd)
 		if err != nil {
 			return err
@@ -675,16 +675,16 @@ func (r *runtime) liveToolRow(console *terminal.Console) (string, bool) {
 }
 
 func (r *runtime) restore() error {
-	proj, err := r.store.Projection()
+	state, err := r.store.ModelState()
 	if err != nil {
 		return err
 	}
 	thinking := ""
 	if r.store.EntryCount() > 0 {
-		thinking = proj.State.ThinkingLevel
+		thinking = state.ThinkingLevel
 	}
 	ov := config.ResolveStartup(r.options.Provider, r.options.Model, r.options.Thinking, r.options.SessionDir, r.options.NoSession,
-		proj.State.Provider, proj.State.ModelID, thinking, r.settings, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
+		state.Provider, state.ModelID, thinking, r.settings, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	if ov.Provider == "" {
 		ov.Provider = "anthropic"
 	}
@@ -826,18 +826,6 @@ func envMap() map[string]string {
 	return m
 }
 
-// sameDir reports whether two paths name one directory. Temporary directories
-// on macOS sit behind a /var to /private/var symlink, so a textual
-// comparison alone prompts to resume sessions unnecessarily.
-func sameDir(a, b string) bool {
-	if filepath.Clean(a) == filepath.Clean(b) {
-		return true
-	}
-	ra, ea := filepath.EvalSymlinks(a)
-	rb, eb := filepath.EvalSymlinks(b)
-	return ea == nil && eb == nil && ra == rb
-}
-
 func askProjectConsent(o Options, cwd string, console *terminal.Console, lifecycle *terminalLifecycle) (bool, error) {
 	if o.DenyProj {
 		return false, nil
@@ -948,7 +936,7 @@ func workspaceSessions(dir, cwd string) ([]session.SessionInfo, error) {
 	}
 	var mine []session.SessionInfo
 	for _, info := range infos {
-		if info.Cwd == cwd {
+		if session.SameDir(info.Cwd, cwd) {
 			mine = append(mine, info)
 		}
 	}
@@ -1052,7 +1040,8 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	if console == nil || r.store == nil {
 		return
 	}
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent)
+	projection := r.store.ProjectionIfCached()
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
@@ -1077,10 +1066,20 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 				snapshot.Usage += "↓" + formatFooterTokens(accounting.Usage.Output)
 			}
 		}
-		if projection, err := r.store.Projection(); err == nil && r.cfg.Model.ContextWindow > 0 {
-			estimated := agent.EstimatedContext(projection, r.cfg)
-			percent := 100 * float64(estimated) / float64(r.cfg.Model.ContextWindow)
-			snapshot.ContextEstimate = "~" + formatFooterFixedOneDecimal(percent, "%") + "/" + formatFooterTokens(float64(r.cfg.Model.ContextWindow))
+		if r.cfg.Model.ContextWindow > 0 {
+			estimated, hasEstimate := 0, false
+			if projection != nil {
+				estimated, hasEstimate = agent.EstimatedContext(projection, r.cfg), true
+			} else if tokens, ok := r.store.LastContextTokens(); ok {
+				estimated, hasEstimate = tokens, true
+			} else if r.store.EntryCount() == 0 {
+				// Fresh session: retain the system/tool baseline without decoding.
+				estimated, hasEstimate = agent.EstimatedContext(&session.Projection{}, r.cfg), true
+			}
+			if hasEstimate {
+				percent := 100 * float64(estimated) / float64(r.cfg.Model.ContextWindow)
+				snapshot.ContextEstimate = "~" + formatFooterFixedOneDecimal(percent, "%") + "/" + formatFooterTokens(float64(r.cfg.Model.ContextWindow))
+			}
 		}
 		r.footerKey, r.footerSnapshot = key, snapshot
 	}

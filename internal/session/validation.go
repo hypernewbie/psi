@@ -98,8 +98,12 @@ func (s SystemMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (s *SystemMessage) UnmarshalJSON(raw []byte) error {
+	// SystemMessage is also nested in compaction records, where the eager
+	// reader bypasses AgentMessage's defold. Drop alias-case protocol keys
+	// here so eager and indexed readers agree on Pi's exact-field semantics.
+	data := defoldSimple(raw, messageKeys)
 	var v systemAlias
-	if err := json.Unmarshal(raw, &v); err != nil {
+	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
 	*s = SystemMessage(v)

@@ -14,7 +14,6 @@ import (
 type Activation struct {
 	Store      *session.Store
 	Path       []*session.Entry
-	Proj       *session.Projection
 	Recall     []string
 	Offline    bool
 	OfflineErr error
@@ -27,23 +26,19 @@ func PrepareActivation(candidate *session.Store) (*Activation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("activation: %w", err)
 	}
-	proj, err := candidate.Projection()
-	if err != nil {
-		return nil, fmt.Errorf("activation: %w", err)
-	}
 	recall, err := candidate.Recall()
 	if err != nil {
 		return nil, fmt.Errorf("activation recall: %w", err)
 	}
-	// 2. Continuation check (refuse unsafe unknown context, deferred state).
-	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+	// 2. Continuation check reads indexed flags only; no transcript decode.
+	if err := session.CheckContinuableMetadata(session.BuildContextEntries(path)); err != nil {
 		// Readable history remains; continuation blocked (offline history).
-		return &Activation{Store: candidate, Path: path, Proj: proj, Recall: recall, Offline: true, OfflineErr: err}, nil
+		return &Activation{Store: candidate, Path: path, Recall: recall, Offline: true, OfflineErr: err}, nil
 	}
 	// 3. Ownership checked by caller via TryLock before commit.
-	// 4. Context, display iterator, recall source prepared here.
+	// 4. Metadata path and recall are ready; projection/display are on demand.
 	return &Activation{
-		Store: candidate, Path: path, Proj: proj,
+		Store: candidate, Path: path,
 		Recall: recall,
 	}, nil
 }

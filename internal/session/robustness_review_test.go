@@ -164,6 +164,7 @@ func reviewMetadataState(e *Entry) map[string]any {
 		if a := m.Assistant; a != nil {
 			out["provider"], out["model"], out["api"] = a.Provider, a.Model, a.API
 			out["responseModel"], out["usage"] = a.ResponseModel, a.Usage
+			out["stopReason"] = a.StopReason
 			text := false
 			var calls [][2]string
 			for _, b := range a.Content {
@@ -187,7 +188,7 @@ func reviewMetadataState(e *Entry) map[string]any {
 		out["firstKept"], out["usage"] = c.FirstKeptEntryID, c.Usage
 	}
 	if c := e.ContextEdit; c != nil {
-		out["target"] = c.TargetID
+		out["target"], out["replacement"] = c.TargetID, c.Replacement
 	}
 	if m := e.ModelChange; m != nil {
 		out["provider"], out["model"] = m.Provider, m.ModelID

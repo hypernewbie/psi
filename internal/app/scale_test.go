@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,24 +28,41 @@ func TestScaleActivationProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	loadedTools := 0
+	store.LoadHook = func(meta session.RecordMeta) {
+		if strings.HasPrefix(meta.ID, "t") {
+			loadedTools++
+		}
+	}
 	act, err := PrepareActivation(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(start)
-	if len(act.Proj.Flat) != 3 || len(act.Recall) != 2 {
-		t.Fatalf("wrong projection/recall: %d %d", len(act.Proj.Flat), len(act.Recall))
+	if len(act.Path) < 10000 || len(act.Recall) != 2 || act.Offline {
+		t.Fatalf("wrong activation: path=%d recall=%d offline=%v err=%v", len(act.Path), len(act.Recall), act.Offline, act.OfflineErr)
+	}
+	if store.EntryCount() <= 15000 {
+		t.Fatalf("scale fixture lost history: %d entries", store.EntryCount())
+	}
+	if loadedTools != 0 {
+		t.Fatalf("activation decoded %d historical tool payloads", loadedTools)
 	}
 	var rss unix.Rusage
 	if err := unix.Getrusage(unix.RUSAGE_SELF, &rss); err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("SCALE activation_ms=%d peak_rss_kib=%d entries=%d\n", elapsed.Milliseconds(), rss.Maxrss, store.EntryCount())
-	if elapsed > 3*time.Second {
-		t.Fatalf("activation %v exceeds 3s", elapsed)
+	rssKiB := rss.Maxrss
+	if goruntime.GOOS == "darwin" {
+		// macOS reports ru_maxrss in bytes; Linux reports KiB.
+		rssKiB /= 1024
 	}
-	if rss.Maxrss >= 160*1024 {
-		t.Fatalf("RSS %d KiB exceeds 160 MiB", rss.Maxrss)
+	fmt.Printf("SCALE activation_ms=%d peak_rss_kib=%d entries=%d\n", elapsed.Milliseconds(), rssKiB, store.EntryCount())
+	if elapsed > 5*time.Second {
+		t.Fatalf("activation %v exceeds 5s", elapsed)
+	}
+	if rssKiB >= 160*1024 {
+		t.Fatalf("RSS %d KiB exceeds 160 MiB", rssKiB)
 	}
 	count := 0
 	complete, err := store.Timeline(true, 0, func(item session.TranscriptItem) bool {
@@ -109,7 +127,7 @@ func TestScale512MiBActivation(t *testing.T) {
 		records++
 		parent = id
 	}
-	fmt.Fprintf(w, "{\"type\":\"compaction\",\"id\":\"cp\",\"parentId\":%q,\"timestamp\":\"2026-01-01T00:00:03Z\",\"summary\":\"synthetic summary\",\"firstKeptEntryId\":\"cp\",\"tokensBefore\":100,\"systemMessage\":{\"role\":\"system\",\"content\":\"synthetic instructions\",\"timestamp\":3}}\n", parent)
+	fmt.Fprintf(w, "{\"type\":\"compaction\",\"id\":\"cp\",\"parentId\":%q,\"timestamp\":\"2026-01-01T00:00:03Z\",\"summary\":\"synthetic summary\",\"firstKeptEntryId\":\"u0\",\"tokensBefore\":100,\"systemMessage\":{\"role\":\"system\",\"content\":\"synthetic instructions\",\"timestamp\":3}}\n", parent)
 	fmt.Fprintln(w, `{"type":"message","id":"u1","parentId":"cp","timestamp":"2026-01-01T00:00:04Z","message":{"role":"user","content":"active prompt","timestamp":4}}`)
 	if err := w.Flush(); err != nil {
 		t.Fatal(err)

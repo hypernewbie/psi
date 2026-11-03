@@ -45,7 +45,12 @@ func validateGraph(entries []*Entry) error {
 func (s *Store) MetadataPath() ([]*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return BuildPath(s.entries, s.leafID)
+	return s.pathLocked()
+}
+
+// pathLocked walks the active branch through the already-maintained byID map.
+func (s *Store) pathLocked() ([]*Entry, error) {
+	return buildPathByID(s.byID, s.entries, s.leafID)
 }
 func (s *Store) EntryCount() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.entries) }
 func (s *Store) openSnapshotLocked() (*os.File, error) {
@@ -140,7 +145,7 @@ func (s *Store) loadEntriesLocked(entries []*Entry) ([]*Entry, error) {
 // never enter the display working set. n==0 means the entire selected view.
 func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool, error) {
 	s.mu.Lock()
-	path, err := BuildPath(s.entries, s.leafID)
+	path, err := s.pathLocked()
 	if err != nil {
 		s.mu.Unlock()
 		return false, err
@@ -280,7 +285,7 @@ func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool,
 func (s *Store) Recall() ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path, err := BuildPath(s.entries, s.leafID)
+	path, err := s.pathLocked()
 	if err != nil {
 		return nil, err
 	}
