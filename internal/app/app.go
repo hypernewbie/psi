@@ -28,6 +28,7 @@ import (
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/loop"
+	"psi/internal/pibridge"
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
 	"psi/internal/session"
@@ -549,6 +550,7 @@ func Run(args []string, version string) error {
 		ac:    ac.NewController(),
 	}
 	defer func() {
+		r.closeBridge()
 		r.store.Unlock()
 		if r.prov != nil {
 			r.prov.CloseIdle()
@@ -621,6 +623,8 @@ type runtime struct {
 	authErr                  error
 	generation               int64
 	state                    State
+	bridge                   *pibridge.Client
+	bridgeTried              bool
 	selector                 *Selector
 	selectorDraft            string
 	selectorCursor           int
@@ -1082,6 +1086,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	}
 	r.footerSnapshot.Theme = r.theme
 	console.SetPresentation(r.footerSnapshot)
+	r.syncBridge()
 }
 
 func formatFooterTokens(n float64) string {
@@ -1470,6 +1475,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 	}
 	r.generation++
+	r.syncBridge()
 	r.state = StateReplaying
 	// Startup activation: display current view before the next editable prompt (P2-035).
 	// Same projector + replay engine as /resume (P2-036).
@@ -1514,6 +1520,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
+			r.bridgeRunStarted()
 		case event.SteeringDelivered, event.FollowUpDelivered:
 			// A delivered queued message becomes a normal user turn. Remove it
 			// from the appropriate dim queue and append its durable transcript row.
@@ -1526,6 +1533,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.RunEnd:
 			console.SetThinking(false)
 			runOutcome = ev.Outcome
+			r.bridgeRunSettled(runOutcomeOf(ev))
 		case event.Retry:
 			if r.state != StateCancelling {
 				r.state = StateWaiting
