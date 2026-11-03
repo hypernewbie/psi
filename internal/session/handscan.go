@@ -336,6 +336,79 @@ func metadataUsage(b []byte) Usage {
 	return usage
 }
 
+// metadataContentIssue mirrors checkContent's block allowlist without decoding
+// text, images, or tool arguments. A string is valid for every role whose
+// content is a string-or-array union; slices are checked by block type.
+func metadataContentIssue(raw []byte, role string) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || metadataNull(raw) {
+		return ""
+	}
+	if raw[0] == '"' {
+		return ""
+	}
+	if raw[0] != '[' {
+		return fmt.Sprintf("unsupported %s content: refuse lossy continuation", role)
+	}
+	issue := ""
+	_ = metadataEach(raw, func(blockRaw []byte) error {
+		block, err := metadataObject(blockRaw)
+		if err != nil {
+			issue = fmt.Sprintf("unsupported %s content: refuse lossy continuation", role)
+			return nil
+		}
+		typ := metadataString(block, "type")
+		switch role {
+		case "assistant":
+			if typ != "text" && typ != "thinking" && typ != "toolCall" {
+				issue = fmt.Sprintf("unsupported assistant content block %q: refuse lossy continuation", typ)
+			}
+		default:
+			if typ == "text" || (typ == "image" && role != "system") {
+				return nil
+			}
+			issue = fmt.Sprintf("unsupported %s content block %q: refuse lossy continuation", role, typ)
+		}
+		return nil
+	})
+	return issue
+}
+
+// metadataMessageIssue records the flat-context issues that applyEdit can
+// repair. Deferred raw handles are tracked separately because an entry stays on
+// the path even when its message is dropped from the projection.
+func metadataMessageIssue(role string, message metadataObjectView) string {
+	switch role {
+	case "assistant":
+		switch metadataString(message, "stopReason") {
+		case "deferred", "pending":
+			return "unfinished/deferred assistant response: refuse continuation"
+		}
+		return metadataContentIssue(message["content"], "assistant")
+	case "system":
+		return metadataContentIssue(message["content"], "system")
+	case "user", "toolResult", "custom":
+		return metadataContentIssue(message["content"], role)
+	case "bashExecution", "branchSummary", "compactionSummary":
+		// No content check in checkContent.
+		return ""
+	default:
+		return fmt.Sprintf("unsupported context role %q: refuse lossy continuation", role)
+	}
+}
+
+func metadataDeferred(message metadataObjectView) bool {
+	// CheckContinuable's raw probe uses encoding/json's case-insensitive field
+	// matching. Mirror it so an alias-case deferred handle is not accepted by
+	// the metadata-only activation check.
+	for key, raw := range message {
+		if strings.EqualFold(key, "deferred") && !metadataNull(raw) {
+			return true
+		}
+	}
+	return false
+}
+
 func handScanRecord(data []byte) (entry *Entry, header *SessionHeader, err error) {
 	// Treat a damaged physical record as an invisible gap. The surrounding
 	// session remains readable and the writer stays disabled.
@@ -377,13 +450,17 @@ func handScanRecord(data []byte) (entry *Entry, header *SessionHeader, err error
 		message, _ := metadataObject(obj["message"])
 		role := metadataString(message, "role")
 		m := AgentMessage{Role: role}
+		e.contentIssue = metadataMessageIssue(role, message)
+		if role == "assistant" {
+			e.deferred = metadataDeferred(message)
+		}
 		switch role {
 		case "user":
 			m.User = &UserMessage{Role: role}
 		case "system":
 			m.System = &SystemMessage{Role: role}
 		case "assistant":
-			a := &AssistantMessage{Role: role, Provider: metadataString(message, "provider"), Model: metadataString(message, "model"), API: metadataString(message, "api"), Usage: metadataUsage(message["usage"])}
+			a := &AssistantMessage{Role: role, Provider: metadataString(message, "provider"), Model: metadataString(message, "model"), API: metadataString(message, "api"), Usage: metadataUsage(message["usage"]), StopReason: metadataString(message, "stopReason")}
 			_ = json.Unmarshal(message["responseModel"], &a.ResponseModel)
 			content := message["content"]
 			if len(content) != 0 && !metadataNull(content) {
@@ -429,10 +506,16 @@ func handScanRecord(data []byte) (entry *Entry, header *SessionHeader, err error
 			u := metadataUsage(usage)
 			e.Compaction.Usage = &u
 		}
+		if systemMessage, err := metadataObject(obj["systemMessage"]); err == nil {
+			e.contentIssue = metadataContentIssue(systemMessage["content"], "system")
+		}
 	case "branch_summary":
 		e.BranchSummary = &BranchSummaryEntry{}
 	case "context_edit":
 		e.ContextEdit = &ContextEditEntry{TargetID: metadataString(obj, "targetId")}
+		if replacement := obj["replacement"]; len(replacement) != 0 {
+			e.ContextEdit.Replacement = append(json.RawMessage(nil), replacement...)
+		}
 	case "custom":
 		e.Custom = &CustomEntry{CustomType: metadataString(obj, "customType")}
 		if e.Custom.CustomType == "psi.input" {
@@ -443,6 +526,7 @@ func handScanRecord(data []byte) (entry *Entry, header *SessionHeader, err error
 		c := &CustomMessageEntry{CustomType: metadataString(obj, "customType")}
 		_ = json.Unmarshal(obj["display"], &c.Display)
 		e.CustomMessage = c
+		e.contentIssue = metadataContentIssue(obj["content"], "custom")
 		if c.CustomType == "psi.input" {
 			details, _ := metadataObject(obj["details"])
 			e.provenanceTarget = metadataString(details, "targetId")
@@ -456,7 +540,7 @@ func handScanRecord(data []byte) (entry *Entry, header *SessionHeader, err error
 		_ = json.Unmarshal(obj["name"], &e.SessionInfo.Name)
 	}
 	if kind == "message" {
-		e.toolSummaries = metadataToolSummaries(data)
+		e.toolSummaries = metadataToolSummaries(obj, obj["message"])
 	}
 	return e, nil, nil
 }

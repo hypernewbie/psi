@@ -61,6 +61,7 @@ var entryKeys = map[string]bool{
 	"display": true, "name": true, "data": true, "details": true, "usage": true,
 	"kind": true, "model": true, "note": true, "summary": true, "tokensBefore": true,
 	"fromHook": true, "systemMessage": true, "fromId": true, "label": true, "replacement": true,
+	"content": true,
 }
 
 var messageKeys = map[string]bool{

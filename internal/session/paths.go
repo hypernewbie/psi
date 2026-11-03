@@ -71,6 +71,18 @@ func DefaultSessionDir(cwd, agentDir string) string {
 	return filepath.Join(root, "--"+safe+"--")
 }
 
+// SameDir reports whether two paths name one directory. Temporary directories
+// on macOS sit behind a /var to /private/var symlink, so textual comparison
+// alone can hide an existing session.
+func SameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, ea := filepath.EvalSymlinks(a)
+	rb, eb := filepath.EvalSymlinks(b)
+	return ea == nil && eb == nil && ra == rb
+}
+
 func resolveDir(dir, base string) string {
 	e := expandHome(dir)
 	if filepath.IsAbs(e) {

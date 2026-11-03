@@ -10,12 +10,7 @@ const maxToolSummariesPerEntry = 64
 // metadataToolSummaries extracts only the allowlisted argument fields while
 // the indexer already has the record bytes. Hidden bodies remain raw slices
 // used by the JSON scanner and are never decoded or retained.
-func metadataToolSummaries(record []byte) map[string]event.ToolSummary {
-	root, err := metadataObject(record)
-	if err != nil {
-		return nil
-	}
-	messageRaw := root["message"]
+func metadataToolSummaries(root metadataObjectView, messageRaw []byte) map[string]event.ToolSummary {
 	message, err := metadataObject(messageRaw)
 	if err != nil {
 		return nil

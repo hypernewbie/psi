@@ -33,6 +33,8 @@ type Store struct {
 	writeErr         error
 	sessionInfoCount int
 	records          map[string]RecordMeta // disk-backed payloads; entries contains small metadata only
+	projection       *Projection           // last completed context; written incrementally
+	projectionLeaf   string                // leaf that projection represents
 	storage          *storageOps
 	// LoadHook fires before each lazy payload read (nil in production).
 	// Deterministic fault schedules use it to rewrite the session mid-walk.
@@ -278,7 +280,7 @@ func (s *Store) WriteError() error {
 func (s *Store) ActivePath() ([]*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path, err := BuildPath(s.entries, s.leafID)
+	path, err := s.pathLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +291,7 @@ func (s *Store) ActivePath() ([]*Entry, error) {
 func (s *Store) ActiveCustomEntries(customType string) ([]*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path, err := BuildPath(s.entries, s.leafID)
+	path, err := s.pathLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -302,20 +304,108 @@ func (s *Store) ActiveCustomEntries(customType string) ([]*Entry, error) {
 	return s.loadEntriesLocked(selected)
 }
 
-// Projection builds the provenance-preserving context.
+func (s *Store) projectionCacheValidLocked() bool {
+	// Deterministic fault schedules must observe every lazy read. Never serve a
+	// cache hit while a LoadHook is installed; production has no hook.
+	return s.LoadHook == nil && s.projection != nil && s.projectionLeaf == s.leafID && s.snapLocked().unchanged()
+}
+
+// Projection builds or reuses the provenance-preserving context. Callers get a
+// snapshot header: later appends grow the internal cache without changing the
+// slices already returned. The entry/message values are shared and read-only.
 func (s *Store) Projection() (*Projection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path, err := BuildPath(s.entries, s.leafID)
+	if s.projectionCacheValidLocked() {
+		return s.projectionViewLocked(), nil
+	}
+	s.projection = nil
+	path, err := s.pathLocked()
 	if err != nil {
 		return nil, err
 	}
 	state := RestoreModelState(path)
-	path, err = s.loadEntriesLocked(BuildContextEntries(path))
+	ctx, err := s.loadEntriesLocked(BuildContextEntries(path))
 	if err != nil {
 		return nil, err
 	}
-	return projectEntries(path, state), nil
+	s.projection = projectEntries(ctx, state)
+	s.projectionLeaf = s.leafID
+	return s.projectionViewLocked(), nil
+}
+
+// ProjectionIfCached returns the current projection only if one is already
+// built and fresh. Startup/footer code uses this to avoid paying for decode.
+func (s *Store) ProjectionIfCached() *Projection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.projectionCacheValidLocked() {
+		return s.projectionViewLocked()
+	}
+	return nil
+}
+
+func (s *Store) projectionViewLocked() *Projection {
+	if s.projection == nil {
+		return nil
+	}
+	view := *s.projection
+	return &view
+}
+
+// ModelState restores provider/model/thinking from indexed metadata.
+func (s *Store) ModelState() (ModelState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.projectionCacheValidLocked() {
+		return s.projection.State, nil
+	}
+	path, err := s.pathLocked()
+	if err != nil {
+		return ModelState{}, err
+	}
+	return RestoreModelState(path), nil
+}
+
+// LastContextTokens returns the newest valid assistant usage after the latest
+// compaction. It reads indexed metadata only; false means no trustworthy usage.
+// A latest-wins null context edit removes its target from the projected context,
+// so dropped assistant usage must not leak into the footer estimate.
+func (s *Store) LastContextTokens() (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.pathLocked()
+	if err != nil {
+		return 0, false
+	}
+	dropped := map[string]bool{}
+	latestCompaction := -1
+	for i, e := range path {
+		if e.Kind == "context_edit" && e.ContextEdit != nil {
+			replacement := e.ContextEdit.Replacement
+			dropped[e.ContextEdit.TargetID] = len(replacement) == 0 || string(replacement) == "null"
+		}
+		if e.Kind == "compaction" {
+			latestCompaction = i
+		}
+	}
+	for i := len(path) - 1; i > latestCompaction; i-- {
+		e := path[i]
+		if e.Kind != "message" || e.Message == nil || e.Message.Message.Assistant == nil {
+			continue
+		}
+		if dropped[e.ID()] {
+			continue
+		}
+		a := e.Message.Message.Assistant
+		if a.StopReason == "aborted" || a.StopReason == "error" {
+			continue
+		}
+		if tokens := ContextTokens(a.Usage); tokens > 0 {
+			return tokens, true
+		}
+	}
+	return 0, false
 }
 
 // AppendMessage appends a message as a child of the leaf.
@@ -428,7 +518,7 @@ func (s *Store) AppendContextEdit(targetID string, replacement json.RawMessage) 
 	}
 	target = loaded[0]
 	// Must be on the active branch.
-	path, err := BuildPath(s.entries, s.leafID)
+	path, err := s.pathLocked()
 	if err != nil {
 		return "", err
 	}
@@ -544,6 +634,7 @@ func (s *Store) Branch(branchFromID string) error {
 		return fmt.Errorf("entry %s not found", branchFromID)
 	}
 	s.leafID = branchFromID
+	s.projection = nil
 	return nil
 }
 
@@ -562,8 +653,50 @@ func (s *Store) GetEntry(id string) *Entry {
 	return loaded[0]
 }
 
+// cacheProjectionAppendLocked grows the completed projection by one entry.
+// Compaction and context edits change earlier contributions; drop the cache and
+// rebuild on next use instead of trying to patch history.
+func (s *Store) cacheProjectionAppendLocked(e *Entry, oldLeaf string) {
+	if s.projection == nil {
+		return
+	}
+	if s.projectionLeaf != oldLeaf {
+		s.projection = nil
+		return
+	}
+	switch e.Kind {
+	case "compaction", "context_edit":
+		s.projection = nil
+		return
+	}
+	p := s.projection
+	p.Entries = append(p.Entries, e)
+	msgs := EntryToContextMessages(e)
+	p.Messages = append(p.Messages, msgs)
+	p.Flat = append(p.Flat, msgs...)
+	switch e.Kind {
+	case "model_change":
+		if e.ModelChange != nil {
+			p.State.Provider, p.State.ModelID, p.State.HasModel = e.ModelChange.Provider, e.ModelChange.ModelID, true
+		}
+	case "thinking_level_change":
+		if e.ThinkingLevelChange != nil {
+			p.State.ThinkingLevel = e.ThinkingLevelChange.ThinkingLevel
+		}
+	case "message":
+		if e.Message != nil && e.Message.Message.Assistant != nil {
+			a := e.Message.Message.Assistant
+			if a.Provider != "" && a.Model != "" {
+				p.State.Provider, p.State.ModelID, p.State.HasModel = a.Provider, a.Model, true
+			}
+		}
+	}
+	s.projectionLeaf = e.ID()
+}
+
 // appendLocked validates, persists, and advances the leaf. Caller holds mu.
 func (s *Store) appendLocked(e *Entry, payload any) (err error) {
+	oldLeaf := s.leafID
 	if s.writeErr != nil {
 		return fmt.Errorf("storage blocked: %w", s.writeErr)
 	}
@@ -605,6 +738,12 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 		return err
 	}
 	e.Raw = data
+	// Keep metadata flags on in-memory entries too; activation checks the same
+	// Entry values whether the store is durable or --no-session.
+	e.provenanceTarget = thin.provenanceTarget
+	e.toolSummaries = thin.toolSummaries
+	e.contentIssue = thin.contentIssue
+	e.deferred = thin.deferred
 	expectedSize := int64(-1)
 	if s.persist && s.file != "" {
 		if !s.flushed {
@@ -712,6 +851,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 		}
 		s.knownSize, s.knownInfo = st.Size(), st
 	}
+	s.cacheProjectionAppendLocked(e, oldLeaf)
 	return nil
 }
 
