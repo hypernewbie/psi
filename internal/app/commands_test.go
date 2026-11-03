@@ -16,7 +16,7 @@ import (
 
 // P2-045: command table drives help + parser. Unknown commands never become prompts.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"help", "new", "resume", "model", "thinking", "compact", "loop", "loop-stop", "session", "history", "name", "clone", "hotkeys", "quit"}
+	cmds := []string{"help", "new", "resume", "model", "thinking", "compact", "loop", "loop-stop", "session", "version", "history", "name", "clone", "hotkeys", "quit"}
 	help := terminal.HelpText()
 	for _, c := range cmds {
 		if !strings.Contains(help, "/"+c) {
@@ -77,6 +77,24 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	quit, err = r.command(&terminal.Command{Name: "session"}, &out)
 	if err != nil || quit || !strings.Contains(out.String(), "session ") {
 		t.Errorf("/session failed: quit=%v, err=%v, out=%q", quit, err, out.String())
+	}
+	out.Reset()
+
+	// /version prints release, commit, and toolchain lines.
+	r.version = "0.0.0-test"
+	quit, err = r.command(&terminal.Command{Name: "version"}, &out)
+	if err != nil || quit {
+		t.Errorf("/version failed: quit=%v, err=%v", quit, err)
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 3 || lines[0] != "psi 0.0.0-test" || !strings.HasPrefix(lines[1], "commit ") || !strings.HasPrefix(lines[2], "build ") {
+		t.Errorf("/version must print release, commit, build: %q", out.String())
+	}
+	out.Reset()
+
+	// /version takes no argument.
+	if _, err = r.command(&terminal.Command{Name: "version", Arg: "x"}, &out); err == nil {
+		t.Errorf("/version with arg should return error")
 	}
 	out.Reset()
 
