@@ -41,6 +41,7 @@ never change `--docs`; it reads embedded bytes only.
 | Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |
 | Skills | `skills`, `enableSkillCommands` | paths + selector |
 | Compaction | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides` | bounded summaries; per-model reserve overrides; `/ac` controls are session-local |
+| Queues | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`, as in Pi |
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
 | Display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | bounded inline spacing and code-block indent |
 | Shell | `shellPath`, `shellCommandPrefix` | `shellPath` selects the shell; `shellCommandPrefix` prepends commands; project values require consent |

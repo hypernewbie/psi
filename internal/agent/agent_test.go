@@ -565,7 +565,11 @@ func TestSteerWhileStreamingAndBatchRunning(t *testing.T) {
 				{Type: "toolCall", ID: "t1", Name: "read", Arguments: map[string]any{"path": "work.txt"}},
 			},
 		},
-		{Text: "processed steering", StopReason: "stop"},
+		{Text: "processed steering 1", StopReason: "stop"},
+		{Text: "processed steering 2", StopReason: "stop"},
+		{Text: "processed steering 3", StopReason: "stop"},
+		{Text: "processed steering 4", StopReason: "stop"},
+		{Text: "processed steering 5", StopReason: "stop"},
 	}
 
 	cfg := Config{Model: modelMeta(), Thinking: "off", Tools: toolDefs(), System: "base"}
@@ -595,22 +599,18 @@ func TestSteerWhileStreamingAndBatchRunning(t *testing.T) {
 		t.Fatalf("run failed: %v", err)
 	}
 
-	// Provider received 2 calls: first with initial prompt, second with tool result and all 5 steering messages
-	if fake.CallCount() != 2 {
-		t.Fatalf("expected 2 provider calls, got %d", fake.CallCount())
+	// Pi's default steering mode delivers one message per turn, so five queued
+	// messages need five further requests after the initial tool turn.
+	if fake.CallCount() != n+1 {
+		t.Fatalf("expected %d provider calls, got %d", n+1, fake.CallCount())
 	}
 
-	secondReq := fake.Requests()[1]
-	steeredCount := 0
-	for _, m := range secondReq.Messages {
-		if m.Role == "user" {
-			for i := 0; i < n; i++ {
-				if strings.Contains(fmt.Sprint(m.Content), fmt.Sprintf("steering-%d", i)) {
-					steeredCount++
-				}
-			}
-		}
+	requests := fake.Requests()
+	if got := countSteeringMessages(requests[1], n); got != 1 {
+		t.Fatalf("one-at-a-time mode delivered %d steering messages in the first turn", got)
 	}
+	secondReq := requests[len(requests)-1]
+	steeredCount := countSteeringMessages(secondReq, n)
 	if steeredCount != n {
 		t.Fatalf("expected %d steered messages in provider request, found %d", n, steeredCount)
 	}
@@ -750,5 +750,117 @@ func TestSteerRaceWithRunEnding(t *testing.T) {
 	}
 	if inStore && inPending {
 		t.Fatal("late steering message is duplicated in store and pending queue!")
+	}
+}
+
+func reqHasUserText(req provider.Request, text string) bool {
+	for _, m := range req.Messages {
+		if m.Role == "user" && strings.Contains(fmt.Sprint(m.Content), text) {
+			return true
+		}
+	}
+	return false
+}
+
+func countSteeringMessages(req provider.Request, n int) int {
+	found := 0
+	for _, m := range req.Messages {
+		if m.Role != "user" {
+			continue
+		}
+		for i := 0; i < n; i++ {
+			if strings.Contains(fmt.Sprint(m.Content), fmt.Sprintf("steering-%d", i)) {
+				found++
+			}
+		}
+	}
+	return found
+}
+
+func TestSteeringQueueModes(t *testing.T) {
+	tests := []struct {
+		mode       string
+		wantCalls  int
+		wantAllIn3 bool
+	}{
+		{"", 4, false}, // Pi's default: one steering message per turn
+		{QueueModeOneAtATime, 4, false},
+		{QueueModeAll, 3, true},
+	}
+	for _, tc := range tests {
+		t.Run("mode="+tc.mode, func(t *testing.T) {
+			store, _, fake, _, _ := testSetup(t)
+			fake.Responses = []*provider.Response{
+				{Text: "using a tool", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "call-1", Name: "bash", Arguments: map[string]any{"command": "true"}}}},
+				{Text: "no tools here", StopReason: "stop"},
+				{Text: "third", StopReason: "stop"},
+				{Text: "fourth", StopReason: "stop"},
+			}
+			var loop *Loop
+			var starts int
+			loop = New(store, tools.NewRegistry(store.Cwd()), fake, func(e event.Event) {
+				if e.Type != event.AssistantStart {
+					return
+				}
+				starts++
+				if starts == 2 {
+					loop.Steer("steer A")
+					loop.Steer("steer B")
+				}
+			})
+			loop.SetQueueModes(tc.mode, "")
+			if err := loop.Submit(context.Background(), "start", Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
+				t.Fatal(err)
+			}
+			if fake.CallCount() != tc.wantCalls {
+				t.Fatalf("provider calls = %d, want %d", fake.CallCount(), tc.wantCalls)
+			}
+			requests := fake.Requests()
+			third := requests[2]
+			if !reqHasUserText(third, "steer A") {
+				t.Fatal("steering was not delivered at the next turn boundary")
+			}
+			if got := reqHasUserText(third, "steer B"); got != tc.wantAllIn3 {
+				t.Fatalf("steer B in the third request = %v, want %v", got, tc.wantAllIn3)
+			}
+			last := requests[len(requests)-1]
+			if !reqHasUserText(last, "steer A") || !reqHasUserText(last, "steer B") {
+				t.Fatal("steering messages missing from the final request")
+			}
+			if pending := loop.PendingSteering(); len(pending) != 0 {
+				t.Fatalf("steering queue not drained: %q", pending)
+			}
+		})
+	}
+}
+
+func TestFollowUpQueueModeAll(t *testing.T) {
+	store, _, fake, _, _ := testSetup(t)
+	fake.Responses = []*provider.Response{
+		{Text: "first answer", StopReason: "stop"},
+		{Text: "second answer", StopReason: "stop"},
+	}
+	var loop *Loop
+	var starts int
+	loop = New(store, tools.NewRegistry(store.Cwd()), fake, func(e event.Event) {
+		if e.Type != event.AssistantStart {
+			return
+		}
+		starts++
+		if starts == 1 {
+			loop.FollowUp("follow-up one")
+			loop.FollowUp("follow-up two")
+		}
+	})
+	loop.SetQueueModes("", QueueModeAll)
+	if err := loop.Submit(context.Background(), "initial", Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.CallCount() != 2 {
+		t.Fatalf("provider calls = %d, want the initial run plus one follow-up run", fake.CallCount())
+	}
+	last := fake.Requests()[1]
+	if !reqHasUserText(last, "follow-up one") || !reqHasUserText(last, "follow-up two") {
+		t.Fatal("all-mode follow-ups were not delivered together")
 	}
 }

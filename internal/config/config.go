@@ -87,6 +87,8 @@ type Settings struct {
 	DefaultProvider         string
 	DefaultModel            string
 	DefaultThinking         string
+	SteeringMode            string // "one-at-a-time" (Pi default) or "all"
+	FollowUpMode            string // "one-at-a-time" (Pi default) or "all"
 	SessionDir              string
 	SessionDirSource        string // "cli"|"env"|"settings"|"default"
 	DefaultTools            []string
@@ -113,6 +115,8 @@ func defaultSettings() Settings {
 		AutocompleteMaxVisible:  5,
 		MarkdownCodeBlockIndent: "  ",
 		DefaultThinking:         "off",
+		SteeringMode:            "one-at-a-time",
+		FollowUpMode:            "one-at-a-time",
 		DefaultTools:            []string{"read", "bash", "edit", "write"},
 		EnableSkills:            true,
 		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
@@ -138,6 +142,8 @@ type rawSettings struct {
 	DefaultProvider     *string  `json:"defaultProvider"`
 	DefaultModel        *string  `json:"defaultModel"`
 	DefaultThinking     *string  `json:"defaultThinkingLevel"`
+	SteeringMode        *string  `json:"steeringMode"`
+	FollowUpMode        *string  `json:"followUpMode"`
 	SessionDir          *string  `json:"sessionDir"`
 	DefaultTools        []string `json:"defaultTools"`
 	Skills              any      `json:"skills"`
@@ -388,6 +394,20 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 	if raw.DefaultThinking != nil {
 		out.DefaultThinking = *raw.DefaultThinking
 		set("defaultThinkingLevel", *raw.DefaultThinking)
+	}
+	for key, mode := range map[string]*string{"steeringMode": raw.SteeringMode, "followUpMode": raw.FollowUpMode} {
+		if mode == nil {
+			continue
+		}
+		if *mode != "all" && *mode != "one-at-a-time" {
+			return fmt.Errorf("%s must be \"all\" or \"one-at-a-time\"", key)
+		}
+		if key == "steeringMode" {
+			out.SteeringMode = *mode
+		} else {
+			out.FollowUpMode = *mode
+		}
+		set(key, *mode)
 	}
 	if raw.SessionDir != nil {
 		out.SessionDir = *raw.SessionDir

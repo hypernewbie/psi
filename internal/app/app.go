@@ -1761,6 +1761,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			events <- e
 		})
 		activeLoop = loop
+		loop.SetQueueModes(r.settings.SteeringMode, r.settings.FollowUpMode)
 		go func() {
 			if compact {
 				if resumeThisCompaction {

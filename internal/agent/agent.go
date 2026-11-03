@@ -46,16 +46,26 @@ type Config struct {
 	CompactionProvider func() (provider.Provider, provider.ModelMeta, func(), error)
 }
 
+// Queue modes match Pi's steeringMode and followUpMode settings. Pi polls the
+// steering queue before each model request and the follow-up queue once the run
+// would otherwise end.
+const (
+	QueueModeOneAtATime = "one-at-a-time"
+	QueueModeAll        = "all"
+)
+
 type Loop struct {
-	mu        sync.Mutex
-	running   bool
-	store     *session.Store
-	reg       *tools.Registry
-	prov      provider.Provider
-	sink      func(event.Event)
-	steerMu   sync.Mutex
-	steering  []queuedInput
-	followUps []string
+	mu           sync.Mutex
+	running      bool
+	store        *session.Store
+	reg          *tools.Registry
+	prov         provider.Provider
+	sink         func(event.Event)
+	steerMu      sync.Mutex
+	steering     []queuedInput
+	followUps    []string
+	steeringMode string
+	followUpMode string
 }
 
 // queuedInput is one undelivered steering message. Provenance rides with the
@@ -120,6 +130,48 @@ func (l *Loop) PendingFollowUp() []string {
 	return append([]string(nil), l.followUps...)
 }
 
+// SetQueueModes mirrors Pi's steeringMode and followUpMode settings. Unknown
+// values fall back to Pi's default: one message per turn.
+func (l *Loop) SetQueueModes(steering, followUp string) {
+	l.steerMu.Lock()
+	l.steeringMode = normalizeQueueMode(steering)
+	l.followUpMode = normalizeQueueMode(followUp)
+	l.steerMu.Unlock()
+}
+
+func normalizeQueueMode(mode string) string {
+	if mode == QueueModeAll {
+		return QueueModeAll
+	}
+	return QueueModeOneAtATime
+}
+
+// takeQueued removes the messages one turn may deliver, honoring the queue mode.
+func takeQueued[T any](mode string, queue *[]T) []T {
+	if len(*queue) == 0 {
+		return nil
+	}
+	n := 1
+	if mode == QueueModeAll {
+		n = len(*queue)
+	}
+	taken := append([]T(nil), (*queue)[:n]...)
+	*queue = (*queue)[n:]
+	return taken
+}
+
+func (l *Loop) takeSteering() []queuedInput {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	return takeQueued(l.steeringMode, &l.steering)
+}
+
+func (l *Loop) takeFollowUp() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	return takeQueued(l.followUpMode, &l.followUps)
+}
+
 // ClearSteering takes and clears the queued steering messages.
 func (l *Loop) ClearSteering() []string {
 	l.steerMu.Lock()
@@ -157,10 +209,7 @@ func (l *Loop) deliverSteering() bool {
 // deliverQueuedSteering appends queued messages in order and restores the
 // remainder on failure, so a retry cannot duplicate or reorder input.
 func (l *Loop) deliverQueuedSteering() (bool, error) {
-	l.steerMu.Lock()
-	msgs := l.steering
-	l.steering = nil
-	l.steerMu.Unlock()
+	msgs := l.takeSteering()
 	for i, msg := range msgs {
 		uid, err := l.store.AppendMessage(userMsg(msg.text))
 		if err != nil {
@@ -182,25 +231,20 @@ func (l *Loop) deliverQueuedSteering() (bool, error) {
 	return len(msgs) > 0, nil
 }
 
-// deliverFollowUp persists one queued message at the point when the current
-// run would otherwise finish. One-at-a-time matches Pi's default queue mode.
+// deliverFollowUp persists queued messages at the point when the current run
+// would otherwise finish, honoring the follow-up queue mode.
 func (l *Loop) deliverFollowUp() (bool, error) {
-	l.steerMu.Lock()
-	if len(l.followUps) == 0 {
-		l.steerMu.Unlock()
-		return false, nil
+	msgs := l.takeFollowUp()
+	for i, text := range msgs {
+		if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
+			l.steerMu.Lock()
+			l.followUps = append(msgs[i:], l.followUps...)
+			l.steerMu.Unlock()
+			return false, fmt.Errorf("storage failure, stopping: %w", err)
+		}
+		l.sink(event.Event{Type: event.FollowUpDelivered, Text: text})
 	}
-	text := l.followUps[0]
-	l.followUps = l.followUps[1:]
-	l.steerMu.Unlock()
-	if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
-		l.steerMu.Lock()
-		l.followUps = append([]string{text}, l.followUps...)
-		l.steerMu.Unlock()
-		return false, fmt.Errorf("storage failure, stopping: %w", err)
-	}
-	l.sink(event.Event{Type: event.FollowUpDelivered, Text: text})
-	return true, nil
+	return len(msgs) > 0, nil
 }
 
 func (l *Loop) Running() bool { l.mu.Lock(); defer l.mu.Unlock(); return l.running }
@@ -256,7 +300,7 @@ func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
 		return fmt.Errorf("storage failure, stopping: %w", err)
 	}
 	_ = uid
-	return l.run(ctx, cfg)
+	return l.run(ctx, cfg, false)
 }
 
 // SubmitWithProvenance stores the expanded user input plus visible invocation provenance (P2-043, P2-054).
@@ -303,7 +347,7 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 			return fmt.Errorf("storage failure, stopping: %w", err)
 		}
 	}
-	return l.run(ctx, cfg)
+	return l.run(ctx, cfg, false)
 }
 
 func refreshDynamicConfig(cfg *Config) {
@@ -366,7 +410,7 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 	return nil
 }
 
-func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
+func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool) (runErr error) {
 	// Pi's agent loop has no turn cap: it runs until the model stops calling
 	// tools, the provider errors, or the user cancels. A legitimate chain of
 	// sequential tool calls is unbounded, so psi must not invent a limit.
@@ -379,8 +423,14 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			return err
 		}
 		// Turn boundary: deliver steering queued while the previous turn ran,
-		// before the next model request (Pi's getSteeringMessages poll).
-		l.deliverSteering()
+		// before the next model request (Pi's getSteeringMessages poll). Pi skips
+		// this poll when the previous iteration already delivered a batch, so
+		// one-at-a-time mode never puts two messages in the same turn.
+		deliveredThisTurn := skipInitialSteeringPoll
+		if !deliveredThisTurn {
+			deliveredThisTurn = l.deliverSteering()
+		}
+		skipInitialSteeringPoll = false
 		refreshDynamicConfig(&cfg)
 		proj, err := l.store.Projection()
 		if err != nil {
@@ -405,7 +455,10 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			// Pi polls again after next-turn preparation, before the next model
 			// request; do the same here so steering is not stranded until the
 			// post-response boundary (or restored to the editor when the run ends).
-			l.deliverSteering()
+			// Poll only when this turn has not already delivered a batch.
+			if !deliveredThisTurn {
+				l.deliverSteering()
+			}
 			proj, err = l.store.Projection()
 			if err != nil {
 				return err
@@ -513,6 +566,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 					if err := l.maybeAdaptiveCompact(ctx, cfg, true, true); err != nil {
 						return err
 					}
+					skipInitialSteeringPoll = true
 					continue
 				}
 			}
@@ -539,6 +593,7 @@ func (l *Loop) run(ctx context.Context, cfg Config) (runErr error) {
 			if err := l.maybeAdaptiveCompact(ctx, cfg, true, true); err != nil {
 				return err
 			}
+			skipInitialSteeringPoll = true
 		}
 		if err := l.runBatch(ctx, resp.ToolCalls, cfg); err != nil {
 			return err

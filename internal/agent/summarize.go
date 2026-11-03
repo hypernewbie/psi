@@ -133,7 +133,7 @@ func (l *Loop) ContinuePending(ctx context.Context, cfg Config) error {
 	if !delivered {
 		return nil
 	}
-	return l.run(ctx, cfg)
+	return l.run(ctx, cfg, true)
 }
 
 func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resumePrompt string) error {
@@ -150,7 +150,7 @@ func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resume
 			return fmt.Errorf("storage failure, stopping: %w", err)
 		}
 		l.sink(event.Event{Type: event.SteeringDelivered, Text: resumePrompt})
-		return l.run(ctx, cfg)
+		return l.run(ctx, cfg, true)
 	}
 	if !queued {
 		var err error
@@ -160,7 +160,7 @@ func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resume
 		}
 	}
 	if queued {
-		return l.run(ctx, cfg)
+		return l.run(ctx, cfg, true)
 	}
 	return nil
 }

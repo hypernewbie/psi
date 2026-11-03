@@ -454,3 +454,33 @@ func TestEnvCharAndRedactCredential(t *testing.T) {
 		t.Errorf("containsString(nil) should be false")
 	}
 }
+
+func TestQueueModeSettings(t *testing.T) {
+	root := t.TempDir()
+	user := filepath.Join(root, "settings.json")
+
+	defaults, err := LoadSettings(filepath.Join(root, "missing.json"), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.Settings.SteeringMode != "one-at-a-time" || defaults.Settings.FollowUpMode != "one-at-a-time" {
+		t.Fatalf("queue mode defaults = %q/%q", defaults.Settings.SteeringMode, defaults.Settings.FollowUpMode)
+	}
+
+	writeJSON(t, user, `{"steeringMode":"all","followUpMode":"one-at-a-time"}`)
+	loaded, err := LoadSettings(user, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Settings.SteeringMode != "all" || loaded.Settings.FollowUpMode != "one-at-a-time" {
+		t.Fatalf("queue modes = %q/%q", loaded.Settings.SteeringMode, loaded.Settings.FollowUpMode)
+	}
+	if loaded.Sources["steeringMode"] != "user:"+user {
+		t.Fatalf("steeringMode source = %q", loaded.Sources["steeringMode"])
+	}
+
+	writeJSON(t, user, `{"steeringMode":"sometimes"}`)
+	if _, err := LoadSettings(user, "", false); err == nil {
+		t.Fatal("invalid steeringMode must be rejected")
+	}
+}
