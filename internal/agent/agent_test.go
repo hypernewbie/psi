@@ -779,16 +779,18 @@ func countSteeringMessages(req provider.Request, n int) int {
 
 func TestSteeringQueueModes(t *testing.T) {
 	tests := []struct {
+		name       string
 		mode       string
 		wantCalls  int
 		wantAllIn3 bool
 	}{
-		{"", 4, false}, // Pi's default: one steering message per turn
-		{QueueModeOneAtATime, 4, false},
-		{QueueModeAll, 3, true},
+		{"default", "", 4, false}, // Pi's default: one steering message per turn
+		{"one-at-a-time", queueModeOneAtATime, 4, false},
+		{"all", queueModeAll, 3, true},
+		{"unknown falls back to default", "bogus", 4, false},
 	}
 	for _, tc := range tests {
-		t.Run("mode="+tc.mode, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			store, _, fake, _, _ := testSetup(t)
 			fake.Responses = []*provider.Response{
 				{Text: "using a tool", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "call-1", Name: "bash", Arguments: map[string]any{"command": "true"}}}},
@@ -852,7 +854,7 @@ func TestFollowUpQueueModeAll(t *testing.T) {
 			loop.FollowUp("follow-up two")
 		}
 	})
-	loop.SetQueueModes("", QueueModeAll)
+	loop.SetQueueModes("", queueModeAll)
 	if err := loop.Submit(context.Background(), "initial", Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
 		t.Fatal(err)
 	}
@@ -862,5 +864,54 @@ func TestFollowUpQueueModeAll(t *testing.T) {
 	last := fake.Requests()[1]
 	if !reqHasUserText(last, "follow-up one") || !reqHasUserText(last, "follow-up two") {
 		t.Fatal("all-mode follow-ups were not delivered together")
+	}
+}
+
+func TestSteeringDeliversOneBatchPerTurnWithContinuation(t *testing.T) {
+	store, _, fake, _, _ := testSetup(t)
+	fake.Responses = []*provider.Response{
+		{Text: "using a tool", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "call-1", Name: "bash", Arguments: map[string]any{"command": "true"}}}},
+		{Text: "no tools here", StopReason: "stop"},
+		{Text: "after nudge", StopReason: "stop"},
+		{Text: "done", StopReason: "stop"},
+	}
+	var loop *Loop
+	var starts int
+	loop = New(store, tools.NewRegistry(store.Cwd()), fake, func(e event.Event) {
+		if e.Type != event.AssistantStart {
+			return
+		}
+		starts++
+		if starts == 2 {
+			loop.Steer("steer A")
+			loop.Steer("steer B")
+		}
+	})
+	// One continuation keeps the run alive without a queued message, so only the
+	// one-batch-per-turn rule can stop steer B from joining the same request.
+	nudges := 0
+	cfg := Config{Model: modelMeta(), Tools: toolDefs()}
+	cfg.ContinueOnEnd = func() (string, string, bool) {
+		nudges++
+		if nudges == 1 {
+			return "nudge", "keep going", true
+		}
+		return "", "", false
+	}
+	if err := loop.Submit(context.Background(), "start", cfg); err != nil {
+		t.Fatal(err)
+	}
+	requests := fake.Requests()
+	if len(requests) != 4 {
+		t.Fatalf("provider calls = %d, want 4", len(requests))
+	}
+	if !reqHasUserText(requests[2], "steer A") {
+		t.Fatal("steering was not delivered before the continuation request")
+	}
+	if reqHasUserText(requests[2], "steer B") {
+		t.Fatal("a second steering message joined the same turn")
+	}
+	if !reqHasUserText(requests[3], "steer B") {
+		t.Fatal("queued steering message was never delivered")
 	}
 }

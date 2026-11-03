@@ -46,12 +46,11 @@ type Config struct {
 	CompactionProvider func() (provider.Provider, provider.ModelMeta, func(), error)
 }
 
-// Queue modes match Pi's steeringMode and followUpMode settings. Pi polls the
-// steering queue before each model request and the follow-up queue once the run
-// would otherwise end.
+// Queue modes match Pi's steeringMode and followUpMode settings: one message
+// per turn by default, or every queued message at once.
 const (
-	QueueModeOneAtATime = "one-at-a-time"
-	QueueModeAll        = "all"
+	queueModeOneAtATime = "one-at-a-time"
+	queueModeAll        = "all"
 )
 
 type Loop struct {
@@ -140,10 +139,10 @@ func (l *Loop) SetQueueModes(steering, followUp string) {
 }
 
 func normalizeQueueMode(mode string) string {
-	if mode == QueueModeAll {
-		return QueueModeAll
+	if mode == queueModeAll {
+		return queueModeAll
 	}
-	return QueueModeOneAtATime
+	return queueModeOneAtATime
 }
 
 // takeQueued removes the messages one turn may deliver, honoring the queue mode.
@@ -152,7 +151,7 @@ func takeQueued[T any](mode string, queue *[]T) []T {
 		return nil
 	}
 	n := 1
-	if mode == QueueModeAll {
+	if mode == queueModeAll {
 		n = len(*queue)
 	}
 	taken := append([]T(nil), (*queue)[:n]...)
@@ -557,18 +556,22 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			// Deliver steering before follow-ups. Follow-ups wait until the
 			// current run has no more tool calls or steering messages.
 			deliveredSteering := l.deliverSteering()
+			deliveredFollowUp := false
 			if !deliveredSteering {
-				deliveredFollowUp, deliverErr := l.deliverFollowUp()
+				var deliverErr error
+				deliveredFollowUp, deliverErr = l.deliverFollowUp()
 				if deliverErr != nil {
 					return deliverErr
 				}
-				if deliveredFollowUp {
-					if err := l.maybeAdaptiveCompact(ctx, cfg, true, true); err != nil {
-						return err
-					}
-					skipInitialSteeringPoll = true
-					continue
+			}
+			// One delivery batch per turn: the next iteration must not deliver
+			// another batch before the following model request.
+			skipInitialSteeringPoll = deliveredSteering || deliveredFollowUp
+			if deliveredFollowUp {
+				if err := l.maybeAdaptiveCompact(ctx, cfg, true, true); err != nil {
+					return err
 				}
+				continue
 			}
 			if cfg.ContinueOnEnd != nil {
 				messageType, content, ok := cfg.ContinueOnEnd()
@@ -593,7 +596,6 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			if err := l.maybeAdaptiveCompact(ctx, cfg, true, true); err != nil {
 				return err
 			}
-			skipInitialSteeringPoll = true
 		}
 		if err := l.runBatch(ctx, resp.ToolCalls, cfg); err != nil {
 			return err

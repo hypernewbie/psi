@@ -395,19 +395,19 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		out.DefaultThinking = *raw.DefaultThinking
 		set("defaultThinkingLevel", *raw.DefaultThinking)
 	}
-	for key, mode := range map[string]*string{"steeringMode": raw.SteeringMode, "followUpMode": raw.FollowUpMode} {
-		if mode == nil {
-			continue
+	if raw.SteeringMode != nil {
+		if *raw.SteeringMode != "all" && *raw.SteeringMode != "one-at-a-time" {
+			return fmt.Errorf("steeringMode must be \"all\" or \"one-at-a-time\"")
 		}
-		if *mode != "all" && *mode != "one-at-a-time" {
-			return fmt.Errorf("%s must be \"all\" or \"one-at-a-time\"", key)
+		out.SteeringMode = *raw.SteeringMode
+		set("steeringMode", *raw.SteeringMode)
+	}
+	if raw.FollowUpMode != nil {
+		if *raw.FollowUpMode != "all" && *raw.FollowUpMode != "one-at-a-time" {
+			return fmt.Errorf("followUpMode must be \"all\" or \"one-at-a-time\"")
 		}
-		if key == "steeringMode" {
-			out.SteeringMode = *mode
-		} else {
-			out.FollowUpMode = *mode
-		}
-		set(key, *mode)
+		out.FollowUpMode = *raw.FollowUpMode
+		set("followUpMode", *raw.FollowUpMode)
 	}
 	if raw.SessionDir != nil {
 		out.SessionDir = *raw.SessionDir

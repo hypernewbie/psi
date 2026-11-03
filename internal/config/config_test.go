@@ -483,4 +483,8 @@ func TestQueueModeSettings(t *testing.T) {
 	if _, err := LoadSettings(user, "", false); err == nil {
 		t.Fatal("invalid steeringMode must be rejected")
 	}
+	writeJSON(t, user, `{"followUpMode":"sometimes"}`)
+	if _, err := LoadSettings(user, "", false); err == nil {
+		t.Fatal("invalid followUpMode must be rejected")
+	}
 }
