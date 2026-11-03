@@ -200,6 +200,46 @@ func testRuntime(t *testing.T) *runtime {
 	return r
 }
 
+func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
+	r := testRuntime(t)
+	r.cfg.Model.ContextWindow = 100000
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+
+	r.refreshPresentation(console)
+	if r.footerSnapshot.ContextEstimate == "" {
+		t.Fatal("empty session lost the baseline estimate")
+	}
+	if r.store.ProjectionIfCached() != nil {
+		t.Fatal("footer built a projection for an empty session")
+	}
+
+	if _, err := r.store.AppendMessage(agentMessageUser("one prompt")); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if r.footerSnapshot.ContextEstimate != "" {
+		t.Fatalf("existing session without usage fabricated an estimate: %q", r.footerSnapshot.ContextEstimate)
+	}
+	if r.store.ProjectionIfCached() != nil {
+		t.Fatal("footer built a projection for an existing session")
+	}
+
+	if _, err := r.store.Projection(); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if r.footerSnapshot.ContextEstimate == "" {
+		t.Fatal("footer ignored a projection cached after the last redraw")
+	}
+}
+
 func TestFooterSnapshotIsCachedAcrossRedraws(t *testing.T) {
 	r := testRuntime(t)
 	var output bytes.Buffer

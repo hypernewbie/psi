@@ -30,6 +30,9 @@ func FuzzDecodeEntries(f *testing.F) {
 func FuzzIndexedMetadata(f *testing.F) {
 	f.Add([]byte(`{"type":"session","version":3,"id":"fuzz","cwd":"/synthetic/work"}` + "\n" + `{"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"synthetic"}}` + "\n"))
 	f.Add([]byte(`{"type":"custom","id":"x","data":["opaque"]}`))
+	f.Add([]byte(`{"type":"message","id":"a","message":{"role":"assistant","content":[{"type":"mystery"}],"stopReason":"deferred"}}`))
+	f.Add([]byte(`{"type":"message","id":"u","message":{"role":"user","content":{"bad":true}}}`))
+	f.Add([]byte(`{"type":"context_edit","id":"e","targetId":"u","replacement":{"content":"fixed"}}`))
 	f.Add([]byte("not json\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1024*1024 {
@@ -54,6 +57,23 @@ func FuzzIndexedMetadata(f *testing.F) {
 		}
 		_ = RestoreModelState(path)
 		_ = BuildContextEntries(path)
+
+		// Metadata-only activation must agree with the full projection on
+		// whether continuation is refused. Context edits are included.
+		header, fullEntries, _, err := DecodeEntries(bytes.NewReader(data), "synthetic-fuzz.jsonl")
+		if err != nil || header == nil {
+			return
+		}
+		fullPath, err := BuildPath(fullEntries, "")
+		if err != nil {
+			return
+		}
+		fullProjection := BuildProjection(fullPath)
+		fullErr := CheckContinuable(fullProjection.Flat, fullProjection.Entries)
+		metaErr := CheckContinuableMetadata(BuildContextEntries(path))
+		if (fullErr == nil) != (metaErr == nil) {
+			t.Fatalf("continuation disagreement: full=%v metadata=%v", fullErr, metaErr)
+		}
 	})
 }
 

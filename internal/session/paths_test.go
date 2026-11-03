@@ -67,6 +67,27 @@ func TestSessionDirOverridePrecedence(t *testing.T) {
 	}
 }
 
+func TestSameDirResolvesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !SameDir(real, alias) {
+		t.Fatalf("same directory through symlink not recognized: %q %q", real, alias)
+	}
+	if !SameDir(real+string(filepath.Separator), real) {
+		t.Fatalf("trailing separator not normalized")
+	}
+	if SameDir(real, filepath.Join(root, "other")) {
+		t.Fatalf("different directories compared equal")
+	}
+}
+
 func TestAssertValidSessionID(t *testing.T) {
 	valid := []string{"a", "ab1", "my.session-1_2", "A0-._9z"}
 	for _, id := range valid {

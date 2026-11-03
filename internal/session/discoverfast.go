@@ -106,7 +106,7 @@ func findRecentFast(sessionDir, cwd string) (string, error) {
 		if err != nil {
 			continue
 		}
-		if cwd == "" || h.Cwd == cwd {
+		if cwd == "" || SameDir(h.Cwd, cwd) {
 			return f.path, nil
 		}
 	}

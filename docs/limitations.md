@@ -20,6 +20,13 @@ Per-tool approval, a permission-policy language, and automatic Git operations ar
 The shell tool intentionally inherits the psi process environment.
 Regression shell processes instead use an isolated environment.
 
+## Phi integration
+
+The native Phi bridge is the only RPC surface.
+It is a local Unix socket that publishes lifecycle and state only; psi output never leaves the process.
+Windows panes stay plain because psi has no named-pipe dialer.
+phi injects the endpoint and token at spawn; psi clears them before any tool runs.
+
 ## Tool execution
 
 Tool calls from one assistant response run concurrently, like Pi's parallel default.
