@@ -272,63 +272,29 @@ func TestCompactionFlow(t *testing.T) {
 	}
 }
 
-// gatedProvider blocks one scripted request until the test releases it. A test
-// that steers during that request knows the message is queued before the loop
-// reaches its delivery point, instead of racing an instant fake response.
-type gatedProvider struct {
-	*provider.Fake
-	gateIdx int
-	entered chan struct{}
-	gate    chan struct{}
-
-	mu    sync.Mutex
-	calls int
-}
-
-func (g *gatedProvider) Send(ctx context.Context, req provider.Request, onText func(string)) (*provider.Response, error) {
-	g.mu.Lock()
-	idx := g.calls
-	g.calls++
-	g.mu.Unlock()
-	if idx == g.gateIdx {
-		close(g.entered)
-		select {
-		case <-g.gate:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	return g.Fake.Send(ctx, req, onText)
-}
-
 func TestSteeringDeliveredAtTurnBoundaryAndContinuesRun(t *testing.T) {
-	store, reg, fake, _, _ := testSetup(t)
+	store, _, fake, _, _ := testSetup(t)
 	fake.Responses = []*provider.Response{
 		{Text: "using a tool", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "call-steer-1", Name: "bash", Arguments: map[string]any{"command": "true"}}}},
 		{Text: "no tools here", StopReason: "stop"},
 		{Text: "done after steering", StopReason: "stop"},
 	}
-	// Hold the second request open: the tool batch has settled, so steering
-	// now is queued before the no-tool response is even produced.
-	gated := &gatedProvider{Fake: fake, gateIdx: 1, entered: make(chan struct{}), gate: make(chan struct{})}
-	loop := New(store, reg, gated, nil)
-	done := make(chan error, 1)
-	go func() {
-		done <- loop.Submit(context.Background(), "start", Config{Model: modelMeta(), Tools: toolDefs()})
-	}()
-	select {
-	case <-gated.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("second request never started")
-	}
-	loop.Steer("steered message")
-	close(gated.gate)
-	select {
-	case err := <-done:
-		steeringAssertions(t, store, fake, loop, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("run did not finish after steering")
-	}
+	// Steer from the run's own event sink so the queueing is ordered with the
+	// loop instead of racing a polling goroutine. The second turn has no tool
+	// calls, so only the post-turn steering poll can keep the run alive.
+	var loop *Loop
+	var starts int
+	loop = New(store, tools.NewRegistry(store.Cwd()), fake, func(e event.Event) {
+		if e.Type != event.AssistantStart {
+			return
+		}
+		starts++
+		if starts == 2 {
+			loop.Steer("steered message")
+		}
+	})
+	err := loop.Submit(context.Background(), "start", Config{Model: modelMeta(), Tools: toolDefs()})
+	steeringAssertions(t, store, fake, loop, err)
 }
 
 func steeringAssertions(t *testing.T, store *session.Store, fake *provider.Fake, loop *Loop, err error) {
