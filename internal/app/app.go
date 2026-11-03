@@ -634,22 +634,29 @@ type runtime struct {
 	signals                  chan os.Signal
 	footerKey                string
 	footerSnapshot           terminal.PresentationSnapshot
-	themeCatalog             *pitheme.Catalog
-	theme                    *pitheme.Theme
-	themeSetting             string
-	themeName                string
-	themeMode                pitheme.ColorMode
-	themeColors              pitheme.TerminalColors
-	themeColorsReceived      bool
-	themeColorCollector      *terminalColorCollector
-	themeAppearance          string
-	themeFallback            string
-	themeDiagnostics         []pitheme.Diagnostic
-	projectTrusted           bool
-	loops                    *loop.Controller
-	ac                       *ac.Controller
-	cancelACEndTurn          func()
-	reportedColorScheme      string
+	contextTokens            float64
+	contextWindow            float64
+	// Bridge compact readiness, mirrored from loop-owned state.
+	compactActive       bool
+	compactPending      bool
+	queuedInputs        func() int
+	bridgeWork          func() bool
+	themeCatalog        *pitheme.Catalog
+	theme               *pitheme.Theme
+	themeSetting        string
+	themeName           string
+	themeMode           pitheme.ColorMode
+	themeColors         pitheme.TerminalColors
+	themeColorsReceived bool
+	themeColorCollector *terminalColorCollector
+	themeAppearance     string
+	themeFallback       string
+	themeDiagnostics    []pitheme.Diagnostic
+	projectTrusted      bool
+	loops               *loop.Controller
+	ac                  *ac.Controller
+	cancelACEndTurn     func()
+	reportedColorScheme string
 	// activeTools holds the running calls of the current batch in start
 	// order. Parallel batches keep several; the live row shows the newest.
 	activeTools []activeTool
@@ -1066,6 +1073,9 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 				snapshot.Usage += "↓" + formatFooterTokens(accounting.Usage.Output)
 			}
 		}
+		// Bridge telemetry is sampled here, next to the footer estimate, so
+		// both report the same point in time. Neither forces a projection.
+		r.contextTokens, r.contextWindow = 0, 0
 		if r.cfg.Model.ContextWindow > 0 {
 			estimated, hasEstimate := 0, false
 			if projection != nil {
@@ -1077,6 +1087,8 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 				estimated, hasEstimate = agent.EstimatedContext(&session.Projection{}, r.cfg), true
 			}
 			if hasEstimate {
+				r.contextTokens = float64(estimated)
+				r.contextWindow = float64(r.cfg.Model.ContextWindow)
 				percent := 100 * float64(estimated) / float64(r.cfg.Model.ContextWindow)
 				snapshot.ContextEstimate = "~" + formatFooterFixedOneDecimal(percent, "%") + "/" + formatFooterTokens(float64(r.cfg.Model.ContextWindow))
 			}
@@ -1288,6 +1300,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	status := terminal.NewStatusWriter(out)
 	events := make(chan event.Event, 64)
 	done := make(chan error, 1)
+	// Capability requests are served on this loop so mutation stays
+	// single-owner; the bridge client only carries them.
+	bridge := newBridgeHandler(r, console)
 	signals := r.signals
 	if signals == nil {
 		signals = make(chan os.Signal, 8)
@@ -1321,6 +1336,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 		pendingInputBytes += len(input.Key) + len(input.Reply)
 	}
 	initialMessages := append([]string(nil), r.options.Messages...)
+	// Readiness must see queued input the moment it appears, not the next
+	// draw: Phi decides from the published snapshot alone.
+	r.queuedInputs = func() int {
+		queued := len(initialMessages)
+		if activeLoop != nil {
+			queued += len(activeLoop.PendingSteering()) + len(activeLoop.PendingFollowUp())
+		}
+		return queued
+	}
+	// Bridge readiness must reflect preparation work that can still install a
+	// configuration, not only runs the loop owns.
+	r.bridgeWork = bridge.busy
 	frameTimer := time.NewTimer(time.Hour)
 	frameTimer.Stop()
 	defer frameTimer.Stop()
@@ -1576,12 +1603,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.SetThinking(false)
 			stream.Close()
 			r.state = StateCompacting
+			r.compactActive = true
 			setActivity(compactionActivity(ev.State))
+			r.syncBridge()
 		case event.CompactionEnd:
+			r.compactActive = false
 			if r.state != StateCancelling {
 				r.state = StateWaiting
 				setActivity("Working… (Esc/Ctrl+C cancel)")
 			}
+			r.syncBridge()
 		}
 	}
 	acEndTurnTimer := time.NewTimer(time.Hour)
@@ -1706,6 +1737,19 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		}()
 	}
+	startCompact := func(focus string) error {
+		if writeErr := r.store.WriteError(); writeErr != nil {
+			return writeErr
+		}
+		checker := agent.New(r.store, r.reg, r.prov, nil)
+		if _, err := checker.CheckCompaction(r.cfg); err != nil {
+			return err
+		}
+		resumeAfterCompaction = false
+		start("", "", focus, "", "", true)
+		return nil
+	}
+	bridge.compactRun = startCompact
 	checkAndStartCompact := func(focus string, explicit, resume bool) {
 		if writeErr := r.store.WriteError(); writeErr != nil {
 			notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
@@ -1911,6 +1955,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			} else {
 				return nil
 			}
+		case req := <-bridge.requests():
+			bridge.start, bridge.activeLoop = start, activeLoop
+			bridge.handle(req, busy)
+		case <-bridge.completed():
+			bridge.finishPreparation(busy)
+			r.draw(console)
+		case job := <-bridge.searchResults():
+			bridge.finishSearch(job)
 		case ev := <-events:
 			recordEventFrames(func() { applyEvent(ev) })
 		case err := <-done:
@@ -1928,6 +1980,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			cancel()
 			busy = false
+			bridge.resolveCompactRun(err)
 			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
 			// Queued input can arrive after the run's last queue poll but before
 			// its settled event reaches this loop. Continue it after a clean run;

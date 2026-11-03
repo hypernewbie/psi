@@ -273,34 +273,28 @@ func TestCompactionFlow(t *testing.T) {
 }
 
 func TestSteeringDeliveredAtTurnBoundaryAndContinuesRun(t *testing.T) {
-	store, _, fake, loop, _ := testSetup(t)
+	store, _, fake, _, _ := testSetup(t)
 	fake.Responses = []*provider.Response{
 		{Text: "using a tool", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "call-steer-1", Name: "bash", Arguments: map[string]any{"command": "true"}}}},
 		{Text: "no tools here", StopReason: "stop"},
 		{Text: "done after steering", StopReason: "stop"},
 	}
-	done := make(chan error, 1)
-	go func() {
-		done <- loop.Submit(context.Background(), "start", Config{Model: modelMeta(), Tools: toolDefs()})
-	}()
-	// Wait for the tool call to settle, then steer while the run is alive.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, entry := range store.Entries() {
-			if entry.Kind == "message" && entry.Message != nil && entry.Message.Message.Role == "toolResult" {
-				loop.Steer("steered message")
-				select {
-				case err := <-done:
-					steeringAssertions(t, store, fake, loop, err)
-					return
-				case <-time.After(5 * time.Second):
-					t.Fatal("run did not finish after steering")
-				}
-			}
+	// Steer from the run's own event sink so the queueing is ordered with the
+	// loop instead of racing a polling goroutine. The second turn has no tool
+	// calls, so only the post-turn steering poll can keep the run alive.
+	var loop *Loop
+	var starts int
+	loop = New(store, tools.NewRegistry(store.Cwd()), fake, func(e event.Event) {
+		if e.Type != event.AssistantStart {
+			return
 		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatal("tool result never settled")
+		starts++
+		if starts == 2 {
+			loop.Steer("steered message")
+		}
+	})
+	err := loop.Submit(context.Background(), "start", Config{Model: modelMeta(), Tools: toolDefs()})
+	steeringAssertions(t, store, fake, loop, err)
 }
 
 func steeringAssertions(t *testing.T, store *session.Store, fake *provider.Fake, loop *Loop, err error) {

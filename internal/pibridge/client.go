@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pibridgepb "psi/internal/pibridge/pb"
 )
@@ -40,25 +41,45 @@ const (
 	protocolVersion = 1
 	capLifecycle    = "pi.lifecycle.v1"
 	capState        = "pi.state.v2"
+	capModels       = "pi.models.v1"
+	capThinking     = "pi.thinking.v1"
+	capHistory      = "pi.history.v1"
+	capContext      = "pi.context.v1"
+	capSkills       = "pi.skills.v1"
+	capTranscript   = "pi.transcript-search.v2"
+	capCompact      = "pi.compact.v1"
 
 	// attachDeadline must stay below Phi's own 5s hello deadline: that status
 	// is terminal, so the local timeout has to fire first for the retry to
-	// happen at all.
+	// happen at all. It bounds the first write and the Accepted wait together.
 	attachDeadline = 4 * time.Second
 	minBackoff     = 250 * time.Millisecond
 	maxBackoff     = 5 * time.Second
+
+	// writeDeadline bounds one blocked stream write. A local stall is a
+	// transport fault, not Phi's terminal verdict, so the stream is dropped
+	// and reconnected instead of stopping the bridge.
+	writeDeadline = 5 * time.Second
 
 	// pendingLimit bounds lifecycle edges queued while no stream is up.
 	pendingLimit = 128
 	// recvQueue bounds messages buffered between the reader and the owner.
 	recvQueue = 16
+	// requestQueue bounds capability requests waiting for the host loop. A
+	// full queue refuses that request; it never blocks the stream.
+	requestQueue = 16
 )
+
+// hostCapabilities is advertised on every Hello. A capability is listed only
+// once its handler answers every host path; deferred work stays unadvertised.
+var hostCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact}
 
 var (
 	errAcceptTimeout = errors.New("pibridge: attach not accepted")
 	errProtocol      = errors.New("pibridge: protocol error")
 	errNotReady      = errors.New("pibridge: session identity not ready")
 	errRegeneration  = errors.New("pibridge: runtime generation changed")
+	errWriteTimeout  = errors.New("pibridge: stream write blocked")
 )
 
 // Outcome is the logical run outcome at settlement.
@@ -93,6 +114,27 @@ type Snapshot struct {
 	Provider   string
 	Model      string
 	Thinking   string
+
+	// Context telemetry is a point-in-time estimate. Presence is explicit:
+	// an absent token count is unknown, never zero. A known window stays
+	// present while the tokens are still unknown.
+	ContextTokens    float64
+	HasContextTokens bool
+	ContextWindow    float64
+	HasContextWindow bool
+
+	// Compact readiness is copied host state. Absence means unavailable,
+	// never idle.
+	Compact    CompactReadiness
+	HasCompact bool
+}
+
+// CompactReadiness is one sampled view of compaction admission state.
+type CompactReadiness struct {
+	Idle       bool
+	HasPending bool
+	Active     bool
+	Pending    bool
 }
 
 type edge struct {
@@ -125,6 +167,9 @@ type Client struct {
 	jrn     journal
 	pending []edge
 	wake    chan struct{}
+	// requests carries capability requests to the host loop. It exists for
+	// the lifetime of the client so a host select arm never sees it appear.
+	requests chan Request
 }
 
 // FromEnv builds a client when Phi provisioned this process. It returns nil
@@ -160,6 +205,7 @@ func FromEnv(initial Snapshot) *Client {
 		runtimeID: newRuntimeID(),
 		snap:      initial,
 		wake:      make(chan struct{}, 1),
+		requests:  make(chan Request, requestQueue),
 	}
 	return c
 }
@@ -339,7 +385,7 @@ func retryable(err error) bool {
 		errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	if errors.Is(err, errAcceptTimeout) || errors.Is(err, errNotReady) {
+	if errors.Is(err, errAcceptTimeout) || errors.Is(err, errNotReady) || errors.Is(err, errWriteTimeout) {
 		return true
 	}
 	switch status.Code(err) {
@@ -354,7 +400,7 @@ func retryable(err error) bool {
 // accepted this attempt, so a fresh failure after a healthy stream starts
 // again from the minimum delay.
 func (c *Client) runOnce(parent context.Context) (served bool, err error) {
-	hello, gen, ok := c.hello()
+	hello, gen, runtimeID, ok := c.hello()
 	if !ok {
 		return false, errNotReady
 	}
@@ -375,7 +421,8 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := stream.Send(hello); err != nil {
+	deadline := time.Now().Add(attachDeadline)
+	if err := sendFrame(ctx, cancel, stream, hello, writeBudget(deadline)); err != nil {
 		return false, err
 	}
 
@@ -403,7 +450,8 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 		}
 	}()
 
-	if err := c.awaitAccepted(ctx, msgs, recvErr); err != nil {
+	caps, err := c.awaitAccepted(ctx, msgs, recvErr, gen, runtimeID, deadline)
+	if err != nil {
 		return false, err
 	}
 	served = true
@@ -411,6 +459,10 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 	if err := c.flush(stream, gen); err != nil {
 		return served, err
 	}
+	// Replies are bounded here, never on the host loop: Phi may stop reading
+	// while the host still has work to answer.
+	out := newOutbox()
+	defer out.close()
 	for {
 		select {
 		case <-ctx.Done():
@@ -418,13 +470,34 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 		case err := <-recvErr:
 			return served, err
 		case msg := <-msgs:
-			switch payload := msg.Payload.(type) {
-			case *pibridgepb.PhiToPi_StateRequest:
-				if err := stream.Send(c.stateMessage(payload.StateRequest.GetRequestId(), gen)); err != nil {
-					return served, err
-				}
-			case *pibridgepb.PhiToPi_ProtocolError:
+			if !c.validEnvelope(msg, gen) {
+				return served, fmt.Errorf("%w: message identity does not match this stream", errProtocol)
+			}
+			if payload, ok := msg.Payload.(*pibridgepb.PhiToPi_ProtocolError); ok {
 				return served, fmt.Errorf("%w: %s", errProtocol, payload.ProtocolError.GetSafeMessage())
+			}
+			req, ok := c.dispatch(msg, ctx, out, gen)
+			if !ok {
+				continue
+			}
+			if !caps[capabilityOf(req.kind)] {
+				req.ReplyUnavailable()
+				continue
+			}
+			select {
+			case c.requests <- req:
+			default:
+				req.ReplyUnavailable()
+			}
+		case frame := <-out.ch:
+			out.sent(frame)
+			// Lifecycle edges go first: optional replies must never delay
+			// a settlement or evict a journal record.
+			if err := c.flush(stream, gen); err != nil {
+				return served, err
+			}
+			if err := sendFrame(ctx, cancel, stream, frame, writeBudget(time.Time{})); err != nil {
+				return served, err
 			}
 		case <-c.wake:
 			if err := c.flush(stream, gen); err != nil {
@@ -434,43 +507,128 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 	}
 }
 
-func (c *Client) awaitAccepted(ctx context.Context, msgs <-chan *pibridgepb.PhiToPi, recvErr <-chan error) error {
-	timer := time.NewTimer(attachDeadline)
+// sendFrame writes one message under a local deadline. A blocked write
+// cancels the stream context, which unblocks the sender; the buffered result
+// channel means that goroutine cannot outlive the stream's own error.
+func sendFrame(ctx context.Context, cancel context.CancelFunc, stream pibridgepb.Integration_ConnectClient, msg *pibridgepb.PiToPhi, wait time.Duration) error {
+	if wait <= 0 {
+		return errWriteTimeout
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- stream.Send(msg) }()
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		cancel()
+		return errWriteTimeout
+	}
+}
+
+// writeBudget caps one write by the remaining attach budget, so the first
+// Hello write and the Accepted wait together stay inside attachDeadline.
+func writeBudget(deadline time.Time) time.Duration {
+	if deadline.IsZero() {
+		return writeDeadline
+	}
+	remaining := time.Until(deadline)
+	if remaining < writeDeadline {
+		return remaining
+	}
+	return writeDeadline
+}
+
+// validEnvelope rejects a message that does not belong to this stream. A
+// mismatch is a protocol fault, never a request for another pane.
+func (c *Client) validEnvelope(msg *pibridgepb.PhiToPi, gen uint64) bool {
+	return msg.GetPaneId() == c.paneID &&
+		msg.GetProcessId() == c.processID &&
+		msg.GetRuntimeGeneration() == gen
+}
+
+func capabilityOf(kind string) string {
+	switch kind {
+	case RequestModels, RequestSetModel:
+		return capModels
+	case RequestThinking, RequestSetThinking:
+		return capThinking
+	case RequestHistory:
+		return capHistory
+	case RequestSkills, RequestInvokeSkill:
+		return capSkills
+	case RequestTranscript:
+		return capTranscript
+	case RequestCompact:
+		return capCompact
+	case RequestState:
+		return capState
+	}
+	return ""
+}
+
+// awaitAccepted checks the handshake against what this attempt offered. Phi
+// may accept a subset of the offered capabilities, but it cannot accept a
+// different runtime or a capability we never offered.
+func (c *Client) awaitAccepted(ctx context.Context, msgs <-chan *pibridgepb.PhiToPi, recvErr <-chan error, gen uint64, runtimeID string, deadline time.Time) (map[string]bool, error) {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	offered := map[string]bool{}
+	for _, name := range hostCapabilities {
+		offered[name] = true
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-timer.C:
-			return errAcceptTimeout
+			return nil, errAcceptTimeout
 		case err := <-recvErr:
-			return err
+			return nil, err
 		case msg := <-msgs:
 			switch payload := msg.Payload.(type) {
 			case *pibridgepb.PhiToPi_Accepted:
-				return nil
+				accepted := payload.Accepted
+				if accepted.GetProtocolVersion() != protocolVersion ||
+					accepted.GetRuntimeId() != runtimeID ||
+					accepted.GetRuntimeGeneration() != gen ||
+					msg.GetPaneId() != c.paneID ||
+					msg.GetProcessId() != c.processID {
+					return nil, fmt.Errorf("%w: unexpected accepted identity", errProtocol)
+				}
+				caps := map[string]bool{}
+				for _, name := range accepted.GetCapabilities() {
+					if offered[name] {
+						caps[name] = true
+					}
+				}
+				return caps, nil
 			case *pibridgepb.PhiToPi_ProtocolError:
-				return fmt.Errorf("%w: %s", errProtocol, payload.ProtocolError.GetSafeMessage())
+				return nil, fmt.Errorf("%w: %s", errProtocol, payload.ProtocolError.GetSafeMessage())
 			}
 		}
 	}
 }
 
-// hello builds the attach message and the generation it binds.
-func (c *Client) hello() (*pibridgepb.PiToPhi, uint64, bool) {
+// hello builds the attach message and the identity it binds.
+func (c *Client) hello() (*pibridgepb.PiToPhi, uint64, string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.snap.SessionID == "" {
-		return nil, 0, false
+		return nil, 0, "", false
 	}
 	gen := c.snap.Generation
+	runtimeID := c.runtimeID
 	snap := c.snapshotLocked("")
 	first, last := c.jrn.bounds()
 	hello := &pibridgepb.Hello{
 		ProtocolVersion:      protocolVersion,
 		SessionId:            c.snap.SessionID,
-		RuntimeId:            c.runtimeID,
-		Capabilities:         []string{capLifecycle, capState},
+		RuntimeId:            runtimeID,
+		Capabilities:         append([]string(nil), hostCapabilities...),
 		CurrentState:         snap,
 		JournalFirstSequence: first,
 		JournalLastSequence:  last,
@@ -480,7 +638,7 @@ func (c *Client) hello() (*pibridgepb.PiToPhi, uint64, bool) {
 		ProcessId:         c.processID,
 		RuntimeGeneration: gen,
 		Payload:           &pibridgepb.PiToPhi_Hello{Hello: hello},
-	}, gen, true
+	}, gen, runtimeID, true
 }
 
 func (c *Client) snapshotLocked(requestID string) *pibridgepb.StateSnapshot {
@@ -500,6 +658,29 @@ func (c *Client) snapshotLocked(requestID string) *pibridgepb.StateSnapshot {
 	}
 	if c.snap.Provider != "" || c.snap.Model != "" {
 		snap.Model = &pibridgepb.ModelSnapshot{Provider: c.snap.Provider, Model: c.snap.Model}
+	}
+	if c.snap.HasContextTokens {
+		if c.snap.HasContextWindow {
+			snap.ContextUsage = &pibridgepb.ContextUsageSnapshot{
+				Tokens:        proto.Float64(c.snap.ContextTokens),
+				ContextWindow: proto.Float64(c.snap.ContextWindow),
+			}
+			if c.snap.ContextWindow > 0 {
+				snap.ContextUsage.Percent = proto.Float64(100 * c.snap.ContextTokens / c.snap.ContextWindow)
+			}
+		} else {
+			snap.ContextUsage = &pibridgepb.ContextUsageSnapshot{Tokens: proto.Float64(c.snap.ContextTokens)}
+		}
+	} else if c.snap.HasContextWindow {
+		snap.ContextUsage = &pibridgepb.ContextUsageSnapshot{ContextWindow: proto.Float64(c.snap.ContextWindow)}
+	}
+	if c.snap.HasCompact {
+		snap.CompactReadiness = &pibridgepb.CompactReadiness{
+			Idle:               c.snap.Compact.Idle,
+			HasPendingMessages: c.snap.Compact.HasPending,
+			CompactionActive:   c.snap.Compact.Active,
+			BridgePending:      c.snap.Compact.Pending,
+		}
 	}
 	return snap
 }

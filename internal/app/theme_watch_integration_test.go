@@ -79,10 +79,9 @@ func TestUserThemeAtomicSaveReloadsOpenCompletionWithoutLosingQuery(t *testing.T
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--no-session", "--use-theme", "selected")
 	q.prompt()
 	q.write("/")
-	q.prompt()
-	if !strings.Contains(q.raw.String(), oldAccent) {
-		t.Fatalf("initial completion did not use selected accent %q", oldAccent)
-	}
+	// prompt() drops buffered bytes once the screen is quiet, so wait for the
+	// completion frame to arrive instead of sampling it after a quiet prompt.
+	q.wait(oldAccent)
 	newAccent := writeAccentTheme(t, themePath, "#abcdef", true)
 	if newAccent == oldAccent {
 		t.Fatalf("fixture accents quantized to the same terminal color %q", oldAccent)
