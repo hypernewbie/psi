@@ -1714,6 +1714,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if state.Active && !state.Forever {
 				definitions = append(definitions, loop.ToolDefinition())
 			}
+			// The syncboard tool is advertised only while Phi negotiated
+			// its capability; the handler itself rechecks on every call.
+			if r.syncboardAvailable() {
+				definitions = append(definitions, syncboardToolDefinition())
+			}
 			return r.prompt + loop.SystemPromptAddition(state), definitions
 		}
 		cfg.InternalTools = map[string]agent.InternalToolHandler{
@@ -1721,6 +1726,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				result := r.loops.HandleControl(invocation.Arguments)
 				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
 			},
+			syncboardToolName: r.syncboardInternalHandler,
 		}
 		cfg.AfterToolCall = func(_ context.Context, invocation tools.Invocation, result tools.Result) error {
 			if invocation.Name != loop.ControlToolName || result.IsError {

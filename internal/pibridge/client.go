@@ -48,6 +48,7 @@ const (
 	capSkills       = "pi.skills.v1"
 	capTranscript   = "pi.transcript-search.v2"
 	capCompact      = "pi.compact.v1"
+	capSyncboard    = "pi.syncboard.v1"
 
 	// attachDeadline must stay below Phi's own 5s hello deadline: that status
 	// is terminal, so the local timeout has to fire first for the retry to
@@ -72,7 +73,7 @@ const (
 
 // hostCapabilities is advertised on every Hello. A capability is listed only
 // once its handler answers every host path; deferred work stays unadvertised.
-var hostCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact}
+var hostCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact, capSyncboard}
 
 var (
 	errAcceptTimeout = errors.New("pibridge: attach not accepted")
@@ -170,6 +171,17 @@ type Client struct {
 	// requests carries capability requests to the host loop. It exists for
 	// the lifetime of the client so a host select arm never sees it appear.
 	requests chan Request
+
+	// caps is the last negotiated set. It is only valid on a live
+	// stream: the run loop clears it when the stream dies.
+	capsMu sync.RWMutex
+	caps   map[string]bool
+	// sbSeq allocates reverse-direction call ids; sbWaiters correlates
+	// responses; sbQueue holds calls the next flush writes.
+	sbMu      sync.Mutex
+	sbSeq     uint64
+	sbWaiters map[string]chan sbDelivery
+	sbQueue   []sbQueued
 }
 
 // FromEnv builds a client when Phi provisioned this process. It returns nil
@@ -455,6 +467,10 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 		return false, err
 	}
 	served = true
+	// The negotiated set dies with this stream: waiters queued on it fail
+	// instead of leaking onto the next handshake.
+	c.setCaps(caps)
+	defer c.dropCaps()
 	c.dropReplayed(hello.GetHello().GetJournalLastSequence())
 	if err := c.flush(stream, gen); err != nil {
 		return served, err
@@ -475,6 +491,10 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 			}
 			if payload, ok := msg.Payload.(*pibridgepb.PhiToPi_ProtocolError); ok {
 				return served, fmt.Errorf("%w: %s", errProtocol, payload.ProtocolError.GetSafeMessage())
+			}
+			if res, ok := msg.Payload.(*pibridgepb.PhiToPi_SyncboardResponse); ok {
+				c.resolveSyncboard(res.SyncboardResponse)
+				continue
 			}
 			req, ok := c.dispatch(msg, ctx, out, gen)
 			if !ok {
@@ -721,7 +741,19 @@ func (c *Client) flush(stream pibridgepb.Integration_ConnectClient, gen uint64) 
 		c.mu.Lock()
 		if len(c.pending) == 0 && !c.dirty {
 			c.mu.Unlock()
-			return nil
+			// Reverse-direction calls ride the same flush: with no edges
+			// pending they go out at once instead of waiting for the
+			// next snapshot change.
+			queued := c.takeSyncboard()
+			if len(queued) == 0 {
+				return nil
+			}
+			for _, q := range queued {
+				if err := stream.Send(c.syncboardMessage(q, gen)); err != nil {
+					return err
+				}
+			}
+			continue
 		}
 		edges := c.pending
 		c.pending = nil
