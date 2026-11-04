@@ -40,21 +40,21 @@ import (
 )
 
 type Options struct {
-	Help, Version, Continue, Resume                           bool
-	SessionPath, Provider, Model, Thinking, SessionDir, Tools string
-	Name, ExcludeTools, Mode, TUIMode, SystemPrompt           string
-	AppendSystemPrompts                                       []string
-	ListModels                                                bool
-	ListModelsFilter                                          string
-	NoTools, NoSession, AllowProj, DenyProj                   bool
-	NoThemes, NoSkills, NoContextFiles, Offline               bool
-	UseTheme                                                  string
-	ThemePaths                                                []string
-	Messages                                                  []string
+	Help, Version, Continue, Resume                                      bool
+	SessionPath, SessionID, Provider, Model, Thinking, SessionDir, Tools string
+	Name, ExcludeTools, Mode, TUIMode, SystemPrompt                      string
+	AppendSystemPrompts                                                  []string
+	ListModels                                                           bool
+	ListModelsFilter                                                     string
+	NoTools, NoSession, AllowProj, DenyProj                              bool
+	NoThemes, NoSkills, NoContextFiles, Offline                          bool
+	UseTheme                                                             string
+	ThemePaths                                                           []string
+	Messages                                                             []string
 }
 
 var cliValueFlags = map[string]bool{
-	"provider": true, "model": true, "thinking": true, "session": true,
+	"provider": true, "model": true, "thinking": true, "session": true, "session-id": true,
 	"session-dir": true, "tools": true, "t": true, "theme": true,
 	"use-theme": true, "name": true, "n": true, "exclude-tools": true,
 	"xt": true, "mode": true, "tui-mode": true, "system-prompt": true,
@@ -188,6 +188,7 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.Resume, "resume", false, "resume with selection")
 	fs.BoolVar(&o.Resume, "r", false, "resume with selection (Pi alias)")
 	fs.StringVar(&o.SessionPath, "session", "", "open session path or ID")
+	fs.StringVar(&o.SessionID, "session-id", "", "use this session ID, creating it if missing")
 	fs.StringVar(&o.Provider, "provider", "", "provider")
 	fs.StringVar(&o.Model, "model", "", "model ID or provider/model")
 	fs.StringVar(&o.Thinking, "thinking", "", "thinking level")
@@ -247,13 +248,18 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 		return o, fs, fmt.Errorf("--approve/--allow-project and --no-approve/--deny-project conflict")
 	}
 	count := 0
-	for _, selected := range []bool{o.Continue, o.Resume, o.SessionPath != ""} {
+	for _, selected := range []bool{o.Continue, o.Resume, o.SessionPath != "", o.SessionID != ""} {
 		if selected {
 			count++
 		}
 	}
 	if count > 1 {
-		return o, fs, fmt.Errorf("choose only one of --continue, --resume, and --session")
+		return o, fs, fmt.Errorf("choose only one of --continue, --resume, --session, and --session-id")
+	}
+	if o.SessionID != "" {
+		if err := session.AssertValidSessionID(o.SessionID); err != nil {
+			return o, fs, fmt.Errorf("--session-id: %v", err)
+		}
 	}
 	if o.Name != "" {
 		o.Name = strings.TrimSpace(o.Name)
@@ -380,6 +386,7 @@ Pi-compatible options:
   --continue, -c             Continue the most recent session
   --resume, -r               Select a session to resume
   --session <path|id>        Open session file or ID prefix in session directory
+  --session-id <id>          Use the current directory's existing session with the ID, creating it otherwise
   --session-dir <dir>        Session directory
   --provider <name>          Select provider; use configured model if omitted
   --model <id|provider/id>   Select model; :thinking suffix is supported
@@ -408,7 +415,7 @@ Pi-compatible options:
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Use -- before a message that starts with a hyphen.
-Not supported: --print/-p, JSON/RPC modes, fullscreen mode, @file, --api-key, --models, --session-id, --fork, --export, extensions, MCP, and prompt templates.
+Not supported: --print/-p, JSON/RPC modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version)
 }
 
@@ -892,6 +899,20 @@ func confirmWorkspaceMismatch(console *terminal.Console, lifecycle *terminalLife
 func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.StartupOverrides, console *terminal.Console, lifecycle *terminalLifecycle) (*session.Store, error) {
 	dir := session.SessionDirOverride(ov.SessionDir, "", "", cwd, agentDir)
 	persist := !ov.NoSession
+	// Pi --session-id semantics: use the current directory's existing
+	// session with the ID, creating it otherwise.
+	if o.SessionID != "" {
+		infos, err := workspaceSessions(dir, cwd)
+		if err != nil {
+			return nil, err
+		}
+		for _, info := range infos {
+			if info.ID == o.SessionID {
+				return session.OpenFile(info.Path, cwd, persist)
+			}
+		}
+		return session.New(session.OpenOptions{Cwd: cwd, SessionDir: dir, AgentDir: agentDir, Persist: persist, ID: o.SessionID})
+	}
 	if o.SessionPath != "" {
 		path := o.SessionPath
 		if _, err := os.Stat(path); os.IsNotExist(err) {
