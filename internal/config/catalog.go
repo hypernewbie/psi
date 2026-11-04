@@ -4,21 +4,36 @@ import (
 	_ "embed"
 	"encoding/json"
 	"sort"
+	"sync"
 )
 
 //go:embed data/catalog.json
 var catalogJSON []byte
 
+var (
+	bundledOnce sync.Once
+	catalog     map[string][]ModelMeta
+)
+
+func catalogOnce() map[string][]ModelMeta {
+	bundledOnce.Do(func() {
+		var all map[string][]ModelMeta
+		// Generated, embedded public data. Never load a catalog from the network.
+		if err := json.Unmarshal(catalogJSON, &all); err != nil {
+			panic("invalid embedded public model catalog")
+		}
+		for provider := range all {
+			for i := range all[provider] {
+				all[provider][i].InputImage = containsString(all[provider][i].Input, "image")
+			}
+		}
+		catalog = all
+	})
+	return catalog
+}
+
 func BundledModels(provider string) []ModelMeta {
-	var all map[string][]ModelMeta
-	// Generated, embedded public data. Never load a catalog from the network.
-	if err := json.Unmarshal(catalogJSON, &all); err != nil {
-		panic("invalid embedded public model catalog")
-	}
-	for i := range all[provider] {
-		all[provider][i].InputImage = containsString(all[provider][i].Input, "image")
-	}
-	return all[provider]
+	return catalogOnce()[provider]
 }
 func bundledModel(provider, id string) (ModelMeta, bool) {
 	for _, m := range BundledModels(provider) {

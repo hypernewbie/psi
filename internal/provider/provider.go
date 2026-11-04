@@ -189,6 +189,8 @@ func BuildRequest(req Request) (map[string]any, error) {
 		return BuildGoogleRequest(req)
 	case "openai-responses":
 		return BuildResponsesRequest(req)
+	case "mistral-conversations":
+		return BuildMistralRequest(req)
 	default:
 		return nil, fmt.Errorf("unsupported provider API %q", req.Model.API)
 	}

@@ -16,7 +16,26 @@ if (pkg.name !== "@earendil-works/pi-ai") {
 	throw new Error("input must be the public pi-ai package");
 }
 
-const providers = ["anthropic", "openai-codex", "minimax", "opencode-go", "deepseek", "zai", "google"];
+// Registered chat APIs per provider, mirroring internal/providerregistry.
+// Cached or bundled models outside this allowlist stay out of the embedded
+// catalog; Pi's overlay cache applies the same rule at load time.
+const providerAPIs = {
+	anthropic: ["anthropic-messages"],
+	"openai-codex": ["openai-codex-responses"],
+	minimax: ["anthropic-messages"],
+	"opencode-go": ["anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"],
+	deepseek: ["openai-completions"],
+	zai: ["openai-completions"],
+	google: ["google-generative-ai"],
+	xiaomi: ["openai-completions"],
+	moonshotai: ["openai-completions"],
+	"qwen-token-plan": ["openai-completions"],
+	openrouter: ["openai-completions"],
+	xai: ["openai-responses"],
+	groq: ["openai-completions"],
+	mistral: ["mistral-conversations"],
+};
+const providers = Object.keys(providerAPIs);
 const catalog = {};
 const hashes = {};
 const manifest = JSON.parse(readFileSync(join(root, "dist/providers/data/.manifest.json"), "utf8"));
@@ -51,7 +70,7 @@ for (const provider of providers) {
 	const source = JSON.parse(data);
 	const models = Object.values(source)
 		.flatMap((api) => Object.values(api))
-		.filter((model) => model.type === "chat")
+		.filter((model) => model.type === "chat" && providerAPIs[provider].includes(model.api))
 		.map(publicChatModel)
 		.filter(Boolean)
 		.sort((a, b) => a.id.localeCompare(b.id));

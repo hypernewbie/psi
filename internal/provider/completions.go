@@ -55,6 +55,9 @@ func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req
 	if req.Model.ProviderID() == "opencode-go" && c.SessionID != "" && !hasHeader(c.Headers, "x-opencode-session") {
 		httpReq.Header.Set("x-opencode-session", c.SessionID)
 	}
+	if req.Model.ProviderID() == "openrouter" && c.SessionID != "" && !hasHeader(c.Headers, "x-session-id") {
+		httpReq.Header.Set("x-session-id", c.SessionID)
+	}
 	for name, value := range c.Headers {
 		httpReq.Header.Set(name, value)
 	}

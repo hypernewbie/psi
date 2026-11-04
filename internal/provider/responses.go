@@ -27,8 +27,8 @@ func NewResponsesClient(baseURL, apiKey string, maxRetry int, idle time.Duration
 }
 
 func (c *ResponsesClient) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
-	if req.Model.API != "openai-responses" || req.Model.ProviderID() != "opencode-go" {
-		return nil, fmt.Errorf("openai-responses is only enabled for the registered OpenCode Go provider")
+	if req.Model.API != "openai-responses" || req.Model.ProviderID() != "opencode-go" && req.Model.ProviderID() != "xai" {
+		return nil, fmt.Errorf("openai-responses is only enabled for the registered OpenCode Go and xAI providers")
 	}
 	baseURL := c.BaseURL
 	if baseURL == "" {

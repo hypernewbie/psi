@@ -32,6 +32,7 @@ var completionsCompatFields = map[string]bool{
 	"requiresReasoningContentOnAssistantMessages": true,
 	"thinkingFormat":                              true,
 	"zaiToolStream":                               true,
+	"sendSessionAffinityHeaders":                  true,
 	"supportsMidConvoSystemMessages":              true,
 	"supportsMidConvoToolAdditions":               true,
 }
@@ -69,7 +70,7 @@ func resolveCompletionsCompat(model ModelMeta) (completionsCompat, error) {
 		defaultThinking, defaultMaxTokens = "deepseek", "max_tokens"
 	case "zai":
 		defaultThinking, defaultMaxTokens = "zai", "max_tokens"
-	case "opencode-go":
+	case "opencode-go", "xiaomi", "moonshotai", "qwen-token-plan", "openrouter", "groq":
 	default:
 		return completionsCompat{}, fmt.Errorf("openai-completions is not supported for provider %q", model.ProviderID())
 	}
@@ -117,16 +118,15 @@ func resolveCompletionsCompat(model ModelMeta) (completionsCompat, error) {
 	if compat.thinkingFormat, err = stringValue("thinkingFormat", defaultThinking); err != nil {
 		return compat, err
 	}
-	if compat.thinkingFormat != "deepseek" && compat.thinkingFormat != "zai" && compat.thinkingFormat != "openai" {
+	if compat.thinkingFormat != "deepseek" && compat.thinkingFormat != "zai" && compat.thinkingFormat != "openai" && compat.thinkingFormat != "qwen" && compat.thinkingFormat != "openrouter" {
 		return compat, fmt.Errorf("model %q uses unsupported thinkingFormat %q", model.ID, compat.thinkingFormat)
 	}
+	// Mid-conversation system messages never enter psi requests: the
+	// transcript carries a single leading system prompt, so these capability
+	// flags (Pi replays or drops later system messages) are accepted and unused.
 	for _, key := range []string{"supportsMidConvoSystemMessages", "supportsMidConvoToolAdditions"} {
-		enabled, err := boolValue(key, false)
-		if err != nil {
+		if _, err := boolValue(key, false); err != nil {
 			return compat, err
-		}
-		if enabled {
-			return compat, fmt.Errorf("model %q requires unsupported compatibility feature %q", model.ID, key)
 		}
 	}
 	return compat, nil
@@ -211,6 +211,26 @@ func BuildCompletionsRequest(req Request) (map[string]any, error) {
 				} else if off, ok := req.Model.ThinkingLevelMap["off"]; ok && off != nil {
 					params["reasoning_effort"] = *off
 				}
+			}
+		case "qwen":
+			params["enable_thinking"] = req.Thinking != "off"
+			if req.Thinking != "off" && compat.supportsReasoningEffort {
+				if effort, ok := mappedEffort(req.Model, req.Thinking); ok {
+					params["reasoning_effort"] = effort
+				}
+			}
+		case "openrouter":
+			// OpenRouter normalizes reasoning across providers via a nested reasoning object.
+			if req.Thinking != "off" {
+				if effort, ok := mappedEffort(req.Model, req.Thinking); ok {
+					params["reasoning"] = map[string]any{"effort": effort}
+				}
+			} else if off, present := req.Model.ThinkingLevelMap["off"]; !present || off != nil {
+				effort := "none"
+				if off != nil && *off != "" {
+					effort = *off
+				}
+				params["reasoning"] = map[string]any{"effort": effort}
 			}
 		}
 	}

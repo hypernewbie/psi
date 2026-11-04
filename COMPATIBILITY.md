@@ -49,7 +49,7 @@ Additional storage rules:
 
 | Area | Supported | Boundary |
 |---|---|---|
-| `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, and `google` | use the model's declared registered API; reject unsupported provider/API pairs |
+| `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `moonshotai`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, and `mistral` | use the model's declared registered API; reject unsupported provider/API pairs |
 | `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic budget/adaptive profiles and Codex effort maps |
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | `read,bash,edit,write` with replacement and `+`/`-` | four tools only |

@@ -9,7 +9,14 @@
     "opencode-go": "e3cb85944bdbc7fb369204dac3001c683e422ca44f305112e77fb1c5dbfbb79e",
     "deepseek": "10a296fb3e898f7715c80890c8af0af4f5fd58f22dbcd6612fdc5d762157ccdc",
     "zai": "58e6642fdfb736f0b9a4a277c760c536a3cea66a030abbfb2615f7b2851d5c6f",
-    "google": "b61fb0e27da5be60e1112e46955c5923656cb4d62bb221f834a9463d764ef5de"
+    "google": "b61fb0e27da5be60e1112e46955c5923656cb4d62bb221f834a9463d764ef5de",
+    "xiaomi": "495b5fddf3c3ec8904fecc15c4c19536f4961dce7b51512b6909d2df2e739824",
+    "moonshotai": "1da2c4e34f22aef17a07c974d85bdee8e1b68b6dc712e3769c935b3f1e7dadca",
+    "qwen-token-plan": "37b9a76c54090228d1026a8f0fcb4d304b00d64b1a3a94cb2ae6e677d2c52b13",
+    "openrouter": "601a908570175a93712f282030d331661fa49ff21139160186271d21445c798e",
+    "xai": "59f8a7bdf14e79ba1b0d0a37e56251bbf100420bdac7d6af5942508fdb990f11",
+    "groq": "087df37206e9eed8b10f1e558e4c496289bef60074b7e8afba4f20fb102b4ec2",
+    "mistral": "c15e0ec8fcbc16b58342242b159af6ad035e7472d06ef4ccfc17fafc947ef3dc"
   },
   "protocolReference": "d5b3de22d0e24a3e9c38a9410d3329b099717283",
   "generator": "snapshot-models-v2",
@@ -20,7 +27,14 @@
     "opencode-go",
     "deepseek",
     "zai",
-    "google"
+    "google",
+    "xiaomi",
+    "moonshotai",
+    "qwen-token-plan",
+    "openrouter",
+    "xai",
+    "groq",
+    "mistral"
   ],
   "scope": "chat model IDs, APIs, public endpoints, input/reasoning metadata, thinking maps, and compatibility metadata only; no credentials or headers"
 }

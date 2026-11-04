@@ -60,7 +60,7 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.wait("0 matches")
 	q.prompt()
 	q.write("\x15gpt-5.6-luna")
-	q.wait("1 matches")
+	q.wait("6 matches") // opencode-go, openai-codex, and OpenRouter upstream variants
 	q.prompt()
 	q.write("\r")
 	q.wait("gpt-5.6-luna • thinking off")

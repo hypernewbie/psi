@@ -60,6 +60,41 @@ var registry = map[string]Spec{
 		Environment: "ZAI_API_KEY", DefaultAPI: "openai-completions",
 		Endpoints: map[string]string{"openai-completions": "https://api.z.ai/api/coding/paas/v4"},
 	},
+	"xiaomi": {
+		ID: "xiaomi", Name: "Xiaomi MiMo", Auth: AuthAPIKey,
+		Environment: "XIAOMI_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://api.xiaomimimo.com/v1"},
+	},
+	"moonshotai": {
+		ID: "moonshotai", Name: "Moonshot AI", Auth: AuthAPIKey,
+		Environment: "MOONSHOT_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://api.moonshot.ai/v1"},
+	},
+	"qwen-token-plan": {
+		ID: "qwen-token-plan", Name: "Qwen Token Plan", Auth: AuthAPIKey,
+		Environment: "QWEN_TOKEN_PLAN_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
+	},
+	"openrouter": {
+		ID: "openrouter", Name: "OpenRouter", Auth: AuthAPIKey,
+		Environment: "OPENROUTER_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://openrouter.ai/api/v1"},
+	},
+	"xai": {
+		ID: "xai", Name: "xAI", Auth: AuthAPIKey,
+		Environment: "XAI_API_KEY", DefaultAPI: "openai-responses",
+		Endpoints: map[string]string{"openai-responses": "https://api.x.ai/v1"},
+	},
+	"groq": {
+		ID: "groq", Name: "Groq", Auth: AuthAPIKey,
+		Environment: "GROQ_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://api.groq.com/openai/v1"},
+	},
+	"mistral": {
+		ID: "mistral", Name: "Mistral", Auth: AuthAPIKey,
+		Environment: "MISTRAL_API_KEY", DefaultAPI: "mistral-conversations",
+		Endpoints: map[string]string{"mistral-conversations": "https://api.mistral.ai"},
+	},
 	"google": {
 		ID: "google", Name: "Google", Auth: AuthAPIKey,
 		Environment: "GEMINI_API_KEY", DefaultAPI: "google-generative-ai",

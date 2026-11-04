@@ -14,9 +14,9 @@ func TestAdvertisedModelsHaveRequestPathsOrPreciseUnavailableReasons(t *testing.
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
 	checked, unavailable := 0, 0
 	selector := modelSelector(r)
-	for _, family := range []string{"minimax", "opencode-go", "deepseek", "zai", "google"} {
+	for _, family := range []string{"minimax", "opencode-go", "deepseek", "zai", "google", "xiaomi", "moonshotai", "qwen-token-plan", "openrouter", "xai", "groq", "mistral"} {
 		for _, meta := range config.BundledModels(family) {
-			if meta.API != "anthropic-messages" && meta.API != "openai-completions" && meta.API != "google-generative-ai" && meta.API != "openai-responses" {
+			if meta.API != "anthropic-messages" && meta.API != "openai-completions" && meta.API != "google-generative-ai" && meta.API != "openai-responses" && meta.API != "mistral-conversations" {
 				continue
 			}
 			checked++
@@ -60,7 +60,7 @@ func TestRestoreUnsupportedCompletionModelKeepsImportedHistoryReadable(t *testin
 	}
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"opencode-go": {Models: []config.ModelMeta{{
 		ID: "future-model", API: "openai-completions", BaseURL: "https://opencode.ai/inference/go/v1", Reasoning: true, MaxTokens: 8192, Input: []string{"text"},
-		Compat: modelmeta.Compat{"supportsMidConvoSystemMessages": []byte("true")},
+		Compat: modelmeta.Compat{"cacheControlFormat": []byte("\"anthropic\"")},
 	}}}}}
 	if err := r.restore(); err != nil {
 		t.Fatal(err)

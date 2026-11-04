@@ -6,7 +6,7 @@ import (
 )
 
 func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
-	want := []string{"anthropic", "deepseek", "google", "minimax", "openai-codex", "opencode-go", "zai"}
+	want := []string{"anthropic", "deepseek", "google", "groq", "minimax", "mistral", "moonshotai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "zai"}
 	if got := IDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("provider IDs = %v, want %v", got, want)
 	}
@@ -23,6 +23,13 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		{"deepseek", "openai-completions", "DEEPSEEK_API_KEY", "https://api.deepseek.com"},
 		{"zai", "openai-completions", "ZAI_API_KEY", "https://api.z.ai/api/coding/paas/v4"},
 		{"google", "google-generative-ai", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"},
+		{"xiaomi", "openai-completions", "XIAOMI_API_KEY", "https://api.xiaomimimo.com/v1"},
+		{"moonshotai", "openai-completions", "MOONSHOT_API_KEY", "https://api.moonshot.ai/v1"},
+		{"qwen-token-plan", "openai-completions", "QWEN_TOKEN_PLAN_API_KEY", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
+		{"openrouter", "openai-completions", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"},
+		{"xai", "openai-responses", "XAI_API_KEY", "https://api.x.ai/v1"},
+		{"groq", "openai-completions", "GROQ_API_KEY", "https://api.groq.com/openai/v1"},
+		{"mistral", "mistral-conversations", "MISTRAL_API_KEY", "https://api.mistral.ai"},
 	} {
 		spec, ok := Lookup(tc.provider)
 		if !ok || !SupportsAPI(tc.provider, tc.api) || spec.Environment != tc.environment || DefaultEndpoint(tc.provider, tc.api) != tc.endpoint {
@@ -30,13 +37,20 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		}
 	}
 	wantAPIs := map[string][]string{
-		"anthropic":    {"anthropic-messages"},
-		"openai-codex": {"openai-codex-responses"},
-		"minimax":      {"anthropic-messages"},
-		"opencode-go":  {"anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"},
-		"deepseek":     {"openai-completions"},
-		"zai":          {"openai-completions"},
-		"google":       {"google-generative-ai"},
+		"anthropic":       {"anthropic-messages"},
+		"openai-codex":    {"openai-codex-responses"},
+		"minimax":         {"anthropic-messages"},
+		"opencode-go":     {"anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"},
+		"deepseek":        {"openai-completions"},
+		"zai":             {"openai-completions"},
+		"google":          {"google-generative-ai"},
+		"xiaomi":          {"openai-completions"},
+		"moonshotai":      {"openai-completions"},
+		"qwen-token-plan": {"openai-completions"},
+		"openrouter":      {"openai-completions"},
+		"xai":             {"openai-responses"},
+		"groq":            {"openai-completions"},
+		"mistral":         {"mistral-conversations"},
 	}
 	for _, providerID := range want {
 		spec, _ := Lookup(providerID)

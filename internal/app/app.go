@@ -782,6 +782,13 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		responses.Headers = headers
 		responses.SessionID = r.store.Header().ID
 		client = responses
+	case "mistral-conversations":
+		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		authErr = err
+		mistral := provider.NewMistralClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
+		mistral.Headers = headers
+		mistral.SessionID = r.store.Header().ID
+		client = mistral
 	default:
 		return fmt.Errorf("unsupported provider API %q", meta.API)
 	}

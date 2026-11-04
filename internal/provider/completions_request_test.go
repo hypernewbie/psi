@@ -150,8 +150,8 @@ func TestOpenCodeCompletionsReasoningReplayAndUnsupportedCompat(t *testing.T) {
 	}
 
 	model.Compat = completionCompat(t, map[string]any{"supportsMidConvoSystemMessages": true})
-	if _, err := BuildCompletionsRequest(Request{Model: model, Thinking: "off"}); err == nil || !strings.Contains(err.Error(), "supportsMidConvoSystemMessages") {
-		t.Fatalf("unsupported compatibility feature accepted: %v", err)
+	if _, err := BuildCompletionsRequest(Request{Model: model, Thinking: "off"}); err != nil {
+		t.Fatalf("mid-conversation system message capability rejected: %v", err)
 	}
 	model.Compat = completionCompat(t, map[string]any{"maxTokensField": "max_tokens", "unknownFutureFlag": true})
 	if _, err := BuildCompletionsRequest(Request{Model: model, Thinking: "off"}); err == nil || !strings.Contains(err.Error(), "unknownFutureFlag") {

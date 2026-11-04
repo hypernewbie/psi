@@ -8,7 +8,7 @@ import (
 func SupportedThinking(model ModelMeta) []string {
 	var levels []string
 	for _, level := range ValidLevels {
-		if (model.API == "google-generative-ai" || model.API == "openai-responses" || model.API == "openai-completions") && model.Reasoning {
+		if (model.API == "google-generative-ai" || model.API == "openai-responses" || model.API == "openai-completions" || model.API == "mistral-conversations") && model.Reasoning {
 			mapped, exists := model.ThinkingLevelMap[level]
 			if exists && mapped == nil {
 				continue

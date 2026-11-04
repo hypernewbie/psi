@@ -89,7 +89,7 @@ func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
 	compat := responsesCompat{supportsDeveloperRole: true, supportsMaxOutputTokens: true, sessionAffinityFormat: "openai"}
 	for field := range model.Compat {
 		switch field {
-		case "supportsDeveloperRole", "supportsMidConvoSystemMessages", "supportsAdditionalTools", "supportsMaxOutputTokens", "supportsStrictMode", "sessionAffinityFormat":
+		case "supportsDeveloperRole", "supportsMidConvoSystemMessages", "supportsAdditionalTools", "supportsMaxOutputTokens", "supportsStrictMode", "sessionAffinityFormat", "supportsLongCacheRetention":
 		default:
 			return responsesCompat{}, fmt.Errorf("model %q uses unsupported openai-responses compatibility field %q", model.ID, field)
 		}

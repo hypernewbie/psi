@@ -718,7 +718,7 @@ func TestFooterSnapshotShowsLatestSessionNameAndTracksLeaf(t *testing.T) {
 }
 
 func TestFooterProviderCountUsesAvailableCatalogs(t *testing.T) {
-	if got := footerProviderCount(&config.ModelsFile{}); got != 7 {
+	if got := footerProviderCount(&config.ModelsFile{}); got != 14 {
 		t.Fatalf("available provider count=%d, want all embedded provider catalogs", got)
 	}
 	if got := footerProviderCount(nil); got != 0 {

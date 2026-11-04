@@ -800,6 +800,20 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 			id = "claude-sonnet-4-5"
 		case "openai-codex":
 			id = "gpt-5.6-luna"
+		case "xiaomi":
+			id = "mimo-v2.6-pro"
+		case "moonshotai":
+			id = "kimi-k2.7-code"
+		case "qwen-token-plan":
+			id = "qwen3.8-max"
+		case "openrouter":
+			id = "moonshotai/kimi-k2.7-code"
+		case "xai":
+			id = "grok-4.7"
+		case "groq":
+			id = "openai/gpt-oss-120b"
+		case "mistral":
+			id = "devstral-medium-latest"
 		default:
 			return ModelMeta{}, fmt.Errorf("provider %q needs an explicit model selection", providerID)
 		}
