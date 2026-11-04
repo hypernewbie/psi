@@ -646,8 +646,14 @@ type runtime struct {
 	contextTokens            float64
 	contextWindow            float64
 	// Bridge compact readiness, mirrored from loop-owned state.
-	compactActive       bool
-	compactPending      bool
+	compactActive  bool
+	compactPending bool
+	// Native reload fence state. contextRev counts every user message and
+	// compaction boundary; reloadPending latches one admitted reload;
+	// reloadHigh is the highest reload id observed.
+	contextRev          uint64
+	reloadPending       bool
+	reloadHigh          uint64
 	queuedInputs        func() int
 	bridgeWork          func() bool
 	themeCatalog        *pitheme.Catalog
@@ -1688,6 +1694,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.draw(console)
 			return
 		}
+		// Every submitted message and every compaction boundary moves the
+		// reload fence, so a moved-on session reads stale.
+		if compact || strings.TrimSpace(text) != "" {
+			r.bumpContextRev()
+		}
 		if strings.TrimSpace(display) != "" {
 			console.EnsureTranscriptGap()
 			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: display})
@@ -1786,6 +1797,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 		return nil
 	}
 	bridge.compactRun = startCompact
+	bridge.reloadRun = func() error {
+		_, err := r.handleReloadCommand("", io.Discard)
+		if err != nil {
+			notice(terminal.NoticeWarning, "Theme reload failed; the last valid theme remains active. "+err.Error())
+		}
+		r.draw(console)
+		return err
+	}
 	checkAndStartCompact := func(focus string, explicit, resume bool) {
 		if writeErr := r.store.WriteError(); writeErr != nil {
 			notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
@@ -2095,6 +2114,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 					fmt.Fprintln(out, line)
 				}
 			}
+			if compacting {
+				// A finished compaction rewrote history: move the fence even
+				// when the run itself was refused or failed.
+				r.bumpContextRev()
+			}
 			compacting = false
 			if exiting {
 				_, doneFramesAfter, _, _ := console.FrameStats()
@@ -2369,6 +2393,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						activeLoop.Steer(text)
 						console.SetSteeringRows(activeLoop.PendingSteering())
 					}
+					r.bumpContextRev()
 				}
 				r.draw(console)
 				continue

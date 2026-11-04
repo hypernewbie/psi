@@ -89,6 +89,12 @@ type bridgeHandler struct {
 	compactHigh uint64
 	compact     *bridgeCompact
 	compactRun  func(focus string) error
+
+	// Reload admission state. Reload runs synchronously on the loop, so the
+	// latch only ever spans one handle call, but it is still published for
+	// Phi's mutual exclusion and retired by readiness evidence.
+	reload    *bridgeReload
+	reloadRun func() error
 }
 
 // bridgeCompact is one accepted, unanswered compaction.
@@ -97,6 +103,12 @@ type bridgeCompact struct {
 	request pibridge.Request
 	session string
 	leaf    string
+}
+
+// bridgeReload is one admitted native reload.
+type bridgeReload struct {
+	id      uint64
+	request pibridge.Request
 }
 
 // bridgeSearch is one page read running outside the loop.
@@ -165,6 +177,8 @@ func (h *bridgeHandler) handle(req pibridge.Request, runBusy bool) {
 		h.startSearch(req)
 	case pibridge.RequestCompact:
 		h.startCompact(req, runBusy)
+	case pibridge.RequestReload:
+		h.startReload(req, runBusy)
 	default:
 		req.ReplyUnavailable()
 	}
@@ -282,6 +296,9 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 	case h.r.compactActive:
 		req.ReplyCompact(pibridge.CompactRefused, "compaction-active")
 		return
+	case h.reload != nil:
+		req.ReplyCompact(pibridge.CompactRefused, "pending")
+		return
 	case h.queuedInputs() > 0:
 		req.ReplyCompact(pibridge.CompactRefused, "queued")
 		return
@@ -296,6 +313,79 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 	h.compact = &bridgeCompact{id: id, request: req, session: expect.Session, leaf: expect.Leaf}
 	h.r.compactPending = true
 	h.r.syncBridge()
+}
+
+// startReload admits one native resource reload. Admission mirrors
+// compaction: identity and readiness are rechecked immediately before
+// callback entry, and anything unexpected refuses without invoking the
+// native command. The native command runs synchronously on the loop, so
+// the dispatch acknowledgment reports entry and the latch releases on
+// completion in the same call.
+func (h *bridgeHandler) startReload(req pibridge.Request, runBusy bool) {
+	id, ok := canonicalDecimal(req.RequestID())
+	switch {
+	case !ok:
+		req.ReplyReload(false, "stale")
+		return
+	case id <= h.r.reloadHigh:
+		req.ReplyReload(false, "duplicate")
+		return
+	case h.reload != nil:
+		req.ReplyReload(false, "pending")
+		return
+	}
+	h.r.reloadHigh = id
+	expect := req.ReloadExpectation()
+	switch {
+	case req.Expired():
+		req.ReplyReload(false, "unavailable")
+		return
+	case h.r.store == nil, h.r.selector != nil:
+		req.ReplyReload(false, "unavailable")
+		return
+	case h.r.state == StateStorageBlocked || h.r.store.WriteError() != nil:
+		req.ReplyReload(false, "unavailable")
+		return
+	case h.prep != nil:
+		req.ReplyReload(false, "busy")
+		return
+	case expect.Session != h.r.store.Header().ID, expect.Leaf != h.r.store.LeafID():
+		req.ReplyReload(false, "stale")
+		return
+	case expect.Model.Provider != h.r.ov.Provider, expect.Model.Model != h.r.ov.Model:
+		req.ReplyReload(false, "stale")
+		return
+	case expect.HasRunID && expect.RunID != h.r.bridge.RunID(),
+		expect.HasContextRev && expect.ContextRev != h.r.contextRev:
+		req.ReplyReload(false, "stale")
+		return
+	case runBusy || h.r.state != StateIdle:
+		req.ReplyReload(false, "busy")
+		return
+	case h.r.compactActive:
+		req.ReplyReload(false, "compaction-active")
+		return
+	case h.queuedInputs() > 0:
+		req.ReplyReload(false, "queued")
+		return
+	case h.compact != nil:
+		req.ReplyReload(false, "pending")
+		return
+	case h.reloadRun == nil:
+		req.ReplyReload(false, "unavailable")
+		return
+	}
+	h.reload = &bridgeReload{id: id, request: req}
+	h.r.reloadPending = true
+	h.r.syncBridge()
+	// Entry is acknowledged before the native command runs: DISPATCHED
+	// reports callback entry, never completion.
+	req.ReplyReload(true, "")
+	runErr := h.reloadRun()
+	h.reload = nil
+	h.r.reloadPending = false
+	h.r.syncBridge()
+	_ = runErr // entry already acknowledged; the native path reports locally
 }
 
 // resolveCompactRun answers the outstanding compaction from the settled run.
@@ -467,6 +557,7 @@ func (h *bridgeHandler) finishSkill(prep *bridgePrep, runBusy bool) {
 			return
 		}
 		h.activeLoop.SteerWithProvenance(prep.expanded, "/skill:"+prep.request.Name(), "skill")
+		h.r.bumpContextRev()
 		prep.request.ReplyInvokeSkill(true, "")
 		return
 	}

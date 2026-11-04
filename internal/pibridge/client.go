@@ -48,6 +48,7 @@ const (
 	capSkills       = "pi.skills.v1"
 	capTranscript   = "pi.transcript-search.v2"
 	capCompact      = "pi.compact.v1"
+	capReload       = "pi.reload.v1"
 	capSyncboard    = "pi.syncboard.v1"
 
 	// attachDeadline must stay below Phi's own 5s hello deadline: that status
@@ -73,7 +74,7 @@ const (
 
 // hostCapabilities is advertised on every Hello. A capability is listed only
 // once its handler answers every host path; deferred work stays unadvertised.
-var hostCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact, capSyncboard}
+var hostCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact, capSyncboard, capReload}
 
 var (
 	errAcceptTimeout = errors.New("pibridge: attach not accepted")
@@ -128,6 +129,11 @@ type Snapshot struct {
 	// never idle.
 	Compact    CompactReadiness
 	HasCompact bool
+
+	// Reload readiness is copied host state. Absence means unavailable,
+	// never idle.
+	Reload    ReloadReadiness
+	HasReload bool
 }
 
 // CompactReadiness is one sampled view of compaction admission state.
@@ -584,6 +590,8 @@ func capabilityOf(kind string) string {
 		return capTranscript
 	case RequestCompact:
 		return capCompact
+	case RequestReload:
+		return capReload
 	case RequestState:
 		return capState
 	}
@@ -702,7 +710,37 @@ func (c *Client) snapshotLocked(requestID string) *pibridgepb.StateSnapshot {
 			BridgePending:      c.snap.Compact.Pending,
 		}
 	}
+	if c.snap.HasReload {
+		ready := &pibridgepb.ReloadReadiness{
+			Idle:               c.snap.Reload.Idle,
+			HasPendingMessages: c.snap.Reload.HasPending,
+			CompactionActive:   c.snap.Reload.CompactActive,
+			CompactPending:     c.snap.Reload.CompactPending,
+			ReloadPending:      c.snap.Reload.ReloadPending,
+		}
+		if c.snap.Reload.HasRunID {
+			ready.RunId = proto.Uint64(c.snap.Reload.RunID)
+		}
+		if c.snap.Reload.HasContextRev {
+			ready.ContextRevision = proto.Uint64(c.snap.Reload.ContextRev)
+		}
+		if c.snap.Reload.HasHighWater {
+			ready.HighWater = proto.Uint64(c.snap.Reload.HighWater)
+		}
+		snap.ReloadReadiness = ready
+	}
 	return snap
+}
+
+// RunID returns the current logical run counter. It is nil-receiver safe
+// and reports zero before the first run.
+func (c *Client) RunID() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.runID
 }
 
 func (c *Client) stateMessage(requestID string, gen uint64) *pibridgepb.PiToPhi {

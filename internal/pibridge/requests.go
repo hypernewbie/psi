@@ -29,6 +29,7 @@ const (
 	RequestInvokeSkill = "invoke-skill"
 	RequestTranscript  = "transcript-search"
 	RequestCompact     = "compact"
+	RequestReload      = "reload"
 )
 
 // ModelRef is one selectable catalog entry, named the way snapshots name it.
@@ -116,6 +117,13 @@ type Request struct {
 	compactLeaf    string
 	compactModel   ModelRef
 	hasModel       bool
+
+	reloadSession    string
+	reloadLeaf       string
+	reloadModel      ModelRef
+	hasReloadModel   bool
+	reloadRunID      *uint64
+	reloadContextRev *uint64
 }
 
 // Kind names the request. Unrecognized kinds are never forwarded.
@@ -425,6 +433,8 @@ func (r Request) ReplyUnavailable() bool {
 		return r.ReplyTranscriptUnavailable()
 	case RequestCompact:
 		return r.ReplyCompact(CompactRefused, "unavailable")
+	case RequestReload:
+		return r.ReplyReload(false, "unavailable")
 	default:
 		return false
 	}
@@ -483,6 +493,14 @@ func (c *Client) dispatch(msg *pibridgepb.PhiToPi, ctx context.Context, out *out
 		if model := compact.GetExpectedModel(); model != nil {
 			req.compactModel, req.hasModel = ModelRef{Provider: model.GetProvider(), Model: model.GetModel()}, true
 		}
+	case *pibridgepb.PhiToPi_ReloadRequest:
+		reload := payload.ReloadRequest
+		req.kind, req.requestID = RequestReload, reload.GetRequestId()
+		req.reloadSession, req.reloadLeaf = reload.GetExpectedSessionId(), reload.GetExpectedLeafId()
+		if model := reload.GetExpectedModel(); model != nil {
+			req.reloadModel, req.hasReloadModel = ModelRef{Provider: model.GetProvider(), Model: model.GetModel()}, true
+		}
+		req.reloadRunID, req.reloadContextRev = reload.ExpectedRunId, reload.ExpectedContextRevision
 	default:
 		return Request{}, false
 	}

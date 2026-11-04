@@ -40,12 +40,39 @@ func bridgeSnapshot(r *runtime) pibridge.Snapshot {
 		queued = true
 	}
 	snap.Compact = pibridge.CompactReadiness{
-		Idle:       r.state == StateIdle && !r.compactActive && !r.compactPending && !prepWork,
+		Idle:       r.state == StateIdle && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork,
 		HasPending: queued,
 		Active:     r.compactActive,
 		Pending:    r.compactPending,
 	}
+	// Reload readiness rides the same snapshot. The run id is the client's
+	// live counter and the revision counts every user message and
+	// compaction boundary, so a moved-on session reads stale.
+	snap.HasReload = true
+	snap.Reload = pibridge.ReloadReadiness{
+		RunID:          r.bridge.RunID(),
+		HasRunID:       true,
+		ContextRev:     r.contextRev,
+		HasContextRev:  true,
+		Idle:           r.state == StateIdle && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork,
+		HasPending:     queued,
+		CompactActive:  r.compactActive,
+		CompactPending: r.compactPending,
+		ReloadPending:  r.reloadPending,
+		HighWater:      r.reloadHigh,
+		HasHighWater:   true,
+	}
 	return snap
+}
+
+// bumpContextRev counts one context change for the reload fence. It runs on
+// the loop next to the mutation it describes, then republishes readiness.
+func (r *runtime) bumpContextRev() {
+	if r == nil {
+		return
+	}
+	r.contextRev++
+	r.syncBridge()
 }
 
 // syncBridge starts the bridge once the runtime generation is valid and
