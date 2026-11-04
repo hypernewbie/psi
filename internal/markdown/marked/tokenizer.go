@@ -7,14 +7,29 @@ import (
 
 // Tokenizer is marked's `_Tokenizer`, ported from marked/src/Tokenizer.ts.
 type Tokenizer struct {
-	options *MarkedOptions
-	rules   Rules
-	lexer   *Lexer
+	// Options holds the options of the tokenizer.
+	Options *MarkedOptions
+	// Rules holds the grammar of the tokenizer.
+	Rules Rules
+	// Lexer holds the lexer that runs the tokenizer.
+	Lexer *Lexer
+	// Overrides holds the tokenizer methods that an extension replaced, like
+	// marked's "overwrite" tokenizer extensions.
+	Overrides *TokenizerOverrides
+}
+
+// TokenizerOverrides holds the tokenizer methods that an extension replaced.
+// A method that is not set keeps the built in behaviour.
+type TokenizerOverrides struct {
+	// EmStrong replaces the em and strong tokenizer.
+	EmStrong func(t *Tokenizer, src, maskedSrc, prevChar string) (*Token, bool)
+	// Del replaces the strikethrough tokenizer.
+	Del func(t *Tokenizer, src, maskedSrc, prevChar string) (*Token, bool)
 }
 
 // newTokenizer creates a tokenizer, like marked's `_Tokenizer` constructor.
 func newTokenizer(options *MarkedOptions) *Tokenizer {
-	return &Tokenizer{options: options}
+	return &Tokenizer{Options: options}
 }
 
 // outputLink is marked's `outputLink`.
@@ -91,7 +106,7 @@ func indentCodeCompensation(raw string, text string, rules Rules) string {
 
 // Space is marked's `space`.
 func (t *Tokenizer) Space(src string) *Token {
-	cap := exec(t.rules.Block.Newline, src)
+	cap := exec(t.Rules.Block.Newline, src)
 	if cap != nil && utf16Len(cap.whole()) > 0 {
 		return &Token{Type: TypeSpace, Raw: cap.whole()}
 	}
@@ -100,15 +115,15 @@ func (t *Tokenizer) Space(src string) *Token {
 
 // Code is marked's `code`.
 func (t *Tokenizer) Code(src string) *Token {
-	cap := exec(t.rules.Block.Code, src)
+	cap := exec(t.Rules.Block.Code, src)
 	if cap == nil {
 		return nil
 	}
 	raw := cap.whole()
-	if !t.options.Pedantic {
+	if !t.Options.PedanticEnabled() {
 		raw = TrimTrailingBlankLines(raw)
 	}
-	text := replaceAll(t.rules.Other.CodeRemoveIndent, raw, func(string) string { return "" })
+	text := replaceAll(t.Rules.Other.CodeRemoveIndent, raw, func(string) string { return "" })
 	return &Token{
 		Type:           TypeCode,
 		Raw:            raw,
@@ -119,16 +134,16 @@ func (t *Tokenizer) Code(src string) *Token {
 
 // Fences is marked's `fences`.
 func (t *Tokenizer) Fences(src string) *Token {
-	cap := exec(t.rules.Block.Fences, src)
+	cap := exec(t.Rules.Block.Fences, src)
 	if cap == nil {
 		return nil
 	}
 	raw := cap.whole()
-	text := indentCodeCompensation(raw, cap.group(3), t.rules)
+	text := indentCodeCompensation(raw, cap.group(3), t.Rules)
 	lang := cap.group(2)
 	if lang != "" {
 		lang = strings.TrimSpace(lang)
-		lang = replaceGroup(t.rules.Inline.AnyPunctuation, lang, 1)
+		lang = replaceGroup(t.Rules.Inline.AnyPunctuation, lang, 1)
 	}
 	return &Token{
 		Type: TypeCode,
@@ -140,18 +155,18 @@ func (t *Tokenizer) Fences(src string) *Token {
 
 // Heading is marked's `heading`.
 func (t *Tokenizer) Heading(src string) *Token {
-	cap := exec(t.rules.Block.Heading, src)
+	cap := exec(t.Rules.Block.Heading, src)
 	if cap == nil {
 		return nil
 	}
 	text := strings.TrimSpace(cap.group(2))
 
 	// remove trailing #s
-	if matches(t.rules.Other.EndingHash, text) {
+	if matches(t.Rules.Other.EndingHash, text) {
 		trimmed := Rtrim(text, "#", false)
-		if t.options.Pedantic {
+		if t.Options.PedanticEnabled() {
 			text = strings.TrimSpace(trimmed)
-		} else if trimmed == "" || matches(t.rules.Other.EndingSpaceChar, trimmed) {
+		} else if trimmed == "" || matches(t.Rules.Other.EndingSpaceChar, trimmed) {
 			// CommonMark requires space before trailing #s
 			text = strings.TrimSpace(trimmed)
 		}
@@ -163,13 +178,13 @@ func (t *Tokenizer) Heading(src string) *Token {
 		Depth:       utf16Len(cap.group(1)),
 		Text:        text,
 		HasInline:   true,
-		InlineIndex: t.lexer.inline(text),
+		InlineIndex: t.Lexer.inline(text),
 	}
 }
 
 // Hr is marked's `hr`.
 func (t *Tokenizer) Hr(src string) *Token {
-	cap := exec(t.rules.Block.Hr, src)
+	cap := exec(t.Rules.Block.Hr, src)
 	if cap == nil {
 		return nil
 	}
@@ -178,7 +193,7 @@ func (t *Tokenizer) Hr(src string) *Token {
 
 // Blockquote is marked's `blockquote`.
 func (t *Tokenizer) Blockquote(src string) *Token {
-	cap := exec(t.rules.Block.Blockquote, src)
+	cap := exec(t.Rules.Block.Blockquote, src)
 	if cap == nil {
 		return nil
 	}
@@ -194,7 +209,7 @@ func (t *Tokenizer) Blockquote(src string) *Token {
 		i := 0
 		for ; i < len(lines); i++ {
 			// get lines up to a continuation
-			if matches(t.rules.Other.BlockquoteStart, lines[i]) {
+			if matches(t.Rules.Other.BlockquoteStart, lines[i]) {
 				currentLines = append(currentLines, lines[i])
 				inBlockquote = true
 			} else if !inBlockquote {
@@ -206,10 +221,10 @@ func (t *Tokenizer) Blockquote(src string) *Token {
 		lines = lines[i:]
 
 		currentRaw := strings.Join(currentLines, "\n")
-		currentText := replaceAll(t.rules.Other.BlockquoteSetextReplace, currentRaw, func(match string) string {
+		currentText := replaceAll(t.Rules.Other.BlockquoteSetextReplace, currentRaw, func(match string) string {
 			return "\n    " + match[1:]
 		})
-		currentText = replaceAll(t.rules.Other.BlockquoteSetextReplace2, currentText, func(string) string { return "" })
+		currentText = replaceAll(t.Rules.Other.BlockquoteSetextReplace2, currentText, func(string) string { return "" })
 		if raw != "" {
 			raw = raw + "\n" + currentRaw
 		} else {
@@ -223,10 +238,10 @@ func (t *Tokenizer) Blockquote(src string) *Token {
 
 		// parse blockquote lines as top level tokens
 		// merge paragraphs if this is a continuation
-		top := t.lexer.State.Top
-		t.lexer.State.Top = true
-		tokens = t.lexer.blockTokens(currentText, tokens, true)
-		t.lexer.State.Top = top
+		top := t.Lexer.State.Top
+		t.Lexer.State.Top = true
+		tokens = t.Lexer.blockTokens(currentText, tokens, true)
+		t.Lexer.State.Top = top
 
 		// if there is no continuation then we are done
 		if len(lines) == 0 {
@@ -249,7 +264,7 @@ func (t *Tokenizer) Blockquote(src string) *Token {
 			// strip one marker from them too. Otherwise a restated marker after
 			// a lazy line is re-parsed as a spurious deeper blockquote.
 			continuation := strings.Join(lines, "\n")
-			newText := oldToken.Raw + "\n" + replaceAll(t.rules.Other.BlockquoteSetextReplace2, continuation, func(string) string { return "" })
+			newText := oldToken.Raw + "\n" + replaceAll(t.Rules.Other.BlockquoteSetextReplace2, continuation, func(string) string { return "" })
 			newToken := t.Blockquote(newText)
 			if newToken == nil {
 				return &Token{Type: TypeBlockquote, Raw: raw, Text: text, Tokens: tokens}
@@ -281,7 +296,7 @@ func (t *Tokenizer) Blockquote(src string) *Token {
 
 // List is marked's `list`.
 func (t *Tokenizer) List(src string) *Token {
-	cap := exec(t.rules.Block.List, src)
+	cap := exec(t.Rules.Block.List, src)
 	if cap == nil {
 		return nil
 	}
@@ -309,12 +324,12 @@ func (t *Tokenizer) List(src string) *Token {
 		bull = `\` + bull
 	}
 
-	if t.options.Pedantic && !isordered {
+	if t.Options.PedanticEnabled() && !isordered {
 		bull = "[*+-]"
 	}
 
 	// Get next list item
-	itemRegex := t.rules.Other.ListItemRegex(bull)
+	itemRegex := t.Rules.Other.ListItemRegex(bull)
 	endsWithBlankLine := false
 	// Check if current bullet point can start a new List Item
 	for src != "" {
@@ -327,7 +342,7 @@ func (t *Tokenizer) List(src string) *Token {
 			break
 		}
 
-		if matches(t.rules.Block.Hr, src) { // End list if bullet was actually HR
+		if matches(t.Rules.Block.Hr, src) { // End list if bullet was actually HR
 			break
 		}
 
@@ -340,7 +355,7 @@ func (t *Tokenizer) List(src string) *Token {
 
 		indent := 0
 		switch {
-		case t.options.Pedantic:
+		case t.Options.PedanticEnabled():
 			indent = 2
 			itemContents = jsTrimStart(line)
 		case blankLine:
@@ -355,19 +370,19 @@ func (t *Tokenizer) List(src string) *Token {
 			indent += utf16Len(cap.group(1))
 		}
 
-		if blankLine && matches(t.rules.Other.BlankLine, nextLine) { // Items begin with at most one blank line
+		if blankLine && matches(t.Rules.Other.BlankLine, nextLine) { // Items begin with at most one blank line
 			raw += nextLine + "\n"
 			src = substring(src, utf16Len(nextLine)+1)
 			endEarly = true
 		}
 
 		if !endEarly {
-			nextBulletRegex := t.rules.Other.NextBulletRegex(indent)
-			hrRegex := t.rules.Other.HrRegex(indent)
-			fencesBeginRegex := t.rules.Other.FencesBeginRegex(indent)
-			headingBeginRegex := t.rules.Other.HeadingBeginRegex(indent)
-			htmlBeginRegex := t.rules.Other.HtmlBeginRegex(indent)
-			blockquoteBeginRegex := t.rules.Other.BlockquoteBeginRegex(indent)
+			nextBulletRegex := t.Rules.Other.NextBulletRegex(indent)
+			hrRegex := t.Rules.Other.HrRegex(indent)
+			fencesBeginRegex := t.Rules.Other.FencesBeginRegex(indent)
+			headingBeginRegex := t.Rules.Other.HeadingBeginRegex(indent)
+			htmlBeginRegex := t.Rules.Other.HtmlBeginRegex(indent)
+			blockquoteBeginRegex := t.Rules.Other.BlockquoteBeginRegex(indent)
 
 			// Check if following lines should be included in List Item
 			for src != "" {
@@ -376,11 +391,11 @@ func (t *Tokenizer) List(src string) *Token {
 				var nextLineWithoutTabs string
 
 				// Re-align to follow commonmark nesting rules
-				if t.options.Pedantic {
-					nextLine = replaceAll(t.rules.Other.ListReplaceNesting, nextLine, func(string) string { return "  " })
+				if t.Options.PedanticEnabled() {
+					nextLine = replaceAll(t.Rules.Other.ListReplaceNesting, nextLine, func(string) string { return "  " })
 					nextLineWithoutTabs = nextLine
 				} else {
-					nextLineWithoutTabs = replaceAll(t.rules.Other.TabCharGlobal, nextLine, func(string) string { return "    " })
+					nextLineWithoutTabs = replaceAll(t.Rules.Other.TabCharGlobal, nextLine, func(string) string { return "    " })
 				}
 
 				// End list item if found code fences
@@ -422,7 +437,7 @@ func (t *Tokenizer) List(src string) *Token {
 					}
 
 					// paragraph continuation unless last line was a different block level element
-					if indexOfNonSpace(replaceAll(t.rules.Other.TabCharGlobal, line, func(string) string { return "    " })) >= 4 { // indented code block
+					if indexOfNonSpace(replaceAll(t.Rules.Other.TabCharGlobal, line, func(string) string { return "    " })) >= 4 { // indented code block
 						break
 					}
 					if matches(fencesBeginRegex, line) {
@@ -450,14 +465,14 @@ func (t *Tokenizer) List(src string) *Token {
 			// If the previous item ended with a blank line, the list is loose
 			if endsWithBlankLine {
 				list.Loose = true
-			} else if matches(t.rules.Other.DoubleBlankLine, raw) {
+			} else if matches(t.Rules.Other.DoubleBlankLine, raw) {
 				endsWithBlankLine = true
 			}
 		}
 
 		list.Items = append(list.Items, ListItem{
 			Raw:    raw,
-			Task:   t.options.GFM && matches(t.rules.Other.ListIsTask, itemContents),
+			Task:   t.Options.GFMEnabled() && matches(t.Rules.Other.ListIsTask, itemContents),
 			Loose:  false,
 			Text:   itemContents,
 			Tokens: []Token{},
@@ -481,14 +496,14 @@ func (t *Tokenizer) List(src string) *Token {
 	// First pass: tokenize items and finalize list.loose from spacers before
 	// placing checkboxes
 	for i := range list.Items {
-		t.lexer.State.Top = false
-		list.Items[i].Tokens = t.lexer.blockTokens(list.Items[i].Text, nil, false)
+		t.Lexer.State.Top = false
+		list.Items[i].Tokens = t.Lexer.blockTokens(list.Items[i].Text, nil, false)
 
 		if !list.Loose {
 			// Check if list should be loose
 			hasMultipleLineBreaks := false
 			for _, token := range list.Items[i].Tokens {
-				if token.Type == TypeSpace && matches(t.rules.Other.AnyLine, token.Raw) {
+				if token.Type == TypeSpace && matches(t.Rules.Other.AnyLine, token.Raw) {
 					hasMultipleLineBreaks = true
 					break
 				}
@@ -506,17 +521,17 @@ func (t *Tokenizer) List(src string) *Token {
 		}
 		if item.Task && itemToken != nil && (itemToken.Type == TypeText || itemToken.Type == TypeParagraph) {
 			// Remove checkbox markdown from item tokens
-			item.Text = replaceAll(t.rules.Other.ListReplaceTask, item.Text, func(string) string { return "" })
-			itemToken.Raw = replaceAll(t.rules.Other.ListReplaceTask, itemToken.Raw, func(string) string { return "" })
-			itemToken.Text = replaceAll(t.rules.Other.ListReplaceTask, itemToken.Text, func(string) string { return "" })
-			for j := len(t.lexer.InlineQueue) - 1; j >= 0; j-- {
-				if matches(t.rules.Other.ListIsTask, t.lexer.InlineQueue[j].src) {
-					t.lexer.InlineQueue[j].src = replaceAll(t.rules.Other.ListReplaceTask, t.lexer.InlineQueue[j].src, func(string) string { return "" })
+			item.Text = replaceAll(t.Rules.Other.ListReplaceTask, item.Text, func(string) string { return "" })
+			itemToken.Raw = replaceAll(t.Rules.Other.ListReplaceTask, itemToken.Raw, func(string) string { return "" })
+			itemToken.Text = replaceAll(t.Rules.Other.ListReplaceTask, itemToken.Text, func(string) string { return "" })
+			for j := len(t.Lexer.InlineQueue) - 1; j >= 0; j-- {
+				if matches(t.Rules.Other.ListIsTask, t.Lexer.InlineQueue[j].src) {
+					t.Lexer.InlineQueue[j].src = replaceAll(t.Rules.Other.ListReplaceTask, t.Lexer.InlineQueue[j].src, func(string) string { return "" })
 					break
 				}
 			}
 
-			taskRaw := exec(t.rules.Other.ListTaskCheckbox, item.Raw)
+			taskRaw := exec(t.Rules.Other.ListTaskCheckbox, item.Raw)
 			if taskRaw != nil {
 				checked := taskRaw.whole() != "[ ]"
 				checkboxToken := Token{
@@ -564,7 +579,7 @@ func (t *Tokenizer) List(src string) *Token {
 
 // Html is marked's `html`.
 func (t *Tokenizer) Html(src string) *Token {
-	cap := exec(t.rules.Block.HTML, src)
+	cap := exec(t.Rules.Block.HTML, src)
 	if cap == nil {
 		return nil
 	}
@@ -581,21 +596,21 @@ func (t *Tokenizer) Html(src string) *Token {
 
 // Def is marked's `def`.
 func (t *Tokenizer) Def(src string) *Token {
-	cap := exec(t.rules.Block.Def, src)
+	cap := exec(t.Rules.Block.Def, src)
 	if cap == nil {
 		return nil
 	}
 	tag := strings.ToLower(cap.group(1))
-	tag = replaceAll(t.rules.Other.MultipleSpaceGlobal, tag, func(string) string { return " " })
+	tag = replaceAll(t.Rules.Other.MultipleSpaceGlobal, tag, func(string) string { return " " })
 	href := ""
 	if cap.group(2) != "" {
-		href = replaceGroup(t.rules.Other.HrefBrackets, cap.group(2), 1)
-		href = replaceGroup(t.rules.Inline.AnyPunctuation, href, 1)
+		href = replaceGroup(t.Rules.Other.HrefBrackets, cap.group(2), 1)
+		href = replaceGroup(t.Rules.Inline.AnyPunctuation, href, 1)
 	}
 	title := cap.group(3)
 	if title != "" {
 		title = cutRange(title, 1, utf16Len(title)-1)
-		title = replaceGroup(t.rules.Inline.AnyPunctuation, title, 1)
+		title = replaceGroup(t.Rules.Inline.AnyPunctuation, title, 1)
 	}
 	return &Token{
 		Type:  TypeDef,
@@ -608,22 +623,22 @@ func (t *Tokenizer) Def(src string) *Token {
 
 // Table is marked's `table`.
 func (t *Tokenizer) Table(src string) *Token {
-	cap := exec(t.rules.Block.Table, src)
+	cap := exec(t.Rules.Block.Table, src)
 	if cap == nil {
 		return nil
 	}
 
-	if !matches(t.rules.Other.TableDelimiter, cap.group(2)) {
+	if !matches(t.Rules.Other.TableDelimiter, cap.group(2)) {
 		// delimiter row must have a pipe (|) or colon (:) otherwise it is a
 		// setext heading
 		return nil
 	}
 
 	headers := SplitCells(cap.group(1), 0)
-	aligns := strings.Split(replaceAll(t.rules.Other.TableAlignChars, cap.group(2), func(string) string { return "" }), "|")
+	aligns := strings.Split(replaceAll(t.Rules.Other.TableAlignChars, cap.group(2), func(string) string { return "" }), "|")
 	var rows []string
 	if strings.TrimSpace(cap.group(3)) != "" {
-		rows = strings.Split(replaceAll(t.rules.Other.TableRowBlankLine, cap.group(3), func(string) string { return "" }), "\n")
+		rows = strings.Split(replaceAll(t.Rules.Other.TableRowBlankLine, cap.group(3), func(string) string { return "" }), "\n")
 	}
 
 	item := &Token{
@@ -641,11 +656,11 @@ func (t *Tokenizer) Table(src string) *Token {
 
 	for _, align := range aligns {
 		switch {
-		case matches(t.rules.Other.TableAlignRight, align):
+		case matches(t.Rules.Other.TableAlignRight, align):
 			item.Align = append(item.Align, "right")
-		case matches(t.rules.Other.TableAlignCenter, align):
+		case matches(t.Rules.Other.TableAlignCenter, align):
 			item.Align = append(item.Align, "center")
-		case matches(t.rules.Other.TableAlignLeft, align):
+		case matches(t.Rules.Other.TableAlignLeft, align):
 			item.Align = append(item.Align, "left")
 		default:
 			item.Align = append(item.Align, "")
@@ -658,7 +673,7 @@ func (t *Tokenizer) Table(src string) *Token {
 			Header: true,
 			Align:  item.Align[i],
 		})
-		headerIndex := t.lexer.inline(header)
+		headerIndex := t.Lexer.inline(header)
 		item.Header[len(item.Header)-1].InlineIndex = headerIndex
 		item.Header[len(item.Header)-1].HasInline = true
 	}
@@ -672,7 +687,7 @@ func (t *Tokenizer) Table(src string) *Token {
 				Header: false,
 				Align:  item.Align[i],
 			})
-			rowCells[len(rowCells)-1].InlineIndex = t.lexer.inline(cell)
+			rowCells[len(rowCells)-1].InlineIndex = t.Lexer.inline(cell)
 			rowCells[len(rowCells)-1].HasInline = true
 		}
 		item.Rows = append(item.Rows, rowCells)
@@ -683,7 +698,7 @@ func (t *Tokenizer) Table(src string) *Token {
 
 // Lheading is marked's `lheading`.
 func (t *Tokenizer) Lheading(src string) *Token {
-	cap := exec(t.rules.Block.LHeading, src)
+	cap := exec(t.Rules.Block.LHeading, src)
 	if cap == nil {
 		return nil
 	}
@@ -698,13 +713,13 @@ func (t *Tokenizer) Lheading(src string) *Token {
 		Depth:       depth,
 		Text:        text,
 		HasInline:   true,
-		InlineIndex: t.lexer.inline(text),
+		InlineIndex: t.Lexer.inline(text),
 	}
 }
 
 // Paragraph is marked's `paragraph`.
 func (t *Tokenizer) Paragraph(src string) *Token {
-	cap := exec(t.rules.Block.Paragraph, src)
+	cap := exec(t.Rules.Block.Paragraph, src)
 	if cap == nil {
 		return nil
 	}
@@ -717,13 +732,13 @@ func (t *Tokenizer) Paragraph(src string) *Token {
 		Raw:         cap.whole(),
 		Text:        text,
 		HasInline:   true,
-		InlineIndex: t.lexer.inline(text),
+		InlineIndex: t.Lexer.inline(text),
 	}
 }
 
 // Text is marked's `text`.
 func (t *Tokenizer) Text(src string) *Token {
-	cap := exec(t.rules.Block.Text, src)
+	cap := exec(t.Rules.Block.Text, src)
 	if cap == nil {
 		return nil
 	}
@@ -732,13 +747,13 @@ func (t *Tokenizer) Text(src string) *Token {
 		Raw:         cap.whole(),
 		Text:        cap.whole(),
 		HasInline:   true,
-		InlineIndex: t.lexer.inline(cap.whole()),
+		InlineIndex: t.Lexer.inline(cap.whole()),
 	}
 }
 
 // Escape is marked's `escape`.
 func (t *Tokenizer) Escape(src string) *Token {
-	cap := exec(t.rules.Inline.Escape, src)
+	cap := exec(t.Rules.Inline.Escape, src)
 	if cap == nil {
 		return nil
 	}
@@ -747,26 +762,26 @@ func (t *Tokenizer) Escape(src string) *Token {
 
 // Tag is marked's `tag`.
 func (t *Tokenizer) Tag(src string) *Token {
-	cap := exec(t.rules.Inline.Tag, src)
+	cap := exec(t.Rules.Inline.Tag, src)
 	if cap == nil {
 		return nil
 	}
-	if !t.lexer.State.InLink && matches(t.rules.Other.StartATag, cap.whole()) {
-		t.lexer.State.InLink = true
-	} else if t.lexer.State.InLink && matches(t.rules.Other.EndATag, cap.whole()) {
-		t.lexer.State.InLink = false
+	if !t.Lexer.State.InLink && matches(t.Rules.Other.StartATag, cap.whole()) {
+		t.Lexer.State.InLink = true
+	} else if t.Lexer.State.InLink && matches(t.Rules.Other.EndATag, cap.whole()) {
+		t.Lexer.State.InLink = false
 	}
-	if !t.lexer.State.InRawBlock && matches(t.rules.Other.StartPreScriptTag, cap.whole()) {
-		t.lexer.State.InRawBlock = true
-	} else if t.lexer.State.InRawBlock && matches(t.rules.Other.EndPreScriptTag, cap.whole()) {
-		t.lexer.State.InRawBlock = false
+	if !t.Lexer.State.InRawBlock && matches(t.Rules.Other.StartPreScriptTag, cap.whole()) {
+		t.Lexer.State.InRawBlock = true
+	} else if t.Lexer.State.InRawBlock && matches(t.Rules.Other.EndPreScriptTag, cap.whole()) {
+		t.Lexer.State.InRawBlock = false
 	}
 
 	return &Token{
 		Type:       TypeHTML,
 		Raw:        cap.whole(),
-		InLink:     t.lexer.State.InLink,
-		InRawBlock: t.lexer.State.InRawBlock,
+		InLink:     t.Lexer.State.InLink,
+		InRawBlock: t.Lexer.State.InRawBlock,
 		Block:      false,
 		Text:       cap.whole(),
 	}
@@ -774,14 +789,14 @@ func (t *Tokenizer) Tag(src string) *Token {
 
 // Link is marked's `link`.
 func (t *Tokenizer) Link(src string) *Token {
-	cap := exec(t.rules.Inline.Link, src)
+	cap := exec(t.Rules.Inline.Link, src)
 	if cap == nil {
 		return nil
 	}
 	trimmedURL := strings.TrimSpace(cap.group(2))
-	if !t.options.Pedantic && matches(t.rules.Other.StartAngleBracket, trimmedURL) {
+	if !t.Options.PedanticEnabled() && matches(t.Rules.Other.StartAngleBracket, trimmedURL) {
 		// commonmark requires matching angle brackets
-		if !matches(t.rules.Other.EndAngleBracket, trimmedURL) {
+		if !matches(t.Rules.Other.EndAngleBracket, trimmedURL) {
 			return nil
 		}
 
@@ -811,9 +826,9 @@ func (t *Tokenizer) Link(src string) *Token {
 	}
 	href := cap.group(2)
 	title := ""
-	if t.options.Pedantic {
+	if t.Options.PedanticEnabled() {
 		// split pedantic href and title
-		link := exec(t.rules.Other.PedanticHrefTitle, href)
+		link := exec(t.Rules.Other.PedanticHrefTitle, href)
 		if link != nil {
 			href = link.group(1)
 			title = link.group(3)
@@ -823,8 +838,8 @@ func (t *Tokenizer) Link(src string) *Token {
 	}
 
 	href = strings.TrimSpace(href)
-	if matches(t.rules.Other.StartAngleBracket, href) {
-		if t.options.Pedantic && !matches(t.rules.Other.EndAngleBracket, trimmedURL) {
+	if matches(t.Rules.Other.StartAngleBracket, href) {
+		if t.Options.PedanticEnabled() && !matches(t.Rules.Other.EndAngleBracket, trimmedURL) {
 			// pedantic allows starting angle bracket without ending angle bracket
 			href = substring(href, 1)
 		} else {
@@ -832,19 +847,19 @@ func (t *Tokenizer) Link(src string) *Token {
 		}
 	}
 	if href != "" {
-		href = replaceGroup(t.rules.Inline.AnyPunctuation, href, 1)
+		href = replaceGroup(t.Rules.Inline.AnyPunctuation, href, 1)
 	}
 	if title != "" {
-		title = replaceGroup(t.rules.Inline.AnyPunctuation, title, 1)
+		title = replaceGroup(t.Rules.Inline.AnyPunctuation, title, 1)
 	}
-	return outputLink(&match{groups: []string{cap.group(0), cap.group(1), href, title}}, Link{Href: href, Title: title}, cap.group(0), t.lexer, t.rules)
+	return outputLink(&match{groups: []string{cap.group(0), cap.group(1), href, title}}, Link{Href: href, Title: title}, cap.group(0), t.Lexer, t.Rules)
 }
 
 // Reflink is marked's `reflink`.
 func (t *Tokenizer) Reflink(src string, links Links) *Token {
-	cap := exec(t.rules.Inline.Reflink, src)
+	cap := exec(t.Rules.Inline.Reflink, src)
 	if cap == nil {
-		cap = exec(t.rules.Inline.Nolink, src)
+		cap = exec(t.Rules.Inline.Nolink, src)
 	}
 	if cap == nil {
 		return nil
@@ -853,18 +868,30 @@ func (t *Tokenizer) Reflink(src string, links Links) *Token {
 	if linkString == "" {
 		linkString = cap.group(1)
 	}
-	linkString = replaceAll(t.rules.Other.MultipleSpaceGlobal, linkString, func(string) string { return " " })
+	linkString = replaceAll(t.Rules.Other.MultipleSpaceGlobal, linkString, func(string) string { return " " })
 	link, ok := links[strings.ToLower(linkString)]
 	if !ok {
 		text := firstUnit(cap.whole())
 		return &Token{Type: TypeText, Raw: text, Text: text}
 	}
-	return outputLink(cap, link, cap.whole(), t.lexer, t.rules)
+	return outputLink(cap, link, cap.whole(), t.Lexer, t.Rules)
 }
 
-// EmStrong is marked's `emStrong`.
+// EmStrong is marked's `emStrong`. An extension may replace the method, in
+// which case the built in method runs only when the extension reports that
+// it did not handle the source.
 func (t *Tokenizer) EmStrong(src string, maskedSrc string, prevChar string) *Token {
-	m := exec(t.rules.Inline.EmStrongLDelim, src)
+	if t.Overrides != nil && t.Overrides.EmStrong != nil {
+		if token, handled := t.Overrides.EmStrong(t, src, maskedSrc, prevChar); handled {
+			return token
+		}
+	}
+	return t.emStrong(src, maskedSrc, prevChar)
+}
+
+// emStrong is marked's `emStrong`.
+func (t *Tokenizer) emStrong(src string, maskedSrc string, prevChar string) *Token {
+	m := exec(t.Rules.Inline.EmStrongLDelim, src)
 	if m == nil {
 		return nil
 	}
@@ -874,7 +901,7 @@ func (t *Tokenizer) EmStrong(src string, maskedSrc string, prevChar string) *Tok
 
 	// _ can't be between two alphanumerics. \p{L}\p{N} includes non-english
 	// alphabet/numbers as well
-	if m.group(4) != "" && matches(t.rules.Other.UnicodeAlphaNumeric, prevChar) {
+	if m.group(4) != "" && matches(t.Rules.Other.UnicodeAlphaNumeric, prevChar) {
 		return nil
 	}
 
@@ -883,7 +910,7 @@ func (t *Tokenizer) EmStrong(src string, maskedSrc string, prevChar string) *Tok
 		nextChar = m.group(3)
 	}
 
-	if nextChar == "" || prevChar == "" || matches(t.rules.Inline.Punctuation, prevChar) {
+	if nextChar == "" || prevChar == "" || matches(t.Rules.Inline.Punctuation, prevChar) {
 		// unicode Regex counts emoji as 1 char; spread into array for proper
 		// count (used multiple times below)
 		lLength := runeLen(m.whole()) - 1
@@ -898,9 +925,9 @@ func (t *Tokenizer) EmStrong(src string, maskedSrc string, prevChar string) *Tok
 		// steals the opener of a later span (`**a*b*c` must be
 		// `**a<em>b</em>c`).
 		midRun := prevChar == delimChar
-		endReg := t.rules.Inline.EmStrongRDelimAst
+		endReg := t.Rules.Inline.EmStrongRDelimAst
 		if delimChar != "*" {
-			endReg = t.rules.Inline.EmStrongRDelimUnd
+			endReg = t.Rules.Inline.EmStrongRDelimUnd
 		}
 
 		// Clip maskedSrc to same section of string as src (move to lexer?)
@@ -953,7 +980,7 @@ func (t *Tokenizer) EmStrong(src string, maskedSrc string, prevChar string) *Tok
 					Type:   TypeEm,
 					Raw:    raw,
 					Text:   text,
-					Tokens: t.lexer.inlineTokens(text, nil),
+					Tokens: t.Lexer.inlineTokens(text, nil),
 				}
 			}
 
@@ -963,7 +990,7 @@ func (t *Tokenizer) EmStrong(src string, maskedSrc string, prevChar string) *Tok
 				Type:   TypeStrong,
 				Raw:    raw,
 				Text:   text,
-				Tokens: t.lexer.inlineTokens(text, nil),
+				Tokens: t.Lexer.inlineTokens(text, nil),
 			}
 		}
 	}
@@ -972,13 +999,13 @@ func (t *Tokenizer) EmStrong(src string, maskedSrc string, prevChar string) *Tok
 
 // Codespan is marked's `codespan`.
 func (t *Tokenizer) Codespan(src string) *Token {
-	cap := exec(t.rules.Inline.Code, src)
+	cap := exec(t.Rules.Inline.Code, src)
 	if cap == nil {
 		return nil
 	}
-	text := replaceAll(t.rules.Other.NewLineCharGlobal, cap.group(2), func(string) string { return " " })
-	hasNonSpaceChars := matches(t.rules.Other.NonSpaceChar, text)
-	hasSpaceCharsOnBothEnds := matches(t.rules.Other.StartingSpaceChar, text) && matches(t.rules.Other.EndingSpaceChar, text)
+	text := replaceAll(t.Rules.Other.NewLineCharGlobal, cap.group(2), func(string) string { return " " })
+	hasNonSpaceChars := matches(t.Rules.Other.NonSpaceChar, text)
+	hasSpaceCharsOnBothEnds := matches(t.Rules.Other.StartingSpaceChar, text) && matches(t.Rules.Other.EndingSpaceChar, text)
 	if hasNonSpaceChars && hasSpaceCharsOnBothEnds {
 		text = cutRange(text, 1, utf16Len(text)-1)
 	}
@@ -991,23 +1018,35 @@ func (t *Tokenizer) Codespan(src string) *Token {
 
 // Br is marked's `br`.
 func (t *Tokenizer) Br(src string) *Token {
-	cap := exec(t.rules.Inline.Br, src)
+	cap := exec(t.Rules.Inline.Br, src)
 	if cap == nil {
 		return nil
 	}
 	return &Token{Type: TypeBr, Raw: cap.whole()}
 }
 
-// Del is marked's `del`.
+// Del is marked's `del`. An extension may replace the method, in which case
+// the built in method runs only when the extension reports that it did not
+// handle the source.
 func (t *Tokenizer) Del(src string, maskedSrc string, prevChar string) *Token {
-	m := exec(t.rules.Inline.DelLDelim, src)
+	if t.Overrides != nil && t.Overrides.Del != nil {
+		if token, handled := t.Overrides.Del(t, src, maskedSrc, prevChar); handled {
+			return token
+		}
+	}
+	return t.del(src, maskedSrc, prevChar)
+}
+
+// del is marked's `del`.
+func (t *Tokenizer) del(src string, maskedSrc string, prevChar string) *Token {
+	m := exec(t.Rules.Inline.DelLDelim, src)
 	if m == nil {
 		return nil
 	}
 
 	nextChar := m.group(1)
 
-	if nextChar == "" || prevChar == "" || matches(t.rules.Inline.Punctuation, prevChar) {
+	if nextChar == "" || prevChar == "" || matches(t.Rules.Inline.Punctuation, prevChar) {
 		// unicode Regex counts emoji as 1 char; spread into array for proper
 		// count
 		lLength := runeLen(m.whole()) - 1
@@ -1015,7 +1054,7 @@ func (t *Tokenizer) Del(src string, maskedSrc string, prevChar string) *Token {
 		rLength := 0
 		delimTotal := lLength
 
-		endReg := t.rules.Inline.DelRDelim
+		endReg := t.Rules.Inline.DelRDelim
 
 		// Clip maskedSrc to same section of string as src
 		maskedSrc = cutSuffix(maskedSrc, utf16Len(src)-lLength)
@@ -1059,7 +1098,7 @@ func (t *Tokenizer) Del(src string, maskedSrc string, prevChar string) *Token {
 				Type:   TypeDel,
 				Raw:    raw,
 				Text:   text,
-				Tokens: t.lexer.inlineTokens(text, nil),
+				Tokens: t.Lexer.inlineTokens(text, nil),
 			}
 		}
 	}
@@ -1068,7 +1107,7 @@ func (t *Tokenizer) Del(src string, maskedSrc string, prevChar string) *Token {
 
 // Autolink is marked's `autolink`.
 func (t *Tokenizer) Autolink(src string) *Token {
-	cap := exec(t.rules.Inline.Autolink, src)
+	cap := exec(t.Rules.Inline.Autolink, src)
 	if cap == nil {
 		return nil
 	}
@@ -1093,7 +1132,7 @@ func (t *Tokenizer) Autolink(src string) *Token {
 
 // Url is marked's `url`.
 func (t *Tokenizer) Url(src string) *Token {
-	cap := exec(t.rules.Inline.URL, src)
+	cap := exec(t.Rules.Inline.URL, src)
 	if cap == nil {
 		return nil
 	}
@@ -1106,7 +1145,7 @@ func (t *Tokenizer) Url(src string) *Token {
 		// do extended autolink path validation
 		for {
 			prevCapZero := raw
-			backpedal := exec(t.rules.Inline.Backpedal, raw)
+			backpedal := exec(t.Rules.Inline.Backpedal, raw)
 			if backpedal == nil {
 				raw = ""
 			} else {
@@ -1139,11 +1178,11 @@ func (t *Tokenizer) Url(src string) *Token {
 
 // InlineText is marked's `inlineText`.
 func (t *Tokenizer) InlineText(src string) *Token {
-	cap := exec(t.rules.Inline.Text, src)
+	cap := exec(t.Rules.Inline.Text, src)
 	if cap == nil {
 		return nil
 	}
-	escaped := t.lexer.State.InRawBlock
+	escaped := t.Lexer.State.InRawBlock
 	return &Token{
 		Type:    TypeText,
 		Raw:     cap.whole(),

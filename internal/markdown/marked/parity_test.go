@@ -70,13 +70,13 @@ func referenceOptions(testCase referenceCase) *MarkedOptions {
 	for key, value := range testCase.Options {
 		switch key {
 		case "gfm":
-			options.GFM = value == true
+			options.GFM = Bool(value == true)
 		case "pedantic":
-			options.Pedantic = value == true
+			options.Pedantic = Bool(value == true)
 		case "breaks":
-			options.Breaks = value == true
+			options.Breaks = Bool(value == true)
 		case "silent":
-			options.Silent = value == true
+			options.Silent = Bool(value == true)
 		}
 	}
 	return options

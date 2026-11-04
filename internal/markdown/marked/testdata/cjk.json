@@ -1,0 +1,1219 @@
+[
+ {
+  "markdown": "**粗体**中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体**中文",
+    "text": "**粗体**中文",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文**粗体**",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文**粗体**",
+    "text": "中文**粗体**",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗体**。",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体**。",
+    "text": "**粗体**。",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "。**粗体**中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "。**粗体**中文",
+    "text": "。**粗体**中文",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "*斜体*中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "*斜体*中文",
+    "text": "*斜体*中文",
+    "tokens": [
+     {
+      "type": "em",
+      "raw": "*斜体*",
+      "text": "斜体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "斜体",
+        "text": "斜体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文*斜体*",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文*斜体*",
+    "text": "中文*斜体*",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "em",
+      "raw": "*斜体*",
+      "text": "斜体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "斜体",
+        "text": "斜体",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文。*斜体*。",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文。*斜体*。",
+    "text": "中文。*斜体*。",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文。",
+      "text": "中文。",
+      "tokens": []
+     },
+     {
+      "type": "em",
+      "raw": "*斜体*",
+      "text": "斜体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "斜体",
+        "text": "斜体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "~~删除~~中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "~~删除~~中文",
+    "text": "~~删除~~中文",
+    "tokens": [
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文~~删除~~",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文~~删除~~",
+    "text": "中文~~删除~~",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗体**中文**粗体**",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体**中文**粗体**",
+    "text": "**粗体**中文**粗体**",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文**粗体**中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文**粗体**中文",
+    "text": "中文**粗体**中文",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**a**中**b**",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**a**中**b**",
+    "text": "**a**中**b**",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**a**",
+      "text": "a",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "a",
+        "text": "a",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中",
+      "text": "中",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**b**",
+      "text": "b",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "b",
+        "text": "b",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中**a**文**b**字",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中**a**文**b**字",
+    "text": "中**a**文**b**字",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中",
+      "text": "中",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**a**",
+      "text": "a",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "a",
+        "text": "a",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "文",
+      "text": "文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**b**",
+      "text": "b",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "b",
+        "text": "b",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "字",
+      "text": "字",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "_下划线_中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "_下划线_中文",
+    "text": "_下划线_中文",
+    "tokens": [
+     {
+      "type": "em",
+      "raw": "_下划线_",
+      "text": "下划线",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "下划线",
+        "text": "下划线",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文_下划线_",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文_下划线_",
+    "text": "中文_下划线_",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文_下划线_",
+      "text": "中文_下划线_",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗体**和*斜体*以及~~删除~~",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体**和*斜体*以及~~删除~~",
+    "text": "**粗体**和*斜体*以及~~删除~~",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "和",
+      "text": "和",
+      "tokens": []
+     },
+     {
+      "type": "em",
+      "raw": "*斜体*",
+      "text": "斜体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "斜体",
+        "text": "斜体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "以及",
+      "text": "以及",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文**粗体**、中文*斜体*、中文~~删除~~",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文**粗体**、中文*斜体*、中文~~删除~~",
+    "text": "中文**粗体**、中文*斜体*、中文~~删除~~",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "、中文",
+      "text": "、中文",
+      "tokens": []
+     },
+     {
+      "type": "em",
+      "raw": "*斜体*",
+      "text": "斜体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "斜体",
+        "text": "斜体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "、中文",
+      "text": "、中文",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗**体**",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗**体**",
+    "text": "**粗**体**",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗**",
+      "text": "粗",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗",
+        "text": "粗",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "体**",
+      "text": "体**",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文**粗**体**",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文**粗**体**",
+    "text": "中文**粗**体**",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗**",
+      "text": "粗",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗",
+        "text": "粗",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "体**",
+      "text": "体**",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗体**",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体**",
+    "text": "**粗体**",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文**粗体**中文**斜体**中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文**粗体**中文**斜体**中文",
+    "text": "中文**粗体**中文**斜体**中文",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**斜体**",
+      "text": "斜体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "斜体",
+        "text": "斜体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "a**粗体**b",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "a**粗体**b",
+    "text": "a**粗体**b",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "a",
+      "text": "a",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "b",
+      "text": "b",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文**粗体**。",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文**粗体**。",
+    "text": "中文**粗体**。",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "。**粗体**。",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "。**粗体**。",
+    "text": "。**粗体**。",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "（**粗体**）",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "（**粗体**）",
+    "text": "（**粗体**）",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "（",
+      "text": "（",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "）",
+      "text": "）",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文（**粗体**）中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文（**粗体**）中文",
+    "text": "中文（**粗体**）中文",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文（",
+      "text": "中文（",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "）中文",
+      "text": "）中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "~~删除~~。",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "~~删除~~。",
+    "text": "~~删除~~。",
+    "tokens": [
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "。~~删除~~",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "。~~删除~~",
+    "text": "。~~删除~~",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "。",
+      "text": "。",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗体** ",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体** ",
+    "text": "**粗体** ",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": " ",
+      "text": " ",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": " **粗体**",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": " **粗体**",
+    "text": " **粗体**",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": " ",
+      "text": " ",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文 **粗体** 中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文 **粗体** 中文",
+    "text": "中文 **粗体** 中文",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文 ",
+      "text": "中文 ",
+      "tokens": []
+     },
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": " 中文",
+      "text": " 中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗体**中文*斜体*中文~~删除~~中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体**中文*斜体*中文~~删除~~中文",
+    "text": "**粗体**中文*斜体*中文~~删除~~中文",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "em",
+      "raw": "*斜体*",
+      "text": "斜体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "斜体",
+        "text": "斜体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ }
+]

@@ -84,7 +84,7 @@ func (p *Parser) Parse(tokens []Token) string {
 			out.WriteString(p.renderer.Text(token))
 		default:
 			errMsg := "Token with \"" + token.Type + "\" type was not found."
-			if p.options.Silent {
+			if p.options.SilentEnabled() {
 				return out.String()
 			}
 			panic(errMsg)
@@ -150,7 +150,7 @@ func (p *Parser) parseInline(tokens []Token, text bool) string {
 			out.WriteString(p.text(token, text))
 		default:
 			errMsg := "Token with \"" + token.Type + "\" type was not found."
-			if p.options.Silent {
+			if p.options.SilentEnabled() {
 				return out.String()
 			}
 			panic(errMsg)

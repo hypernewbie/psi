@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode/utf16"
 
 	"github.com/dlclark/regexp2"
 )
@@ -67,8 +66,11 @@ func jsToDotNet(src string, multiline bool) string {
 					end := strings.IndexByte(src[i:], '}')
 					if end > 0 {
 						code := parseCodePoint(src[i+3 : i+end])
-						out.WriteString(surrogatePair(code))
-						i += end
+						out.WriteString(codePointEscape(code))
+						// leave the index at the character in front of the
+						// closing brace, so that the loop continues behind
+						// the escape
+						i += end - 1
 						break
 					}
 				}
@@ -237,15 +239,11 @@ func parseCodePoint(s string) int {
 	return value
 }
 
-// surrogatePair writes a code point as the UTF-16 surrogate pair that .NET
-// expects inside a character class.
-func surrogatePair(code int) string {
-	r := rune(code)
-	if r > 0xFFFF {
-		high, low := utf16.EncodeRune(r)
-		return fmt.Sprintf(`\x%04x\x%04x`, high, low)
-	}
-	return fmt.Sprintf(`\x%04x`, code)
+// codePointEscape writes a code point as the escape that matches the code
+// point itself. The engine of the port works on code points, so a code point
+// above U+FFFF keeps its value instead of being split into a surrogate pair.
+func codePointEscape(code int) string {
+	return fmt.Sprintf(`\x{%X}`, code)
 }
 
 // match mirrors the array that JavaScript's RegExp.exec returns. The first

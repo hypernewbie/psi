@@ -52,23 +52,28 @@ func NewLexer(options *MarkedOptions) *Lexer {
 	}
 	lexer.State = LexerState{Top: true}
 
-	tokenizer := newTokenizer(options)
-	tokenizer.lexer = lexer
+	tokenizer := options.Tokenizer
+	if tokenizer == nil {
+		tokenizer = newTokenizer(options)
+	}
+	options.Tokenizer = tokenizer
+	tokenizer.Options = options
+	tokenizer.Lexer = lexer
 
 	rules := Rules{Other: other, Block: block["normal"], Inline: inline["normal"]}
 	switch {
-	case options.Pedantic:
+	case options.PedanticEnabled():
 		rules.Block = block["pedantic"]
 		rules.Inline = inline["pedantic"]
-	case options.GFM:
+	case options.GFMEnabled():
 		rules.Block = block["gfm"]
-		if options.Breaks {
+		if options.BreaksEnabled() {
 			rules.Inline = inline["breaks"]
 		} else {
 			rules.Inline = inline["gfm"]
 		}
 	}
-	tokenizer.rules = rules
+	tokenizer.Rules = rules
 	lexer.tokenizer = tokenizer
 
 	return lexer
@@ -76,7 +81,7 @@ func NewLexer(options *MarkedOptions) *Lexer {
 
 // Lex parses a markdown document into tokens, like marked's `Lexer.lex`.
 func (l *Lexer) Lex(src string) []Token {
-	src = replaceAll(l.tokenizer.rules.Other.CarriageReturn, src, func(string) string { return "\n" })
+	src = replaceAll(l.tokenizer.Rules.Other.CarriageReturn, src, func(string) string { return "\n" })
 
 	l.Tokens = l.blockTokens(src, l.Tokens, false)
 
@@ -129,10 +134,10 @@ func (l *Lexer) attachInlineCell(cell *TableCell, results [][]Token) {
 
 // blockTokens lexes a block of markdown, like marked's `blockTokens`.
 func (l *Lexer) blockTokens(src string, tokens []Token, lastParagraphClipped bool) []Token {
-	l.tokenizer.lexer = l
-	if l.Options.Pedantic {
-		src = replaceAll(l.tokenizer.rules.Other.TabCharGlobal, src, func(string) string { return "    " })
-		src = replaceAll(l.tokenizer.rules.Other.SpaceLine, src, func(string) string { return "" })
+	l.tokenizer.Lexer = l
+	if l.Options.PedanticEnabled() {
+		src = replaceAll(l.tokenizer.Rules.Other.TabCharGlobal, src, func(string) string { return "    " })
+		src = replaceAll(l.tokenizer.Rules.Other.SpaceLine, src, func(string) string { return "" })
 	}
 
 	srcLength := -1
@@ -365,8 +370,8 @@ func (l *Lexer) linkInText(text string) bool {
 		return false
 	}
 
-	linkRule := l.tokenizer.rules.Inline.Link
-	for _, found := range execAll(l.tokenizer.rules.Inline.BlockSkip, text) {
+	linkRule := l.tokenizer.Rules.Inline.Link
+	for _, found := range execAll(l.tokenizer.Rules.Inline.BlockSkip, text) {
 		// blockSkip also matches code spans and html, and the `!` of an image
 		// is left out of the match, so read the character before it.
 		if matches(linkRule, found.whole()) && charAt(text, found.index-1) != "!" {
@@ -374,7 +379,7 @@ func (l *Lexer) linkInText(text string) bool {
 		}
 	}
 
-	for _, found := range execAll(l.tokenizer.rules.Inline.ReflinkSearch, text) {
+	for _, found := range execAll(l.tokenizer.Rules.Inline.ReflinkSearch, text) {
 		match0 := found.whole()
 		refStart := lastIndexOfUnit(match0, "[")
 		if charAt(match0, 0) == "!" {
@@ -395,13 +400,13 @@ func (l *Lexer) linkInText(text string) bool {
 
 // inlineTokens lexes inline markdown, like marked's `inlineTokens`.
 func (l *Lexer) inlineTokens(src string, tokens []Token) []Token {
-	l.tokenizer.lexer = l
+	l.tokenizer.Lexer = l
 	// String with links masked to avoid interference with em and strong
 	maskedSrc := src
 
 	// Mask out reflinks
 	if len(l.Links) > 0 && strings.Contains(src, "[") {
-		reflinkSearch := l.tokenizer.rules.Inline.ReflinkSearch
+		reflinkSearch := l.tokenizer.Rules.Inline.ReflinkSearch
 		// maskReflink is marked's `maskReflink`. It masks the links a
 		// candidate holds by calling itself, so the port keeps it recursive.
 		var maskReflink func(match0 string) string
@@ -436,7 +441,7 @@ func (l *Lexer) inlineTokens(src string, tokens []Token) []Token {
 	// Every mask must keep the length it replaces: emStrong and del line
 	// maskedSrc up with src by slicing from the end. `anyPunctuation` matches
 	// unicode punctuation, so an escaped astral character is 3 code units.
-	maskedSrc = replaceAll(l.tokenizer.rules.Inline.AnyPunctuation, maskedSrc, func(match0 string) string {
+	maskedSrc = replaceAll(l.tokenizer.Rules.Inline.AnyPunctuation, maskedSrc, func(match0 string) string {
 		return strings.Repeat("+", utf16Len(match0))
 	})
 
@@ -444,7 +449,7 @@ func (l *Lexer) inlineTokens(src string, tokens []Token) []Token {
 	// marked masks a match with a run of "a" of the same length, so the
 	// masked source keeps the length of the source it replaces. The second
 	// group of the expression holds the characters in front of a code span.
-	maskedSrc = replaceAllMatches(l.tokenizer.rules.Inline.BlockSkip, maskedSrc, func(found *match) string {
+	maskedSrc = replaceAllMatches(l.tokenizer.Rules.Inline.BlockSkip, maskedSrc, func(found *match) string {
 		match0 := found.whole()
 		context := found.group(2)
 		offset := 0
@@ -616,7 +621,7 @@ func (l *Lexer) inlineTokens(src string, tokens []Token) []Token {
 
 // infiniteLoopError reports a lexer that does not consume its input.
 func (l *Lexer) infiniteLoopError(src string) {
-	if l.Options.Silent {
+	if l.Options.SilentEnabled() {
 		return
 	}
 	panic(fmt.Sprintf("marked: infinite loop on byte: %d", src[0]))
