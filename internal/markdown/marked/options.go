@@ -47,8 +47,10 @@ type TokenizerExtension func(lexer *Lexer, src string, tokens []Token) *Token
 // there.
 type TokenizerStart func(lexer *Lexer, src string) int
 
-// RendererExtension is marked's `RendererExtensionFunction`.
-type RendererExtension func(token *Token) bool
+// RendererExtension is marked's `RendererExtensionFunction`. It returns the
+// rendered token and reports whether it rendered it. A renderer that reports
+// false lets the built in renderer handle the token.
+type RendererExtension func(token *Token) (string, bool)
 
 // Hooks is marked's `Hooks`. Only the hooks the port needs are kept.
 type Hooks struct {

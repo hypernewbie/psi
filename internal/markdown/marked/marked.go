@@ -21,6 +21,18 @@ func LexInline(src string, options *MarkedOptions) []Token {
 	return lexer.inlineTokens(src, nil)
 }
 
+// Parse renders a markdown document to HTML, like marked's `marked.parse`.
+func Parse(src string, options *MarkedOptions) string {
+	tokens, _ := Lex(src, options)
+	return ParseTokens(tokens, options)
+}
+
+// ParseInline renders inline markdown to HTML, like marked's
+// `marked.parseInline`.
+func ParseInline(src string, options *MarkedOptions) string {
+	return ParseInlineTokens(LexInline(src, options), options)
+}
+
 // walkTokens calls the walk function with every token, like marked's
 // `walkTokens`.
 func walkTokens(tokens []Token, walk func(*Token)) {

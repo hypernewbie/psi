@@ -196,6 +196,12 @@ function lexTokens(markdown, options) {
   return marked.lexer(markdown).map(canonicalToken);
 }
 
+// renderHTML renders a case the way marked's spec runner does.
+function renderHTML(markdown, options) {
+  const marked = new Marked(options);
+  return marked.parse(markdown);
+}
+
 const cases = [];
 
 for (const mode of modes) {
@@ -211,6 +217,7 @@ for (const mode of modes) {
           markdown: spec.markdown,
           options,
           tokens: lexTokens(spec.markdown, options),
+          html: renderHTML(spec.markdown, options),
         });
       });
     } else if (entry.endsWith('.md')) {
@@ -221,6 +228,7 @@ for (const mode of modes) {
         markdown: body,
         options,
         tokens: lexTokens(body, options),
+        html: renderHTML(body, options),
       });
     }
   }
