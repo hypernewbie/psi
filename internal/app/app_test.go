@@ -31,10 +31,14 @@ func TestParseBoundary(t *testing.T) {
 	if err != nil || o.Model != "m" || !o.NoSession || o.UseTheme != "light/dark" || !o.NoThemes || len(o.ThemePaths) != 2 {
 		t.Fatalf("%+v %v", o, err)
 	}
-	for _, args := range [][]string{{"--continue", "--resume"}, {"--allow-project", "--deny-project"}, {"--print", "prompt"}, {"--mode", "rpc"}, {"--tui-mode", "fullscreen"}} {
+	for _, args := range [][]string{{"--continue", "--resume"}, {"--allow-project", "--deny-project"}, {"--print", "prompt"}, {"--tui-mode", "fullscreen"}} {
 		if _, _, err := Parse(args); err == nil {
 			t.Errorf("accepted conflicting/unsupported arguments: %v", args)
 		}
+	}
+	o, _, err = Parse([]string{"--mode", "rpc"})
+	if err != nil || o.Mode != "rpc" {
+		t.Fatalf("rejected --mode rpc: %+v %v", o, err)
 	}
 }
 

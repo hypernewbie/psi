@@ -267,8 +267,8 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 			return o, fs, fmt.Errorf("--name requires a non-empty value")
 		}
 	}
-	if o.Mode != "text" {
-		return o, fs, fmt.Errorf("psi supports only --mode text; print, JSON, and RPC modes are not supported")
+	if o.Mode != "text" && o.Mode != "rpc" {
+		return o, fs, fmt.Errorf("psi supports only --mode text and --mode rpc; print and JSON modes are not supported")
 	}
 	if o.TUIMode != "regular" {
 		return o, fs, fmt.Errorf("psi uses the regular inline terminal; --tui-mode fullscreen is not supported")
@@ -406,7 +406,7 @@ Pi-compatible options:
   --no-themes                Disable theme loading
   --no-skills, -ns           Disable skills
   --no-context-files, -nc    Disable AGENTS.md and CLAUDE.md
-  --mode text                Select the only supported output mode
+  --mode text|rpc            Select interactive text or headless JSONL RPC mode
   --tui-mode regular         Select the inline terminal mode
   --offline                  No-op; psi does not refresh Pi's model cache
   --list-models [search]     List cached and bundled models without network access
@@ -415,7 +415,7 @@ Pi-compatible options:
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Use -- before a message that starts with a hyphen.
-Not supported: --print/-p, JSON/RPC modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
+Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version)
 }
 
@@ -434,6 +434,9 @@ func Run(args []string, version string) error {
 	}
 	if o.ListModels {
 		return listAvailableModels(os.Stdout, session.AgentDir(), o.ListModelsFilter)
+	}
+	if o.Mode == "rpc" {
+		return runRPC(o, version)
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return fmt.Errorf("noninteractive input: psi needs a terminal (no print/RPC mode)")
@@ -478,59 +481,7 @@ func Run(args []string, version string) error {
 	themeSetting := selectedThemeSetting(st, o)
 	activeTheme, activeThemeName, themeFallback := resolveThemeSnapshot(themeCatalog, themeSetting, colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: activeTheme, NoColor: noColor, Display: presentationDisplay(st)})
-	if o.NoTools {
-		st.DefaultTools = []string{}
-	} else {
-		if o.Tools != "" {
-			st.DefaultTools, err = config.ResolveTools(strings.Split(o.Tools, ","), st.DefaultTools)
-			if err != nil {
-				return err
-			}
-		}
-		if o.ExcludeTools != "" {
-			var excluded []string
-			for _, name := range strings.Split(o.ExcludeTools, ",") {
-				name = strings.TrimSpace(name)
-				if name != "" {
-					excluded = append(excluded, "-"+name)
-				}
-			}
-			if len(excluded) > 0 {
-				st.DefaultTools, err = config.ResolveTools(excluded, st.DefaultTools)
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
-	if err != nil {
-		return err
-	}
-	var instructions []config.InstructionFile
-	if !o.NoContextFiles {
-		instructions, err = config.DiscoverInstructions(cwd, agentDir, consent)
-		if err != nil {
-			return err
-		}
-	}
-	var sk []skills.Skill
-	var diagnostics []skills.Diagnostic
-	if !o.NoSkills {
-		sk, diagnostics = skills.Discover(cwd, agentDir, st.Skills, consent)
-	}
-	var appendSystemPrompts []string
-	for _, source := range o.AppendSystemPrompts {
-		appendSystemPrompts = append(appendSystemPrompts, resolveCLIPrompt(source))
-	}
-	prompt := config.AssemblePromptWithOverrides(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools, resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
-	if o.Provider != "" {
-		if _, ok := providerregistry.Lookup(o.Provider); !ok {
-			return fmt.Errorf("unsupported provider %q (available: %s)", o.Provider, strings.Join(providerregistry.IDs(), ", "))
-		}
-	}
-	ov := config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
-	store, err := openSession(o, cwd, agentDir, st, ov, console, lifecycle)
+	models, sk, diagnostics, prompt, _, store, err := activateSession(o, cwd, agentDir, &st, consent, console, lifecycle)
 	if errors.Is(err, errStartupCancelled) {
 		return nil
 	}
