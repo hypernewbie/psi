@@ -289,11 +289,17 @@ func (m *MarkdownStream) processNormalLine(stable *[]string) {
 				m.processNormalLine(stable)
 				return
 			}
+			if len(bytes.TrimSpace(m.pending[:start])) > 0 {
+				// The fence belongs to an unfinished block, for example a list
+				// item. Keep the block together so the Markdown renderer can
+				// nest the fence inside it.
+				m.noteBlockShape(line)
+				return
+			}
 			m.fenceByte, m.fenceLen = marker, count
 			m.fenceHasLine = false
-			info := strings.Fields(string(lineBytes[count:]))
-			if len(info) > 0 {
-				m.fenceLanguage = info[0]
+			if info := markdownFenceInfoText(lineBytes); info != "" {
+				m.fenceLanguage = info
 			}
 			m.commitFenceStart(stable)
 			m.clearPending()
@@ -370,7 +376,7 @@ func (m *MarkdownStream) commitFenceStart(stable *[]string) {
 		m.needsSeparator = false
 	}
 	label := "```" + SanitizeStatusRow(m.fenceLanguage)
-	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth(label, max(0, m.width-1)), Token: TokenCodeFence}}}
+	row := markdownFenceRow(label, mdIndent(m.display.transcriptIndent(), TokenText), max(1, m.width-1), TokenText)
 	*stable = append(*stable, row.SerializeWithTheme(m.palette, colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
 	m.seenOutput = true
 }
@@ -385,7 +391,8 @@ func renderCodeRows(line []byte, width int, noColor bool, palette *pitheme.Theme
 	text := strings.TrimSuffix(string(line), "\r")
 	spans := []StyledSpan{{Text: Sanitize(text), Token: TokenCodeBlock}}
 	display = display.normalized()
-	rows := wrapMarkdown(spans, max(1, width-1), mdIndent(display.CodeBlockIndent), mdIndent(display.CodeBlockIndent))
+	prefix := mdIndent(display.transcriptIndent()+display.CodeBlockIndent, TokenText)
+	rows := wrapMarkdown(spans, max(1, width-1), prefix, prefix)
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, row.SerializeWithTheme(palette, colorDisabled(PresentationSnapshot{NoColor: noColor})))
@@ -397,7 +404,7 @@ func (m *MarkdownStream) commitFenceEnd(stable *[]string) {
 	if !m.fenceHasLine {
 		m.commitCodeLine(nil, stable)
 	}
-	row := StyledRow{Spans: []StyledSpan{{Text: TruncateToWidth("```", max(0, m.width-1)), Token: TokenCodeFence}}}
+	row := markdownFenceRow("```", mdIndent(m.display.transcriptIndent(), TokenText), max(1, m.width-1), TokenText)
 	*stable = append(*stable, row.SerializeWithTheme(m.palette, colorDisabled(PresentationSnapshot{NoColor: m.noColor})))
 	m.seenOutput = true
 }
@@ -807,6 +814,23 @@ func markdownFenceStart(line []byte) (byte, int, bool) {
 		count++
 	}
 	return marker, count, count >= 3
+}
+
+// markdownFenceInfoText returns the info string that follows a fence marker.
+// The marker may be indented, for example inside a list item.
+func markdownFenceInfoText(line []byte) string {
+	trimmed := bytes.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 {
+		return ""
+	}
+	count := 0
+	for count < len(trimmed) && (trimmed[count] == '`' || trimmed[count] == '~') {
+		count++
+	}
+	if count < 3 {
+		return ""
+	}
+	return strings.TrimSpace(string(trimmed[count:]))
 }
 
 func isMarkdownFenceClose(line []byte, marker byte, minimum int) bool {

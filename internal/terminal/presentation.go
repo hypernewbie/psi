@@ -103,12 +103,13 @@ func thinkingToken(level string) ThemeToken {
 }
 
 type StyledSpan struct {
-	Text       string
-	Token      ThemeToken
-	Background ThemeToken
-	Bold       bool
-	Italic     bool
-	Underline  bool
+	Text          string
+	Token         ThemeToken
+	Background    ThemeToken
+	Bold          bool
+	Italic        bool
+	Underline     bool
+	Strikethrough bool
 }
 
 // StyledRow contains untrusted, plain-text spans. Only Serialize generates
@@ -141,7 +142,7 @@ func (r StyledRow) SerializeWithTheme(palette *pitheme.Theme, noColor bool) stri
 			return
 		}
 		if palette != nil && !noColor {
-			attributes := pitheme.TextStyle{Bold: active.Bold, Italic: active.Italic, Underline: active.Underline}
+			attributes := pitheme.TextStyle{Bold: active.Bold, Italic: active.Italic, Underline: active.Underline, Strikethrough: active.Strikethrough}
 			styled, err := palette.Style(text.String(), string(active.Token), string(active.Background), attributes)
 			if err == nil {
 				b.WriteString(styled)
@@ -162,6 +163,9 @@ func (r StyledRow) SerializeWithTheme(palette *pitheme.Theme, noColor bool) stri
 				}
 				if active.Underline {
 					codes = append(codes, "4")
+				}
+				if active.Strikethrough {
+					codes = append(codes, "9")
 				}
 			}
 			if len(codes) > 0 {
@@ -184,7 +188,7 @@ func (r StyledRow) SerializeWithTheme(palette *pitheme.Theme, noColor bool) stri
 		if span.Background == "" {
 			span.Background = r.Surface
 		}
-		if activeSet && (active.Token != span.Token || active.Background != span.Background || active.Bold != span.Bold || active.Italic != span.Italic || active.Underline != span.Underline) {
+		if activeSet && (active.Token != span.Token || active.Background != span.Background || active.Bold != span.Bold || active.Italic != span.Italic || active.Underline != span.Underline || active.Strikethrough != span.Strikethrough) {
 			flush()
 			activeSet = false
 		}

@@ -82,6 +82,10 @@ Emoji and symbols no longer count as letters.
 Session decoders use exact field names, including nested usage fields.
 Prompts and bracketed pastes have a 256 KiB UTF-8 budget.
 The terminal writer uses differential writes for ordinary same-size updates and bounds writes to 64 KiB. Stream output coalesces at scheduled frames and flushes at semantic boundaries. It retains display source for the complete displayed conversation. A geometry change rebuilds the main-screen document from that source with Pi's `CSI 2J`, home, `CSI 3J` sequence. This can erase earlier shell scrollback and change selection or scroll position. The active Markdown parser remains bounded; the retained display ledger is separate from model context.
+The Markdown renderer follows Pi's marked-based output for CommonMark, GFM tables, task lists, strict strikethrough, bare URL autolinks, and backslash escapes; `internal/terminal/testdata/pi-markdown-parity.json` pins the rendered rows of 77 samples against the pinned Pi revision.
+It does not implement Pi's LaTeX, Mermaid, terminal-image, or OSC 8 hyperlink rendering, and it does not reproduce marked's tokenizer quirk that leaves stray `~~` markers in inputs such as `~~a ~~ and ~~b~~`.
+psi keeps its own left message margin, so code blocks, quotes, and tables sit one cell right of Pi's default `outputPad` margin.
+Two known differences remain. Pi keeps the source indentation of a lazy list continuation line, while psi renders the line without that space, and psi never lets a table exceed the terminal width, while Pi can overflow a table by one cell when a column is empty and the table exactly fills the line.
 
 Regression tests cover startup history, `/history all`, Backspace, nonduplicated submission, and `/new` recall reset.
 Actual-app PTY tests cover Ctrl+Z/SIGCONT and terminal-attribute restoration.

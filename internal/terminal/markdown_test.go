@@ -27,13 +27,14 @@ func TestRenderMarkdownRetainedSubset(t *testing.T) {
 		"  - second item",
 		"      - nested",
 		"",
-		"│   quoted line next line",
+		"  │ quoted line",
+		"  │ next line",
 		"",
-		"```go",
-		"  fmt.Println(\"hi\")",
-		"```",
+		"  ```go",
+		"    fmt.Println(\"hi\")",
+		"  ```",
 		"",
-		strings.Repeat("─", 59),
+		"  " + strings.Repeat("─", 57),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Markdown output mismatch\n got: %#v\nwant: %#v", got, want)
@@ -65,7 +66,7 @@ func TestRenderMarkdownMatchesPiParagraphListSpacing(t *testing.T) {
 func TestRenderMarkdownReadableUnsupportedAndSafe(t *testing.T) {
 	input := "<script>not executed</script>\n\n| a | b |\n|---|---|\n| x | y |\n\n![diagram](https://example.test/image)\n\nlink \x1b]52;c;secret\x07"
 	got := strings.Join(RenderMarkdown(input, 80, true), "\n")
-	for _, want := range []string{"<script>not executed</script>", "| a | b |", "[image: diagram]", "link"} {
+	for _, want := range []string{"<script>not executed</script>", "│ a │ b │", "diagram", "link"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Markdown fallback missing %q in %q", want, got)
 		}

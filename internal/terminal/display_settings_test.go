@@ -20,7 +20,7 @@ func TestPiDisplaySettingsAffectMessageAndToolGeometry(t *testing.T) {
 	code := RenderMarkdownWithDisplay("```go\nfmt.Println(1)\n```", 40, true, display)
 	found := false
 	for _, row := range code {
-		if row == "> fmt.Println(1)" {
+		if row == " > fmt.Println(1)" {
 			found = true
 		}
 	}

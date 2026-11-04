@@ -8,9 +8,9 @@
     "",
     "  The fix passes with go test.",
     "",
-    "```go",
-    "  fmt.Println(\"ok\")",
-    "```",
+    "  ```go",
+    "    fmt.Println(\"ok\")",
+    "  ```",
     ""
   ],
   "styleTokens": [
@@ -23,7 +23,7 @@
   "omissions": [
     "No language highlighter",
     "No OSC 8 hyperlinks",
-    "No math, Mermaid, terminal images, or table layout",
+    "No math, Mermaid, or terminal images",
     "Raw HTML and unsupported structures remain literal text"
   ]
 }

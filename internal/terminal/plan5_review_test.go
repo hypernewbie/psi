@@ -38,7 +38,7 @@ func TestReviewUserMarkerPreservesLeadingCodeFenceAndQuote(t *testing.T) {
 			t.Fatalf("missing user marker: %q", output)
 		}
 		if strings.HasPrefix(source, "```") {
-			if !strings.Contains(output, "```go") || !strings.Contains(output, "\n  abcdef\n") {
+			if !strings.Contains(output, "```go") || !strings.Contains(output, "\n      abcdef\n") {
 				t.Errorf("user marker changed code: %q", output)
 			}
 		} else if !strings.Contains(output, "│") || !strings.Contains(output, "requested change") {
