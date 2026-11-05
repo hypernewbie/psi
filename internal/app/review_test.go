@@ -317,6 +317,31 @@ func (q *reviewPTY) wait(want string) {
 		}
 	}
 }
+// waitScreen waits until the settled VT screen contains want. A quiet-gap
+// settle (prompt) can sample a mid-keystroke frame while the app is still
+// draining PTY input, so state assertions synchronize on the content itself.
+func (q *reviewPTY) waitScreen(want string) {
+	q.t.Helper()
+	timer := time.NewTimer(8 * time.Second)
+	defer timer.Stop()
+	for {
+		if strings.Contains(q.screen.Text(), want) {
+			return
+		}
+		select {
+		case chunk, ok := <-q.chunks:
+			if !ok {
+				q.t.Fatalf("process exited waiting for screen %q: %q", want, q.screen.Text())
+			}
+			q.pending += string(chunk)
+			q.raw.Write(chunk)
+			q.screen.Feed(chunk)
+		case <-timer.C:
+			q.t.Fatalf("timeout waiting for screen %q: %q", want, q.screen.Text())
+		}
+	}
+}
+
 func (q *reviewPTY) prompt() {
 	q.t.Helper()
 	ready := func() bool {

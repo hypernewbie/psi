@@ -51,6 +51,7 @@ func TestInlineProjectTrustPickerDefaultsToDeny(t *testing.T) {
 			q.prompt()
 			if allow {
 				q.write("/skill:pro")
+				q.waitScreen("/skill:project")
 				q.prompt()
 				if !strings.Contains(q.screen.Text(), "/skill:project") {
 					t.Fatalf("trusted project skill was not loaded: %q", q.screen.Text())
