@@ -1751,7 +1751,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	bridge.reloadRun = func() error {
 		_, err := r.handleReloadCommand("", io.Discard)
 		if err != nil {
-			notice(terminal.NoticeWarning, "Theme reload failed; the last valid theme remains active. "+err.Error())
+			notice(terminal.NoticeWarning, "Resource reload failed. "+err.Error())
 		}
 		r.draw(console)
 		return err
@@ -2614,10 +2614,13 @@ func (r *runtime) handleReloadCommand(arg string, out io.Writer) (bool, error) {
 	if err := r.reloadTheme(); err != nil {
 		return false, err
 	}
+	if err := r.reloadResources(); err != nil {
+		return false, err
+	}
 	if r.lifecycle != nil && r.lifecycle.console != nil {
 		r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
 	}
-	fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("theme reloaded: %s (%s, %s)", r.themeName, r.themeAppearance, r.themeMode)))
+	fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("resources and theme reloaded: %s (%s, %s)", r.themeName, r.themeAppearance, r.themeMode)))
 	return false, nil
 }
 
