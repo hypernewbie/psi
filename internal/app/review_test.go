@@ -317,6 +317,7 @@ func (q *reviewPTY) wait(want string) {
 		}
 	}
 }
+
 // waitScreen waits until the settled VT screen contains want. A quiet-gap
 // settle (prompt) can sample a mid-keystroke frame while the app is still
 // draining PTY input, so state assertions synchronize on the content itself.
