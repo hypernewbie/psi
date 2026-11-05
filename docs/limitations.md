@@ -7,7 +7,7 @@ It has no fullscreen mode, widgets, panels, session-tree interface, or Pi TUI AP
 It has no extension runtime, MCP, codemode, tool search, subagents, public SDK, or Pi JSON event mode.
 Print mode, HTML export, sharing, bug uploads, hosted services, telemetry, and automatic updates are excluded.
 
-psi supports Anthropic, ChatGPT Codex, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google. OpenCode Go selects Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses per model. Unsupported provider/API pairs and compatibility features remain unavailable.
+See [Providers](providers.md) for supported providers and protocols. Unsupported provider/API pairs and compatibility features remain unavailable.
 
 Cloud credential discovery, routing, virtual models, and automatic catalog refresh are excluded. Google Vertex and OAuth, OpenCode Zen, MiniMax China, and Z.AI China endpoints are not included. Live-provider acceptance has not run.
 Background provider jobs, cache warming, classifier models, and image/audio/video generation are excluded.

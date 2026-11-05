@@ -83,9 +83,12 @@ psi --no-tools
 - `-t`, `--tools <list>` replaces the default selection with a comma-separated
   allowlist of `read`, `bash`, `edit`, and `write`.
 - `-xt`, `--exclude-tools <list>` removes names from whatever is selected.
-- `-nt`, `--no-tools` disables every tool.
-- `-nbt`, `--no-builtin-tools` is accepted; all psi tools are built-in, so it
-  behaves like `--no-tools`.
+- `-nt`, `--no-tools` disables `read`, `bash`, `edit`, and `write`.
+- `-nbt`, `--no-builtin-tools` behaves like `--no-tools`.
+
+These flags affect the four file/shell tools only. `loop_control` remains
+available during an active goal or exact-count loop. `syncboard` remains
+available while the connected Phi bridge accepts that capability.
 
 `defaultTools` in `settings.json` accepts the same names, plus `+name` and
 `-name` entries that add to or remove from the default set.

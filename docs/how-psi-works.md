@@ -45,6 +45,7 @@ The system prompt is assembled from ordered sections:
 | `project_context` | `AGENTS.md` and ancestor instruction files |
 | `skills` | skill names, descriptions, and paths |
 | `cwd` | the working folder |
+| `loop` | active loop guidance, omitted when no loop is active |
 
 A custom preamble (`SYSTEM.md` or `--system-prompt`) suppresses `tools`,
 `rules`, and `docs`. The other sections still apply. Skill bodies are not in the

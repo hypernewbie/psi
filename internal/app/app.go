@@ -213,10 +213,10 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.StringVar(&o.Tools, "t", "", "tool list (Pi alias)")
 	fs.StringVar(&o.ExcludeTools, "exclude-tools", "", "comma-separated tools to disable")
 	fs.StringVar(&o.ExcludeTools, "xt", "", "comma-separated tools to disable (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-tools", false, "disable tools")
-	fs.BoolVar(&o.NoTools, "nt", false, "disable tools (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable built-in tools (all psi tools)")
-	fs.BoolVar(&o.NoTools, "nbt", false, "disable built-in tools (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-tools", false, "disable read,bash,edit,write")
+	fs.BoolVar(&o.NoTools, "nt", false, "disable read,bash,edit,write (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable read,bash,edit,write (alias for --no-tools)")
+	fs.BoolVar(&o.NoTools, "nbt", false, "disable read,bash,edit,write (Pi alias)")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -432,8 +432,8 @@ Pi-compatible options:
   --no-session               Keep this session in memory only
   --tools, -t <list>         Select read,bash,edit,write tools
   --exclude-tools, -xt <list> Disable selected tools
-  --no-tools, -nt            Disable all tools
-  --no-builtin-tools, -nbt   Disable psi tools (all tools are built-in)
+  --no-tools, -nt            Disable read,bash,edit,write
+  --no-builtin-tools, -nbt   Alias for --no-tools
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
   --theme <path>             Load a theme (repeatable)
@@ -451,6 +451,8 @@ Pi-compatible options:
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Use -- before a message that starts with a hyphen.
+Tool-selection flags affect read,bash,edit,write only.
+loop_control and syncboard remain available when their separate availability checks pass.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version)
 }
