@@ -52,7 +52,14 @@ func referenceTokens(t *testing.T, node string, markdown string) []any {
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if err != nil {
+		// The script reports a missing marked module with status 3. The
+		// live comparison is a development aid; the frozen corpus of
+		// testdata/tokens.json is the oracle.
+		if exit, ok := err.(*osexec.ExitError); ok && exit.ExitCode() == 3 {
+			t.Skipf("marked 18.0.11 is not available: %s", strings.TrimSpace(stderr.String()))
+		}
 		t.Fatalf("run marked: %v: %s", err, stderr.String())
 	}
 

@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // Prints the token stream of marked 18.0.11 for the inputs given on stdin,
 // one JSON document per input, so the Go port can be compared with it.
+// When marked is not available, the script prints MARKED-NOT-FOUND on stderr
+// and exits with status 3, so the differential test can skip instead of
+// fail.
 //
-// Usage: node scripts/marked-tokens.mjs < inputs.txt
+// Usage: node scripts/marked-tokens.mjs [marked-dir] < inputs.txt
 
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
@@ -28,7 +31,8 @@ function loadMarked() {
       // try the next candidate
     }
   }
-  throw new Error('marked 18.0.11 not found');
+  console.error('MARKED-NOT-FOUND: pass the marked module directory as the first argument');
+  process.exit(3);
 }
 
 const { Marked } = await loadMarked();
