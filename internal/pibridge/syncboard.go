@@ -84,8 +84,8 @@ func (c *Client) setCaps(caps map[string]bool) {
 func (c *Client) dropCaps() {
 	c.capsMu.Lock()
 	c.caps = nil
-	c.capsMu.Unlock()
 	c.failSyncboard(&SyncboardError{Outcome: "unknown", Reason: "transport-error"})
+	c.capsMu.Unlock()
 }
 
 // CallSyncboard performs one bounded Syncboard operation against Phi. The
@@ -98,16 +98,22 @@ func (c *Client) CallSyncboard(ctx context.Context, op pibridgepb.SyncboardOpera
 	if err := ctx.Err(); err != nil {
 		return SyncboardResult{}, &SyncboardError{Outcome: "not-sent", Reason: "cancelled"}
 	}
-	if !c.SyncboardAccepted() {
+	// Admission and disconnect share capsMu -> sbMu ordering. Otherwise a
+	// caller can enqueue after the old stream's waiters have been failed.
+	c.capsMu.RLock()
+	if !c.caps[capSyncboard] {
+		c.capsMu.RUnlock()
 		return SyncboardResult{}, &SyncboardError{Outcome: "not-sent", Reason: "unavailable"}
 	}
 	c.sbMu.Lock()
 	if c.sbSeq == ^uint64(0) {
 		c.sbMu.Unlock()
+		c.capsMu.RUnlock()
 		return SyncboardResult{}, &SyncboardError{Outcome: "not-sent", Reason: "unavailable"}
 	}
 	if len(c.sbWaiters) >= syncboardPendingMax {
 		c.sbMu.Unlock()
+		c.capsMu.RUnlock()
 		return SyncboardResult{}, &SyncboardError{Outcome: "not-sent", Reason: "busy"}
 	}
 	c.sbSeq++
@@ -117,8 +123,9 @@ func (c *Client) CallSyncboard(ctx context.Context, op pibridgepb.SyncboardOpera
 		c.sbWaiters = map[string]chan sbDelivery{}
 	}
 	c.sbWaiters[id] = ch
-	c.sbQueue = append(c.sbQueue, sbQueued{id: id, op: op, key: key, value: value})
+	c.sbQueue = append(c.sbQueue, sbQueued{id: id, op: op, key: key, value: append([]byte(nil), value...)})
 	c.sbMu.Unlock()
+	c.capsMu.RUnlock()
 	c.poke()
 
 	timer := time.NewTimer(syncboardCallTimeout)
@@ -141,6 +148,12 @@ func (c *Client) CallSyncboard(ctx context.Context, op pibridgepb.SyncboardOpera
 func (c *Client) dropSyncboardWaiter(id string) {
 	c.sbMu.Lock()
 	delete(c.sbWaiters, id)
+	for i, q := range c.sbQueue {
+		if q.id == id {
+			c.sbQueue = append(c.sbQueue[:i], c.sbQueue[i+1:]...)
+			break
+		}
+	}
 	c.sbMu.Unlock()
 }
 
@@ -201,6 +214,7 @@ func (c *Client) failSyncboard(err *SyncboardError) {
 	c.sbMu.Lock()
 	waiters := c.sbWaiters
 	c.sbWaiters = nil
+	c.sbQueue = nil
 	c.sbMu.Unlock()
 	for _, ch := range waiters {
 		select {
