@@ -43,6 +43,10 @@ psi resolves a credential in this order:
 expired Codex token, preserves unrelated fields, and never substitutes a billed
 OpenAI API key for Codex OAuth. Run `/login openai-codex` in Pi to sign in.
 
+Each acquisition of the shared credential lock has a five-second wait limit and
+respects cancellation. On Windows, access-denied errors during lock creation use
+the same bounded wait.
+
 Credential values in `models.json` accept `$VAR`, `${VAR}`, `$$`, and `$!`
 escapes. `!command` values are rejected without being executed.
 
