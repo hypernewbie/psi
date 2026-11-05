@@ -136,21 +136,6 @@ func (s *rpcRunner) isRunning() bool {
 	return s.running
 }
 
-func (s *rpcRunner) setRunning(running bool, cancel context.CancelFunc) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.running = running
-	s.cancel = cancel
-}
-
-// markRunning records the model turn without touching the stored cancel:
-// RunStart arrives after submission and must not clobber the abort handle.
-func (s *rpcRunner) markRunning() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.running = true
-}
-
 func (s *rpcRunner) pendingCount() int {
 	return len(s.loop.PendingSteering()) + len(s.loop.PendingFollowUp())
 }
@@ -160,8 +145,12 @@ func (s *rpcRunner) pendingCount() int {
 func (s *rpcRunner) sink(ev event.Event) {
 	switch ev.Type {
 	case event.RunStart:
-		s.markRunning()
 		s.emit(map[string]any{"type": "agent_start"})
+	case event.SteeringDelivered, event.FollowUpDelivered:
+		s.userMessage(ev.Text)
+	case event.AssistantStart:
+		s.sweepDurable()
+		s.emit(map[string]any{"type": "message_start", "message": map[string]any{"role": "assistant", "content": []any{}}})
 	case event.TextDelta:
 		if ev.Text == "" {
 			return
@@ -180,6 +169,7 @@ func (s *rpcRunner) sink(ev event.Event) {
 			},
 		})
 	case event.ToolStart:
+		s.sweepDurable()
 		s.mu.Lock()
 		if !s.streamOpen {
 			s.streamOpen = true
@@ -217,16 +207,6 @@ func (s *rpcRunner) sink(ev event.Event) {
 		s.compactionReason = reason
 		s.mu.Unlock()
 		s.emit(map[string]any{"type": "compaction_start", "reason": reason})
-	case event.RunEnd:
-		s.mu.Lock()
-		s.streamOpen = false
-		s.toolIndex = 0
-		s.running = false
-		s.cancel = nil
-		s.mu.Unlock()
-		s.sweepDurable()
-		aborted := ev.Outcome == event.OutcomeInterrupted
-		s.emit(map[string]any{"type": "agent_settled", "aborted": aborted})
 	}
 }
 
@@ -261,7 +241,9 @@ func (s *rpcRunner) sweepDurable() {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			continue
 		}
-		s.emit(map[string]any{"type": "message_start", "message": body})
+		if msg.Role != "assistant" {
+			s.emit(map[string]any{"type": "message_start", "message": body})
+		}
 		s.emit(map[string]any{"type": "message_end", "message": body})
 	}
 }
@@ -357,7 +339,13 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "prompt", s.r.authErr.Error())
 		return &out
 	}
-	if s.loop.Running() {
+	if s.isRunning() {
+		// Submission and settlement have small windows outside Loop.Running.
+		// Do not accept a queue entry that the loop may never deliver.
+		if !s.loop.Running() {
+			out := rpcErr(cmd.ID, "prompt", "Agent is starting or settling; retry the prompt.")
+			return &out
+		}
 		switch cmd.StreamingBehavior {
 		case "followUp":
 			s.loop.FollowUp(text)
@@ -369,16 +357,35 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 		default:
 			s.loop.Steer(text)
 		}
-		s.userMessage(text)
 		out := rpcOK(cmd.ID, "prompt", map[string]any{"disposition": "queued"})
 		return &out
 	}
+	// Compaction or an imported session can change the active projection.
+	// Only publish messages written by this new run.
+	proj, err := s.r.store.Projection()
+	if err != nil {
+		out := rpcErr(cmd.ID, "prompt", err.Error())
+		return &out
+	}
+	s.emitted = len(proj.Flat)
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg := s.runConfig()
+	s.mu.Lock()
+	s.running, s.cancel = true, cancel
+	s.mu.Unlock()
 	s.userMessage(text)
 	go func() {
-		ctx, cancel := context.WithCancel(context.Background())
-		s.setRunning(true, cancel)
-		defer s.setRunning(false, nil)
-		_ = s.loop.Submit(ctx, text, s.runConfig())
+		err := s.loop.Submit(ctx, text, cfg)
+		s.sweepDurable()
+		s.mu.Lock()
+		s.streamOpen, s.toolIndex = false, 0
+		s.running, s.cancel = false, nil
+		if err != nil && ctx.Err() == nil {
+			_ = s.out.Encode(map[string]any{"type": "extension_error", "error": err.Error()})
+		}
+		_ = s.out.Encode(map[string]any{"type": "agent_settled", "aborted": ctx.Err() != nil})
+		s.mu.Unlock()
+		cancel()
 	}()
 	out := rpcOK(cmd.ID, "prompt", map[string]any{"disposition": "started"})
 	return &out
@@ -447,6 +454,10 @@ func rpcAvailableModels(models *config.ModelsFile) []rpcModel {
 // setModel switches the provider configuration synchronously: the command
 // loop is already serialized, so no preparation worker is needed.
 func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
+	if s.isRunning() || s.isCompacting() || s.pendingCount() > 0 {
+		out := rpcErr(cmd.ID, "set_model", "Cannot change model while a run is active or queued")
+		return &out
+	}
 	r := s.r
 	providerID, modelID := strings.TrimSpace(cmd.Provider), strings.TrimSpace(cmd.ModelID)
 	if providerID == "" || modelID == "" {
@@ -483,6 +494,7 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = cand.ov, cand.cfg, cand.prov, cand.authErr, cand.reg
+	s.loop = agent.New(r.store, r.reg, r.prov, s.sink)
 	out := rpcOK(cmd.ID, "set_model", rpcModel{Provider: providerID, ID: modelID, Name: rpcModelName(r.models, providerID, modelID)})
 	return &out
 }
@@ -490,6 +502,10 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 // setThinking changes the level for the live model. Thinking is per-request
 // state, so no provider rebuild is needed.
 func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
+	if s.isRunning() || s.isCompacting() {
+		out := rpcErr(cmd.ID, "set_thinking_level", "Cannot change thinking level while a run is active")
+		return &out
+	}
 	r := s.r
 	level := strings.TrimSpace(cmd.Level)
 	if level == "" {
@@ -530,6 +546,7 @@ func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 	}
 	s.mu.Lock()
 	s.compacting = true
+	s.compactionReason = ""
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -539,16 +556,15 @@ func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 	compactErr := s.loop.Compact(context.Background(), s.runConfig(), cmd.CustomInstructions)
 	s.mu.Lock()
 	reason := s.compactionReason
-	if reason == "" {
-		reason = event.CompactionManual
-	}
 	s.mu.Unlock()
 	if compactErr != nil {
-		aborted := compactErr == context.Canceled
-		s.emit(map[string]any{
-			"type": "compaction_end", "reason": reason,
-			"aborted": aborted, "errorMessage": compactErr.Error(),
-		})
+		if reason != "" {
+			s.emit(map[string]any{
+				"type": "compaction_end", "reason": reason,
+				"aborted": false, "errorMessage": compactErr.Error(),
+			})
+			s.emit(map[string]any{"type": "agent_settled", "aborted": false})
+		}
 		out := rpcErr(cmd.ID, "compact", compactErr.Error())
 		return &out
 	}
@@ -556,6 +572,7 @@ func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 		"type": "compaction_end", "reason": reason,
 		"aborted": false, "result": map[string]any{},
 	})
+	s.emit(map[string]any{"type": "agent_settled", "aborted": false})
 	out := rpcOK(cmd.ID, "compact", map[string]any{})
 	return &out
 }

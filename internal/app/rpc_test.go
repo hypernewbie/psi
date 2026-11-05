@@ -238,17 +238,20 @@ func TestRPCPromptStartsStreamsAndSettles(t *testing.T) {
 	if deltas != 2 {
 		t.Fatalf("text deltas = %d, want 2: %v", deltas, objs)
 	}
-	// The durable sweep publishes each stored assistant message exactly once
-	// as a start/end pair.
-	pairs := 0
-	for i := 0; i+1 < len(objs); i++ {
-		if objs[i]["type"] == "message_start" && objs[i+1]["type"] == "message_end" &&
-			objs[i]["message"].(map[string]any)["role"] == "assistant" {
-			pairs++
+	// The assistant start precedes deltas; the durable end closes that stream.
+	start, end := -1, -1
+	for i, obj := range objs {
+		if msg, ok := obj["message"].(map[string]any); ok && msg["role"] == "assistant" {
+			if obj["type"] == "message_start" {
+				start = i
+			}
+			if obj["type"] == "message_end" {
+				end = i
+			}
 		}
 	}
-	if pairs != 1 {
-		t.Fatalf("assistant start/end pairs = %d, want 1: %v", pairs, objs)
+	if start < 0 || end <= start+1 {
+		t.Fatalf("assistant stream boundaries missing or out of order: %v", objs)
 	}
 	settled := objs[len(objs)-1]
 	if settled["type"] != "agent_settled" || settled["aborted"] != false {

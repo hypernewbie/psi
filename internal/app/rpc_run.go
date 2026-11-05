@@ -134,6 +134,14 @@ func runRPC(o Options, version string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
 	s := &rpcRunner{r: r, out: enc}
+	// Phi hydrates resumed sessions separately. Never replay their old
+	// messages as new live events after the next prompt.
+	if proj, err := store.Projection(); err == nil {
+		s.emitted = len(proj.Flat)
+	} else {
+		cleanup()
+		return err
+	}
 	// The RPC child is spawned without Phi's bridge environment, so the
 	// syncboard tool stays hidden by the same availability predicate the
 	// terminal loop uses.
