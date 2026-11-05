@@ -277,16 +277,18 @@ func TestUserThemeReloadPreservesOpenModelPickerQuery(t *testing.T) {
 	q.write("/model\r")
 	q.wait("Models")
 	q.write("anth")
+	// The picker redraws per keystroke; synchronize on the rendered query row
+	// instead of the quiet-gap prompt, which can sample a partial frame.
+	q.waitScreen("> anth")
 	q.prompt()
-	if !strings.Contains(q.screen.Text(), "anth") {
-		t.Fatalf("model picker did not show its filter query: %q", q.screen.Text())
-	}
 	cursorRow, cursorCol := q.screen.CursorRow, q.screen.CursorCol
 	accent := writeAccentTheme(t, themePath, "#abcdef", true)
+	// Distinct accent bytes prove the reload frame arrived; the quiet-gap
+	// prompt then settles it before the cursor is sampled.
 	q.wait(accent)
 	q.prompt()
 	screen := q.screen.Text()
-	if !strings.Contains(screen, "Models") || !strings.Contains(screen, "anth") || !strings.Contains(screen, "→ ✓ m [anthropic]") {
+	if !strings.Contains(screen, "Models") || !strings.Contains(screen, "> anth") || !strings.Contains(screen, "→ ✓ m [anthropic]") {
 		t.Fatalf("atomic theme reload changed the open picker query or selection: %q", screen)
 	}
 	if q.screen.CursorRow != cursorRow || q.screen.CursorCol != cursorCol {
