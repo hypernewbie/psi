@@ -29,3 +29,7 @@ jobs:
         # PLAN2/PLAN4/PLAN5 resource profiles: idle frames, 10k metadata
         # first page, and the 512 MiB compacted-session activation.
         run: go test -tags acceptance ./internal/app -count=1 -v
+      - name: tagged-drain
+        # Post-exit drain depends on the 100ms idle grace re-arming between
+        # chunks; a starved runner can miss it without a product change.
+        run: go test -tags acceptance ./internal/tools -count=1 -v

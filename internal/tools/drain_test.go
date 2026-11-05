@@ -1,3 +1,5 @@
+//go:build acceptance
+
 package tools
 
 // Phase E regressions for PLAN3 F07: post-exit drain follows the Pi idle
