@@ -17,6 +17,10 @@ type BashTool struct {
 	Cwd         string
 	ShellPath   string
 	ShellPrefix string
+
+	// now is the idle-drain clock. Nil means the wall clock; tests inject a
+	// fake clock so the post-exit grace never races host scheduling.
+	now func() time.Time
 }
 
 func (t *BashTool) shell() string {
@@ -68,7 +72,7 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 			os.Remove(f.Name())
 		}
 	}()
-	capture := &tailCapture{file: f, cancel: stop}
+	capture := &tailCapture{file: f, cancel: stop, now: t.now}
 	capture.touch()
 	if t.ShellPrefix != "" {
 		cmdStr = t.ShellPrefix + "\n" + cmdStr
@@ -127,7 +131,7 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 				return
 			default:
 			}
-			if time.Since(capture.lastWrite()) > idleDrainGrace {
+			if capture.nowTime().Sub(capture.lastWrite()) > idleDrainGrace {
 				// Quiet pipe: release with the leader status preserved.
 				killGroup()
 				return
@@ -210,11 +214,19 @@ type tailCapture struct {
 	err    error
 	cancel context.CancelFunc
 	last   atomic.Int64 // nanos of the most recent chunk (idle drain clock)
+	now    func() time.Time
+}
+
+// nowTime reports the drain clock instant. A nil clock means the wall clock.
+func (c *tailCapture) nowTime() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 // lastWrite reports the most recent output instant.
-
-func (c *tailCapture) touch() { c.last.Store(time.Now().UnixNano()) }
+func (c *tailCapture) touch() { c.last.Store(c.nowTime().UnixNano()) }
 
 func (c *tailCapture) lastWrite() time.Time { return time.Unix(0, c.last.Load()) }
 
