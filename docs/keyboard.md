@@ -28,12 +28,13 @@ Commands (bounded inline, searchable editor pickers, no fullscreen):
 - `/thinking` — searchable supported-level picker with Pi's `→` pointer; `/thinking [level]` applies a direct session-local choice
 - `/compact [focus]` — real cancellable summary, start/settled outcome
 - `/session` — identity, workspace, provider/API/model, thinking, continuation, usage, and theme diagnostics (no secrets, no invented $0.00)
+- `/settings` — inline list of supported live settings; `Up/Down` wrap, `PageUp/PageDown` move by the visible window, `Enter`/`Space` change the value, `Esc`/`Ctrl+C` close. Changes apply immediately; persisted values merge into the agent `settings.json`. Refused while a run is active.
 - `/version` — psi release, git commit and commit time, and Go toolchain/platform as stamped at build time; `(dirty)` marks a tree with uncommitted or untracked changes at build time. Pi has no such command: it shows its version in the startup header and through `pi --version`
 - `/reload` — reload supported display/theme settings and resources without replaying committed scrollback
 - `/history [N|all]` — last N user spans (default 20) or full history, display-only, no mutation
 - `/skill:name [args]` — resolve, persist reproducible input (`psi.input`), show invocation once
 - `/quit` — settle work, restore terminal
 
-Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
+Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft; `/settings` reports that the run must finish first.
 Unknown `/commands` error locally, never become prompts.
 Every command works after resume and after cancellation; draft preserved on errors.

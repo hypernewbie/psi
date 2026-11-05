@@ -628,6 +628,7 @@ type runtime struct {
 	bridge                   *pibridge.Client
 	bridgeTried              bool
 	selector                 *Selector
+	settingsPicker           *terminal.SettingsPicker
 	selectorDraft            string
 	selectorCursor           int
 	selectorRestoreOnSuccess bool
@@ -1262,7 +1263,10 @@ func (r *runtime) draw(console *terminal.Console) {
 	if row, ok := r.liveToolRow(console); ok {
 		console.SetToolRowNoDraw(row)
 	}
-	if r.selector != nil {
+	if r.settingsPicker != nil {
+		width, rows := console.PickerSize()
+		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
+	} else if r.selector != nil {
 		width, rows := console.PickerSize()
 		console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else {
@@ -1408,6 +1412,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.Editor.Clear()
 		}
 		r.selectorDraft, r.selectorCursor = "", 0
+		r.draw(console)
+	}
+	openSettings := func() {
+		r.settingsPicker = r.newSettingsPicker()
+		r.state = StateSelecting
+		r.draw(console)
+	}
+	closeSettings := func() {
+		r.settingsPicker = nil
+		console.ClearPickerRows()
+		r.state = StateIdle
+		if r.authErr != nil {
+			r.state = StateOffline
+		}
 		r.draw(console)
 	}
 	cycleThinking := func() {
@@ -2188,6 +2206,60 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
+			if !busy && r.settingsPicker != nil {
+				if input.Paste {
+					continue
+				}
+				switch string(input.Key) {
+				case "\x1b", "\x03":
+					closeSettings()
+				case "\x1b[A", "\x1bOA":
+					r.settingsPicker.Move(-1)
+					r.draw(console)
+				case "\x1b[B", "\x1bOB":
+					r.settingsPicker.Move(1)
+					r.draw(console)
+				case "\x1b[5~":
+					r.settingsPicker.Page(-1)
+					r.draw(console)
+				case "\x1b[6~":
+					r.settingsPicker.Page(1)
+					r.draw(console)
+				case "\r", " ":
+					item, value, ok := r.settingsPicker.Cycle()
+					if !ok {
+						r.draw(console)
+						continue
+					}
+					path, err := r.applySetting(item.ID, value, console)
+					if err != nil {
+						notice(terminal.NoticeError, err.Error())
+						// The row advanced before the failed apply; rebuild from the
+						// settings that are still active.
+						index := r.settingsPicker.Index
+						r.settingsPicker = r.newSettingsPicker()
+						r.settingsPicker.Index = index
+					} else if path != nil {
+						if err := r.persistSettingsValue(path, value.Value); err != nil {
+							notice(terminal.NoticeError, "Saved for this session only: "+err.Error())
+						}
+					}
+					if err == nil {
+						if item.ID == "theme" || item.ID == "color-mode" {
+							if watch != nil {
+								watch.SetSelected(r.selectedUserThemePath())
+							}
+						}
+						if item.ID == "theme" && r.options.UseTheme != "" {
+							notice(terminal.NoticeInfo, "Stored the default theme; --use-theme keeps the current display.")
+						}
+					}
+					console.RequestFullRedraw()
+					r.footerKey = ""
+					r.draw(console)
+				}
+				continue
+			}
 			if !busy && r.selector != nil {
 				key := string(input.Key)
 				if !input.Paste {
@@ -2323,6 +2395,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// can update session-local settings; /ac compact waits for this run
 				// to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
+						notice(terminal.NoticeInfo, "Finish or cancel the run before changing settings.")
+						console.Editor.RestoreDraft(text, len([]rune(text)))
+						console.RefreshCompletion()
+						r.draw(console)
+						continue
+					}
 					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "ac" || cmd.Name == "autocompact") {
 						parts := strings.Fields(cmd.Arg)
 						if len(parts) > 0 && strings.EqualFold(parts[0], "compact") {
@@ -2477,6 +2556,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.draw(console)
 					continue
 				}
+				if cmd.Name == "settings" {
+					if strings.TrimSpace(cmd.Arg) != "" {
+						notice(terminal.NoticeError, "use /settings")
+						r.draw(console)
+						continue
+					}
+					openSettings()
+					continue
+				}
 				quit, err := r.command(cmd, out)
 				if cmd.Name == "reload" && err == nil && watch != nil {
 					watch.SetSelected(r.selectedUserThemePath())
@@ -2532,6 +2620,8 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return r.handleHotkeysCommand(cmd.Arg, out)
 	case "session":
 		return r.handleSessionCommand(cmd.Arg, out)
+	case "settings":
+		return r.handleSettingsCommand(cmd.Arg, out)
 	case "version":
 		return r.handleVersionCommand(cmd.Arg, out)
 	case "reload":

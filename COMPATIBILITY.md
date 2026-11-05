@@ -68,6 +68,13 @@ Additional storage rules:
 Unsupported package/extension declarations never trigger install or code loading.
 Unknown harmless UI prefs need no per-key warning.
 
+`/settings` changes the supported subset above in place. Persisted values merge
+into the user `settings.json`; unknown keys, `$schema`, nested siblings, and
+top-level key order stay. Malformed JSON is refused without writing. Project
+`.pi/settings.json` is never written and can still override a user value.
+Auto-compact is session-only. `quietStartup: "header"` loads as on and is
+written as a boolean only when that row changes.
+
 ## Native loop and adaptive compaction controls
 
 Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it does not load TypeScript extensions. `/loop` and `/loop-stop` control goal/pass/forever runs. `/ac` and `/autocompact` provide adaptive thresholds, predicted-growth compaction, completed-run compaction, and a session-local summary-model choice. See `internal/ac/README.md` for `/ac` defaults and commands. `/ac` settings reset when the session changes and are not written to `settings.json`.

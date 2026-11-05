@@ -31,6 +31,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "loop", Syntax: "/loop goal|forever|<N> <task>", Description: "repeat work until goal, count, or user stop"},
 	{Name: "loop-stop", Syntax: "/loop-stop", Description: "stop the active loop"},
 	{Name: "session", Syntax: "/session", Description: "identity, workspace, provider/model, thinking, usage"},
+	{Name: "settings", Syntax: "/settings", Description: "change supported settings and save them"},
 	{Name: "version", Syntax: "/version", Description: "release, git commit, toolchain"},
 	{Name: "reload", Syntax: "/reload", Description: "reload theme and terminal display data"},
 	{Name: "history", Syntax: "/history [N|all]", Description: "last N user spans or display full history"},
