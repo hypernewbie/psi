@@ -51,8 +51,9 @@ A custom preamble (`SYSTEM.md` or `--system-prompt`) suppresses `tools`,
 prompt; psi reads a skill file when the task matches its description.
 
 Each section is stored in the session as a named entry. When configuration
-changes, psi appends a system record with ordered section values and tombstones
-for removals. Replaying a session rebuilds the exact prompt text that was sent.
+changes, psi appends ordered section values and null values for removals. If
+retained sections must move, psi removes them before restoring the new order.
+Replaying a session rebuilds the prompt text sent to the provider.
 
 ## Sessions
 

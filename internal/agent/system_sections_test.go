@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -188,6 +190,54 @@ func TestOldSingleSectionSessionIsReplaced(t *testing.T) {
 	}
 	if fake.Calls[0].System != config.RenderSections(sections) {
 		t.Fatalf("replayed system = %q, want the assembled prompt", fake.Calls[0].System)
+	}
+}
+
+func TestInsertedSectionsSurviveInterruptedRun(t *testing.T) {
+	store, reg, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{{Text: "first", StopReason: "stop"}, nil, {Text: "resumed", StopReason: "stop"}}
+	fake.Errors = []error{nil, io.ErrUnexpectedEOF}
+	base := []config.PromptSection{{Name: "preamble", Body: "You are psi"}, {Name: "cwd", Body: "<cwd>\n/ws\n</cwd>"}}
+	cfg := Config{Model: modelMeta(), System: config.RenderSections(base), Sections: base}
+	ctx := context.Background()
+	if err := loop.Submit(ctx, "start", cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Sections = []config.PromptSection{base[0], {Name: "addendum", Body: "<addendum>\nnew instructions\n</addendum>"}, base[1]}
+	cfg.System = config.RenderSections(cfg.Sections)
+	if err := loop.Submit(ctx, "after reload", cfg); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("provider interruption = %v", err)
+	}
+	if got := fake.Calls[1].System; got != cfg.System {
+		t.Fatalf("inserted section order = %q, want %q", got, cfg.System)
+	}
+	count := len(systemRecords(t, store.File()))
+	reopened, err := session.OpenFile(store.File(), store.Cwd(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued := New(reopened, reg, fake, nil)
+	if err := continued.Submit(ctx, "retry after restart", cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Calls[2].System; got != cfg.System {
+		t.Fatalf("restarted prompt = %q, want %q", got, cfg.System)
+	}
+	if got := len(systemRecords(t, store.File())); got != count {
+		t.Fatalf("retry duplicated configuration: system records = %d, want %d", got, count)
+	}
+
+	// If resetting section order fails, do not admit a user turn or send it.
+	before := len(reopened.Entries())
+	cfg.Sections[0], cfg.Sections[1] = cfg.Sections[1], cfg.Sections[0]
+	cfg.System = config.RenderSections(cfg.Sections)
+	diskErr := errors.New("injected configuration write failure")
+	reopened.FailWritesForTest(diskErr)
+	if err := continued.Submit(ctx, "must not be admitted", cfg); !errors.Is(err, diskErr) {
+		t.Fatalf("configuration failure = %v", err)
+	}
+	if len(fake.Calls) != 3 || len(reopened.Entries()) != before {
+		t.Fatal("failed configuration write admitted a turn or sent a request")
 	}
 }
 

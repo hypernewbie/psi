@@ -1,7 +1,8 @@
 # Command line
 
-psi has one mode: interactive, inline, in a terminal. There are no
-subcommands. Run `psi --help` for the exact flags of the installed binary.
+psi runs interactively in a terminal by default. `--mode rpc` selects the
+headless interface. There are no subcommands. Run `psi --help` for the exact
+flags of the installed binary.
 
 ```sh
 psi [options] [messages...]
@@ -68,8 +69,8 @@ psi --session ~/.pi/agent/sessions/--work-proj--/2026-01-01T00-00-00.jsonl
 - `--no-session` keeps the session in memory and writes no file.
 - `-n`, `--name <name>` sets the session display name.
 
-custom session IDs, forking, and session export are not supported. Use `/clone` to
-copy a session. See [Sessions](sessions.md).
+Forking and session export are not supported. Use `/clone` to copy a session.
+See [Sessions](sessions.md).
 
 ## Tools
 
@@ -104,8 +105,9 @@ psi --no-skills --no-context-files
   `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `SYSTEM.md`, and
   `APPEND_SYSTEM.md`, including the agent-directory copies.
 
-Project-local variants of these resources load only after project consent.
-psi has no extension runtime, MCP client, skill-file flag, or prompt templates,
+Project skills, themes, settings, and `.pi/SYSTEM.md` / `.pi/APPEND_SYSTEM.md`
+load only after project consent. Context files such as `AGENTS.md` load without
+consent. psi has no extension runtime, MCP client, skill-file flag, or prompt templates,
 so the Pi flags that load them do not exist.
 
 ## Prompts and process

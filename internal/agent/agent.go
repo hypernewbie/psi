@@ -344,7 +344,30 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 			order = append(order, cfg.Sections[i].Name)
 		}
 	}
-	if !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, sections) {
+	// Replay preserves the insertion position of existing keys. A section
+	// restored by /reload would otherwise land after cwd, not in prompt order.
+	var nextOrder []string
+	for _, section := range responseSystemSections(eff.Checkpoint) {
+		if sections[section.Name] != nil {
+			nextOrder = append(nextOrder, section.Name)
+		}
+	}
+	for _, name := range order {
+		if eff.Checkpoint.Sections[name] == nil {
+			nextOrder = append(nextOrder, name)
+		}
+	}
+	reorder := !reflect.DeepEqual(nextOrder, order)
+	if reorder {
+		reset := &session.SystemMessage{Role: "system", Content: "", Sections: map[string]*string{}, Timestamp: time.Now().UnixMilli()}
+		for name := range eff.Checkpoint.Sections {
+			reset.Sections[name] = nil
+		}
+		if _, err := l.store.AppendMessage(session.AgentMessage{Role: "system", System: reset}); err != nil {
+			return err
+		}
+	}
+	if reorder || !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, sections) {
 		var removed []session.ToolReference
 		for _, tool := range eff.Tools {
 			name := tool.Name

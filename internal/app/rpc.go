@@ -118,7 +118,7 @@ func (s *rpcRunner) runConfig() agent.Config {
 		if r.syncboardAvailable() {
 			definitions = append(definitions, syncboardToolDefinition())
 		}
-		return config.RenderSections(r.sections), r.sections, definitions
+		return r.prompt, r.sections, definitions
 	}
 	cfg.InternalTools = map[string]agent.InternalToolHandler{
 		syncboardToolName: r.syncboardInternalHandler,

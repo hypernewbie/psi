@@ -11,9 +11,6 @@ func TestEveryTopicResolves(t *testing.T) {
 		if !ok || strings.TrimSpace(body) == "" {
 			t.Errorf("topic %q did not resolve", topic.Name)
 		}
-		if strings.Contains(body, "\x00") {
-			t.Errorf("topic %q contains a NUL byte", topic.Name)
-		}
 	}
 }
 

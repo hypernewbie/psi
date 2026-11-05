@@ -178,9 +178,49 @@ func TestActualAppPromptSections(t *testing.T) {
 	second.write("again\r")
 	second.wait("PROMPT_SHAPE_DONE")
 	second.prompt()
-	second.write("/quit\r")
-	second.finish()
 	if again := sessionSystems(t, matches[0]); len(again) != len(records) {
 		t.Fatalf("second run appended a system record: %d, want %d", len(again), len(records))
+	}
+
+	// A custom prompt removes the default sections. Restoring the default
+	// after /reload must restore their position, not append them after cwd.
+	systemFile := filepath.Join(agentDir, "SYSTEM.md")
+	writeAppFile(t, systemFile, "RELOADED_CUSTOM_BASE")
+	second.write("/reload\r")
+	second.wait("resources and theme reloaded:")
+	second.prompt()
+	second.write("custom prompt\r")
+	second.wait("PROMPT_SHAPE_DONE")
+	second.prompt()
+	if err := os.Remove(systemFile); err != nil {
+		t.Fatal(err)
+	}
+	second.write("/reload\r")
+	second.wait("resources and theme reloaded:")
+	second.prompt()
+	second.write("restored prompt\r")
+	second.wait("PROMPT_SHAPE_DONE")
+	second.prompt()
+	second.write("/quit\r")
+	second.finish()
+
+	mu.Lock()
+	requests := append([][]byte(nil), bodies...)
+	mu.Unlock()
+	if len(requests) != 4 {
+		t.Fatalf("provider requests = %d, want 4", len(requests))
+	}
+	for i, body := range requests[2:] {
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := request["system"].(string)
+		if i == 0 {
+			if !strings.HasPrefix(got, "RELOADED_CUSTOM_BASE\n\n") || strings.Contains(got, "<tools>") || strings.Contains(got, "<docs>") {
+				t.Fatalf("reload did not install the custom prompt: %q", got)
+			}
+		} else if got != system {
+			t.Fatalf("reload changed the restored prompt order:\n got %q\nwant %q", got, system)
+		}
 	}
 }

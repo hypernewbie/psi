@@ -22,8 +22,7 @@ Regression shell processes instead use an isolated environment.
 
 ## Phi integration
 
-The native Phi bridge is the only bidirectional control surface; `--mode rpc` is the separate headless JSONL mode for one session.
-It is a local Unix socket that publishes lifecycle and state only; psi output never leaves the process.
+The native Phi bridge uses a local Unix socket for lifecycle, state, and capability requests. Transcript search can return bounded excerpts of visible text to Phi; output is not streamed there. `--mode rpc` is a separate headless JSONL control interface for one session.
 Windows panes stay plain because psi has no named-pipe dialer.
 phi injects the endpoint and token at spawn; psi clears them before any tool runs.
 

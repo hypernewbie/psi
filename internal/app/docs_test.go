@@ -48,8 +48,9 @@ func TestPrintDocs(t *testing.T) {
 	if err := printDocs(&output, "config"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(output.String(), "#") {
-		t.Fatalf("config topic does not look like markdown: %q", output.String())
+	want, _ := docs.Get("config")
+	if output.String() != want {
+		t.Fatalf("printed config differs from the embedded topic: %q", output.String())
 	}
 
 	output.Reset()

@@ -24,7 +24,7 @@ value cannot send the token off-host.
 
 ## Capabilities
 
-Nine capabilities are advertised:
+Eleven capabilities are advertised:
 
 - `pi.lifecycle.v1`: run start and settle edges plus a bounded 64-record
   journal that reconnects replay.
@@ -41,9 +41,13 @@ Nine capabilities are advertised:
   branch, paginated by anchor and index.
 - `pi.compact.v1`: readiness reporting and one admitted native compaction
   per request id.
+- `pi.reload.v1`: reload instructions, skills, and theme/display resources
+  through the native reload path, with session and context checks.
+- `pi.syncboard.v1`: coordinator requests through the negotiated bridge
+  capability; the tool is available only while that capability is connected.
 
 Phi keeps its own fallbacks for the capabilities a pane does not advertise.
-Attachments and reload remain Phi-side work.
+Attachments remain Phi-side work.
 
 ## Failure behavior
 
@@ -77,8 +81,7 @@ managed only when both sides support it; otherwise it stays plain.
 ## Limits
 
 - Windows panes stay plain: Phi uses a named pipe and psi has no pipe dialer.
-- Only the capabilities above exist. Attachments and reload remain Phi
-  fallbacks; syncboard is not bridged.
+- Only the capabilities above exist. Attachments remain a Phi fallback.
 - psi output is not streamed to Phi. The pane renders its own PTY.
 
 ## Contract

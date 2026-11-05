@@ -49,8 +49,7 @@ Common Pi aliases include `-h`, `-v`, `-c`, `-r`, `-t`, `-nt`, `-nbt`, `-a`, and
 Psi does not support these Pi options:
 
 - `--print/-p`, Pi's JSON event mode, or fullscreen mode.
-- `@file`, API-key flags, model scopes, custom session IDs, forking, or
-  session export.
+- `@file`, API-key flags, model scopes, forking, or session export.
 - Extensions, MCP, or prompt templates.
 
 Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/picker selection),

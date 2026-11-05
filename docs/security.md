@@ -60,7 +60,9 @@ to the model. Treat a session file as sensitive as the work it describes.
 Model requests contain the system prompt, the active branch, and the tool
 definitions. Codex OAuth token refresh is the other built-in outbound request.
 Commands run by the `bash` tool can make their own network connections. The
-native Phi bridge is a local Unix socket that publishes lifecycle and state; it
-does not forward prompts or file contents anywhere else.
+native Phi bridge is a local Unix socket that publishes lifecycle and state.
+Transcript-search requests can return excerpts of visible conversation text to
+Phi. In RPC mode, prompts, responses, and tool results are also written to stdout.
+Treat the controlling process as trusted.
 
 There is no telemetry, no automatic upload, and no hosted service.

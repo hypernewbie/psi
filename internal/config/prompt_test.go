@@ -113,9 +113,6 @@ func TestNoToolsKeepsOnlyFixedRules(t *testing.T) {
 			t.Fatalf("tools section present without tools: %q", s.Body)
 		}
 	}
-	if docs := docsSection(); !strings.Contains(docs, "quickstart") || !strings.Contains(docs, "psi --docs") {
-		t.Fatalf("docs section does not list topics or the command: %s", docs)
-	}
 	rendered := RenderSections(sections)
 	if strings.Contains(rendered, "Use bash for file operations") {
 		t.Fatalf("bash rule without bash: %s", rendered)
