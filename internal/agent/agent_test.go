@@ -435,18 +435,30 @@ func TestConcurrentSubmit_ExactlyOneSucceeds(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	errs := make([]error, n)
+	rejected := make(chan struct{}, n)
 
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			<-start
-			errs[idx] = loop.Submit(context.Background(), fmt.Sprintf("msg-%d", idx), cfg)
+			err := loop.Submit(context.Background(), fmt.Sprintf("msg-%d", idx), cfg)
+			if err != nil && strings.Contains(err.Error(), "a run is already active") {
+				rejected <- struct{}{}
+			}
+			errs[idx] = err
 		}(i)
 	}
 
 	close(start)
 	<-entered
+
+	// Every other submit must be rejected while the winner is inside Send.
+	// Waiting for the rejections keeps a slow goroutine from reaching Submit
+	// after the winner finished, which would start a second run.
+	for i := 0; i < n-1; i++ {
+		<-rejected
+	}
 
 	// While the winner is running inside Send, any new Submit must fail with "a run is already active"
 	if err := loop.Submit(context.Background(), "mid-flight", cfg); err == nil || !strings.Contains(err.Error(), "a run is already active") {
