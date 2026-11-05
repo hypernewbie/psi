@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,10 +25,30 @@ func writeSettingsFileForTest(t *testing.T, path, content string, mode os.FileMo
 	}
 }
 
+// requireSettingsMode checks POSIX permission bits. Windows reports 0666 for
+// every file and ignores chmod, so the bits carry no meaning there.
+func requireSettingsMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != want {
+		t.Fatalf("mode = %o, want %o", info.Mode().Perm(), want)
+	}
+}
+
 func TestUpdateUserSettingsPreservesUnknownKeysAndOrder(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	writeSettingsFileForTest(t, path, "{\n  \"$schema\": \"https://example/schema.json\",\n  \"unknown\": {\"keep\": true},\n  \"outputPad\": 1\n}\n", 0o644)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := updateSettings(t, path, []string{"outputPad"}, "0"); err != nil {
 		t.Fatal(err)
@@ -53,8 +74,8 @@ func TestUpdateUserSettingsPreservesUnknownKeysAndOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
-		t.Fatalf("mode = %o, want 644", info.Mode().Perm())
+	if info.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("mode changed: got %o, want %o", info.Mode().Perm(), before.Mode().Perm())
 	}
 }
 
@@ -141,13 +162,7 @@ func TestUpdateUserSettingsCreatesFile(t *testing.T) {
 	if string(data) != "{\n  \"theme\": \"light\"\n}" {
 		t.Fatalf("created file = %q", data)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
-	}
+	requireSettingsMode(t, path, 0o600)
 }
 
 func TestUpdateUserSettingsFollowsSymlink(t *testing.T) {
