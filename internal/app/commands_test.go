@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -170,12 +171,15 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	}
 
 	// /clone: file stat error
-	if err := os.Chmod(sessionDir, 0000); err == nil {
-		out.Reset()
-		_, statErr := r.command(&terminal.Command{Name: "clone"}, &out)
-		_ = os.Chmod(sessionDir, 0700)
-		if statErr == nil {
-			t.Errorf("/clone on inaccessible directory should return stat error")
+	// POSIX-only: chmod 0000 does not make stat fail on Windows.
+	if goruntime.GOOS != "windows" {
+		if err := os.Chmod(sessionDir, 0000); err == nil {
+			out.Reset()
+			_, statErr := r.command(&terminal.Command{Name: "clone"}, &out)
+			_ = os.Chmod(sessionDir, 0700)
+			if statErr == nil {
+				t.Errorf("/clone on inaccessible directory should return stat error")
+			}
 		}
 	}
 	out.Reset()
@@ -733,7 +737,11 @@ func TestCloneCommandPreconditions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Non-empty session with inaccessible file propagates stat error
+	// Non-empty session with inaccessible file propagates stat error.
+	// POSIX-only: chmod 0000 does not make stat fail on Windows.
+	if goruntime.GOOS == "windows" {
+		return
+	}
 	if err := os.Chmod(sessionDir, 0000); err != nil {
 		t.Fatal(err)
 	}

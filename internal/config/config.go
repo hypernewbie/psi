@@ -214,13 +214,26 @@ func readJSONFile(path string) (map[string]any, error) {
 	return v, nil
 }
 
+// configHomeDir prefers an explicitly set HOME, which tests and cross-platform
+// tooling rely on, before the platform user-home lookup. On Windows,
+// os.UserHomeDir returns USERPROFILE even when HOME points elsewhere.
+func configHomeDir() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	return ""
+}
+
 func resolveConfiguredResourcePath(base, input string) string {
 	prefix, path := "", input
 	if len(path) > 0 && strings.ContainsRune("!+-", rune(path[0])) {
 		prefix, path = path[:1], path[1:]
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if home := configHomeDir(); home != "" {
 			if path == "~" {
 				path = home
 			} else {
@@ -374,8 +387,7 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 				prefix, path = path[:1], path[1:]
 			}
 			if strings.HasPrefix(path, "~/") {
-				home, _ := os.UserHomeDir()
-				path = filepath.Join(home, path[2:])
+				path = filepath.Join(configHomeDir(), path[2:])
 			} else if !filepath.IsAbs(path) {
 				path = filepath.Join(base, path)
 			}

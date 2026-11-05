@@ -3,6 +3,7 @@ package main
 import (
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -14,6 +15,10 @@ func TestBinarySmoke(t *testing.T) {
 
 	binDir := t.TempDir()
 	binPath := filepath.Join(binDir, "psi")
+	if runtime.GOOS == "windows" {
+		// CreateProcess only resolves names ending in .exe.
+		binPath += ".exe"
+	}
 
 	// Build binary
 	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
