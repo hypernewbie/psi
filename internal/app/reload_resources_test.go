@@ -11,6 +11,8 @@ import (
 )
 
 func TestReloadResourcesRefreshesInstructionsAndSkills(t *testing.T) {
+	// The global .agents fallback must not leak into the fixture.
+	t.Setenv("HOME", t.TempDir())
 	cwd, agentDir := t.TempDir(), t.TempDir()
 	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir, Persist: false})
 	if err != nil {
