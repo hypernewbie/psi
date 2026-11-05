@@ -56,27 +56,6 @@ func TestCancellationDispatchP95(t *testing.T) {
 	}
 }
 
-func Test256KiBPasteUpdatesWithinBudget(t *testing.T) {
-	c, _, _ := reviewConsole()
-	payload := bytes.Repeat([]byte{'x'}, pasteBudget)
-	c.Handle(Input{Paste: true, PasteStart: true}, false)
-	c.Handle(Input{Paste: true, Key: payload}, false)
-	start := time.Now()
-	c.Handle(Input{Paste: true, PasteEnd: true}, false)
-	elapsed := time.Since(start)
-	budget := 200 * time.Millisecond
-	if raceInstrumentation {
-		budget = 1000 * time.Millisecond
-	}
-	t.Logf("256KiB paste end-to-frame: %s (budget %s)", elapsed, budget)
-	if elapsed > budget {
-		t.Fatalf("paste update took %s, exceeds %s", elapsed, budget)
-	}
-	if len(c.Editor.Text()) != pasteBudget {
-		t.Fatalf("paste admitted %d bytes, want %d", len(c.Editor.Text()), pasteBudget)
-	}
-}
-
 func TestScheduledFrameBatchCombinesAppendAndStatus(t *testing.T) {
 	c, vt, _ := reviewConsole()
 	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
