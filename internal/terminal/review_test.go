@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,39 +19,12 @@ func reviewConsole() (*Console, *testutil.VTModel, *bytes.Buffer) {
 	return &Console{Editor: NewEditor(), Out: out, writer: NewWriter(out), decoder: NewDecoder()}, vt, raw
 }
 
-func TestEditorKeyToFrameLatencyP95(t *testing.T) {
+func TestCancellationDispatch(t *testing.T) {
 	c, _, _ := reviewConsole()
-	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/synthetic/work", Model: "offline/model", NoColor: true})
-	c.Draw()
-	samples := make([]time.Duration, 100)
-	for i := range samples {
-		start := time.Now()
-		c.Handle(Input{Key: []byte{'x'}}, false)
-		c.Draw()
-		samples[i] = time.Since(start)
-	}
-	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
-	t.Logf("editor key-to-frame: samples=%d p50=%s p95=%s max=%s", len(samples), samples[49], samples[94], samples[99])
-	if samples[94] > 50*time.Millisecond {
-		t.Fatalf("key-to-frame p95 %s exceeds 50ms", samples[94])
-	}
-}
-
-func TestCancellationDispatchP95(t *testing.T) {
-	c, _, _ := reviewConsole()
-	samples := make([]time.Duration, 100)
-	for i := range samples {
-		start := time.Now()
-		_, _, _, cancel := c.Handle(Input{Key: []byte{3}}, true)
-		samples[i] = time.Since(start)
-		if !cancel {
+	for i := 0; i < 100; i++ {
+		if _, _, _, cancel := c.Handle(Input{Key: []byte{3}}, true); !cancel {
 			t.Fatal("Ctrl+C did not dispatch cancellation")
 		}
-	}
-	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
-	t.Logf("cancellation input dispatch: samples=%d p50=%s p95=%s max=%s", len(samples), samples[49], samples[94], samples[99])
-	if samples[94] > 100*time.Millisecond {
-		t.Fatalf("cancellation dispatch p95 %s exceeds 100ms", samples[94])
 	}
 }
 

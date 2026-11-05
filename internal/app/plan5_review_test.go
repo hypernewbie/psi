@@ -51,21 +51,31 @@ func TestReviewStorageFailureDrainsAndClearsActiveTool(t *testing.T) {
 	console.Editor.Insert("question")
 	defer func() { writer.Close(); console.Close(); input.Close() }()
 	finished := make(chan error, 1)
+	// failNow reports the failure only after the repl goroutine returned, so
+	// the deferred console.Close cannot race a live renderer goroutine.
+	failNow := func(format string, args ...any) {
+		writer.Close() // EOF ends the console read loop and the repl goroutine.
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+		}
+		t.Fatalf(format, args...)
+	}
 	go func() { finished <- r.repl(console) }()
 	if _, err := writer.Write([]byte("\r")); err != nil {
-		t.Fatal(err)
+		failNow("submit failed: %v", err)
 	}
 	select {
 	case <-out.failed:
 	case <-time.After(5 * time.Second):
-		t.Fatal("tool-start fault did not run")
+		failNow("tool-start fault did not run")
 	}
 	deadline := time.After(5 * time.Second)
 	for !strings.Contains(out.String(), "storage failure, stopping") {
 		select {
 		case <-time.After(5 * time.Millisecond):
 		case <-deadline:
-			t.Fatalf("storage failure was not displayed: %q", out.String())
+			failNow("storage failure was not displayed: %q", out.String())
 		}
 	}
 	for {
@@ -80,7 +90,7 @@ func TestReviewStorageFailureDrainsAndClearsActiveTool(t *testing.T) {
 			goto settled
 		case <-time.After(20 * time.Millisecond):
 		case <-deadline:
-			t.Fatal("application did not settle after the storage fault")
+			failNow("application did not settle after the storage fault")
 		}
 	}
 settled:
