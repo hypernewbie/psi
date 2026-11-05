@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -11,6 +12,22 @@ import (
 // Supports absolute, ~, and workspace-relative paths. Preserves intentional
 // symlink behavior: no EvalSymlinks on the final target for reads/writes
 // (documented in COMPATIBILITY.md); lexical clean only.
+
+// isAbsolutePath reports whether a tool path is absolute. Slash-rooted paths
+// count as absolute on Windows too, where filepath.IsAbs would treat them as
+// drive-relative.
+func isAbsolutePath(p string) bool {
+	return strings.HasPrefix(p, "/") || filepath.IsAbs(p)
+}
+
+// cleanAbsolute cleans an absolute path while preserving its separator style,
+// so Unix-style slash-rooted paths stay stable on Windows.
+func cleanAbsolute(p string) string {
+	if strings.Contains(p, `\`) {
+		return filepath.Clean(p)
+	}
+	return path.Clean(p)
+}
 
 func resolveToCwd(path, cwd string) string {
 	if path == "" {
@@ -23,8 +40,8 @@ func resolveToCwd(path, cwd string) string {
 		}
 		return filepath.Join(home, path[2:])
 	}
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
+	if isAbsolutePath(path) {
+		return cleanAbsolute(path)
 	}
 	return filepath.Join(cwd, filepath.Clean("/"+path))[len(cwd):]
 	// Note: filepath.Join(cwd, path) with Clean handles .. safely; the manual
@@ -42,8 +59,8 @@ func resolvePath(cwd, path string) string {
 		}
 		return filepath.Join(home, path[2:])
 	}
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
+	if isAbsolutePath(path) {
+		return cleanAbsolute(path)
 	}
 	return filepath.Join(cwd, path)
 }

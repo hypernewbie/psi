@@ -71,7 +71,7 @@ func (s *Store) SearchVisible(ctx context.Context, opts SearchOptions) (SearchPa
 	if budget <= 0 {
 		budget = 1500 * time.Millisecond
 	}
-	deadline := time.Now().Add(budget)
+	start := time.Now()
 
 	s.mu.Lock()
 	leafID := opts.AnchorLeafID
@@ -109,7 +109,12 @@ func (s *Store) SearchVisible(ctx context.Context, opts SearchOptions) (SearchPa
 		if err := ctx.Err(); err != nil {
 			return SearchPage{}, fmt.Errorf("%w: cancelled", ErrSearchUnavailable)
 		}
-		if time.Now().After(deadline) {
+		// Windows clock ticks can exceed the cost of scanning one entry, so
+		// each examined entry also bills a nominal floor against the budget.
+		// Otherwise a nanosecond budget could scan the whole branch within a
+		// single tick and answer with a page that looks complete.
+		const searchEntryFloor = 10 * time.Microsecond
+		if time.Since(start)+time.Duration(i-opts.StartIndex+1)*searchEntryFloor >= budget {
 			return SearchPage{}, fmt.Errorf("%w: budget expired", ErrSearchUnavailable)
 		}
 		if i-opts.StartIndex >= SearchMaxEntries {

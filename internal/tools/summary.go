@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -553,31 +553,58 @@ func numberValue(value any) (float64, bool) {
 	}
 }
 
+// displayPath renders a tool path as a bounded lexical display. Summaries are
+// cross-platform display state, so separators normalize to forward slashes and
+// slash-rooted paths are treated as absolute even on Windows.
 func displayPath(path, cwd, home string) string {
 	path = terminal.SanitizeStatusRow(path)
 	if path == "" {
 		return ""
 	}
-	clean := filepath.Clean(path)
-	if filepath.IsAbs(clean) {
-		if cwd != "" {
-			base, err := filepath.Abs(cwd)
-			if err == nil {
-				if rel, err := filepath.Rel(filepath.Clean(base), clean); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-					return rel
-				}
-			}
+	clean := lexicalClean(path)
+	if lexicalAbsolute(clean) {
+		if rel, ok := lexicalWithin(clean, cwd); ok {
+			return rel
 		}
-		if home != "" {
-			base, err := filepath.Abs(home)
-			if err == nil {
-				if rel, err := filepath.Rel(filepath.Clean(base), clean); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-					return filepath.Join("~", rel)
-				}
+		if rel, ok := lexicalWithin(clean, home); ok {
+			if rel == "." {
+				return "~"
 			}
+			return "~/" + rel
 		}
 	}
 	return clean
+}
+
+// lexicalAbsolute reports whether a cleaned display path is absolute: either
+// slash-rooted or a Windows drive-letter path.
+func lexicalAbsolute(p string) bool {
+	if strings.HasPrefix(p, "/") {
+		return true
+	}
+	return len(p) >= 3 && p[1] == ':' && p[2] == '/' && (p[0] >= 'A' && p[0] <= 'Z' || p[0] >= 'a' && p[0] <= 'z')
+}
+
+func lexicalClean(p string) string {
+	return path.Clean(strings.ReplaceAll(p, "\\", "/"))
+}
+
+// lexicalWithin reports p relative to base when p equals base or is inside it.
+func lexicalWithin(p, base string) (string, bool) {
+	if base == "" {
+		return "", false
+	}
+	base = strings.TrimSuffix(lexicalClean(base), "/")
+	if base == "" {
+		return "", false
+	}
+	if p == base {
+		return ".", true
+	}
+	if !strings.HasPrefix(p, base+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(p[len(base):], "/"), true
 }
 
 func boundDisplay(text string) (string, bool) {

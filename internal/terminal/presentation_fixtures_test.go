@@ -93,7 +93,9 @@ func TestPlan4PiEditorAndFooterFixture(t *testing.T) {
 	// The fixture pins Pi's editor component. The interactive layout adds the
 	// constant widget spacer above it, so prepend that row before comparing.
 	wantRows := append([]string{""}, fixture.PlainRows...)
-	wantRows[3] = strings.ReplaceAll(wantRows[3], "/", string(filepath.Separator))
+	// The footer path row follows the prepended spacer row; convert its
+	// separator for the host platform.
+	wantRows[4] = strings.ReplaceAll(wantRows[4], "/", string(filepath.Separator))
 	view := ComposeEditorView(40, 12, nil, 0, fixture.Snapshot, "")
 	if len(view.Rows) != len(wantRows) {
 		t.Fatalf("rows=%d want=%d: %q", len(view.Rows), len(wantRows), view.Rows)

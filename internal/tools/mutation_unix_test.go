@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -11,6 +12,9 @@ import (
 // key resolution fails the mutation without running the body, instead of
 // running it unserialized.
 func TestMutationQueueUnresolvablePathFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0000 does not block path resolution on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}

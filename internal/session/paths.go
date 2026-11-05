@@ -85,7 +85,9 @@ func SameDir(a, b string) bool {
 
 func resolveDir(dir, base string) string {
 	e := expandHome(dir)
-	if filepath.IsAbs(e) {
+	// Slash-rooted paths are absolute on Windows too, where filepath.IsAbs
+	// would treat them as drive-relative and join them onto the base.
+	if strings.HasPrefix(e, "/") || filepath.IsAbs(e) {
 		return filepath.Clean(e)
 	}
 	if base == "" {
