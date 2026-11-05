@@ -1,0 +1,31 @@
+name: stress
+
+# Timing and resource profiles are environment-sensitive: a shared runner
+# under load can miss a wall-clock budget without any product change. They
+# therefore run on a weekly schedule or on demand, never on every push.
+# Routine per-push coverage stays in ci.yml and must remain deterministic.
+
+on:
+  schedule:
+    # Mondays 05:00 UTC.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+jobs:
+  profiles:
+    # Windows has no cgo, so the tagged profiles are Unix-only.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+      - name: tagged-acceptance
+        # PLAN2/PLAN4/PLAN5 resource profiles: idle frames, 10k metadata
+        # first page, and the 512 MiB compacted-session activation.
+        run: go test -tags acceptance ./internal/app -count=1 -v

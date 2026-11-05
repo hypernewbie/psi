@@ -135,6 +135,10 @@ go test -tags acceptance ./internal/app \
   -run '^TestScale(512MiBActivation|10000MetadataFirstPage)$' -count=3 -v
 ```
 
+These gates are wall-clock budgets. They do not run on every push: routine CI
+(`.github/workflows/ci.yml`) covers correctness, and `stress.yml` runs the
+tagged profiles on a weekly schedule or on manual dispatch.
+
 Run repeated application regressions and the same regressions against the root executable:
 
 ```sh
