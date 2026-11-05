@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"psi/internal/config"
 	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/tools"
@@ -56,11 +57,11 @@ func TestDynamicToolsUpdateAfterInternalToolStateChanges(t *testing.T) {
 	}
 	cfg := Config{
 		Model: modelMeta(),
-		DynamicConfig: func() (string, []provider.ToolDef) {
+		DynamicConfig: func() (string, []config.PromptSection, []provider.ToolDef) {
 			if active {
-				return "active loop", []provider.ToolDef{control}
+				return "active loop", nil, []provider.ToolDef{control}
 			}
-			return "normal", nil
+			return "normal", nil, nil
 		},
 		InternalTools: map[string]InternalToolHandler{
 			"loop_control": func(_ context.Context, _ tools.Invocation) tools.Result {

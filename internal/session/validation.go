@@ -139,6 +139,29 @@ func (s *SystemMessage) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// SetSectionOrder stores the on-disk JSON with sections in the given order.
+// Keys missing from order (nil tombstones for removed sections) are kept at the
+// end, sorted, so a replay still sees them and drops the section.
+func SetSectionOrder(s *SystemMessage, order []string) {
+	seen := make(map[string]bool, len(order))
+	full := make([]string, 0, len(order)+len(s.Sections))
+	for _, key := range order {
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		full = append(full, key)
+	}
+	var rest []string
+	for key := range s.Sections {
+		if !seen[key] {
+			rest = append(rest, key)
+		}
+	}
+	sort.Strings(rest)
+	s.Raw = systemRaw(s, append(full, rest...))
+}
+
 func sectionOrder(s *SystemMessage) []string {
 	var raw map[string]json.RawMessage
 	if json.Unmarshal(s.Raw, &raw) == nil && raw["sections"] != nil {

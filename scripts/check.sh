@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-unformatted=$(gofmt -l cmd internal)
+unformatted=$(gofmt -l cmd internal docs)
 if [ -n "$unformatted" ]; then
   printf 'Files need gofmt:\n%s\n' "$unformatted" >&2
   exit 1

@@ -65,7 +65,15 @@ func TestSystemReplacementAndAncestorOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := AssemblePrompt(ws, files, nil, []string{"read"})
-	if strings.Contains(prompt, "SHADOWED") || strings.Contains(prompt, "You are psi") || !strings.Contains(prompt, "OVERRIDE") || !strings.Contains(prompt, "CUSTOM_BASE") || !strings.Contains(prompt, "WORKSPACE") {
+	if !strings.HasPrefix(prompt, "CUSTOM_BASE") {
+		t.Fatalf("configured SYSTEM.md is not the preamble: %s", prompt)
+	}
+	if strings.Contains(prompt, "SHADOWED") || strings.Contains(prompt, "You are psi") || !strings.Contains(prompt, "OVERRIDE") || !strings.Contains(prompt, "WORKSPACE") {
 		t.Fatalf("instruction precedence: %s", prompt)
+	}
+	for _, absent := range []string{"<tools>", "<rules>", "<docs>"} {
+		if strings.Contains(prompt, absent) {
+			t.Fatalf("custom base kept %q: %s", absent, prompt)
+		}
 	}
 }

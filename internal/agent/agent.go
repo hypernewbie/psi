@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"psi/internal/ac"
+	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
@@ -29,11 +30,13 @@ type Config struct {
 	Tools            []provider.ToolDef
 	MaxTokens        int
 	System           string
+	Sections         []config.PromptSection
 	AutoCompact      bool
 	ReserveTokens    int
 	KeepRecentTokens int
-	// DynamicConfig returns the system prompt and tool set for each model request.
-	DynamicConfig func() (string, []provider.ToolDef)
+	// DynamicConfig returns the system prompt, its sections, and the tool set
+	// for each model request.
+	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
 	InternalTools map[string]InternalToolHandler
 	AfterToolCall func(context.Context, tools.Invocation, tools.Result) error
 	ContinueOnEnd func() (messageType, content string, ok bool)
@@ -305,7 +308,7 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 
 func refreshDynamicConfig(cfg *Config) {
 	if cfg.DynamicConfig != nil {
-		cfg.System, cfg.Tools = cfg.DynamicConfig()
+		cfg.System, cfg.Sections, cfg.Tools = cfg.DynamicConfig()
 	}
 }
 
@@ -328,16 +331,30 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 	for key := range eff.Checkpoint.Sections {
 		sections[key] = nil
 	}
-	sections["psi"] = &cfg.System
-	if !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, map[string]*string{"psi": &cfg.System}) {
+	// Programmatic callers that build no sections keep the legacy single
+	// section so their sessions stay byte-compatible.
+	order := make([]string, 0, len(cfg.Sections))
+	if len(cfg.Sections) == 0 {
+		sections["psi"] = &cfg.System
+		order = append(order, "psi")
+	} else {
+		for i := range cfg.Sections {
+			body := cfg.Sections[i].Body
+			sections[cfg.Sections[i].Name] = &body
+			order = append(order, cfg.Sections[i].Name)
+		}
+	}
+	if !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, sections) {
 		var removed []session.ToolReference
 		for _, tool := range eff.Tools {
 			name := tool.Name
 			removed = append(removed, session.ToolReference{Name: &name})
 		}
-		if _, err := l.store.AppendMessage(session.AgentMessage{Role: "system", System: &session.SystemMessage{
+		msg := session.AgentMessage{Role: "system", System: &session.SystemMessage{
 			Role: "system", Content: "", Sections: sections, ToolsAdded: added, ToolsRemoved: removed, Timestamp: time.Now().UnixMilli(),
-		}}); err != nil {
+		}}
+		session.SetSectionOrder(msg.System, order)
+		if _, err := l.store.AppendMessage(msg); err != nil {
 			return err
 		}
 	}

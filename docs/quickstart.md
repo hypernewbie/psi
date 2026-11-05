@@ -48,8 +48,9 @@ Common Pi aliases include `-h`, `-v`, `-c`, `-r`, `-t`, `-nt`, `-nbt`, `-a`, and
 
 Psi does not support these Pi options:
 
-- `--print/-p`, JSON/RPC modes, or fullscreen mode.
-- `@file`, `--api-key`, `--models`, `--session-id`, `--fork`, or `--export`.
+- `--print/-p`, Pi's JSON event mode, or fullscreen mode.
+- `@file`, API-key flags, model scopes, custom session IDs, forking, or
+  session export.
 - Extensions, MCP, or prompt templates.
 
 Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/picker selection),
@@ -69,3 +70,7 @@ that gap. Truncated tails and locked sessions preserve original bytes; use a cop
 `/new`, or `/resume` when recovery is needed. See `docs/recovery.md`.
 
 See `COMPATIBILITY.md` for the pinned baseline, `docs/keyboard.md` for key precedence, and `docs/ui-acceptance.md` for UI evidence and remaining gates.
+
+New here? Start with [the psi doc map](index.md).
+Every topic is embedded in the binary: `./psi --docs` lists them and
+`./psi --docs quickstart` prints this page.

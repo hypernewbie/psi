@@ -22,14 +22,14 @@ import (
 // model catalog, instructions, skills, the assembled prompt, overrides, and
 // the opened session. Pickers stay with the caller: console and lifecycle are
 // only touched by the interactive resume selector.
-func activateSession(o Options, cwd, agentDir string, st *config.Settings, consent bool, console *terminal.Console, lifecycle *terminalLifecycle) (models *config.ModelsFile, sk []skills.Skill, diagnostics []skills.Diagnostic, prompt string, ov config.StartupOverrides, store *session.Store, err error) {
+func activateSession(o Options, cwd, agentDir string, st *config.Settings, consent bool, console *terminal.Console, lifecycle *terminalLifecycle) (models *config.ModelsFile, sk []skills.Skill, diagnostics []skills.Diagnostic, prompt string, sections []config.PromptSection, ov config.StartupOverrides, store *session.Store, err error) {
 	if o.NoTools {
 		st.DefaultTools = []string{}
 	} else {
 		if o.Tools != "" {
 			st.DefaultTools, err = config.ResolveTools(strings.Split(o.Tools, ","), st.DefaultTools)
 			if err != nil {
-				return nil, nil, nil, "", config.StartupOverrides{}, nil, err
+				return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 			}
 		}
 		if o.ExcludeTools != "" {
@@ -43,20 +43,20 @@ func activateSession(o Options, cwd, agentDir string, st *config.Settings, conse
 			if len(excluded) > 0 {
 				st.DefaultTools, err = config.ResolveTools(excluded, st.DefaultTools)
 				if err != nil {
-					return nil, nil, nil, "", config.StartupOverrides{}, nil, err
+					return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 				}
 			}
 		}
 	}
 	models, err = config.LoadModels(filepath.Join(agentDir, "models.json"))
 	if err != nil {
-		return nil, nil, nil, "", config.StartupOverrides{}, nil, err
+		return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 	}
 	var instructions []config.InstructionFile
 	if !o.NoContextFiles {
 		instructions, err = config.DiscoverInstructions(cwd, agentDir, consent)
 		if err != nil {
-			return nil, nil, nil, "", config.StartupOverrides{}, nil, err
+			return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 		}
 	}
 	if !o.NoSkills {
@@ -66,18 +66,19 @@ func activateSession(o Options, cwd, agentDir string, st *config.Settings, conse
 	for _, source := range o.AppendSystemPrompts {
 		appendSystemPrompts = append(appendSystemPrompts, resolveCLIPrompt(source))
 	}
-	prompt = config.AssemblePromptWithOverrides(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools, resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
+	sections = config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools, resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
+	prompt = config.RenderSections(sections)
 	if o.Provider != "" {
 		if _, ok := providerregistry.Lookup(o.Provider); !ok {
-			return nil, nil, nil, "", config.StartupOverrides{}, nil, fmt.Errorf("unsupported provider %q (available: %s)", o.Provider, strings.Join(providerregistry.IDs(), ", "))
+			return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, fmt.Errorf("unsupported provider %q (available: %s)", o.Provider, strings.Join(providerregistry.IDs(), ", "))
 		}
 	}
 	ov = config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", *st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	store, err = openSession(o, cwd, agentDir, *st, ov, console, lifecycle)
 	if err != nil {
-		return nil, nil, nil, "", config.StartupOverrides{}, nil, err
+		return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 	}
-	return models, sk, diagnostics, prompt, ov, store, nil
+	return models, sk, diagnostics, prompt, sections, ov, store, nil
 }
 
 // runRPC serves one headless JSONL session on stdin/stdout. There is no TTY,
@@ -111,7 +112,7 @@ func runRPC(o Options, version string) error {
 		return err
 	}
 	st := loaded.Settings
-	models, sk, _, prompt, _, store, err := activateSession(o, cwd, agentDir, &st, consent, nil, nil)
+	models, sk, _, prompt, sections, _, store, err := activateSession(o, cwd, agentDir, &st, consent, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -120,7 +121,7 @@ func runRPC(o Options, version string) error {
 	}
 	r := &runtime{
 		store: store, version: version, options: o, settings: st,
-		models: models, skills: sk, prompt: prompt, agentDir: agentDir,
+		models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir,
 		projectTrusted: consent,
 	}
 	cleanup := func() {
