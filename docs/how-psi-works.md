@@ -52,10 +52,15 @@ A custom preamble (`SYSTEM.md` or `--system-prompt`) suppresses `tools`,
 prompt; psi reads a skill file when the task matches its description.
 
 Each section is stored in the session as a named entry. When configuration
-changes, psi appends section values and null values for removals. Replay orders
-sections by name, so a section that returns after removal regains its place
-without an extra record. Replaying a session rebuilds the prompt text sent to
-the provider.
+changes, psi appends section values and null values for removals.
+
+Replay uses the section order in the table, not the order of JSON object keys.
+A section that returns after removal regains its position without an extra
+reset record. Unknown section names in imported sessions follow the known
+sections in alphabetical order. Their values are retained.
+
+Pi uses insertion order when it replays sections. psi deliberately uses the
+fixed order instead, including after reload, restart, and compaction.
 
 ## Sessions
 

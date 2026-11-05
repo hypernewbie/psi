@@ -47,7 +47,7 @@ func sessionSystems(t *testing.T, path string) []json.RawMessage {
 	return out
 }
 
-// sectionBodies returns the on-disk section order and bodies of one record.
+// sectionBodies returns section bodies in prompt order, not JSON key order.
 func sectionBodies(t *testing.T, record json.RawMessage) ([]string, map[string]string) {
 	t.Helper()
 	var message map[string]json.RawMessage
@@ -190,6 +190,9 @@ func TestActualAppPromptSections(t *testing.T) {
 	second.prompt()
 	second.write("/quit\r")
 	second.finish()
+	if records := sessionSystems(t, matches[0]); len(records) != 3 {
+		t.Fatalf("system records after reload cycle = %d, want 3 without reset records", len(records))
+	}
 
 	mu.Lock()
 	requests := append([][]byte(nil), bodies...)

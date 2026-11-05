@@ -138,9 +138,8 @@ func (s *SystemMessage) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// sectionRank fixes the prompt order of known sections. Order is a property
-// of the name, so replay never depends on JSON key order. Pi itself reorders a
-// prompt when a suppressed section returns; ranking avoids that.
+// sectionRank fixes the render order of known sections independently of JSON
+// object key order.
 var sectionRank = map[string]int{
 	"preamble":        0,
 	"tools":           1,

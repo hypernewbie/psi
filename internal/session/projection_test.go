@@ -101,26 +101,13 @@ func TestRestoreModelState(t *testing.T) {
 }
 
 func TestReplaySystem(t *testing.T) {
-	_ = func(id string, parent *string, content string, sections map[string]*string, added []Tool, removed []ToolReference) *Entry {
-		msg := map[string]any{"role": "system", "content": content, "timestamp": 1}
-		if sections != nil {
-			msg["sections"] = sections
-		}
-		if added != nil {
-			msg["toolsAdded"] = added
-		}
-		if removed != nil {
-			msg["toolsRemoved"] = removed
-		}
-		return mustEntry(t, "message", id, parent, map[string]any{"message": msg})
-	}
 	s := func(v string) *string { return &v }
 	// Build manually to avoid helper complexity.
 	sys1 := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Content: "base ", Sections: map[string]*string{"k": s("v1")}, ToolsAdded: []Tool{{Name: "read"}, {Name: "write"}}, Timestamp: 1}}
 	sys2 := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Content: "extra ", Sections: map[string]*string{"k": s("v2"), "gone": nil}, ToolsAdded: []Tool{{Name: "bash"}}, ToolsRemoved: []ToolReference{{Name: s("write")}}, Timestamp: 2}}
 	eff := ReplaySystem([]AgentMessage{*sys1, *sys2})
-	if eff.Content == "" {
-		t.Logf("content=%q", eff.Content)
+	if eff.Content != "base \n\nextra \n\nv2" {
+		t.Errorf("content=%q", eff.Content)
 	}
 	names := []string{}
 	for _, tl := range eff.Tools {
@@ -136,15 +123,16 @@ func TestReplaySystem(t *testing.T) {
 func TestReplaySystemOrdersSectionsByName(t *testing.T) {
 	s := func(v string) *string { return &v }
 	scrambled := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Sections: map[string]*string{
-		"cwd":        s("<cwd>c</cwd>"),
-		"zeta_extra": s("<zeta_extra>z</zeta_extra>"),
-		"preamble":   s("P"),
-		"tools":      s("<tools>T</tools>"),
-		"loop":       s("<loop>L</loop>"),
+		"cwd":         s("<cwd>c</cwd>"),
+		"zeta_extra":  s("<zeta_extra>z</zeta_extra>"),
+		"alpha_extra": s("<alpha_extra>a</alpha_extra>"),
+		"preamble":    s("P"),
+		"tools":       s("<tools>T</tools>"),
+		"loop":        s("<loop>L</loop>"),
 	}, Timestamp: 1}}
 
 	eff := ReplaySystem([]AgentMessage{*scrambled})
-	want := "P\n\n<tools>T</tools>\n\n<cwd>c</cwd>\n\n<loop>L</loop>\n\n<zeta_extra>z</zeta_extra>"
+	want := "P\n\n<tools>T</tools>\n\n<cwd>c</cwd>\n\n<loop>L</loop>\n\n<alpha_extra>a</alpha_extra>\n\n<zeta_extra>z</zeta_extra>"
 	if eff.Content != want {
 		t.Fatalf("replay order:\n got %q\nwant %q", eff.Content, want)
 	}
@@ -153,7 +141,7 @@ func TestReplaySystemOrdersSectionsByName(t *testing.T) {
 	removed := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Sections: map[string]*string{"tools": nil}, Timestamp: 2}}
 	readded := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Sections: map[string]*string{"tools": s("<tools>T2</tools>")}, Timestamp: 3}}
 	eff = ReplaySystem([]AgentMessage{*scrambled, *removed, *readded})
-	want = "P\n\n<tools>T2</tools>\n\n<cwd>c</cwd>\n\n<loop>L</loop>\n\n<zeta_extra>z</zeta_extra>"
+	want = "P\n\n<tools>T2</tools>\n\n<cwd>c</cwd>\n\n<loop>L</loop>\n\n<alpha_extra>a</alpha_extra>\n\n<zeta_extra>z</zeta_extra>"
 	if eff.Content != want {
 		t.Fatalf("re-added section order:\n got %q\nwant %q", eff.Content, want)
 	}

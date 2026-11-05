@@ -1,7 +1,7 @@
 # Environment variables
 
-psi reads a small, fixed set of variables. Anything else in the environment is
-inherited by the `bash` tool and nothing more.
+This page covers provider credentials, directories, shell selection, and display.
+For the private Phi bridge variables, see [Bridge](bridge.md).
 
 ## Provider credentials
 
