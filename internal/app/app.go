@@ -768,6 +768,12 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 }
 
 func (r *runtime) compactionProvider(reference string) (provider.Provider, provider.ModelMeta, func(), error) {
+	if r.authErr != nil {
+		// Pi resolves the summarization request only when it summarizes: the
+		// preparation runs first, so a session with nothing to compact never
+		// needs credentials.
+		return nil, provider.ModelMeta{}, nil, r.authErr
+	}
 	if reference == "" {
 		return nil, provider.ModelMeta{}, nil, nil
 	}
@@ -1638,7 +1644,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.draw(console)
 			return
 		}
-		if r.authErr != nil {
+		if r.authErr != nil && !compact {
+			// A compaction resolves its provider after the preparation, like
+			// Pi: the session is checked before credentials are needed.
 			notice(terminal.NoticeError, r.authErr.Error())
 			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 			console.RefreshCompletion()
@@ -1662,7 +1670,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		setActivity("Working… (Esc/Ctrl+C cancel)")
 		if compact {
 			r.state = StateCompacting
-			setActivity("Compacting context… (Esc/Ctrl+C cancel)")
 		}
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
@@ -1739,10 +1746,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if writeErr := r.store.WriteError(); writeErr != nil {
 			return writeErr
 		}
-		checker := agent.New(r.store, r.reg, r.prov, nil)
-		if _, err := checker.CheckCompaction(r.cfg); err != nil {
-			return err
-		}
 		resumeAfterCompaction = false
 		start("", "", focus, "", "", true)
 		return nil
@@ -1761,20 +1764,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 			notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
 			return
 		}
+		if explicit {
+			// Pi starts the compaction and reports the outcome through the
+			// run: the preparation happens once, inside the run.
+			resumeAfterCompaction = resume
+			start("", "", focus, "", "", true)
+			return
+		}
 		checker := agent.New(r.store, r.reg, r.prov, nil)
 		_, checkErr := checker.CheckCompaction(r.cfg)
 		var noWork *agent.CompactionNoWorkError
 		if errors.As(checkErr, &noWork) {
-			if explicit {
-				message := "Nothing to compact yet. Recent conversation is already within the retained budget."
-				switch noWork.Disposition {
-				case agent.CompactionEmpty:
-					message = "Nothing to compact yet. The session has no conversation history."
-				case agent.CompactionAlreadyDone:
-					message = "Nothing to compact yet. This session is already compacted."
-				}
-				notice(terminal.NoticeInfo, message)
-			}
 			return
 		}
 		if checkErr != nil {
@@ -2049,7 +2049,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 					notice(terminal.NoticeWarning, "Request cancelled.")
 				}
 			} else if err != nil {
+				var noWork *agent.CompactionNoWorkError
 				switch {
+				case errors.As(err, &noWork):
+					message := "Nothing to compact yet. Recent conversation is already within the retained budget."
+					switch noWork.Disposition {
+					case agent.CompactionEmpty:
+						message = "Nothing to compact yet. The session has no conversation history."
+					case agent.CompactionAlreadyDone:
+						message = "Nothing to compact yet. This session is already compacted."
+					}
+					notice(terminal.NoticeInfo, message)
 				case runOutcome == event.OutcomeUnsaved:
 					r.state = StateStorageBlocked
 					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new. "+err.Error())
@@ -2424,26 +2434,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 						continue
 					}
-					checker := agent.New(r.store, r.reg, r.prov, nil)
-					_, checkErr := checker.CheckCompaction(r.cfg)
-					var noWork *agent.CompactionNoWorkError
-					if errors.As(checkErr, &noWork) {
-						message := "Nothing to compact yet. Recent conversation is already within the retained budget."
-						switch noWork.Disposition {
-						case agent.CompactionEmpty:
-							message = "Nothing to compact yet. The session has no conversation history."
-						case agent.CompactionAlreadyDone:
-							message = "Nothing to compact yet. This session is already compacted."
-						}
-						notice(terminal.NoticeInfo, message)
-						r.draw(console)
-						continue
-					}
-					if checkErr != nil {
-						notice(terminal.NoticeError, checkErr.Error())
-						r.draw(console)
-						continue
-					}
+					// Pi starts the compaction and reports the outcome through
+					// the run: the preparation happens once, inside the run.
 					start("", "", cmd.Arg, "", "", true)
 					continue
 				}

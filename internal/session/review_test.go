@@ -80,15 +80,9 @@ func TestTimelineUsesInputProvenanceWithoutChangingContext(t *testing.T) {
 	}
 }
 
-func TestIndexRejectsMalformedRecordsAndInvalidBounds(t *testing.T) {
-	if _, err := BuildIndexFrom(strings.NewReader("{bad json}\n"), "synthetic.jsonl"); err == nil {
-		t.Fatal("malformed index accepted")
-	}
-	idx := &RecordIndex{Path: filepath.Join(t.TempDir(), "absent.jsonl")}
-	for _, meta := range []RecordMeta{{Length: -1}, {Length: 0}, {Offset: -1, Length: 1}} {
-		if _, err := idx.LoadEntry(meta); err == nil || !strings.Contains(err.Error(), "bounds") {
-			t.Fatal(err)
-		}
+func TestMetadataScannerRejectsMalformedRecords(t *testing.T) {
+	if _, _, err := scanMetadataBytes([]byte("{bad json}\n")); err == nil {
+		t.Fatal("malformed record accepted")
 	}
 }
 

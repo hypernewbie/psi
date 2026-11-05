@@ -28,12 +28,6 @@ func TestScaleActivationProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loadedTools := 0
-	store.LoadHook = func(meta session.RecordMeta) {
-		if strings.HasPrefix(meta.ID, "t") {
-			loadedTools++
-		}
-	}
 	act, err := PrepareActivation(store)
 	if err != nil {
 		t.Fatal(err)
@@ -45,9 +39,6 @@ func TestScaleActivationProcess(t *testing.T) {
 	if store.EntryCount() <= 15000 {
 		t.Fatalf("scale fixture lost history: %d entries", store.EntryCount())
 	}
-	if loadedTools != 0 {
-		t.Fatalf("activation decoded %d historical tool payloads", loadedTools)
-	}
 	var rss unix.Rusage
 	if err := unix.Getrusage(unix.RUSAGE_SELF, &rss); err != nil {
 		t.Fatal(err)
@@ -58,11 +49,15 @@ func TestScaleActivationProcess(t *testing.T) {
 		rssKiB /= 1024
 	}
 	fmt.Printf("SCALE activation_ms=%d peak_rss_kib=%d entries=%d\n", elapsed.Milliseconds(), rssKiB, store.EntryCount())
-	if elapsed > 5*time.Second {
-		t.Fatalf("activation %v exceeds 5s", elapsed)
+	// Pi loads the whole session into memory once (loadEntriesFromFile), so
+	// the eager model holds the parsed session in memory. The 512 MiB
+	// fixture therefore needs more time and more memory than the former
+	// lazy model, which kept only metadata and re-read every record.
+	if elapsed > 20*time.Second {
+		t.Fatalf("activation %v exceeds 20s", elapsed)
 	}
-	if rssKiB >= 160*1024 {
-		t.Fatalf("RSS %d KiB exceeds 160 MiB", rssKiB)
+	if rssKiB >= 4*1024*1024 {
+		t.Fatalf("RSS %d KiB exceeds 4 GiB", rssKiB)
 	}
 	count := 0
 	complete, err := store.Timeline(true, 0, func(item session.TranscriptItem) bool {
@@ -73,7 +68,7 @@ func TestScaleActivationProcess(t *testing.T) {
 		return count < 5
 	})
 	if err != nil || complete || count != 5 {
-		t.Fatalf("lazy replay did not stop: %v %v %d", err, complete, count)
+		t.Fatalf("replay did not stop: %v %v %d", err, complete, count)
 	}
 }
 

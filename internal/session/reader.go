@@ -42,6 +42,73 @@ func readRecord(br *bufio.Reader) ([]byte, error) {
 	return br.ReadBytes('\n')
 }
 
+// loadFileEntries loads the whole session file into memory, the way Pi's
+// loadEntriesFromFile does: one pass over the file, every record parsed once,
+// and the parsed entries kept for the rest of the session's life.
+func loadFileEntries(path string) (*SessionHeader, []*Entry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("session must be a regular file: %s", path)
+	}
+	return loadFileEntriesFrom(f, path)
+}
+
+// loadFileEntriesFrom parses every record of a session file. A torn record is
+// an invisible gap: the surrounding session stays readable and the writer
+// stays disabled, matching Pi's skip of malformed lines.
+func loadFileEntriesFrom(r io.Reader, path string) (*SessionHeader, []*Entry, error) {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var header *SessionHeader
+	var entries []*Entry
+	for lineNo := 1; ; lineNo++ {
+		line, err := readRecord(br)
+		if err != nil && err != io.EOF {
+			return nil, nil, &ParseError{Path: path, Line: lineNo, Err: err}
+		}
+		data := trimRecord(line)
+		if len(bytes.TrimSpace(data)) > 0 {
+			fe, parseErr := UnmarshalFileEntry(data)
+			if parseErr != nil {
+				if !json.Valid(data) {
+					// A damaged physical record is an invisible gap.
+					if header == nil {
+						return nil, nil, &ParseError{Path: path, Line: lineNo, Err: parseErr}
+					}
+					if err == io.EOF {
+						break
+					}
+					continue
+				}
+				return nil, nil, &ParseError{Path: path, Line: lineNo, Err: parseErr}
+			}
+			if fe.IsHeader {
+				if header != nil {
+					return nil, nil, &ParseError{Path: path, Line: lineNo, Err: fmt.Errorf("duplicate session header")}
+				}
+				header = fe.Header
+			} else {
+				if header == nil {
+					return nil, nil, &ParseError{Path: path, Line: lineNo, Err: fmt.Errorf("first record is not a session header")}
+				}
+				fillEntryMetadata(fe.Entry)
+				entries = append(entries, fe.Entry)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+	return header, entries, nil
+}
+
 func DecodeEntries(r io.Reader, path string) (*SessionHeader, []*Entry, [][]byte, error) {
 	br := bufio.NewReader(r)
 	var header *SessionHeader

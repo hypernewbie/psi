@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestIndexedViewsMatchEagerViewsAcrossBranches(t *testing.T) {
+func TestStoreViewsMatchEagerViewsAcrossBranches(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	piFixture(t, path)
 	s, err := OpenFile(path, "/tmp/ws", true)
@@ -68,15 +68,11 @@ func TestIndexedViewsMatchEagerViewsAcrossBranches(t *testing.T) {
 			}
 		})
 	}
+	// The loaded session keeps its payloads in memory, like Pi's session
+	// manager: the projection, timeline, and recall all read that copy.
 	for _, e := range s.entries {
-		if len(e.Raw) > 0 {
-			t.Fatal("disk payload retained in metadata")
-		}
-		if e.Message != nil && e.Message.Message.User != nil && e.Message.Message.User.Content != nil {
-			t.Fatal("user body retained in index")
-		}
-		if e.Custom != nil && len(e.Custom.Data) > 0 {
-			t.Fatal("custom body retained in index")
+		if len(e.Raw) == 0 {
+			t.Fatal("loaded entry lost its record bytes")
 		}
 	}
 }
@@ -120,7 +116,7 @@ func TestDiscoveryTitlesUnavailableAndLockMarkers(t *testing.T) {
 	}
 }
 
-func TestIndexedOpaqueDetailsAndLazyProvenance(t *testing.T) {
+func TestOpaqueDetailsAndProvenance(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "session.jsonl")
 	data := `{"type":"session","version":3,"id":"metadata","cwd":"/synthetic/work"}` + "\n" +
@@ -146,12 +142,12 @@ func TestIndexedOpaqueDetailsAndLazyProvenance(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(recall, []string{"/skill:synthetic"}) {
 		t.Fatalf("recall: %q %v", recall, err)
 	}
-	// Disk changes are not silently replaced by stale cached payloads.
+	// A file that grows under a live store takes no new entries.
 	if err := os.WriteFile(path, []byte(data+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Projection(); err == nil {
-		t.Fatal("indexed context ignored external growth")
+	if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "after"}}); err == nil {
+		t.Fatal("append to a grown file was accepted")
 	}
 }
 
@@ -184,7 +180,7 @@ func (f *failingDurable) Close() error {
 	return err
 }
 
-func TestIndexedDurabilityFailuresDoNotAdvanceLogicalState(t *testing.T) {
+func TestDurabilityFailuresDoNotAdvanceLogicalState(t *testing.T) {
 	for _, initial := range []bool{false, true} {
 		for _, stage := range []string{"open", "write", "short", "sync", "close", "post-stat"} {
 			t.Run(fmt.Sprintf("initial=%v/%s", initial, stage), func(t *testing.T) {
@@ -262,14 +258,12 @@ func TestActiveCustomEntriesLoadsOnlyMatchingActiveBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var loaded []string
-	s.LoadHook = func(meta RecordMeta) { loaded = append(loaded, meta.ID) }
 	got, err := s.ActiveCustomEntries("psi.loop.state")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].ID() != first || got[1].ID() != second || !reflect.DeepEqual(loaded, []string{first, second}) {
-		t.Fatalf("entries=%v loaded=%v", got, loaded)
+	if len(got) != 2 || got[0].ID() != first || got[1].ID() != second {
+		t.Fatalf("entries=%v", got)
 	}
 	if string(got[1].Custom.Data) != `{"step":2}` {
 		t.Fatalf("data=%s", got[1].Custom.Data)
@@ -277,9 +271,8 @@ func TestActiveCustomEntriesLoadsOnlyMatchingActiveBranch(t *testing.T) {
 	if err := s.Branch(first); err != nil {
 		t.Fatal(err)
 	}
-	loaded = nil
 	got, err = s.ActiveCustomEntries("psi.loop.state")
-	if err != nil || len(got) != 1 || got[0].ID() != first || !reflect.DeepEqual(loaded, []string{first}) {
-		t.Fatalf("branched entries=%v loaded=%v err=%v", got, loaded, err)
+	if err != nil || len(got) != 1 || got[0].ID() != first {
+		t.Fatalf("branched entries=%v err=%v", got, err)
 	}
 }

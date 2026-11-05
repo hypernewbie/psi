@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -94,12 +93,6 @@ func (s *Store) SearchVisible(ctx context.Context, opts SearchOptions) (SearchPa
 		s.mu.Unlock()
 		return SearchPage{}, fmt.Errorf("%w: anchor is unusable", ErrSearchUnavailable)
 	}
-	records := make(map[string]RecordMeta, len(s.records))
-	for id, meta := range s.records {
-		records[id] = meta
-	}
-	snap := snapIdentity{path: s.file, knownInfo: s.knownInfo, knownSize: s.knownSize}
-	filePath := s.file
 	sessionID := ""
 	if s.header != nil {
 		sessionID = s.header.ID
@@ -111,12 +104,6 @@ func (s *Store) SearchVisible(ctx context.Context, opts SearchOptions) (SearchPa
 	if opts.StartIndex > len(path) {
 		return SearchPage{}, fmt.Errorf("%w: start beyond the branch", ErrSearchUnavailable)
 	}
-	var file *os.File
-	defer func() {
-		if file != nil {
-			file.Close()
-		}
-	}()
 	pageBytes := 0
 	for i := opts.StartIndex; i < len(path); i++ {
 		if err := ctx.Err(); err != nil {
@@ -131,35 +118,15 @@ func (s *Store) SearchVisible(ctx context.Context, opts SearchOptions) (SearchPa
 		}
 		entry := path[i]
 		page.NextIndex = i + 1
-		meta, indexed := records[entry.ID()]
-		if !indexed {
-			// Unindexed payloads are already materialized on this entry.
-			if err := s.searchEntry(ctx, pattern, entry, opts, &page); err != nil {
-				return SearchPage{}, err
-			}
-			continue
-		}
-		if meta.Length <= 0 || meta.Length > SearchMaxRecordBytes {
+		size := int64(len(entry.Raw))
+		if size <= 0 || size > SearchMaxRecordBytes {
 			return SearchPage{}, fmt.Errorf("%w: record too large", ErrSearchUnavailable)
 		}
-		pageBytes += int(meta.Length)
+		pageBytes += int(size)
 		if pageBytes > SearchMaxPageBytes {
 			return SearchPage{}, fmt.Errorf("%w: page too large", ErrSearchUnavailable)
 		}
-		if !snap.unchanged() {
-			return SearchPage{}, externalChangeError(filePath)
-		}
-		if file == nil {
-			file, err = os.Open(filePath)
-			if err != nil {
-				return SearchPage{}, fmt.Errorf("%w: session unreadable", ErrSearchUnavailable)
-			}
-		}
-		loaded, err := loadRecord(file, meta)
-		if err != nil {
-			return SearchPage{}, fmt.Errorf("%w: %v", ErrSearchUnavailable, err)
-		}
-		if err := s.searchEntry(ctx, pattern, loaded, opts, &page); err != nil {
+		if err := s.searchEntry(ctx, pattern, entry, opts, &page); err != nil {
 			return SearchPage{}, err
 		}
 		if len(page.Matches) >= SearchMaxMatches {

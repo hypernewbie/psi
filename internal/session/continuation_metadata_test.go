@@ -35,18 +35,39 @@ func continuationStore(t *testing.T, records ...string) *Store {
 	return store
 }
 
+// metadataPath scans the session file with the metadata scanner, the view
+// that used to drive the activation-time continuation check.
+func metadataPath(t *testing.T, store *Store) []*Entry {
+	t.Helper()
+	path, err := store.MetadataPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.File() == "" {
+		return path
+	}
+	_, entries, err := scanMetadataEntries(store.File())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path
+		}
+		t.Fatal(err)
+	}
+	scanned, err := BuildPath(entries, store.LeafID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scanned
+}
+
 func assertContinuationParity(t *testing.T, store *Store) {
 	t.Helper()
 	projection, err := store.Projection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := store.MetadataPath()
-	if err != nil {
-		t.Fatal(err)
-	}
 	fullErr := CheckContinuable(projection.Flat, projection.Entries)
-	metaErr := CheckContinuableMetadata(BuildContextEntries(path))
+	metaErr := CheckContinuableMetadata(BuildContextEntries(metadataPath(t, store)))
 	if (fullErr == nil) != (metaErr == nil) {
 		t.Fatalf("continuation disagreement: full=%v metadata=%v", fullErr, metaErr)
 	}
@@ -150,10 +171,10 @@ func TestContinuationMetadataParity(t *testing.T) {
 					}
 				}
 			}
-			metaErr := CheckContinuableMetadata(BuildContextEntries(path))
+			metaErr := CheckContinuableMetadata(BuildContextEntries(metadataPath(t, store)))
 			if (metaErr == nil) != tc.want {
 				t.Logf("entry count=%d path=%d", store.EntryCount(), len(path))
-				ctx := BuildContextEntries(path)
+				ctx := BuildContextEntries(metadataPath(t, store))
 				for _, e := range ctx {
 					t.Logf("entry kind=%s id=%s contentIssue=%q deferred=%v", e.Kind, e.ID(), e.contentIssue, e.deferred)
 				}

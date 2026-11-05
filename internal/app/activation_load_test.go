@@ -6,9 +6,9 @@ import (
 	"psi/internal/session"
 )
 
-// Activation must not decode historical tool bodies. Recall is allowed to load
-// user prompts, but the continuation check and model restore are metadata-only.
-func TestPrepareActivationDoesNotLoadHistoricalPayloads(t *testing.T) {
+// Activation restores the model state and the prompt history from the loaded
+// session. Recall is allowed to load user prompts.
+func TestPrepareActivationRestoresHistoryAndRecall(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.New(session.OpenOptions{Cwd: "/tmp/ws", SessionDir: dir, Persist: true})
 	if err != nil {
@@ -32,21 +32,12 @@ func TestPrepareActivationDoesNotLoadHistoricalPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loadedTools := 0
-	opened.LoadHook = func(meta session.RecordMeta) {
-		if toolIDs[meta.ID] {
-			loadedTools++
-		}
-	}
 	act, err := PrepareActivation(opened)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if act.Offline {
 		t.Fatalf("unexpected offline: %v", act.OfflineErr)
-	}
-	if loadedTools != 0 {
-		t.Fatalf("activation loaded %d historical tool payloads", loadedTools)
 	}
 	if len(act.Recall) != 1 || act.Recall[0] != "prompt" {
 		t.Fatalf("recall = %v", act.Recall)

@@ -8,6 +8,8 @@ import (
 )
 
 // UserBlocks also handles generic JSON arrays from imported custom messages.
+// Generic content is read with exact property names, like Pi's typed access:
+// an alias-case key never populates a block field.
 func UserBlocks(content any) ([]UserContentBlock, error) {
 	if content == nil {
 		return nil, nil
@@ -18,15 +20,39 @@ func UserBlocks(content any) ([]UserContentBlock, error) {
 	if blocks, ok := content.([]UserContentBlock); ok {
 		return blocks, nil
 	}
-	raw, err := json.Marshal(content)
-	if err != nil {
-		return nil, err
-	}
-	var blocks []UserContentBlock
-	if err := json.Unmarshal(raw, &blocks); err != nil {
+	items, ok := content.([]any)
+	if !ok {
 		return nil, fmt.Errorf("invalid message content: expected text or an array of blocks")
 	}
-	return blocks, nil
+	out := make([]UserContentBlock, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid message content: expected text or an array of blocks")
+		}
+		block := UserContentBlock{}
+		blockType, _ := obj["type"].(string)
+		block.Type = blockType
+		switch blockType {
+		case "text":
+			text, ok := obj["text"].(string)
+			if !ok {
+				if _, present := obj["text"]; present {
+					return nil, fmt.Errorf("invalid message content: text block has no text")
+				}
+			}
+			block.Text = &TextContent{Type: "text", Text: text}
+		case "image":
+			data, dataOK := obj["data"].(string)
+			mime, mimeOK := obj["mimeType"].(string)
+			if !dataOK || !mimeOK {
+				return nil, fmt.Errorf("invalid message content: image block is incomplete")
+			}
+			block.Image = &ImageContent{Type: "image", Data: data, MimeType: mime}
+		}
+		out = append(out, block)
+	}
+	return out, nil
 }
 
 func checkContent(m AgentMessage) error {
@@ -98,12 +124,14 @@ func (s SystemMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (s *SystemMessage) UnmarshalJSON(raw []byte) error {
-	// SystemMessage is also nested in compaction records, where the eager
-	// reader bypasses AgentMessage's defold. Drop alias-case protocol keys
-	// here so eager and indexed readers agree on Pi's exact-field semantics.
-	data := defoldSimple(raw, messageKeys)
+	// SystemMessage is also nested in compaction records: read the protocol
+	// fields with exact names, like Pi's typed property access.
+	obj, err := splitObject(raw)
+	if err != nil {
+		return err
+	}
 	var v systemAlias
-	if err := json.Unmarshal(data, &v); err != nil {
+	if err := decodeExactObject(obj, &v); err != nil {
 		return err
 	}
 	*s = SystemMessage(v)

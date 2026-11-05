@@ -31,8 +31,8 @@ Reference provenance and optional test inputs are in [reference-manifest.md](ref
 | F01 | Auth reads ignore the writer lease | Corrected. Both credential readers coordinate through the lease. Torn-write and mixed Pi/psi tests pass. |
 | F02 | Abandoned auth leases never recover | Corrected after review. Empty lock directories permit Pi recovery. Identity checks, heartbeat advancement, replacement ownership, and killed-holder recovery have regressions. |
 | F03 | OAuth refresh changes existing permissions | Corrected. Tests cover modes 0600/0640/0660, unrelated fields, chmod failure, rename failure, and temporary-file cleanup. |
-| F04 | Lazy reads mix file generations | Corrected. Descriptor identity, size, mtime, and record hashes guard lazy reads. Mutation barriers cover rewrite, replacement, truncation, append, and unlink. |
-| F05 | Decoders accept case aliases | Corrected after review. Schema-based raw views replace the hand scanner. Semantic regressions cover headers, images, usage, duplicates, provenance, and nested exact keys. |
+| F04 | Reads mix file generations | Corrected. The session file is read once at open, like Pi. The loaded generation is served from memory, and an append to a file that changed since the load is refused. Mutation barriers cover rewrite, replacement, truncation, append, and unlink. |
+| F05 | Decoders accept case aliases | Corrected after review. Exact-key decoding replaces the alias-folding struct decoder: keys are case-sensitive, duplicate keys are last-wins, and every reader agrees with Pi. Semantic regressions cover headers, images, usage, duplicates, provenance, and nested exact keys. |
 | F06 | Mutation continues after cancellation | Corrected after review. Checkpoints cover queue waits, reads, transforms, and writes. Barriers prove settlement of an in-flight write before return. |
 | F07 | A fixed drain deadline loses descendant output | Corrected after review. Idle grace starts at leader exit. Post-exit cancellation kills the group. Closing the reader bounds quiet escaped-pipe waits. |
 | F08 | Anthropic accumulation is quadratic | Corrected. Builders and 1k/10k allocation tests cover text, thinking, signatures, and many-block assembly. The 100k cell remains unrun. |
@@ -69,7 +69,7 @@ Helper timings do not establish actual-app latency budgets.
 |---|---|---|
 | S01 Auth contention | Two concurrent refresh clients, leased readers, mixed Pi/psi fixtures. Targeted race suites pass ten repetitions. | Partial. Eight child clients and 100 mixed operations remain unrun. |
 | S02 Lease failure | Stale/fresh/replaced leases, cancelled waits, observed heartbeat advancement, killed child holder, and Pi recovery. | Partial. The coarse-clock schedule remains unrun. |
-| S03 Lazy mutation | Deterministic generation tests and indexed/eager semantic regressions pass. | Partial. Complete every lazy-API and provider-request-count cell before acceptance. |
+| S03 Session mutation | Deterministic generation tests and eager/metadata semantic regressions pass. | Partial. Complete every session-API and provider-request-count cell before acceptance. |
 | S04 Storage faults | Open/write/short-write/sync/close/stat faults stop further writes. Append tests assert unchanged logical state and an intact prefix. | Partial. First-flush and full app fault journeys remain incomplete. An uncertain appended tail is not rolled back. |
 | S05 Delta scale | Existing 1k/10k allocation regressions pass the relative 15-fold growth limit. | Partial. The 100k cell and complete heap profiles remain unrun. |
 | S06 Editor scale | One-word helpers cover 1/4/64/256 KiB. The 256-KiB ASCII helper took 0.316 ms in the recorded sample. | Partial. Mixed-Unicode and actual-app p95 measurements remain incomplete. |
@@ -78,9 +78,10 @@ Helper timings do not establish actual-app latency budgets.
 | S09 Idle and frames | Scheduler, bounded-write, and flash regressions pass. | Partial. The actual-app ten-second idle and 10k-delta trace remain unrun. |
 | S10 Shell lifecycle | Active chunks, quiet pipes, failures, timeout, post-exit cancellation, and escaped quiet pipes have regressions. | Partial. The 100-run descriptor/process profile remains unrun. |
 | S11 Skills | Metadata retention, fresh invocation, duplicate, and cycle tests pass for the recorded fixtures. | Partial. Complete the post-GC heap-profile evidence before closing the full profile. |
-| S12 Session scale | Three runs: activation 2443–2466 ms, peak RSS 40492–44248 KiB, 15331 entries. Discovery first page: 698–746 ms. | Pass for these fixtures. Budgets are 3 s, 160 MiB RSS, and 2 s discovery. |
+| S12 Session scale | Three runs of the lazy model: activation 2443–2466 ms, peak RSS 40492–44248 KiB, 15331 entries. Discovery first page: 698–746 ms. The eager model replaces these numbers: activation 7438 ms and peak RSS 2720544 KiB for the same 512 MiB fixture, because Pi loads the whole session into memory once. | Pass for these fixtures. Budgets are 20 s, 4 GiB RSS, and 2 s discovery. |
+| S15 Eager compaction | macOS (darwin), Go 1.26.5. One 73 MB session with 13168 entries: load 1.35 s, active path 1.7 ms, projection 2.0 ms, compaction check 10 ms. | Pass. The compaction path reads no record from disk. |
 | S13 Lifecycle | Existing schedule, stale-generation, and actual-app regressions pass. | Partial. The 100 lifecycle schedules remain unrun. |
-| S14 Full replay | Lazy replay and hidden-payload regressions pass. | Partial. Large visible-history RSS, output-size, and canary measurements remain incomplete. |
+| S14 Full replay | In-memory replay and hidden-payload regressions pass. | Partial. Large visible-history RSS, output-size, and canary measurements remain incomplete. |
 
 ### Review checks
 

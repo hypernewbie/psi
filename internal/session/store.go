@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,13 +31,9 @@ type Store struct {
 	knownInfo        os.FileInfo
 	writeErr         error
 	sessionInfoCount int
-	records          map[string]RecordMeta // disk-backed payloads; entries contains small metadata only
-	projection       *Projection           // last completed context; written incrementally
-	projectionLeaf   string                // leaf that projection represents
+	projection       *Projection // last completed context; written incrementally
+	projectionLeaf   string      // leaf that projection represents
 	storage          *storageOps
-	// LoadHook fires before each lazy payload read (nil in production).
-	// Deterministic fault schedules use it to rewrite the session mid-walk.
-	LoadHook func(RecordMeta)
 }
 
 // OpenOptions controls Store creation.
@@ -118,36 +113,22 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 			return nil, err
 		}
 	}
-	idx, err := BuildIndex(path)
+	// Pi loads the whole session once at open (loadEntriesFromFile) and serves
+	// every later read from memory. Do the same: full payloads, single pass.
+	header, entries, err := loadFileEntries(path)
 	if err != nil {
-		var parseErr *ParseError
-		if !errors.As(err, &parseErr) || !errors.Is(err, errRecordGap) {
-			return nil, err
-		}
-		// A crashed writer can leave one interrupted record in the middle of an
-		// otherwise usable Pi session. Keep the valid records visible and let
-		// subsequent writes continue after the recovered gap.
-		idx, err = buildIndexRecovering(path)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
-	header := idx.Header
-	var entries []*Entry
-	records := map[string]RecordMeta{}
+	records := map[string]bool{}
 	sessionInfoCount := 0
-	for _, m := range idx.Records {
-		if m.Type == "session" {
-			continue
-		}
-		entries = append(entries, m.entry)
-		if m.entry.SessionInfo != nil {
+	for _, e := range entries {
+		if e.SessionInfo != nil {
 			sessionInfoCount++
 		}
-		if _, exists := records[m.ID]; exists {
-			return nil, fmt.Errorf("duplicate entry id %q", m.ID)
+		if _, exists := records[e.ID()]; exists {
+			return nil, fmt.Errorf("duplicate entry id %q", e.ID())
 		}
-		records[m.ID] = m
+		records[e.ID()] = true
 	}
 	if header == nil {
 		return nil, fmt.Errorf("session file has no valid header; refusing to initialize an explicit existing file: %s", path)
@@ -160,7 +141,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	} else if incomplete {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
-	s := &Store{header: header, entries: entries, records: records, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
+	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
 	s.rebuildIndex()
 	s.knownInfo, err = os.Stat(path)
 	if err != nil {
@@ -221,13 +202,14 @@ func (s *Store) rebuildIndex() {
 // Header returns the session header.
 func (s *Store) Header() *SessionHeader { return s.header }
 
-// Entries materializes every record for diagnostics and tests. A load error
-// returns nil. Runtime paths use Projection, Timeline, and MetadataPath instead.
+// Entries returns every stored entry. Payloads are materialized in memory
+// at open, matching Pi's session manager.
 func (s *Store) Entries() []*Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entries, _ := s.loadEntriesLocked(s.entries)
-	return entries
+	out := make([]*Entry, len(s.entries))
+	copy(out, s.entries)
+	return out
 }
 
 // SessionName returns the latest session_info name, matching Pi's footer.
@@ -280,11 +262,7 @@ func (s *Store) WriteError() error {
 func (s *Store) ActivePath() ([]*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path, err := s.pathLocked()
-	if err != nil {
-		return nil, err
-	}
-	return s.loadEntriesLocked(path)
+	return s.pathLocked()
 }
 
 // ActiveCustomEntries loads only custom entries of the given type on the active branch.
@@ -301,13 +279,11 @@ func (s *Store) ActiveCustomEntries(customType string) ([]*Entry, error) {
 			selected = append(selected, entry)
 		}
 	}
-	return s.loadEntriesLocked(selected)
+	return selected, nil
 }
 
 func (s *Store) projectionCacheValidLocked() bool {
-	// Deterministic fault schedules must observe every lazy read. Never serve a
-	// cache hit while a LoadHook is installed; production has no hook.
-	return s.LoadHook == nil && s.projection != nil && s.projectionLeaf == s.leafID && s.snapLocked().unchanged()
+	return s.projection != nil && s.projectionLeaf == s.leafID
 }
 
 // Projection builds or reuses the provenance-preserving context. Callers get a
@@ -325,10 +301,7 @@ func (s *Store) Projection() (*Projection, error) {
 		return nil, err
 	}
 	state := RestoreModelState(path)
-	ctx, err := s.loadEntriesLocked(BuildContextEntries(path))
-	if err != nil {
-		return nil, err
-	}
+	ctx := BuildContextEntries(path)
 	s.projection = projectEntries(ctx, state)
 	s.projectionLeaf = s.leafID
 	return s.projectionViewLocked(), nil
@@ -512,11 +485,6 @@ func (s *Store) AppendContextEdit(targetID string, replacement json.RawMessage) 
 	if !ok {
 		return "", fmt.Errorf("entry %s not found", targetID)
 	}
-	loaded, err := s.loadEntriesLocked([]*Entry{target})
-	if err != nil {
-		return "", err
-	}
-	target = loaded[0]
 	// Must be on the active branch.
 	path, err := s.pathLocked()
 	if err != nil {
@@ -642,15 +610,7 @@ func (s *Store) Branch(branchFromID string) error {
 func (s *Store) GetEntry(id string) *Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e := s.byID[id]
-	if e == nil {
-		return nil
-	}
-	loaded, err := s.loadEntriesLocked([]*Entry{e})
-	if err != nil {
-		return nil
-	}
-	return loaded[0]
+	return s.byID[id]
 }
 
 // cacheProjectionAppendLocked grows the completed projection by one entry.
@@ -733,6 +693,8 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	if err != nil {
 		return err
 	}
+	// The metadata scan carries the continuation flags. The full entry stays
+	// in memory, so only the flags come from the scan.
 	thin, err := metadataEntry(data)
 	if err != nil {
 		return err
@@ -818,37 +780,11 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	}
 	s.entries = append(s.entries, e)
 	s.byID[e.ID()] = e
-	if thin.SessionInfo != nil {
+	if e.SessionInfo != nil {
 		s.sessionInfoCount++
 	}
 	s.leafID = e.ID()
 	if st != nil {
-		if s.records == nil {
-			// Initial flush contains only buffered setup and the first message.
-			s.records = map[string]RecordMeta{}
-			hdr, _ := json.Marshal(s.header)
-			offset := int64(len(hdr) + 1)
-			for i, entry := range s.entries {
-				thin, err := metadataEntry(entry.Raw)
-				if err != nil {
-					return err
-				}
-				parent := ""
-				if entry.ParentID() != nil {
-					parent = *entry.ParentID()
-				}
-				s.records[entry.ID()] = RecordMeta{Offset: offset, Length: int64(len(entry.Raw) + 1), Type: entry.Kind, ID: entry.ID(), ParentID: parent, Hash: recordHash(entry.Raw), entry: thin}
-				offset += int64(len(entry.Raw) + 1)
-				s.entries[i], s.byID[entry.ID()] = thin, thin
-			}
-		} else {
-			parent := ""
-			if e.ParentID() != nil {
-				parent = *e.ParentID()
-			}
-			s.records[e.ID()] = RecordMeta{Offset: st.Size() - int64(len(data)+1), Length: int64(len(data) + 1), Type: e.Kind, ID: e.ID(), ParentID: parent, Hash: recordHash(data), entry: thin}
-			s.entries[len(s.entries)-1], s.byID[e.ID()] = thin, thin
-		}
 		s.knownSize, s.knownInfo = st.Size(), st
 	}
 	s.cacheProjectionAppendLocked(e, oldLeaf)

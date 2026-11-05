@@ -24,7 +24,7 @@ A passing fixture does not replace a required application journey or human termi
 | G02 | 007–014 | Partial | One console owns output. Failed durable configuration changes preserve the exact prior runtime. Full transition coverage remains open. |
 | G03 | 015–024 | Partial | Graphemes, paste, recall, Escape timing, whole-edit limits, and visible budget rejection pass. Complete keyboard and latency evidence remains open. |
 | G04 | 025–034 | Partial | Changed rows, bounded writes, maintained-emulator scrollback, coalescing, and restoration pass. Sustained timing and human terminal checks remain open. |
-| G05 | 035–044 | Partial | Startup history, display-only history, lazy replay, titles, unavailable markers, and complete discovery have tests. Full activation journeys remain open. |
+| G05 | 035–044 | Partial | Startup history, display-only history, in-memory replay, titles, unavailable markers, and complete discovery have tests. Full activation journeys remain open. |
 | G06 | 045–053 | Partial | The paged model catalog, effective thinking, stored accounting, and configuration transactions have tests. Complete consent and skill journeys remain open. |
 | G07 | 054–061 | Partial | Settlement and sticky storage blocking pass. Twelve injected open/write/short-write/sync/close/stat cases preserve logical state. Full application fault journeys remain open. |
 | G08 | 062–068 | Partial | The live index and both pinned-reader continuation directions pass for both provider metadata forms. Complete ownership and filesystem edge coverage remains open. |

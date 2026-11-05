@@ -30,8 +30,12 @@ func PrepareActivation(candidate *session.Store) (*Activation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("activation recall: %w", err)
 	}
-	// 2. Continuation check reads indexed flags only; no transcript decode.
-	if err := session.CheckContinuableMetadata(session.BuildContextEntries(path)); err != nil {
+	// 2. Continuation check over the loaded session.
+	projection, err := candidate.Projection()
+	if err != nil {
+		return nil, fmt.Errorf("activation projection: %w", err)
+	}
+	if err := session.CheckContinuable(projection.Flat, projection.Entries); err != nil {
 		// Readable history remains; continuation blocked (offline history).
 		return &Activation{Store: candidate, Path: path, Recall: recall, Offline: true, OfflineErr: err}, nil
 	}

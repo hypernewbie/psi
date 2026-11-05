@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestLazyTimelineExtractsBoundedToolSummaryWithoutBodyCanary(t *testing.T) {
+func TestTimelineExtractsBoundedToolSummaryWithoutBodyCanary(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "work")
 	if err := os.MkdirAll(cwd, 0700); err != nil {
@@ -24,25 +24,18 @@ func TestLazyTimelineExtractsBoundedToolSummaryWithoutBodyCanary(t *testing.T) {
 	const canary = "large-write-body-must-not-reach-timeline"
 	body := strings.Repeat(canary, 12_000)
 	call := ToolCall{Type: "toolCall", ID: "write-call", Name: "write", Arguments: map[string]any{"path": filepath.Join(cwd, "src", "result.go"), "content": body}}
-	callEntryID, err := store.AppendMessage(AgentMessage{Role: "assistant", Assistant: &AssistantMessage{Role: "assistant", Content: []ContentBlock{{Type: "toolCall", Call: &call}}}})
-	if err != nil {
+	if _, err := store.AppendMessage(AgentMessage{Role: "assistant", Assistant: &AssistantMessage{Role: "assistant", Content: []ContentBlock{{Type: "toolCall", Call: &call}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppendMessage(AgentMessage{Role: "toolResult", ToolResult: &ToolResultMessage{Role: "toolResult", ToolCallID: call.ID, ToolName: call.Name, Content: []UserContentBlock{{Type: "text", Text: &TextContent{Type: "text", Text: "hidden-result-canary"}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	lazy, err := OpenFile(store.File(), cwd, true)
+	reopened, err := OpenFile(store.File(), cwd, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	loadedCallRecord := false
-	lazy.LoadHook = func(meta RecordMeta) {
-		if meta.ID == callEntryID {
-			loadedCallRecord = true
-		}
-	}
 	var found *TranscriptItem
-	complete, err := lazy.Timeline(false, 0, func(item TranscriptItem) bool {
+	complete, err := reopened.Timeline(false, 0, func(item TranscriptItem) bool {
 		if item.Kind == KindTool {
 			copy := item
 			found = &copy
@@ -52,9 +45,6 @@ func TestLazyTimelineExtractsBoundedToolSummaryWithoutBodyCanary(t *testing.T) {
 	if err != nil || !complete || found == nil {
 		t.Fatalf("timeline complete=%v found=%+v err=%v", complete, found, err)
 	}
-	if loadedCallRecord {
-		t.Fatal("lazy replay loaded the full tool-call record to recover its summary")
-	}
 	if found.ToolName != "write" || found.ToolState != "done" || found.ToolSummary.Path != "src/result.go" {
 		t.Fatalf("structured replay summary=%+v", found)
 	}
@@ -63,7 +53,7 @@ func TestLazyTimelineExtractsBoundedToolSummaryWithoutBodyCanary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(encoded) > 1024 || strings.Contains(string(encoded), canary) || strings.Contains(string(encoded), "hidden-result-canary") {
-		t.Fatalf("lazy display item retained hidden content (%d bytes)", len(encoded))
+		t.Fatalf("display item retained hidden content (%d bytes)", len(encoded))
 	}
 	if found.ToolSummary.ExitCode != nil || found.ToolSummary.Note != "" {
 		t.Fatalf("spurious metadata: %+v", found.ToolSummary)

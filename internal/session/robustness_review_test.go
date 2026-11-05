@@ -20,7 +20,7 @@ func TestReviewHeaderExactFields(t *testing.T) {
 	}
 	_, h, err := metadataRecord(data)
 	if err != nil || !reflect.DeepEqual(h, f.Header) {
-		t.Fatalf("header readers disagree: eager=%+v indexed=%+v err=%v", f.Header, h, err)
+		t.Fatalf("header readers disagree: eager=%+v metadata=%+v err=%v", f.Header, h, err)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestReviewImageResultPersistsAndReopens(t *testing.T) {
 	}
 	entries, err := reopened.ActivePath()
 	if err != nil || len(entries) != 2 || entries[1].Message.Message.ToolResult.Content[0].Image.Data != "eA==" {
-		t.Fatalf("image did not survive lazy reopen: entries=%+v err=%v", entries, err)
+		t.Fatalf("image did not survive reopen: entries=%+v err=%v", entries, err)
 	}
 	after, _ := os.ReadFile(path)
 	if string(after) != string(before) {

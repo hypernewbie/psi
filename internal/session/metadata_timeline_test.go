@@ -23,27 +23,17 @@ func TestCompactionReplayDoesNotLoadSummaryUnlessHistoryIsExplicit(t *testing.T)
 	}
 	const hidden = "large-compaction-summary-canary"
 	summary := strings.Repeat(hidden, 2_000)
-	compactionID, err := store.AppendCompaction(summary, userID, 28_000, nil)
-	if err != nil {
+	if _, err := store.AppendCompaction(summary, userID, 28_000, nil); err != nil {
 		t.Fatal(err)
 	}
-	lazy, err := OpenFile(store.File(), cwd, true)
+	reopened, err := OpenFile(store.File(), cwd, true)
 	if err != nil {
 		t.Fatal(err)
-	}
-	loaded := false
-	lazy.LoadHook = func(meta RecordMeta) {
-		if meta.ID == compactionID {
-			loaded = true
-		}
 	}
 	var current []TranscriptItem
-	complete, err := lazy.Timeline(false, 0, func(item TranscriptItem) bool { current = append(current, item); return true })
+	complete, err := reopened.Timeline(false, 0, func(item TranscriptItem) bool { current = append(current, item); return true })
 	if err != nil || !complete {
 		t.Fatalf("current timeline complete=%v err=%v", complete, err)
-	}
-	if loaded {
-		t.Fatal("default replay loaded the full compaction summary")
 	}
 	for _, item := range current {
 		if strings.Contains(item.Text, hidden) {
@@ -51,9 +41,9 @@ func TestCompactionReplayDoesNotLoadSummaryUnlessHistoryIsExplicit(t *testing.T)
 		}
 	}
 	var history []TranscriptItem
-	complete, err = lazy.Timeline(true, 0, func(item TranscriptItem) bool { history = append(history, item); return true })
-	if err != nil || !complete || !loaded {
-		t.Fatalf("explicit history did not load summary: complete=%v loaded=%v err=%v", complete, loaded, err)
+	complete, err = reopened.Timeline(true, 0, func(item TranscriptItem) bool { history = append(history, item); return true })
+	if err != nil || !complete {
+		t.Fatalf("history timeline complete=%v err=%v", complete, err)
 	}
 	found := false
 	for _, item := range history {

@@ -21,7 +21,7 @@ func UnmarshalFileEntry(data []byte) (*FileEntry, error) {
 	recType, _ := exactString(obj, "type")
 	if recType == "session" {
 		var h SessionHeader
-		if err := json.Unmarshal(defoldRecord(obj), &h); err != nil {
+		if err := decodeExactObject(obj, &h); err != nil {
 			return nil, err
 		}
 		if h.ID == "" {
@@ -63,74 +63,70 @@ func UnmarshalEntry(data []byte) (*Entry, error) {
 	e := &Entry{Kind: recType, Base: entryBase{
 		Type: recType, ID: recID, ParentID: parentID, Timestamp: timestamp,
 	}, Raw: raw}
-	// Struct decoding folds ASCII case; decode a defolded copy so alias-case
-	// keys can neither populate fields nor break decoding (F05). Raw keeps
-	// the original bytes, including unknown fields.
-	clean := defoldRecord(obj)
 	switch recType {
 	case "message":
 		var v SessionMessageEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.Message = &v
 	case "thinking_level_change":
 		var v ThinkingLevelChangeEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.ThinkingLevelChange = &v
 	case "model_change":
 		var v ModelChangeEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.ModelChange = &v
 	case "usage":
 		var v UsageEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.Usage = &v
 	case "compaction":
 		var v CompactionEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.Compaction = &v
 	case "branch_summary":
 		var v BranchSummaryEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.BranchSummary = &v
 	case "custom":
 		var v CustomEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.Custom = &v
 	case "custom_message":
 		var v CustomMessageEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.CustomMessage = &v
 	case "context_edit":
 		var v ContextEditEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.ContextEdit = &v
 	case "label":
 		var v LabelEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.Label = &v
 	case "session_info":
 		var v SessionInfoEntry
-		if err := json.Unmarshal(clean, &v); err != nil {
+		if err := decodeExactObject(obj, &v); err != nil {
 			return nil, err
 		}
 		e.SessionInfo = &v

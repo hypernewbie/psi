@@ -1,9 +1,8 @@
 package session
 
-// Phase C regressions for PLAN3 F04: lazy session reads must never mix file
-// generations. A mid-walk rewrite, truncate, append, unlink, or rename fails
-// the walk (Timeline reports incomplete output, never success); identity and
-// byte-hash checks reject equal-size rewrites before model input is built.
+// Phase C regressions for PLAN3 F04: a session is loaded once, like Pi's
+// session manager. Every read serves that one generation, and a file that
+// changes under a live store never receives new entries.
 
 import (
 	"os"
@@ -33,8 +32,8 @@ func openPersisted(t *testing.T, path string) *Store {
 	return s
 }
 
-// rewriteSecondLine replaces bbbb with BBBB (same length, same ID): the byte
-// hash must reject it even though offsets, lengths, and identity all match.
+// rewriteSecondLine replaces bbbb with BBBB (same length, same ID): the
+// rewrite keeps the record shape but changes the bytes on disk.
 func rewriteSecondLineSameID(path string) {
 	data, _ := os.ReadFile(path)
 	lines := strings.Split(string(data), "\n")
@@ -58,7 +57,9 @@ func rewriteSecondLineNewID(path string) {
 	_ = os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
 }
 
-func TestF04MidWalkRewriteSameLengthSameID(t *testing.T) {
+// A rewrite after the session was loaded never reaches the model input: the
+// loaded generation is served, and the changed file takes no new entries.
+func TestF04ExternalRewriteAfterLoad(t *testing.T) {
 	for _, mutate := range []struct {
 		name string
 		fn   func(path string)
@@ -69,39 +70,44 @@ func TestF04MidWalkRewriteSameLengthSameID(t *testing.T) {
 		t.Run(mutate.name, func(t *testing.T) {
 			path := twoMessageFile(t)
 			s := openPersisted(t, path)
-			fired := false
-			s.LoadHook = func(m RecordMeta) {
-				if m.ID == "u2" && !fired {
-					fired = true
-					mutate.fn(path)
-				}
+			mutate.fn(path)
+
+			active, err := s.ActivePath()
+			if err != nil {
+				t.Fatalf("ActivePath: %v", err)
 			}
-			if _, err := s.Projection(); err == nil || !strings.Contains(err.Error(), "changed externally") {
-				t.Fatalf("Projection accepted mixed generation: %v", err)
+			if len(active) != 2 {
+				t.Fatalf("active path = %d entries, want 2", len(active))
 			}
-			if _, err := s.ActivePath(); err == nil || !strings.Contains(err.Error(), "changed externally") {
-				t.Fatalf("ActivePath accepted mixed generation: %v", err)
+			if got, _ := active[1].Message.Message.User.Content.(string); got != "bbbb" {
+				t.Fatalf("read served the rewritten file: %q", got)
 			}
-			if _, err := s.Recall(); err == nil || !strings.Contains(err.Error(), "changed externally") {
-				t.Fatalf("Recall accepted mixed generation: %v", err)
+			if _, err := s.Projection(); err != nil {
+				t.Fatalf("Projection: %v", err)
+			}
+			if _, err := s.Recall(); err != nil {
+				t.Fatalf("Recall: %v", err)
 			}
 			var items []TranscriptItem
 			complete, err := s.Timeline(true, 0, func(it TranscriptItem) bool { items = append(items, it); return true })
-			if err == nil || complete {
-				t.Fatalf("Timeline reported success on mixed generation: complete=%v err=%v", complete, err)
+			if err != nil || !complete {
+				t.Fatalf("Timeline complete=%v err=%v", complete, err)
 			}
-			if !strings.Contains(err.Error(), "changed externally") {
-				t.Fatalf("wrong Timeline error: %v", err)
+			// The changed file never receives new entries.
+			_, err = s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "after"}})
+			if err == nil {
+				t.Fatal("append to a changed file was accepted")
 			}
-			// Failed activation keeps the old runtime: entries and leaf intact.
 			if s.LeafID() != "u2" {
-				t.Fatalf("leaf moved on failed walk: %q", s.LeafID())
+				t.Fatalf("leaf moved on refused append: %q", s.LeafID())
 			}
 		})
 	}
 }
 
-func TestF04MidWalkStructuralMutations(t *testing.T) {
+// A structural change after the session was loaded has the same effect: the
+// loaded generation is served and the file takes no new entries.
+func TestF04ExternalStructuralMutations(t *testing.T) {
 	for _, mutate := range []struct {
 		name string
 		fn   func(path string)
@@ -118,60 +124,52 @@ func TestF04MidWalkStructuralMutations(t *testing.T) {
 		t.Run(mutate.name, func(t *testing.T) {
 			path := twoMessageFile(t)
 			s := openPersisted(t, path)
-			fired := false
-			s.LoadHook = func(m RecordMeta) {
-				if !fired {
-					fired = true
-					mutate.fn(path)
-				}
+			mutate.fn(path)
+
+			active, err := s.ActivePath()
+			if err != nil {
+				t.Fatalf("ActivePath: %v", err)
 			}
-			if _, err := s.Projection(); err == nil {
-				t.Fatal("Projection accepted structural mutation mid-walk")
+			if len(active) != 2 {
+				t.Fatalf("active path = %d entries, want 2", len(active))
+			}
+			if _, err := s.Projection(); err != nil {
+				t.Fatalf("Projection: %v", err)
 			}
 			var n int
 			complete, err := s.Timeline(true, 0, func(TranscriptItem) bool { n++; return true })
-			if err == nil || complete {
-				t.Fatalf("Timeline success on %s: complete=%v err=%v", mutate.name, complete, err)
+			if err != nil || !complete {
+				t.Fatalf("Timeline complete=%v err=%v", complete, err)
+			}
+			if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "after"}}); err == nil {
+				t.Fatalf("append to a %s file was accepted", mutate.name)
 			}
 		})
 	}
 }
 
-func TestF04ChangeBetweenIndexAndActivation(t *testing.T) {
+// The session file is read once at open: the loaded generation is the only
+// generation the store serves.
+func TestF04SingleReadGeneration(t *testing.T) {
 	path := twoMessageFile(t)
 	s := openPersisted(t, path)
-	// External rewrite after open, before any read: pre-walk check refuses.
-	rewriteSecondLineSameID(path)
-	if _, err := s.Projection(); err == nil {
-		t.Fatal("Projection accepted pre-walk rewrite")
-	}
-}
-
-func TestF04LoadRecordIdentityUnit(t *testing.T) {
-	path := twoMessageFile(t)
-	idx, err := BuildIndex(path)
+	before, err := s.ActivePath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var meta RecordMeta
-	for _, m := range idx.Records {
-		if m.ID == "u2" {
-			meta = m
-		}
+	// A rewrite after the load cannot slip a second generation into the
+	// store: the loaded entries stay in memory.
+	if err := os.WriteFile(path, []byte("{\"type\":\"message\",\"id\":\"u9\",\"timestamp\":\"2026-01-01T00:00:09.000Z\",\"message\":{\"role\":\"user\",\"content\":\"rewritten\",\"timestamp\":9}}\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	f, err := os.Open(path)
+	after, err := s.ActivePath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	if _, err := loadRecord(f, meta); err != nil {
-		t.Fatalf("valid record rejected: %v", err)
+	if len(after) != len(before) {
+		t.Fatalf("active path = %d entries, want %d", len(after), len(before))
 	}
-	// Zero-hash legacy meta still enforces identity.
-	bare := meta
-	bare.Hash = 0
-	bare.ID = "uX"
-	if _, err := loadRecord(f, bare); err == nil {
-		t.Fatal("identity change accepted with zero hash")
+	if after[len(after)-1].ID() != "u2" {
+		t.Fatalf("leaf = %q, want the loaded leaf", after[len(after)-1].ID())
 	}
 }

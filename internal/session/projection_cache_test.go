@@ -42,10 +42,12 @@ func TestProjectionCacheRejectsExternalRewrite(t *testing.T) {
 	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatal(err)
 	}
-	if store.ProjectionIfCached() != nil {
-		t.Fatal("cache survived an external rewrite")
+	// The loaded session keeps serving its generation; the changed file
+	// takes no new entries.
+	if _, err := store.Projection(); err != nil {
+		t.Fatalf("projection of the loaded session failed: %v", err)
 	}
-	if _, err := store.Projection(); err == nil || !strings.Contains(err.Error(), "changed externally") {
+	if _, err := store.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "after"}}); err == nil || !strings.Contains(err.Error(), "changed externally") {
 		t.Fatalf("external rewrite accepted: %v", err)
 	}
 }

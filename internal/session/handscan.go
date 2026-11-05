@@ -18,7 +18,7 @@ import (
 
 var errRecordGap = errors.New("session record boundary")
 
-type metadataObjectView map[string][]byte
+type metadataObjectView = jsonView
 
 var metadataTypes = map[string]reflect.Type{
 	"session":               reflect.TypeFor[SessionHeader](),

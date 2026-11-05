@@ -47,7 +47,7 @@ type ToolCall struct {
 }
 
 func (t *ToolCall) UnmarshalJSON(data []byte) error {
-	obj, err := exactObject(data)
+	obj, err := splitObject(data)
 	if err != nil {
 		return err
 	}
@@ -120,8 +120,7 @@ func (b ContentBlock) MarshalJSON() ([]byte, error) {
 
 func (b *ContentBlock) UnmarshalJSON(data []byte) error {
 	b.Raw = append(b.Raw[:0], data...)
-	data = defoldSimple(data, blockKeys)
-	obj, err := exactObject(data)
+	obj, err := splitObject(data)
 	if err != nil {
 		return err
 	}
@@ -130,19 +129,19 @@ func (b *ContentBlock) UnmarshalJSON(data []byte) error {
 	switch recType {
 	case "text":
 		var t TextContent
-		if err := json.Unmarshal(data, &t); err != nil {
+		if err := decodeExactObject(obj, &t); err != nil {
 			return err
 		}
 		b.Text = &t
 	case "thinking":
 		var t ThinkingContent
-		if err := json.Unmarshal(data, &t); err != nil {
+		if err := decodeExactObject(obj, &t); err != nil {
 			return err
 		}
 		b.Thinking = &t
 	case "toolCall":
 		var t ToolCall
-		if err := json.Unmarshal(data, &t); err != nil {
+		if err := t.UnmarshalJSON(data); err != nil {
 			return err
 		}
 		b.Call = &t
@@ -179,8 +178,7 @@ func (b UserContentBlock) MarshalJSON() ([]byte, error) {
 
 func (b *UserContentBlock) UnmarshalJSON(data []byte) error {
 	b.Raw = append(b.Raw[:0], data...)
-	data = defoldSimple(data, blockKeys)
-	obj, err := exactObject(data)
+	obj, err := splitObject(data)
 	if err != nil {
 		return err
 	}
@@ -189,13 +187,13 @@ func (b *UserContentBlock) UnmarshalJSON(data []byte) error {
 	switch recType {
 	case "text":
 		var t TextContent
-		if err := json.Unmarshal(data, &t); err != nil {
+		if err := decodeExactObject(obj, &t); err != nil {
 			return err
 		}
 		b.Text = &t
 	case "image":
 		var im ImageContent
-		if err := json.Unmarshal(data, &im); err != nil {
+		if err := decodeExactObject(obj, &im); err != nil {
 			return err
 		}
 		b.Image = &im
@@ -391,7 +389,7 @@ func (m AgentMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (m *AgentMessage) UnmarshalJSON(data []byte) error {
-	obj, err := exactObject(data)
+	obj, err := splitObject(data)
 	if err != nil {
 		return err
 	}
@@ -399,59 +397,58 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	m.Role = role
 	raw := append(json.RawMessage(nil), data...)
 	m.Raw = raw
-	data = defoldMessage(data)
 	switch role {
 	case "system":
 		var s SystemMessage
-		if err := json.Unmarshal(data, &s); err != nil {
+		if err := decodeExactObject(obj, &s); err != nil {
 			return err
 		}
 		s.Raw = raw
 		m.System = &s
 	case "user":
 		var u UserMessage
-		if err := json.Unmarshal(data, &u); err != nil {
+		if err := decodeExactObject(obj, &u); err != nil {
 			return err
 		}
 		u.Raw = raw
 		m.User = &u
 	case "assistant":
 		var a AssistantMessage
-		if err := json.Unmarshal(data, &a); err != nil {
+		if err := decodeExactObject(obj, &a); err != nil {
 			return err
 		}
 		a.Raw = raw
 		m.Assistant = &a
 	case "toolResult":
 		var t ToolResultMessage
-		if err := json.Unmarshal(data, &t); err != nil {
+		if err := decodeExactObject(obj, &t); err != nil {
 			return err
 		}
 		t.Raw = raw
 		m.ToolResult = &t
 	case "bashExecution":
 		var b BashExecutionMessage
-		if err := json.Unmarshal(data, &b); err != nil {
+		if err := decodeExactObject(obj, &b); err != nil {
 			return err
 		}
 		b.Raw = raw
 		m.BashExecution = &b
 	case "custom":
 		var c CustomMessage
-		if err := json.Unmarshal(data, &c); err != nil {
+		if err := decodeExactObject(obj, &c); err != nil {
 			return err
 		}
 		c.Raw = raw
 		m.Custom = &c
 	case "branchSummary":
 		var b BranchSummaryMessage
-		if err := json.Unmarshal(data, &b); err != nil {
+		if err := decodeExactObject(obj, &b); err != nil {
 			return err
 		}
 		m.BranchSummary = &b
 	case "compactionSummary":
 		var c CompactionSummaryMessage
-		if err := json.Unmarshal(data, &c); err != nil {
+		if err := decodeExactObject(obj, &c); err != nil {
 			return err
 		}
 		m.CompactionSummary = &c

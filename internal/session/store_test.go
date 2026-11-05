@@ -476,7 +476,7 @@ func TestConcurrentAppendMessage(t *testing.T) {
 	}
 }
 
-// Invariant: Lazy session file creation with O_EXCL triggers atomically on the first conversation append;
+// Invariant: session file creation with O_EXCL triggers atomically on the first conversation append;
 // multiple simultaneous first appends create exactly one header, preserve all entries, and surface no EEXIST errors.
 func TestFirstAppendRace(t *testing.T) {
 	defer leakcheck.Verify(t)
@@ -951,40 +951,25 @@ func TestExternalChangeDetectionInLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id1, err := s.AppendMessage(AgentMessage{
+	if _, err := s.AppendMessage(AgentMessage{
 		Role: "user",
 		User: &UserMessage{Role: "user", Content: "entry 1", Timestamp: 1},
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
-	id2, err := s.AppendMessage(AgentMessage{
+	if _, err := s.AppendMessage(AgentMessage{
 		Role: "user",
 		User: &UserMessage{Role: "user", Content: "entry 2", Timestamp: 2},
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
-	_ = id1
 
-	// Set LoadHook to modify file on the second entry (when snapshot file f is already open)
-	hookCalled := false
-	s.LoadHook = func(m RecordMeta) {
-		if m.ID == id2 {
-			hookCalled = true
-			f, _ := os.OpenFile(s.File(), os.O_WRONLY|os.O_APPEND, 0o644)
-			f.WriteString(`{"type":"session","version":3,"id":"corrupt","timestamp":"t","cwd":"/tmp"}` + "\n")
-			f.Close()
-		}
-	}
-
-	// ActivePath loads all entries in order: id1 opens f, then id2 fires hook and triggers externalChangeError
-	path, err := s.ActivePath()
-	if err == nil || !strings.Contains(err.Error(), "session file changed externally during read") {
-		t.Fatalf("expected externalChangeError, got path=%v err=%v", path, err)
-	}
-	if !hookCalled {
-		t.Fatal("expected LoadHook to be called on id2")
+	// A file that changes under a live store takes no new entries.
+	f, _ := os.OpenFile(s.File(), os.O_WRONLY|os.O_APPEND, 0o644)
+	f.WriteString(`{"type":"session","version":3,"id":"corrupt","timestamp":"t","cwd":"/tmp"}` + "\n")
+	f.Close()
+	if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "entry 3"}}); err == nil {
+		t.Fatal("append to a changed file was accepted")
 	}
 }
 

@@ -27,7 +27,7 @@ func FuzzDecodeEntries(f *testing.F) {
 	})
 }
 
-func FuzzIndexedMetadata(f *testing.F) {
+func FuzzMetadataScanner(f *testing.F) {
 	f.Add([]byte(`{"type":"session","version":3,"id":"fuzz","cwd":"/synthetic/work"}` + "\n" + `{"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"synthetic"}}` + "\n"))
 	f.Add([]byte(`{"type":"custom","id":"x","data":["opaque"]}`))
 	f.Add([]byte(`{"type":"message","id":"a","message":{"role":"assistant","content":[{"type":"mystery"}],"stopReason":"deferred"}}`))
@@ -38,15 +38,9 @@ func FuzzIndexedMetadata(f *testing.F) {
 		if len(data) > 1024*1024 {
 			return
 		}
-		idx, err := BuildIndexFrom(bytes.NewReader(data), "synthetic-fuzz.jsonl")
-		if err != nil || idx.Header == nil {
+		header, entries, err := scanMetadataBytes(data)
+		if err != nil || header == nil {
 			return
-		}
-		var entries []*Entry
-		for _, record := range idx.Records {
-			if record.entry != nil {
-				entries = append(entries, record.entry)
-			}
 		}
 		if err := validateGraph(entries); err != nil {
 			return
