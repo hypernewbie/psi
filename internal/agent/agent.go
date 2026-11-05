@@ -79,7 +79,11 @@ func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink
 	if sink == nil {
 		sink = func(event.Event) {}
 	}
-	return &Loop{store: store, reg: reg, prov: prov, sink: sink}
+	return &Loop{
+		store: store, reg: reg, prov: prov, sink: sink,
+		steeringMode: queueModeOneAtATime,
+		followUpMode: queueModeOneAtATime,
+	}
 }
 
 // Steer queues a user message for delivery at the next turn boundary, like
@@ -143,6 +147,13 @@ func normalizeQueueMode(mode string) string {
 		return queueModeAll
 	}
 	return queueModeOneAtATime
+}
+
+// QueueModes reports the effective delivery mode of each queue.
+func (l *Loop) QueueModes() (steering, followUp string) {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	return l.steeringMode, l.followUpMode
 }
 
 // takeQueued removes the messages one turn may deliver, honoring the queue mode.

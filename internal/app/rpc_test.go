@@ -118,7 +118,7 @@ func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.S
 	enc := json.NewEncoder(log)
 	enc.SetEscapeHTML(false)
 	s := &rpcRunner{r: r, out: enc}
-	s.loop = agent.New(store, r.reg, prov, s.sink)
+	s.loop = r.newLoop(s.sink)
 	t.Cleanup(func() {
 		s.cancelActive()
 		if s.r.store != nil {
@@ -354,6 +354,24 @@ func TestRPCGetStateShape(t *testing.T) {
 		if _, ok := data[key]; !ok {
 			t.Fatalf("get_state missing %q: %v", key, data)
 		}
+	}
+}
+
+// get_state reports the modes the loop delivers with, not constants: a client
+// must never be told a mode the RPC runtime never applied.
+func TestRPCGetStateReportsQueueModes(t *testing.T) {
+	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
+	s.r.settings.SteeringMode = "one-at-a-time"
+	s.r.settings.FollowUpMode = "all"
+	s.loop = s.r.newLoop(s.sink)
+
+	resp := s.handle(rpcCommand{ID: strptr("g"), Type: "get_state"})
+	if resp == nil || !resp.Success {
+		t.Fatalf("get_state = %+v", resp)
+	}
+	data := resp.Data.(map[string]any)
+	if data["steeringMode"] != "one-at-a-time" || data["followUpMode"] != "all" {
+		t.Fatalf("queue modes = %v/%v, want one-at-a-time/all", data["steeringMode"], data["followUpMode"])
 	}
 }
 

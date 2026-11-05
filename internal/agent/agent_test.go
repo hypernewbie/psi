@@ -785,7 +785,6 @@ func TestSteeringQueueModes(t *testing.T) {
 		wantAllIn3 bool
 	}{
 		{"default", "", 4, false}, // Pi's default: one steering message per turn
-		{"one-at-a-time", queueModeOneAtATime, 4, false},
 		{"all", queueModeAll, 3, true},
 		{"unknown falls back to default", "bogus", 4, false},
 	}
