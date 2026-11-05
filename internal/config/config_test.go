@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"psi/internal/testutil/leakcheck"
@@ -132,6 +133,59 @@ func TestLoadMergePrecedence(t *testing.T) {
 	}
 	if res2.Settings.DefaultModel != "m1" {
 		t.Errorf("consent deny should keep user model, got %q", res2.Settings.DefaultModel)
+	}
+}
+
+func TestLoadProjectSettingsReusesUserLoad(t *testing.T) {
+	dir := t.TempDir()
+	user := filepath.Join(dir, "user.json")
+	project := filepath.Join(dir, "project.json")
+	writeJSON(t, user, `{"theme":"user-light/user-dark","defaultTools":["read","bash"],"defaultThinkingLevel":"low","compaction":{"enabled":true,"reserveTokens":100}}`)
+	writeJSON(t, project, `{"theme":"project-light/project-dark","defaultTools":["-bash","edit"],"compaction":{"keepRecentTokens":999}}`)
+	want, err := LoadSettings(user, project, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userOnly, err := LoadSettings(user, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadProjectSettings(userOnly, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("incremental project load drifted:\n got %+v\nwant %+v", got, want)
+	}
+	// The common startup path: consent granted but no project settings.json.
+	// The base load must come back unchanged.
+	missing, err := LoadProjectSettings(userOnly, filepath.Join(dir, "absent.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(missing, userOnly) {
+		t.Fatalf("absent project file changed the load:\n got %+v\nwant %+v", missing, userOnly)
+	}
+}
+
+func TestLoadProjectSettingsRejectsInvalidProject(t *testing.T) {
+	dir := t.TempDir()
+	user := filepath.Join(dir, "user.json")
+	project := filepath.Join(dir, "project.json")
+	writeJSON(t, user, `{"defaultModel":"m1"}`)
+	base, err := LoadSettings(user, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(project, []byte(`{not valid json`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProjectSettings(base, project); err == nil {
+		t.Fatal("malformed project settings must fail")
+	}
+	writeJSON(t, project, `{"defaultThinkingLevel":"bogus"}`)
+	if _, err := LoadProjectSettings(base, project); err == nil {
+		t.Fatal("invalid merged defaultThinkingLevel must fail")
 	}
 }
 

@@ -173,28 +173,51 @@ type LoadResult struct {
 // Project overrides user for supported scalars; defaultTools uses Pi's
 // replacement and +/- semantics; compaction merges per-field and by model.
 func LoadSettings(userPath, projectPath string, projectConsent bool) (LoadResult, error) {
-	merged := defaultSettings()
-	sources := map[string]string{}
-	if data, err := readJSONFile(userPath); err == nil {
-		if err := applyRaw(data, &merged, sources, "user:"+userPath); err != nil {
-			return LoadResult{}, fmt.Errorf("%s: %w", userPath, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return LoadResult{}, fmt.Errorf("%s: %w", userPath, err)
+	loaded := LoadResult{Settings: defaultSettings(), Sources: map[string]string{}}
+	var err error
+	if loaded, err = applySettingsFile(loaded, userPath, "user:"+userPath); err != nil {
+		return LoadResult{}, err
 	}
 	if projectConsent {
-		if data, err := readJSONFile(projectPath); err == nil {
-			if err := applyRaw(data, &merged, sources, "project:"+projectPath); err != nil {
-				return LoadResult{}, fmt.Errorf("%s: %w", projectPath, err)
-			}
-		} else if !os.IsNotExist(err) {
-			return LoadResult{}, fmt.Errorf("%s: %w", projectPath, err)
+		if loaded, err = applySettingsFile(loaded, projectPath, "project:"+projectPath); err != nil {
+			return LoadResult{}, err
 		}
 	}
-	if merged.DefaultThinking != "" && !validThinking(merged.DefaultThinking) {
-		return LoadResult{}, fmt.Errorf("unsupported defaultThinkingLevel %q", merged.DefaultThinking)
+	return validateSettings(loaded)
+}
+
+// LoadProjectSettings applies project settings.json on top of an earlier load.
+// base is consumed: applyRaw mutates its slices in place.
+func LoadProjectSettings(base LoadResult, projectPath string) (LoadResult, error) {
+	loaded, err := applySettingsFile(base, projectPath, "project:"+projectPath)
+	if err != nil {
+		return LoadResult{}, err
 	}
-	return LoadResult{Settings: merged, Sources: sources}, nil
+	return validateSettings(loaded)
+}
+
+func applySettingsFile(loaded LoadResult, path, src string) (LoadResult, error) {
+	if loaded.Sources == nil {
+		loaded.Sources = map[string]string{}
+	}
+	data, err := readJSONFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return loaded, nil
+		}
+		return LoadResult{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := applyRaw(data, &loaded.Settings, loaded.Sources, src); err != nil {
+		return LoadResult{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return loaded, nil
+}
+
+func validateSettings(loaded LoadResult) (LoadResult, error) {
+	if loaded.Settings.DefaultThinking != "" && !validThinking(loaded.Settings.DefaultThinking) {
+		return LoadResult{}, fmt.Errorf("unsupported defaultThinkingLevel %q", loaded.Settings.DefaultThinking)
+	}
+	return loaded, nil
 }
 
 func readJSONFile(path string) (map[string]any, error) {

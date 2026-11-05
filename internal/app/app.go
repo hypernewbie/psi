@@ -498,7 +498,9 @@ func Run(args []string, version string) error {
 		return err
 	}
 	agentDir := session.AgentDir()
-	userSettings, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), "", false)
+	userPath := filepath.Join(agentDir, "settings.json")
+	projectPath := filepath.Join(cwd, ".pi", "settings.json")
+	userSettings, err := config.LoadSettings(userPath, "", false)
 	if err != nil {
 		return err
 	}
@@ -512,9 +514,11 @@ func Run(args []string, version string) error {
 	if err != nil {
 		return err
 	}
-	loaded, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json"), consent)
-	if err != nil {
-		return err
+	loaded := userSettings
+	if consent {
+		if loaded, err = config.LoadProjectSettings(userSettings, projectPath); err != nil {
+			return err
+		}
 	}
 	st := loaded.Settings
 	themeMode = pitheme.DetectColorMode(st.TerminalTrueColor, envMap(), goruntime.GOOS)
