@@ -98,6 +98,9 @@ type Settings struct {
 	HTTPIdleTimeoutMs       int64 // milliseconds; 0 or -1 disables the idle timer
 	MaxRetries              int
 	QuietStartup            bool
+	// DefaultProjectTrust is the global trust default: "ask", "always", or
+	// "never". It matches pi's defaultProjectTrust setting.
+	DefaultProjectTrust string
 	// Diagnostics for skipped unsupported resources.
 	Warnings []string
 }
@@ -115,6 +118,7 @@ func defaultSettings() Settings {
 		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
 		MaxRetries:              3,
 		HTTPIdleTimeoutMs:       300000,
+		DefaultProjectTrust:     "ask",
 	}
 }
 
@@ -146,12 +150,13 @@ type rawSettings struct {
 			ReserveTokens *int `json:"reserveTokens"`
 		} `json:"modelOverrides"`
 	} `json:"compaction"`
-	ShellPath          *string `json:"shellPath"`
-	ShellCommandPrefix *string `json:"shellCommandPrefix"`
-	HTTPIdleTimeoutMs  any     `json:"httpIdleTimeoutMs"`
-	QuietStartup       any     `json:"quietStartup"`
-	MaxRetries         *int    `json:"maxRetries"`
-	Retry              *struct {
+	ShellPath           *string `json:"shellPath"`
+	ShellCommandPrefix  *string `json:"shellCommandPrefix"`
+	HTTPIdleTimeoutMs   any     `json:"httpIdleTimeoutMs"`
+	QuietStartup        any     `json:"quietStartup"`
+	DefaultProjectTrust *string `json:"defaultProjectTrust"`
+	MaxRetries          *int    `json:"maxRetries"`
+	Retry               *struct {
 		Enabled    *bool `json:"enabled"`
 		MaxRetries *int  `json:"maxRetries"`
 	} `json:"retry"`
@@ -478,6 +483,18 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 	}
 	if raw.MaxRetries != nil {
 		out.MaxRetries = *raw.MaxRetries
+	}
+	if raw.DefaultProjectTrust != nil {
+		switch *raw.DefaultProjectTrust {
+		case "ask", "always", "never":
+			// Pi reads this setting from the global settings only.
+			if strings.HasPrefix(src, "user:") {
+				out.DefaultProjectTrust = *raw.DefaultProjectTrust
+			}
+		default:
+			return fmt.Errorf("defaultProjectTrust must be \"ask\", \"always\", or \"never\"")
+		}
+		set("defaultProjectTrust", "set")
 	}
 	if raw.Retry != nil {
 		if raw.Retry.MaxRetries != nil {

@@ -467,7 +467,7 @@ func Run(args []string, version string) error {
 	userTheme, _, _ := resolveThemeSnapshot(userCatalog, selectedThemeSetting(userSettings.Settings, o), colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
 	_, noColor := os.LookupEnv("NO_COLOR")
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: userTheme, NoColor: noColor, Display: presentationDisplay(userSettings.Settings)})
-	consent, err := askProjectConsent(o, cwd, console, lifecycle)
+	consent, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, console, lifecycle)
 	if err != nil {
 		return err
 	}
@@ -810,39 +810,6 @@ func envMap() map[string]string {
 		}
 	}
 	return m
-}
-
-func askProjectConsent(o Options, cwd string, console *terminal.Console, lifecycle *terminalLifecycle) (bool, error) {
-	if o.DenyProj {
-		return false, nil
-	}
-	if o.AllowProj {
-		return true, nil
-	}
-	hasProject := false
-	for _, p := range []string{".pi/settings.json", ".pi/skills", ".pi/themes", ".pi/packages", ".pi/SYSTEM.md", ".pi/APPEND_SYSTEM.md", ".agents/skills"} {
-		if _, err := os.Stat(filepath.Join(cwd, p)); err == nil {
-			hasProject = true
-			break
-		}
-	}
-	if !hasProject {
-		return false, nil
-	}
-	picker := &terminal.ChoicePicker{
-		Title:   "Project trust",
-		Context: "Load protected project resources from " + cwd + "? This applies to this run only.",
-		Options: []terminal.ChoiceOption{
-			{Label: "Trust for this run", Description: "load project settings, instructions, and skills"},
-			{Label: "Deny", Description: "ignore protected project resources", Current: true},
-		},
-		Selected: 1,
-	}
-	selected, cancelled, err := runChoicePicker(console, lifecycle, picker)
-	if err != nil || cancelled {
-		return false, err
-	}
-	return selected == 0, nil
 }
 
 func confirmWorkspaceMismatch(console *terminal.Console, lifecycle *terminalLifecycle, sessionCwd, toolCwd string) (bool, error) {

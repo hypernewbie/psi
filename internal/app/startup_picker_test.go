@@ -22,7 +22,7 @@ import (
 	"psi/internal/testutil/leakcheck"
 )
 
-func TestInlineProjectTrustPickerDefaultsToDeny(t *testing.T) {
+func TestInlineProjectTrustPickerOffersPiChoices(t *testing.T) {
 	for _, allow := range []bool{false, true} {
 		name := "deny"
 		if allow {
@@ -42,9 +42,9 @@ func TestInlineProjectTrustPickerDefaultsToDeny(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := startReviewPTY(t, home, work, agentDir, "--session", store.File())
-			q.wait("Project trust")
-			if allow {
-				q.write("\x1b[A") // select the explicit one-run trust choice
+			q.wait("Trust project folder?")
+			if !allow {
+				q.write("\x1b[B\x1b[B\x1b[B") // select "Do not trust"
 			}
 			q.write("\r")
 			q.wait("esc interrupt")
@@ -63,13 +63,60 @@ func TestInlineProjectTrustPickerDefaultsToDeny(t *testing.T) {
 				q.wait("skill \"project\" not found")
 				q.prompt()
 			}
-			if strings.Contains(q.raw.String(), "PROJECT_RESOURCE_CANARY") || strings.Contains(q.raw.String(), "PROJECT_SKILL_BODY") {
-				t.Fatal("project resources escaped the consent boundary")
+			if !allow {
+				if strings.Contains(q.raw.String(), "PROJECT_RESOURCE_CANARY") || strings.Contains(q.raw.String(), "PROJECT_SKILL_BODY") {
+					t.Fatal("project resources escaped the consent boundary")
+				}
 			}
 			q.write("/quit\r")
 			q.finish()
 		})
 	}
+}
+
+// A folder is asked about once: the stored decision answers the next run.
+func TestProjectTrustIsAskedOnceAndRemembered(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	writeAppFile(t, filepath.Join(work, ".pi", "SYSTEM.md"), "PROJECT_RESOURCE_CANARY")
+	q := startReviewPTY(t, home, work, agentDir, "--no-session")
+	q.wait("Trust project folder?")
+	q.write("\r")
+	q.wait("esc interrupt")
+	q.write("/quit\r")
+	q.finish()
+	if _, err := os.Stat(filepath.Join(agentDir, "trust.json")); err != nil {
+		t.Fatalf("trust decision was not stored: %v", err)
+	}
+	second := startReviewPTY(t, home, work, agentDir, "--no-session")
+	second.prompt()
+	if strings.Contains(second.screen.Text(), "Trust project folder?") {
+		t.Fatalf("trust prompt appeared twice: %q", second.screen.Text())
+	}
+	second.write("/quit\r")
+	second.finish()
+}
+
+// A folder without trust-requiring project resources is never asked about.
+func TestProjectTrustIsNotAskedWithoutProjectResources(t *testing.T) {
+	home := t.TempDir()
+	work := filepath.Join(home, "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	if err := os.MkdirAll(filepath.Join(home, ".agents", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--no-session")
+	q.prompt()
+	if strings.Contains(q.screen.Text(), "Trust project folder?") {
+		t.Fatalf("trust prompt appeared without project resources: %q", q.screen.Text())
+	}
+	q.write("/quit\r")
+	q.finish()
 }
 
 func TestStartupConfirmationPreservesPendingEditorInput(t *testing.T) {
@@ -85,8 +132,8 @@ func TestStartupConfirmationPreservesPendingEditorInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := startReviewPTY(t, home, work, agentDir, "--session", store.File())
-	q.wait("Project trust")
-	q.write("\r/quit\r") // one terminal write: consent first, next prompt input second
+	q.wait("Trust project folder?")
+	q.write("\x1b[B\x1b[B\x1b[B\r/quit\r") // one terminal write: consent first, next prompt input second
 	q.wait("esc interrupt")
 	q.finish()
 	if strings.Contains(q.raw.String(), "PROJECT_RESOURCE_CANARY") {

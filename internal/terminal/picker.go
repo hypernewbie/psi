@@ -1,6 +1,10 @@
 package terminal
 
-import pitheme "psi/internal/theme"
+import (
+	"strings"
+
+	pitheme "psi/internal/theme"
+)
 
 // PickerMode selects how the picker region is composed.
 type PickerMode uint8
@@ -71,9 +75,13 @@ func (p *ChoicePicker) Rows(width int, noColor bool, palette ...*pitheme.Theme) 
 		rows = append(rows, FormatStyledRow(StyledRow{Spans: spans}, width, noColor, selectedTheme))
 	}
 	// Pi's trust selector shows a title, the visible folder, and the options
-	// with a selection pointer and a current marker. psi keeps its reduced
-	// allow/deny set and its explicit cancel action.
+	// with a selection pointer and a current marker.
 	appendRow([]StyledSpan{{Text: p.Title, Token: TokenAccent, Bold: true}})
+	if p.Context != "" {
+		for _, line := range strings.Split(p.Context, "\n") {
+			appendRow([]StyledSpan{{Text: line, Token: TokenMuted}})
+		}
+	}
 	for i, option := range p.Options {
 		prefix, prefixToken, labelToken := "  ", TokenMuted, TokenText
 		if i == p.Selected {
@@ -94,9 +102,6 @@ func (p *ChoicePicker) Rows(width int, noColor bool, palette ...*pitheme.Theme) 
 			row.Surface = TokenSelectedBg
 		}
 		rows = append(rows, FormatStyledRow(row, width, noColor, selectedTheme))
-	}
-	if p.Context != "" {
-		appendRow([]StyledSpan{{Text: p.Context, Token: TokenMuted}})
 	}
 	appendRow([]StyledSpan{{Text: FitHint(width, "↑↓ navigate · Enter save · Esc cancel", "↑↓ · Enter · Esc", "Enter Esc"), Token: TokenMuted}})
 	return rows

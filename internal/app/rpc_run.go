@@ -95,9 +95,17 @@ func runRPC(o Options, version string) error {
 		return err
 	}
 	agentDir := session.AgentDir()
-	// Headless consent matches the interactive default: protected project
-	// resources stay off unless explicitly approved.
-	consent := o.AllowProj && !o.DenyProj
+	userSettings, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), "", false)
+	if err != nil {
+		return err
+	}
+	// Headless trust follows pi: an explicit override wins, then the stored
+	// decision, then the global defaultProjectTrust setting. There is no UI,
+	// so an undecided folder stays untrusted.
+	consent, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, nil, nil)
+	if err != nil {
+		return err
+	}
 	loaded, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json"), consent)
 	if err != nil {
 		return err
