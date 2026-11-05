@@ -1,14 +1,14 @@
 package app
 
-// Headless JSONL mode for `psi --mode rpc`, a minimal port of Pi's RPC mode.
-// Phi spawns one child with piped stdio and speaks the same line protocol:
-// commands in on stdin, responses and events out on stdout.
+// Headless JSONL mode for `psi --mode rpc`: a scripting utility, not a chat
+// backend. One child with piped stdio speaks pi's line protocol: commands in
+// on stdin, responses and events out on stdout.
 //
-// Only the subset Phi's chat surface uses is implemented: prompt, abort,
-// get_state, get_available_models, set_model, get_available_thinking_levels,
-// set_thinking_level, compact, new_session, get_session_stats, get_commands,
-// and set_session_name. Every other command answers pi's standard unknown
-// error, so Phi degrades exactly as it would against a Pi lacking it.
+// Only the run-and-control subset is implemented: prompt, abort, get_state,
+// get_available_models, set_model, get_available_thinking_levels,
+// set_thinking_level, compact, and get_session_stats. Conversation management
+// (new sessions, display names, skill menus) is chat chrome and answers pi's
+// standard unknown error, like any other unimplemented command.
 // Diagnostics go to stderr; stdout carries protocol only.
 
 import (
@@ -25,13 +25,11 @@ import (
 	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
-	"psi/internal/session"
 	"psi/internal/skills"
 	"psi/internal/tools"
 )
 
-// rpcScannerBuffer is the longest accepted stdin line, mirroring Phi's own
-// 10 MiB JSONL bound.
+// rpcScannerBuffer is the longest accepted stdin line: a 10 MiB JSONL bound.
 const rpcScannerBuffer = 10 * 1024 * 1024
 
 // rpcCommand is one stdin line. Only implemented fields are decoded; the
@@ -45,11 +43,10 @@ type rpcCommand struct {
 	ModelID            string  `json:"modelId"`
 	Level              string  `json:"level"`
 	CustomInstructions string  `json:"customInstructions"`
-	Name               string  `json:"name"`
 }
 
 // rpcResponse is one stdout answer. The id echoes the command's when present;
-// Phi drops id-less responses, so every answer carries it through.
+// Like pi, id-less responses have no waiter, so every answer carries it through.
 type rpcResponse struct {
 	ID      *string `json:"id,omitempty"`
 	Type    string  `json:"type"`
@@ -67,8 +64,8 @@ func rpcErr(id *string, command, message string) rpcResponse {
 	return rpcResponse{ID: id, Type: "response", Command: command, Success: false, Error: message}
 }
 
-// rpcModel is the model object Phi reads: provider and id for identity, name
-// for display with an ID fallback when the catalog has no separate name.
+// rpcModel is the model object headless clients read: provider and id for
+// identity, name for display with an ID fallback when the catalog has none.
 type rpcModel struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
@@ -140,8 +137,8 @@ func (s *rpcRunner) pendingCount() int {
 	return len(s.loop.PendingSteering()) + len(s.loop.PendingFollowUp())
 }
 
-// sink translates the agent event stream to Phi's JSONL events. It runs on
-// agent goroutines, so every write takes the encoder lock.
+// sink translates the agent event stream to pi-compatible JSONL events. It
+// runs on agent goroutines, so every write takes the encoder lock.
 func (s *rpcRunner) sink(ev event.Event) {
 	switch ev.Type {
 	case event.RunStart:
@@ -326,14 +323,8 @@ func (s *rpcRunner) handle(cmd rpcCommand) *rpcResponse {
 		return s.setThinking(cmd)
 	case "compact":
 		return s.compact(cmd)
-	case "new_session":
-		return s.newSession(cmd)
 	case "get_session_stats":
 		return s.sessionStats(cmd)
-	case "get_commands":
-		return s.commands(cmd)
-	case "set_session_name":
-		return s.setName(cmd)
 	case "extension_ui_response":
 		// No extension UI channel exists headlessly; the response has no waiter.
 		return nil
@@ -417,7 +408,7 @@ func (s *rpcRunner) isCompacting() bool {
 	return s.compacting
 }
 
-// getState answers with the live runtime shape Phi's wire parser reads.
+// getState answers with the live runtime shape pi's wire format defines.
 func (s *rpcRunner) getState(cmd rpcCommand) *rpcResponse {
 	s.mu.Lock()
 	running, compacting := s.running, s.compacting
@@ -450,7 +441,7 @@ func (s *rpcRunner) getState(cmd rpcCommand) *rpcResponse {
 }
 
 // rpcAvailableModels enumerates the same selectable catalog the bridge
-// offers, with display names for Phi's pickers.
+// offers, with display names for clients that list models.
 func rpcAvailableModels(models *config.ModelsFile) []rpcModel {
 	var out []rpcModel
 	if models == nil {
@@ -557,8 +548,8 @@ func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
 	return &out
 }
 
-// compact runs one native compaction synchronously: Phi's control gate holds
-// the UI until the command responds.
+// compact runs one native compaction synchronously: callers waiting on the
+// command response hold until it finishes.
 func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 	if s.loop.Running() || s.isRunning() {
 		out := rpcErr(cmd.ID, "compact", "Cannot compact while a run is active")
@@ -597,38 +588,8 @@ func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 	return &out
 }
 
-// newSession replaces the store, exactly like /new. A busy or queued session
-// is refused: Phi pre-checks idleness and never wants a torn transcript.
-func (s *rpcRunner) newSession(cmd rpcCommand) *rpcResponse {
-	r := s.r
-	if s.loop.Running() || s.isRunning() || s.pendingCount() > 0 || s.isCompacting() {
-		out := rpcErr(cmd.ID, "new_session", "Cannot start a new session while a run is active")
-		return &out
-	}
-	next, err := session.New(session.OpenOptions{
-		Cwd: r.store.Cwd(), SessionDir: r.store.Dir(),
-		AgentDir: r.agentDir, Persist: r.store.Persistent(),
-	})
-	if err != nil {
-		out := rpcErr(cmd.ID, "new_session", err.Error())
-		return &out
-	}
-	if err := next.TryLock(); err != nil {
-		out := rpcErr(cmd.ID, "new_session", err.Error())
-		return &out
-	}
-	r.store.Unlock()
-	r.store = next
-	s.loop = agent.New(next, r.reg, r.prov, s.sink)
-	s.mu.Lock()
-	s.emitted = 0
-	s.mu.Unlock()
-	out := rpcOK(cmd.ID, "new_session", map[string]any{"cancelled": false})
-	return &out
-}
-
 // sessionStats answers with stored token accounting and a live context
-// estimate, the two shapes Phi's chat surface renders.
+// estimate for headless observability.
 func (s *rpcRunner) sessionStats(cmd rpcCommand) *rpcResponse {
 	r := s.r
 	acc, err := r.store.Accounting()
@@ -652,39 +613,6 @@ func (s *rpcRunner) sessionStats(cmd rpcCommand) *rpcResponse {
 		},
 	}
 	out := rpcOK(cmd.ID, "get_session_stats", data)
-	return &out
-}
-
-// commands answers with the live session skills, the only invokable source
-// headlessly. The skill: prefix is what Phi's chat sends back through prompt.
-func (s *rpcRunner) commands(cmd rpcCommand) *rpcResponse {
-	var entries []map[string]any
-	for _, skill := range s.r.skills {
-		entries = append(entries, map[string]any{
-			"name": "skill:" + skill.Name, "description": skill.Description, "source": "skill",
-		})
-	}
-	if entries == nil {
-		entries = []map[string]any{}
-	}
-	out := rpcOK(cmd.ID, "get_commands", map[string]any{"commands": entries})
-	return &out
-}
-
-// setName persists the display name and publishes the change event Phi's
-// title service listens for.
-func (s *rpcRunner) setName(cmd rpcCommand) *rpcResponse {
-	name := strings.TrimSpace(cmd.Name)
-	if name == "" {
-		out := rpcErr(cmd.ID, "set_session_name", "Session name cannot be empty")
-		return &out
-	}
-	if _, err := s.r.store.AppendSessionInfo(name); err != nil {
-		out := rpcErr(cmd.ID, "set_session_name", err.Error())
-		return &out
-	}
-	s.emit(map[string]any{"type": "session_info_changed", "name": name})
-	out := rpcOK(cmd.ID, "set_session_name", nil)
 	return &out
 }
 

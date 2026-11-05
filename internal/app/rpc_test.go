@@ -208,7 +208,7 @@ func TestRPCPromptStartsStreamsAndSettles(t *testing.T) {
 	}
 	objs := log.waitFor(t, "agent_settled", isType("agent_settled"))
 
-	// The caller-side message publishes first, so Phi renders instantly.
+	// The caller-side message publishes first, so clients render instantly.
 	userStart := -1
 	for i, obj := range objs {
 		if obj["type"] == "message_start" && obj["message"].(map[string]any)["role"] == "user" {
@@ -440,32 +440,6 @@ func TestRPCCompactEmptyThenAfterExchange(t *testing.T) {
 	}
 }
 
-func TestRPCNewSessionReplacesStore(t *testing.T) {
-	fake := &provider.Fake{Responses: []*provider.Response{{Text: "hi", StopReason: "stop"}}}
-	s, _, log := newRPCTestRunner(t, fake, nil)
-	if resp := s.handle(rpcCommand{ID: strptr("n0"), Type: "prompt", Message: "hello"}); resp == nil || !resp.Success {
-		t.Fatalf("prompt = %+v", resp)
-	}
-	log.waitFor(t, "agent_settled", isType("agent_settled"))
-	before := s.handle(rpcCommand{ID: strptr("n1"), Type: "get_state"})
-	if before.Data.(map[string]any)["messageCount"].(int) == 0 {
-		t.Fatal("prompt left no messages")
-	}
-	oldID := s.r.store.Header().ID
-	resp := s.handle(rpcCommand{ID: strptr("n2"), Type: "new_session"})
-	if resp == nil || !resp.Success || resp.Data.(map[string]any)["cancelled"] != false {
-		t.Fatalf("new_session = %+v", resp)
-	}
-	after := s.handle(rpcCommand{ID: strptr("n3"), Type: "get_state"})
-	data := after.Data.(map[string]any)
-	if data["sessionId"] == oldID {
-		t.Fatalf("session id did not change: %v", data)
-	}
-	if data["messageCount"].(int) != 0 {
-		t.Fatalf("new session not empty: %v", data)
-	}
-}
-
 func TestRPCSessionStats(t *testing.T) {
 	fake := &provider.Fake{Responses: []*provider.Response{{Text: "hi", StopReason: "stop"}}}
 	s, _, _ := newRPCTestRunner(t, fake, nil)
@@ -489,45 +463,13 @@ func TestRPCSessionStats(t *testing.T) {
 	}
 }
 
-func TestRPCGetCommandsListsSkills(t *testing.T) {
-	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, []skills.Skill{{Name: "notes", Description: "Take notes"}})
-	resp := s.handle(rpcCommand{ID: strptr("c"), Type: "get_commands"})
-	if resp == nil || !resp.Success {
-		t.Fatalf("get_commands = %+v", resp)
-	}
-	commands := resp.Data.(map[string]any)["commands"].([]map[string]any)
-	if len(commands) != 1 || commands[0]["name"] != "skill:notes" || commands[0]["source"] != "skill" {
-		t.Fatalf("commands = %v", commands)
-	}
-	empty := func() *rpcRunner {
-		r, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
-		return r
-	}()
-	resp = empty.handle(rpcCommand{ID: strptr("c2"), Type: "get_commands"})
-	if cmds := resp.Data.(map[string]any)["commands"].([]map[string]any); len(cmds) != 0 {
-		t.Fatalf("expected no commands, got %v", cmds)
-	}
-}
-
-func TestRPCSetSessionName(t *testing.T) {
-	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
-	blank := s.handle(rpcCommand{ID: strptr("n1"), Type: "set_session_name", Name: "   "})
-	if blank == nil || blank.Success {
-		t.Fatalf("blank name should fail, got %+v", blank)
-	}
-	ok := s.handle(rpcCommand{ID: strptr("n2"), Type: "set_session_name", Name: " Field Notes "})
-	if ok == nil || !ok.Success {
-		t.Fatalf("set_session_name = %+v", ok)
-	}
-	if s.r.store.SessionName() != "Field Notes" {
-		t.Fatalf("session name = %q", s.r.store.SessionName())
-	}
-	if !hasEvent(log.objects(t), "session_info_changed", map[string]any{"name": "Field Notes"}) {
-		t.Fatalf("missing session_info_changed: %v", log.objects(t))
-	}
-	state := s.handle(rpcCommand{ID: strptr("n3"), Type: "get_state"})
-	if state.Data.(map[string]any)["sessionName"] != "Field Notes" {
-		t.Fatalf("state name = %v", state.Data)
+func TestRPCUtilitySurfaceRejectsConversationManagement(t *testing.T) {
+	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
+	for _, typ := range []string{"new_session", "get_commands", "set_session_name"} {
+		resp := s.handle(rpcCommand{Type: typ})
+		if resp == nil || resp.Success || resp.Error != "Unknown command: "+typ {
+			t.Fatalf("%s should be unimplemented, got %+v", typ, resp)
+		}
 	}
 }
 
