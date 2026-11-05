@@ -296,7 +296,7 @@ func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat tim
 			break
 		}
 		if !os.IsExist(err) {
-			return nil, nil, fmt.Errorf("cannot lock auth.json")
+			return nil, nil, fmt.Errorf("cannot lock auth.json: %w", err)
 		}
 		// Another holder may own the lease. Reclaim only a provably stale,
 		// unchanged lease; never steal a fresh or replaced one.
