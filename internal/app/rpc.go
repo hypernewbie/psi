@@ -202,11 +202,29 @@ func (s *rpcRunner) sink(ev event.Event) {
 			"errorMessage": ev.RetryClass,
 		})
 	case event.CompactionStart:
+		s.sweepDurable()
 		reason := rpcCompactionReason(ev.State)
 		s.mu.Lock()
 		s.compactionReason = reason
 		s.mu.Unlock()
 		s.emit(map[string]any{"type": "compaction_start", "reason": reason})
+	case event.CompactionEnd:
+		if ev.Err == nil {
+			if proj, err := s.r.store.Projection(); err == nil {
+				s.emitted = len(proj.Flat)
+			}
+		}
+		// Explicit compact publishes its outcome when Compact returns.
+		if s.isCompacting() {
+			return
+		}
+		result := map[string]any{"type": "compaction_end", "reason": rpcCompactionReason(ev.State), "aborted": false}
+		if ev.Err != nil {
+			result["errorMessage"] = ev.Err.Error()
+		} else {
+			result["result"] = map[string]any{}
+		}
+		s.emit(result)
 	}
 }
 
@@ -214,6 +232,8 @@ func rpcCompactionReason(state string) string {
 	switch state {
 	case event.CompactionManual, event.CompactionThreshold, event.CompactionOverflow:
 		return state
+	case event.CompactionAdaptive, event.CompactionEndTurn:
+		return event.CompactionThreshold
 	default:
 		return event.CompactionManual
 	}

@@ -193,7 +193,7 @@ func (l *Loop) CheckCompaction(cfg Config) (CompactionPreparation, error) {
 	return prepared, nil
 }
 
-func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason string) error {
+func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason string) (runErr error) {
 	prepared, err := l.CheckCompaction(cfg)
 	if err != nil {
 		return err
@@ -202,7 +202,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 		cfg.ACPolicy.SetCompacting(true)
 	}
 	l.sink(event.Event{Type: event.CompactionStart, State: reason})
-	defer l.sink(event.Event{Type: event.CompactionEnd, State: reason})
+	defer func() { l.sink(event.Event{Type: event.CompactionEnd, State: reason, Err: runErr}) }()
 
 	summaryProvider, summaryModel := l.prov, cfg.Model
 	cleanup := func() {}

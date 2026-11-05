@@ -2,9 +2,11 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
 )
@@ -60,6 +62,15 @@ func TestRPCModelSwitchRebuildsLoop(t *testing.T) {
 	}
 	if s.loop == old {
 		t.Fatal("model switch retained old agent loop and provider")
+	}
+}
+
+func TestRPCAutomaticCompactionPublishesCompletion(t *testing.T) {
+	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
+	s.sink(event.Event{Type: event.CompactionStart, State: event.CompactionThreshold})
+	s.sink(event.Event{Type: event.CompactionEnd, State: event.CompactionThreshold, Err: errors.New("failed")})
+	if !hasEvent(log.objects(t), "compaction_end", map[string]any{"reason": "threshold", "errorMessage": "failed"}) {
+		t.Fatalf("missing automatic compaction outcome: %v", log.objects(t))
 	}
 }
 
