@@ -247,11 +247,12 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		if beforeSelection == "" {
 			t.Fatalf("model picker has no visible selected row before resize to %dx%d: %q", size[0], size[1], conptyVisibleText(screen))
 		}
+		beforeBytes := raw.Len()
 		resize(size[0], size[1])
 		waitFor("picker resize without a key", func(_ string) bool {
-			return conptyEditorReady(screen) && conptyLayoutSized(screen) && pickerSelectionMatches(screen, beforeSelection)
+			return raw.Len() > beforeBytes && conptyEditorReady(screen) && conptyLayoutSized(screen) && pickerSelectionMatches(screen, beforeSelection)
 		})
-		beforeBytes := raw.Len()
+		beforeBytes = raw.Len()
 		write("\x1b[B")
 		waitFor(fmt.Sprintf("picker resize %dx%d", size[0], size[1]), func(_ string) bool {
 			return raw.Len() > beforeBytes && conptyEditorReady(screen) && conptyPickerSelection(screen) != "" && conptyPickerSelection(screen) != beforeSelection
