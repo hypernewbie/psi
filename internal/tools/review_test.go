@@ -59,26 +59,36 @@ func TestReviewCancelledEditWaitDoesNotRead(t *testing.T) {
 }
 
 func TestReviewDrainGraceStartsAtLeaderExit(t *testing.T) {
-	// The drain clock is injected and jumps an hour past the leader's last
-	// chunk before the leader exits. A clock that measured from the last
-	// chunk would kill the group at once; the exit touch restarts it, so the
-	// descendant's post-exit write is captured without depending on how long
-	// a loaded host takes to schedule that write inside 100ms.
+	// Jump the drain clock an hour past the leader's last chunk while the
+	// leader is still alive. The second clock call is the leader-exit touch;
+	// it releases the descendant, which guarantees its write happens after
+	// leader exit. Without that touch, drain expires immediately instead.
 	dir := t.TempDir()
 	reg := NewRegistry(dir)
 	var fake atomic.Int64
 	fake.Store(time.Now().UnixNano())
-	reg.Bash.now = func() time.Time { return time.Unix(0, fake.Load()) }
+	drainReady := filepath.Join(dir, "drain.ready")
+	var clockCalls atomic.Int64
+	var releaseErr error
+	reg.Bash.now = func() time.Time {
+		if clockCalls.Add(1) == 2 {
+			releaseErr = os.WriteFile(drainReady, nil, 0o600)
+		}
+		return time.Unix(0, fake.Load())
+	}
 	gate := filepath.Join(dir, "go")
 	done := make(chan Result, 1)
 	go func() {
 		done <- reg.Dispatch(Invocation{Name: Bash, Arguments: map[string]any{
 			"command": "echo $$ > leader.pid; " +
-				"(echo ready > descendant.ready; while [ ! -e go ]; do sleep 0.01; done; sleep 0.03; printf after-exit) & " +
+				"(echo ready > descendant.ready; while [ ! -e drain.ready ]; do sleep 0.01; done; printf after-exit) & " +
 				"while [ ! -e go ]; do sleep 0.01; done",
 		}})
 	}()
-	t.Cleanup(func() { _ = os.WriteFile(gate, nil, 0o600) })
+	t.Cleanup(func() {
+		_ = os.WriteFile(gate, nil, 0o600)
+		_ = os.WriteFile(drainReady, nil, 0o600)
+	})
 	reviewWaitPID(t, filepath.Join(dir, "leader.pid"))
 	reviewWaitFile(t, filepath.Join(dir, "descendant.ready"))
 	fake.Add(int64(time.Hour))
@@ -87,6 +97,9 @@ func TestReviewDrainGraceStartsAtLeaderExit(t *testing.T) {
 	}
 	select {
 	case res := <-done:
+		if releaseErr != nil {
+			t.Fatalf("release descendant after leader exit: %v", releaseErr)
+		}
 		if res.IsError || !strings.Contains(res.Content[0].Text, "after-exit") {
 			t.Fatalf("quiet leader consumed descendant drain grace: %+v", res)
 		}
