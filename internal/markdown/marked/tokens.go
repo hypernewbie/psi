@@ -77,6 +77,9 @@ type Token struct {
 	// tokens are lexed, so a token that puts a checkbox in front of the
 	// inline tokens of a task list item records the checkbox here.
 	InlinePrepend []Token
+
+	// Pending reports that a streamed latex token has not been closed yet.
+	Pending bool
 }
 
 // ListItem is one item of a list token.

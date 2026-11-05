@@ -193,6 +193,13 @@ func canonicalToken(token *Token) map[string]any {
 		out["text"] = token.Text
 	case TypeCheckbox:
 		out["checked"] = token.Checked
+	case TypeLatex, TypeLatexBlock:
+		// the extension tokens of pi: the reference script emits the pending
+		// flag only when the token carries it
+		out["text"] = token.Text
+		if token.Pending {
+			out["pending"] = true
+		}
 	}
 	return out
 }

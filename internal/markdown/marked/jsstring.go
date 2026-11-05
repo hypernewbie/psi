@@ -118,3 +118,16 @@ func replaceGroup(re *regexp2.Regexp, src string, group int) string {
 		return found.group(group)
 	})
 }
+
+// dropLastUnits returns src without its last n UTF-16 code units, like
+// JavaScript's `str.slice(0, -n)`.
+func dropLastUnits(src string, n int) string {
+	if n <= 0 {
+		return src
+	}
+	total := utf16Len(src)
+	if n >= total {
+		return ""
+	}
+	return cutPrefix(src, total-n)
+}

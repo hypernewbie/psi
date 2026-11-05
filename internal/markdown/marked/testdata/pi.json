@@ -1,0 +1,1223 @@
+[
+ {
+  "markdown": "~~struck~~ text",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "~~struck~~ text",
+    "text": "~~struck~~ text",
+    "tokens": [
+     {
+      "type": "del",
+      "raw": "~~struck~~",
+      "text": "struck",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "struck",
+        "text": "struck",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": " text",
+      "text": " text",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "~~~not struck~~~ text",
+  "tokens": [
+   {
+    "type": "code",
+    "raw": "~~~not struck~~~ text",
+    "text": "",
+    "lang": "not struck~~~ text",
+    "codeBlockStyle": ""
+   }
+  ]
+ },
+ {
+  "markdown": "~~a~~ and ~~b~~",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "~~a~~ and ~~b~~",
+    "text": "~~a~~ and ~~b~~",
+    "tokens": [
+     {
+      "type": "del",
+      "raw": "~~a~~",
+      "text": "a",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "a",
+        "text": "a",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": " and ",
+      "text": " and ",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~b~~",
+      "text": "b",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "b",
+        "text": "b",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "~~nested **bold**~~",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "~~nested **bold**~~",
+    "text": "~~nested **bold**~~",
+    "tokens": [
+     {
+      "type": "del",
+      "raw": "~~nested **bold**~~",
+      "text": "nested **bold**",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "nested ",
+        "text": "nested ",
+        "tokens": []
+       },
+       {
+        "type": "strong",
+        "raw": "**bold**",
+        "text": "bold",
+        "tokens": [
+         {
+          "type": "text",
+          "raw": "bold",
+          "text": "bold",
+          "tokens": []
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$x^2$ inline",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$x^2$ inline",
+    "text": "$x^2$ inline",
+    "tokens": [
+     {
+      "type": "latex",
+      "raw": "$x^2$",
+      "text": "x^2"
+     },
+     {
+      "type": "text",
+      "raw": " inline",
+      "text": " inline",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$$x^2$$ block",
+  "tokens": [
+   {
+    "type": "latexBlock",
+    "raw": "$$x^2$$ block",
+    "text": "x^2$$ block",
+    "pending": true
+   }
+  ]
+ },
+ {
+  "markdown": "$$\\frac{a}{b}$$",
+  "tokens": [
+   {
+    "type": "latexBlock",
+    "raw": "$$\\frac{a}{b}$$",
+    "text": "\\frac{a}{b}"
+   }
+  ]
+ },
+ {
+  "markdown": "\\[x^2\\] block",
+  "tokens": [
+   {
+    "type": "latexBlock",
+    "raw": "\\[x^2\\] block",
+    "text": "x^2\\] block",
+    "pending": true
+   }
+  ]
+ },
+ {
+  "markdown": "\\(x^2\\) inline",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "\\(x^2\\) inline",
+    "text": "\\(x^2\\) inline",
+    "tokens": [
+     {
+      "type": "latex",
+      "raw": "\\(x^2\\)",
+      "text": "x^2"
+     },
+     {
+      "type": "text",
+      "raw": " inline",
+      "text": " inline",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$a_1 + b_2$",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$a_1 + b_2$",
+    "text": "$a_1 + b_2$",
+    "tokens": [
+     {
+      "type": "latex",
+      "raw": "$a_1 + b_2$",
+      "text": "a_1 + b_2"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$100 and $200 dollars",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$100 and $200 dollars",
+    "text": "$100 and $200 dollars",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "$100 and $200 dollars",
+      "text": "$100 and $200 dollars",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "costs 5$ and 10$",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "costs 5$ and 10$",
+    "text": "costs 5$ and 10$",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "costs 5$ and 10$",
+      "text": "costs 5$ and 10$",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "CONST $X_CASE$ more",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "CONST $X_CASE$ more",
+    "text": "CONST $X_CASE$ more",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "CONST ",
+      "text": "CONST ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "$X_CASE$",
+      "text": "X_CASE"
+     },
+     {
+      "type": "text",
+      "raw": " more",
+      "text": " more",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "unclosed $x^2 + pending",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "unclosed $x^2 + pending",
+    "text": "unclosed $x^2 + pending",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "unclosed ",
+      "text": "unclosed ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "$x^2 + pending",
+      "text": "x^2 + pending",
+      "pending": true
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "unclosed \\[x^2 + pending",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "unclosed \\[x^2 + pending",
+    "text": "unclosed \\[x^2 + pending",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "unclosed ",
+      "text": "unclosed ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "\\[x^2 + pending",
+      "text": "x^2 + pending",
+      "pending": true
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "unclosed $$x^2 + pending\n",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "unclosed $$x^2 + pending\n",
+    "text": "unclosed $$x^2 + pending",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "unclosed ",
+      "text": "unclosed ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "$$x^2 + pending",
+      "text": "x^2 + pending",
+      "pending": true
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$ `code` $",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$ `code` $",
+    "text": "$ `code` $",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "$ ",
+      "text": "$ ",
+      "tokens": []
+     },
+     {
+      "type": "codespan",
+      "raw": "`code`",
+      "text": "code"
+     },
+     {
+      "type": "text",
+      "raw": " $",
+      "text": " $",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "text $$display$$ more",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "text $$display$$ more",
+    "text": "text $$display$$ more",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "text ",
+      "text": "text ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "$$display$$",
+      "text": "display"
+     },
+     {
+      "type": "text",
+      "raw": " more",
+      "text": " more",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$$\na = b\n$$\n",
+  "tokens": [
+   {
+    "type": "latexBlock",
+    "raw": "$$\na = b\n$$\n",
+    "text": "a = b"
+   }
+  ]
+ },
+ {
+  "markdown": "$$x$$ then\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$$x$$ then",
+    "text": "$$x$$ then",
+    "tokens": [
+     {
+      "type": "latex",
+      "raw": "$$x$$",
+      "text": "x"
+     },
+     {
+      "type": "text",
+      "raw": " then",
+      "text": " then",
+      "tokens": []
+     }
+    ]
+   },
+   {
+    "type": "space",
+    "raw": "\n\n"
+   },
+   {
+    "type": "table",
+    "raw": "| a | b |\n| --- | --- |\n| 1 | 2 |\n",
+    "align": [
+     null,
+     null
+    ],
+    "header": [
+     {
+      "text": "a",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "a",
+        "text": "a",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "text": "b",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "b",
+        "text": "b",
+        "tokens": []
+       }
+      ]
+     }
+    ],
+    "rows": [
+     [
+      {
+       "text": "1",
+       "header": false,
+       "align": null,
+       "tokens": [
+        {
+         "type": "text",
+         "raw": "1",
+         "text": "1",
+         "tokens": []
+        }
+       ]
+      },
+      {
+       "text": "2",
+       "header": false,
+       "align": null,
+       "tokens": [
+        {
+         "type": "text",
+         "raw": "2",
+         "text": "2",
+         "tokens": []
+        }
+       ]
+      }
+     ]
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$$\n| a | b |\n| --- | --- |\n| 1 | 2 |\n$$\n",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$$\n",
+    "text": "$$",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "$$",
+      "text": "$$",
+      "tokens": []
+     }
+    ]
+   },
+   {
+    "type": "table",
+    "raw": "| a | b |\n| --- | --- |\n| 1 | 2 |\n$$\n",
+    "align": [
+     null,
+     null
+    ],
+    "header": [
+     {
+      "text": "a",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "a",
+        "text": "a",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "text": "b",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "b",
+        "text": "b",
+        "tokens": []
+       }
+      ]
+     }
+    ],
+    "rows": [
+     [
+      {
+       "text": "1",
+       "header": false,
+       "align": null,
+       "tokens": [
+        {
+         "type": "text",
+         "raw": "1",
+         "text": "1",
+         "tokens": []
+        }
+       ]
+      },
+      {
+       "text": "2",
+       "header": false,
+       "align": null,
+       "tokens": [
+        {
+         "type": "text",
+         "raw": "2",
+         "text": "2",
+         "tokens": []
+        }
+       ]
+      }
+     ],
+     [
+      {
+       "text": "$$",
+       "header": false,
+       "align": null,
+       "tokens": [
+        {
+         "type": "text",
+         "raw": "$$",
+         "text": "$$",
+         "tokens": []
+        }
+       ]
+      },
+      {
+       "text": "",
+       "header": false,
+       "align": null,
+       "tokens": []
+      }
+     ]
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "before\n\\[\n\\sum_i i\n\\]\nafter",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "before\n",
+    "text": "before",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "before",
+      "text": "before",
+      "tokens": []
+     }
+    ]
+   },
+   {
+    "type": "latexBlock",
+    "raw": "\\[\n\\sum_i i\n\\]\n",
+    "text": "\\sum_i i"
+   },
+   {
+    "type": "paragraph",
+    "raw": "after",
+    "text": "after",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "after",
+      "text": "after",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "before \\(a\\) after",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "before \\(a\\) after",
+    "text": "before \\(a\\) after",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "before ",
+      "text": "before ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "\\(a\\)",
+      "text": "a"
+     },
+     {
+      "type": "text",
+      "raw": " after",
+      "text": " after",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "**粗体**中文 and ~~删除~~",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "**粗体**中文 and ~~删除~~",
+    "text": "**粗体**中文 and ~~删除~~",
+    "tokens": [
+     {
+      "type": "strong",
+      "raw": "**粗体**",
+      "text": "粗体",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "粗体",
+        "text": "粗体",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文 and ",
+      "text": "中文 and ",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "中文~~删除~~中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "中文~~删除~~中文",
+    "text": "中文~~删除~~中文",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     },
+     {
+      "type": "del",
+      "raw": "~~删除~~",
+      "text": "删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "删除",
+        "text": "删除",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "~~中文删除~~中文",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "~~中文删除~~中文",
+    "text": "~~中文删除~~中文",
+    "tokens": [
+     {
+      "type": "del",
+      "raw": "~~中文删除~~",
+      "text": "中文删除",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "中文删除",
+        "text": "中文删除",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "raw": "中文",
+      "text": "中文",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "- item with $x^2$ inline\n- item two\n",
+  "tokens": [
+   {
+    "type": "list",
+    "raw": "- item with $x^2$ inline\n- item two\n",
+    "ordered": false,
+    "start": "",
+    "loose": false,
+    "items": [
+     {
+      "raw": "- item with $x^2$ inline\n",
+      "task": false,
+      "checked": false,
+      "loose": false,
+      "text": "item with $x^2$ inline",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "item with $x^2$ inline",
+        "text": "item with $x^2$ inline",
+        "tokens": [
+         {
+          "type": "text",
+          "raw": "item with ",
+          "text": "item with ",
+          "tokens": []
+         },
+         {
+          "type": "latex",
+          "raw": "$x^2$",
+          "text": "x^2"
+         },
+         {
+          "type": "text",
+          "raw": " inline",
+          "text": " inline",
+          "tokens": []
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "raw": "- item two",
+      "task": false,
+      "checked": false,
+      "loose": false,
+      "text": "item two",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "item two",
+        "text": "item two",
+        "tokens": [
+         {
+          "type": "text",
+          "raw": "item two",
+          "text": "item two",
+          "tokens": []
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "> quote with $x$\n",
+  "tokens": [
+   {
+    "type": "blockquote",
+    "raw": "> quote with $x$\n",
+    "text": "quote with $x$",
+    "tokens": [
+     {
+      "type": "paragraph",
+      "raw": "quote with $x$",
+      "text": "quote with $x$",
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "quote with ",
+        "text": "quote with ",
+        "tokens": []
+       },
+       {
+        "type": "latex",
+        "raw": "$x$",
+        "text": "x"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "# heading with $x^2$\n",
+  "tokens": [
+   {
+    "type": "heading",
+    "raw": "# heading with $x^2$\n",
+    "text": "heading with $x^2$",
+    "depth": 1,
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "heading with ",
+      "text": "heading with ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "$x^2$",
+      "text": "x^2"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "```\ncode block\n```\n",
+  "tokens": [
+   {
+    "type": "code",
+    "raw": "```\ncode block\n```\n",
+    "text": "code block",
+    "lang": "",
+    "codeBlockStyle": ""
+   }
+  ]
+ },
+ {
+  "markdown": "| math | text |\n| --- | --- |\n| $x^2$ | plain |\n",
+  "tokens": [
+   {
+    "type": "table",
+    "raw": "| math | text |\n| --- | --- |\n| $x^2$ | plain |\n",
+    "align": [
+     null,
+     null
+    ],
+    "header": [
+     {
+      "text": "math",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "math",
+        "text": "math",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "text": "text",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "text",
+        "text": "text",
+        "tokens": []
+       }
+      ]
+     }
+    ],
+    "rows": [
+     [
+      {
+       "text": "$x^2$",
+       "header": false,
+       "align": null,
+       "tokens": [
+        {
+         "type": "latex",
+         "raw": "$x^2$",
+         "text": "x^2"
+        }
+       ]
+      },
+      {
+       "text": "plain",
+       "header": false,
+       "align": null,
+       "tokens": [
+        {
+         "type": "text",
+         "raw": "plain",
+         "text": "plain",
+         "tokens": []
+        }
+       ]
+      }
+     ]
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "a $x$ b $y$ c",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "a $x$ b $y$ c",
+    "text": "a $x$ b $y$ c",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "a ",
+      "text": "a ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "$x$",
+      "text": "x"
+     },
+     {
+      "type": "text",
+      "raw": " b ",
+      "text": " b ",
+      "tokens": []
+     },
+     {
+      "type": "latex",
+      "raw": "$y$",
+      "text": "y"
+     },
+     {
+      "type": "text",
+      "raw": " c",
+      "text": " c",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$$ pending across\n\nnew paragraph",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$$ pending across",
+    "text": "$$ pending across",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "$$ pending across",
+      "text": "$$ pending across",
+      "tokens": []
+     }
+    ]
+   },
+   {
+    "type": "space",
+    "raw": "\n\n"
+   },
+   {
+    "type": "paragraph",
+    "raw": "new paragraph",
+    "text": "new paragraph",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "new paragraph",
+      "text": "new paragraph",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "\\[ pending across\n\nnew paragraph",
+  "tokens": [
+   {
+    "type": "latexBlock",
+    "raw": "\\[ pending across\n\nnew paragraph",
+    "text": "pending across\n\nnew paragraph",
+    "pending": true
+   }
+  ]
+ },
+ {
+  "markdown": "$$\n\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}\n$$\n",
+  "tokens": [
+   {
+    "type": "latexBlock",
+    "raw": "$$\n\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}\n$$\n",
+    "text": "\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}"
+   }
+  ]
+ },
+ {
+  "markdown": "escaped \\$5 not latex",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "escaped \\$5 not latex",
+    "text": "escaped \\$5 not latex",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "escaped ",
+      "text": "escaped ",
+      "tokens": []
+     },
+     {
+      "type": "escape",
+      "raw": "\\$",
+      "text": "$"
+     },
+     {
+      "type": "text",
+      "raw": "5 not latex",
+      "text": "5 not latex",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$50-$100 range",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$50-$100 range",
+    "text": "$50-$100 range",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "$50-$100 range",
+      "text": "$50-$100 range",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "x $ y",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "x $ y",
+    "text": "x $ y",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "x $ y",
+      "text": "x $ y",
+      "tokens": []
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "markdown": "$$\n| a | b |\n| --- | --- |\n",
+  "tokens": [
+   {
+    "type": "paragraph",
+    "raw": "$$\n",
+    "text": "$$",
+    "tokens": [
+     {
+      "type": "text",
+      "raw": "$$",
+      "text": "$$",
+      "tokens": []
+     }
+    ]
+   },
+   {
+    "type": "table",
+    "raw": "| a | b |\n| --- | --- |\n",
+    "align": [
+     null,
+     null
+    ],
+    "header": [
+     {
+      "text": "a",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "a",
+        "text": "a",
+        "tokens": []
+       }
+      ]
+     },
+     {
+      "text": "b",
+      "header": true,
+      "align": null,
+      "tokens": [
+       {
+        "type": "text",
+        "raw": "b",
+        "text": "b",
+        "tokens": []
+       }
+      ]
+     }
+    ],
+    "rows": []
+   }
+  ]
+ }
+]

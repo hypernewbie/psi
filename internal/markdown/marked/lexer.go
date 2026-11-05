@@ -289,7 +289,7 @@ func (l *Lexer) blockTokens(src string, tokens []Token, lastParagraphClipped boo
 				}
 			}
 			if startIndex >= 0 {
-				cutSrc = substring(src, startIndex+1)
+				cutSrc = cutPrefix(src, startIndex+1)
 			}
 		}
 		if l.State.Top {
@@ -591,7 +591,7 @@ func (l *Lexer) inlineTokens(src string, tokens []Token) []Token {
 				}
 			}
 			if startIndex >= 0 {
-				cutSrc = substring(src, startIndex+1)
+				cutSrc = cutPrefix(src, startIndex+1)
 			}
 		}
 		if token = l.tokenizer.InlineText(cutSrc); token != nil {
