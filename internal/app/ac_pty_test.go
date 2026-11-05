@@ -104,7 +104,7 @@ func TestActualAppACEndOfTurnCompaction(t *testing.T) {
 	if len(requestBodies) != 2 {
 		t.Fatalf("provider requests = %d, want user turn and end-of-turn summary", len(requestBodies))
 	}
-	if !strings.Contains(requestBodies[0], "ASK_EOT_COMPACT") || !strings.Contains(requestBodies[1], "# Conversation") {
+	if !strings.Contains(requestBodies[0], "ASK_EOT_COMPACT") || !strings.Contains(requestBodies[1], "older request") || !strings.Contains(requestBodies[1], "context summarization assistant") {
 		t.Fatalf("wrong provider request sequence: %q", requestBodies)
 	}
 	mu.Unlock()

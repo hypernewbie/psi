@@ -246,53 +246,57 @@ func TestCodexMultipleGoroutinesConcurrentRefreshSharedInstance(t *testing.T) {
 }
 
 func TestCodexMultipleGoroutinesConcurrentRefreshDistinctInstances(t *testing.T) {
-	path := writeCodexAuth(t, true)
-	var refreshCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		refreshCalls.Add(1)
-		time.Sleep(30 * time.Millisecond)
-		io.WriteString(w, `{"access_token":"distinct-concurrent-access","refresh_token":"distinct-concurrent-refresh","expires_in":3600}`)
-	}))
-	defer server.Close()
+	for trial := 0; trial < 16; trial++ {
+		t.Run(fmt.Sprintf("handoff-%d", trial), func(t *testing.T) {
+			path := writeCodexAuth(t, true)
+			var refreshCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				refreshCalls.Add(1)
+				time.Sleep(30 * time.Millisecond)
+				io.WriteString(w, `{"access_token":"distinct-concurrent-access","refresh_token":"distinct-concurrent-refresh","expires_in":3600}`)
+			}))
+			defer server.Close()
 
-	const goroutines = 8
-	var wg sync.WaitGroup
-	errCh := make(chan error, goroutines)
+			const goroutines = 8
+			var wg sync.WaitGroup
+			errCh := make(chan error, goroutines)
+			start := make(chan struct{})
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			auth := &CodexAuth{
-				Path:              path,
-				HTTP:              server.Client(),
-				TokenURL:          server.URL,
-				StaleAfter:        5 * time.Second,
-				HeartbeatInterval: 50 * time.Millisecond,
+			for i := 0; i < goroutines; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					auth := &CodexAuth{
+						Path:              path,
+						HTTP:              server.Client(),
+						TokenURL:          server.URL,
+						StaleAfter:        5 * time.Second,
+						HeartbeatInterval: 50 * time.Millisecond,
+					}
+					access, account, err := auth.Get(context.Background())
+					if err != nil {
+						errCh <- err
+						return
+					}
+					if access != "distinct-concurrent-access" || account != "test-account" {
+						errCh <- fmt.Errorf("unexpected access=%q account=%q", access, account)
+					}
+				}()
 			}
-			access, account, err := auth.Get(context.Background())
-			if err != nil {
-				errCh <- err
-				return
+			close(start)
+			wg.Wait()
+			close(errCh)
+
+			for err := range errCh {
+				t.Errorf("goroutine error: %v", err)
 			}
-			if access != "distinct-concurrent-access" || account != "test-account" {
-				errCh <- fmt.Errorf("unexpected access=%q account=%q", access, account)
+			if refreshCalls.Load() != 1 {
+				t.Fatalf("expected exactly 1 refresh call across distinct instances, got %d", refreshCalls.Load())
 			}
-		}()
-	}
-	wg.Wait()
-	close(errCh)
-
-	for err := range errCh {
-		t.Errorf("goroutine error: %v", err)
-	}
-
-	if refreshCalls.Load() != 1 {
-		t.Fatalf("expected exactly 1 refresh call across distinct instances, got %d", refreshCalls.Load())
-	}
-
-	// Lock should not be leaked
-	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
-		t.Fatal("auth.json.lock was leaked")
+			if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
+				t.Fatal("auth.json.lock was leaked")
+			}
+		})
 	}
 }

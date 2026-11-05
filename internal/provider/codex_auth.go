@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -295,8 +296,10 @@ func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat tim
 		if err == nil {
 			break
 		}
-		if !os.IsExist(err) {
-			return nil, nil, fmt.Errorf("cannot lock auth.json")
+		// Windows can report access denied during a directory handoff.
+		// Retry within the same deadline; ownership still requires mkdir success.
+		if !os.IsExist(err) && !(runtime.GOOS == "windows" && os.IsPermission(err)) {
+			return nil, nil, fmt.Errorf("cannot lock auth.json: %w", err)
 		}
 		// Another holder may own the lease. Reclaim only a provably stale,
 		// unchanged lease; never steal a fresh or replaced one.

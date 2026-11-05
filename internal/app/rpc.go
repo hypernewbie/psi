@@ -113,12 +113,12 @@ func (s *rpcRunner) emit(v any) {
 func (s *rpcRunner) runConfig() agent.Config {
 	r := s.r
 	cfg := r.cfg
-	cfg.DynamicConfig = func() (string, []provider.ToolDef) {
+	cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 		definitions := tools.Definitions(r.settings.DefaultTools)
 		if r.syncboardAvailable() {
 			definitions = append(definitions, syncboardToolDefinition())
 		}
-		return r.prompt, definitions
+		return r.prompt, r.sections, definitions
 	}
 	cfg.InternalTools = map[string]agent.InternalToolHandler{
 		syncboardToolName: r.syncboardInternalHandler,

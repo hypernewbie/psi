@@ -16,6 +16,7 @@ psi --use-theme NAME
 psi --theme PATH
 psi --no-themes
 psi --no-session
+psi --docs [topic]
 psi --help
 psi --version
 ```
@@ -27,9 +28,14 @@ The choice applies to this run only. Context files such as `AGENTS.md` load
 separately, as in Pi. User instructions come from the agent directory and
 ancestor folders.
 
+`psi --docs` lists the topics embedded in the binary and `psi --docs <topic>`
+prints one. Those same topics appear in the `<docs>` system-prompt section, so
+the agent can read this page when you ask about psi itself. Project settings
+never change `--docs`; it reads embedded bytes only.
+
 | Area | Keys | Notes |
 |---|---|---|
-| Provider/model | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `moonshotai`, `qwen-token-plan`, `openrouter`, `xai`, `groq`,, and `mistral` |
+| Provider/model | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `moonshotai`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, or `mistral` |
 | Reasoning | `defaultThinkingLevel` | off/minimal/low/medium/high/xhigh/max |
 | Sessions | `sessionDir` | CLI > env (`PI_CODING_AGENT_SESSION_DIR`) > settings > default |
 | Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |
@@ -37,7 +43,7 @@ ancestor folders.
 | Compaction | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides` | bounded summaries; per-model reserve overrides; `/ac` controls are session-local |
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
 | Display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | bounded inline spacing and code-block indent |
-| Shell | `shellPath`, `shellCommandPrefix` | consent for project executables |
+| Shell | `shellPath`, `shellCommandPrefix` | `shellPath` selects the shell; `shellCommandPrefix` prepends commands; project values require consent |
 | Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries` | default idle timeout 300000 ms; 0 disables it; at most 10 retries |
 | Instructions | user/project files | see below |
 | Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | bundled catalog and Pi cache; no network refresh |
@@ -79,7 +85,7 @@ An unsupported stored auth type stops key selection instead of silently changing
 the billing path. Codex uses its OAuth entry and never falls back to an API key.
 
 With no saved provider/model, the default is Anthropic `claude-sonnet-4-5`.
-The public snapshot contains provenance-tracked model metadata for the seven registered providers. It includes API, endpoint, input, thinking, and supported compatibility data from `@earendil-works/pi-ai` version `1.4.0`.
+The public snapshot contains provenance-tracked model metadata for every registered provider. It includes API, endpoint, input, thinking, and supported compatibility data from `@earendil-works/pi-ai` version `1.4.0`.
 Source hashes are in `internal/config/data/catalog-source.json`.
 The snapshot contains capabilities, not credentials, private endpoints, or user defaults.
 Psi also reads newer model data from Pi's `models-store.json` cache.

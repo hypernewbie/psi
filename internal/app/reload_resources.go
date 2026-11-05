@@ -32,10 +32,12 @@ func (r *runtime) reloadResources() error {
 	for _, source := range r.options.AppendSystemPrompts {
 		appendPrompts = append(appendPrompts, resolveCLIPrompt(source))
 	}
-	prompt := config.AssemblePromptWithOverrides(cwd, instructions, []string{skills.FormatForPrompt(sk)}, r.settings.DefaultTools, resolveCLIPrompt(r.options.SystemPrompt), r.options.SystemPrompt != "", appendPrompts)
-	r.skills, r.prompt = sk, prompt
+	sections := config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, r.settings.DefaultTools, resolveCLIPrompt(r.options.SystemPrompt), r.options.SystemPrompt != "", appendPrompts)
+	prompt := config.RenderSections(sections)
+	r.skills, r.prompt, r.sections = sk, prompt, sections
 	r.settings.Skills = loaded.Settings.Skills
 	r.cfg.System = prompt
+	r.cfg.Sections = sections
 	r.syncBridge()
 	return nil
 }

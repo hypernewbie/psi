@@ -87,13 +87,32 @@ func TestLocalModelListUsesCachedCatalog(t *testing.T) {
 func TestCLISystemPromptOverrideAndFileInput(t *testing.T) {
 	instructions := []config.InstructionFile{{Path: "system.md", Kind: "system", Content: "configured base"}, {Path: "AGENTS.md", Kind: "agents", Content: "project context"}}
 	prompt := config.AssemblePromptWithOverrides("/workspace", instructions, []string{"skill info"}, []string{"read"}, "CLI base", true, []string{"CLI addendum"})
-	for _, want := range []string{"CLI base", "Available tools: read", "project context", "skill info", "CLI addendum", "Workspace: /workspace"} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("prompt missing %q: %s", want, prompt)
+	if !strings.HasPrefix(prompt, "CLI base") {
+		t.Errorf("CLI base is not the preamble: %s", prompt)
+	}
+	last := -1
+	for _, want := range []string{"CLI base", "<addendum>", "CLI addendum", "<project_context>", "project context", "<skills>", "skill info", "<cwd>", "/workspace"} {
+		at := strings.Index(prompt, want)
+		if at < 0 {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+		if at < last {
+			t.Fatalf("%q out of order: %s", want, prompt)
+		}
+		last = at
+	}
+	for _, absent := range []string{"configured base", "<tools>", "<rules>", "<docs>", "Available tools:", "Workspace:"} {
+		if strings.Contains(prompt, absent) {
+			t.Fatalf("override prompt contains %q: %s", absent, prompt)
 		}
 	}
-	if strings.Contains(prompt, "configured base") {
-		t.Fatalf("CLI system prompt did not override configured prompt: %s", prompt)
+
+	defaults := config.AssemblePromptWithOverrides("/workspace", nil, nil, []string{"read"}, "", false, nil)
+	if !strings.Contains(defaults, "<tools>\n- read: Read file contents\n</tools>") {
+		t.Fatalf("default prompt tools section = %s", defaults)
+	}
+	if !strings.Contains(defaults, "Use read to examine files instead of cat or sed.") {
+		t.Fatalf("default prompt rules section = %s", defaults)
 	}
 	path := filepath.Join(t.TempDir(), "prompt.txt")
 	if err := os.WriteFile(path, []byte("\uFEFFloaded from file"), 0600); err != nil {

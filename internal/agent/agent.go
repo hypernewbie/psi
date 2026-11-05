@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"psi/internal/ac"
+	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
@@ -29,11 +30,13 @@ type Config struct {
 	Tools            []provider.ToolDef
 	MaxTokens        int
 	System           string
+	Sections         []config.PromptSection
 	AutoCompact      bool
 	ReserveTokens    int
 	KeepRecentTokens int
-	// DynamicConfig returns the system prompt and tool set for each model request.
-	DynamicConfig func() (string, []provider.ToolDef)
+	// DynamicConfig returns the system prompt, its sections, and the tool set
+	// for each model request.
+	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
 	InternalTools map[string]InternalToolHandler
 	AfterToolCall func(context.Context, tools.Invocation, tools.Result) error
 	ContinueOnEnd func() (messageType, content string, ok bool)
@@ -305,7 +308,7 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 
 func refreshDynamicConfig(cfg *Config) {
 	if cfg.DynamicConfig != nil {
-		cfg.System, cfg.Tools = cfg.DynamicConfig()
+		cfg.System, cfg.Sections, cfg.Tools = cfg.DynamicConfig()
 	}
 }
 
@@ -328,8 +331,17 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 	for key := range eff.Checkpoint.Sections {
 		sections[key] = nil
 	}
-	sections["psi"] = &cfg.System
-	if !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, map[string]*string{"psi": &cfg.System}) {
+	// Programmatic callers that build no sections keep the legacy single
+	// section so their sessions stay byte-compatible.
+	if len(cfg.Sections) == 0 {
+		sections["psi"] = &cfg.System
+	} else {
+		for i := range cfg.Sections {
+			body := cfg.Sections[i].Body
+			sections[cfg.Sections[i].Name] = &body
+		}
+	}
+	if !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, sections) {
 		var removed []session.ToolReference
 		for _, tool := range eff.Tools {
 			name := tool.Name
@@ -706,59 +718,9 @@ func responseSystemSections(system *session.SystemMessage) []provider.SystemSect
 	if system == nil || len(system.Sections) == 0 {
 		return nil
 	}
-	var order []string
-	if len(system.Raw) > 0 {
-		decoder := json.NewDecoder(strings.NewReader(string(system.Raw)))
-		if token, err := decoder.Token(); err == nil && token == json.Delim('{') {
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					break
-				}
-				key, _ := keyToken.(string)
-				if key != "sections" {
-					var discard json.RawMessage
-					if decoder.Decode(&discard) != nil {
-						break
-					}
-					continue
-				}
-				if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-					break
-				}
-				for decoder.More() {
-					sectionToken, err := decoder.Token()
-					if err != nil {
-						break
-					}
-					name, _ := sectionToken.(string)
-					var discard json.RawMessage
-					if decoder.Decode(&discard) != nil {
-						break
-					}
-					order = append(order, name)
-				}
-				_, _ = decoder.Token()
-			}
-		}
-	}
-	seen := make(map[string]bool, len(order))
-	var sections []provider.SystemSection
-	for _, name := range order {
-		if _, ok := system.Sections[name]; !ok || seen[name] {
-			continue
-		}
-		seen[name] = true
-		sections = append(sections, provider.SystemSection{Name: name, Value: system.Sections[name]})
-	}
-	var remaining []string
-	for name := range system.Sections {
-		if !seen[name] {
-			remaining = append(remaining, name)
-		}
-	}
-	sort.Strings(remaining)
-	for _, name := range remaining {
+	names := session.OrderedSectionNames(system.Sections)
+	sections := make([]provider.SystemSection, 0, len(names))
+	for _, name := range names {
 		sections = append(sections, provider.SystemSection{Name: name, Value: system.Sections[name]})
 	}
 	return sections

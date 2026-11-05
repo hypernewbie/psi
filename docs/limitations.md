@@ -4,10 +4,10 @@
 
 psi is an inline terminal agent, not a visual Pi clone.
 It has no fullscreen mode, widgets, panels, session-tree interface, or Pi TUI API.
-It has no extension runtime, MCP, codemode, tool search, subagents, public SDK, RPC, or JSON event mode.
+It has no extension runtime, MCP, codemode, tool search, subagents, public SDK, or Pi JSON event mode.
 Print mode, HTML export, sharing, bug uploads, hosted services, telemetry, and automatic updates are excluded.
 
-psi supports Anthropic, ChatGPT Codex, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google. OpenCode Go selects Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses per model. Unsupported provider/API pairs and compatibility features remain unavailable.
+See [Providers](providers.md) for supported providers and protocols. Unsupported provider/API pairs and compatibility features remain unavailable.
 
 Cloud credential discovery, routing, virtual models, and automatic catalog refresh are excluded. Google Vertex and OAuth, OpenCode Zen, MiniMax China, and Z.AI China endpoints are not included. Live-provider acceptance has not run.
 Background provider jobs, cache warming, classifier models, and image/audio/video generation are excluded.
@@ -22,8 +22,7 @@ Regression shell processes instead use an isolated environment.
 
 ## Phi integration
 
-The native Phi bridge is the only RPC surface.
-It is a local Unix socket that publishes lifecycle and state only; psi output never leaves the process.
+The native Phi bridge uses a local Unix socket for lifecycle, state, and capability requests. Transcript search can return bounded excerpts of visible text to Phi; output is not streamed there. `--mode rpc` is a separate headless JSONL control interface for one session.
 Windows panes stay plain because psi has no named-pipe dialer.
 phi injects the endpoint and token at spawn; psi clears them before any tool runs.
 
@@ -53,9 +52,21 @@ The six Linux/macOS/Windows amd64/arm64 cross-builds passed after this change; m
 
 ## Authentication
 
-Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.
+Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Qwen Token Plan, OpenRouter, xAI, Groq, Mistral, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.
 
 psi has no login interface, does not support Anthropic OAuth, and does not execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
+
+## Documentation topics
+
+`psi --docs` serves the topics that describe psi: `index`, `quickstart`,
+`usage`, `cli`, `config`, `providers`, `sessions`, `compaction`, `skills`,
+`security`, `env`, `how-psi-works`, `keyboard`, `limitations`, `recovery`, and
+`bridge`.
+
+Pi topics with no psi counterpart are intentionally absent, and the files in
+`docs/` that hold QA ledgers (`acceptance`, `plan5-acceptance`,
+`plan6-acceptance`, `ui-acceptance`, `ux-spacing-audit`,
+`reference-manifest`, `robustness`) are not served by `--docs`.
 
 ## Current implementation limits
 

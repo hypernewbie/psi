@@ -266,6 +266,10 @@ func TestRPCPromptStartsStreamsAndSettles(t *testing.T) {
 	if count == 0 {
 		t.Fatal("prompt left no durable messages")
 	}
+	requests := fake.Requests()
+	if len(requests) != 1 || requests[0].System != s.r.prompt {
+		t.Fatalf("RPC request lost the configured system prompt: %#v", requests)
+	}
 }
 
 func TestRPCPromptBusyRequiresBehavior(t *testing.T) {

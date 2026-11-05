@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/term"
 
+	"psi/docs"
 	"psi/internal/ac"
 	"psi/internal/agent"
 	"psi/internal/buildinfo"
@@ -46,6 +47,8 @@ type Options struct {
 	AppendSystemPrompts                                                  []string
 	ListModels                                                           bool
 	ListModelsFilter                                                     string
+	Docs                                                                 bool
+	DocsTopic                                                            string
 	NoTools, NoSession, AllowProj, DenyProj                              bool
 	NoThemes, NoSkills, NoContextFiles, Offline                          bool
 	UseTheme                                                             string
@@ -91,6 +94,19 @@ func splitCLIArgs(args []string) (flags, messages []string, err error) {
 			continue
 		}
 		if strings.HasPrefix(arg, "--list-models=") {
+			flags = append(flags, arg)
+			continue
+		}
+		if arg == "--docs" {
+			value := ""
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.HasPrefix(args[i+1], "@") {
+				i++
+				value = args[i]
+			}
+			flags = append(flags, "--docs="+value)
+			continue
+		}
+		if strings.HasPrefix(arg, "--docs=") {
 			flags = append(flags, arg)
 			continue
 		}
@@ -197,10 +213,10 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.StringVar(&o.Tools, "t", "", "tool list (Pi alias)")
 	fs.StringVar(&o.ExcludeTools, "exclude-tools", "", "comma-separated tools to disable")
 	fs.StringVar(&o.ExcludeTools, "xt", "", "comma-separated tools to disable (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-tools", false, "disable tools")
-	fs.BoolVar(&o.NoTools, "nt", false, "disable tools (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable built-in tools (all psi tools)")
-	fs.BoolVar(&o.NoTools, "nbt", false, "disable built-in tools (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-tools", false, "disable read,bash,edit,write")
+	fs.BoolVar(&o.NoTools, "nt", false, "disable read,bash,edit,write (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable read,bash,edit,write (alias for --no-tools)")
+	fs.BoolVar(&o.NoTools, "nbt", false, "disable read,bash,edit,write (Pi alias)")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -225,6 +241,10 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	})
 	fs.Func("list-models", "list models from the local Pi catalog (optional search text)", func(value string) error {
 		o.ListModels, o.ListModelsFilter = true, value
+		return nil
+	})
+	fs.Func("docs", "print psi documentation (no topic lists topics)", func(value string) error {
+		o.Docs, o.DocsTopic = true, value
 		return nil
 	})
 	fs.StringVar(&o.UseTheme, "use-theme", "", "select a Pi theme for this invocation")
@@ -314,6 +334,21 @@ func formatModelTokenCount(count int) string {
 	return strconv.Itoa(count)
 }
 
+// printDocs writes one docs topic, or the topic list when topic is empty or
+// "list". It reads embedded bytes only: no terminal, settings, or network.
+func printDocs(w io.Writer, topic string) error {
+	if topic == "" || topic == "list" {
+		_, err := io.WriteString(w, docs.List())
+		return err
+	}
+	body, ok := docs.Get(topic)
+	if !ok {
+		return fmt.Errorf("unknown docs topic %q\n%s", topic, docs.List())
+	}
+	_, err := io.WriteString(w, body)
+	return err
+}
+
 func listAvailableModels(output io.Writer, agentDir, filter string) error {
 	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
 	if err != nil {
@@ -397,8 +432,8 @@ Pi-compatible options:
   --no-session               Keep this session in memory only
   --tools, -t <list>         Select read,bash,edit,write tools
   --exclude-tools, -xt <list> Disable selected tools
-  --no-tools, -nt            Disable all tools
-  --no-builtin-tools, -nbt   Disable psi tools (all tools are built-in)
+  --no-tools, -nt            Disable read,bash,edit,write
+  --no-builtin-tools, -nbt   Alias for --no-tools
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
   --theme <path>             Load a theme (repeatable)
@@ -410,11 +445,14 @@ Pi-compatible options:
   --tui-mode regular         Select the inline terminal mode
   --offline                  No-op; psi does not refresh Pi's model cache
   --list-models [search]     List cached and bundled models without network access
+  --docs [topic]             Print psi documentation (no topic prints the list)
   --help, -h                 Show this help
   --version, -v              Show version
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Use -- before a message that starts with a hyphen.
+Tool-selection flags affect read,bash,edit,write only.
+loop_control and syncboard remain available when their separate availability checks pass.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version)
 }
@@ -434,6 +472,9 @@ func Run(args []string, version string) error {
 	}
 	if o.ListModels {
 		return listAvailableModels(os.Stdout, session.AgentDir(), o.ListModelsFilter)
+	}
+	if o.Docs {
+		return printDocs(os.Stdout, o.DocsTopic)
 	}
 	if o.Mode == "rpc" {
 		return runRPC(o, version)
@@ -481,7 +522,7 @@ func Run(args []string, version string) error {
 	themeSetting := selectedThemeSetting(st, o)
 	activeTheme, activeThemeName, themeFallback := resolveThemeSnapshot(themeCatalog, themeSetting, colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: activeTheme, NoColor: noColor, Display: presentationDisplay(st)})
-	models, sk, diagnostics, prompt, _, store, err := activateSession(o, cwd, agentDir, &st, consent, console, lifecycle)
+	models, sk, diagnostics, prompt, sections, _, store, err := activateSession(o, cwd, agentDir, &st, consent, console, lifecycle)
 	if errors.Is(err, errStartupCancelled) {
 		return nil
 	}
@@ -501,7 +542,7 @@ func Run(args []string, version string) error {
 		return err
 	}
 	r := &runtime{
-		store: store, version: version, options: o, settings: st, models: models, skills: sk, prompt: prompt, agentDir: agentDir,
+		store: store, version: version, options: o, settings: st, models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir,
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
 		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
@@ -577,6 +618,7 @@ type runtime struct {
 	models                   *config.ModelsFile
 	skills                   []skills.Skill
 	prompt, agentDir         string
+	sections                 []config.PromptSection
 	ov                       config.StartupOverrides
 	cfg                      agent.Config
 	prov                     provider.Provider
@@ -692,7 +734,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		ov.Thinking = "off"
 	}
 	pm := providerModel(ov.Provider, meta)
-	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt,
+	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt, Sections: r.sections,
 		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveForModel(ov.Provider, ov.Model), KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
 	if _, err := provider.BuildRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
 		return err
@@ -1644,18 +1686,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
 			return r.compactionProvider(r.ac.Snapshot().CompactorModel)
 		}
-		cfg.DynamicConfig = func() (string, []provider.ToolDef) {
+		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
 			definitions := tools.Definitions(r.settings.DefaultTools)
 			if state.Active && !state.Forever {
 				definitions = append(definitions, loop.ToolDefinition())
 			}
-			// The syncboard tool is advertised only while Phi negotiated
-			// its capability; the handler itself rechecks on every call.
 			if r.syncboardAvailable() {
 				definitions = append(definitions, syncboardToolDefinition())
 			}
-			return r.prompt + loop.SystemPromptAddition(state), definitions
+			sections := r.sections
+			if addition := strings.TrimSpace(loop.SystemPromptAddition(state)); addition != "" {
+				sections = append(append([]config.PromptSection(nil), sections...), config.PromptSection{Name: "loop", Body: "<loop>\n" + addition + "\n</loop>"})
+			}
+			return config.RenderSections(sections), sections, definitions
 		}
 		cfg.InternalTools = map[string]agent.InternalToolHandler{
 			loop.ControlToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {

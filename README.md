@@ -1,6 +1,6 @@
 # psi
 
-Go coding agent with an inline terminal. Four tools: `read`, `write`, `edit`, `bash`. Providers: Anthropic, ChatGPT Codex, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google. Sessions use Pi-compatible v3 JSONL.
+Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`. See [Providers](docs/providers.md) for supported providers and protocols. Sessions use Pi-compatible v3 JSONL.
 
 ## Build
 
@@ -19,7 +19,7 @@ go build -o psi ./cmd/psi
 
 Codex uses your existing ChatGPT OAuth login from Pi. Log in through Pi first (`/login openai-codex`). No login UI here, and no OpenAI API key fallback.
 
-Each API-key provider uses its own environment variable: `ANTHROPIC_API_KEY`, `MINIMAX_API_KEY`, `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, or `GEMINI_API_KEY`. OpenCode Go selects the API and endpoint from each model's metadata.
+Each API-key provider uses its own environment variable. See [Providers](docs/providers.md) for the credentials each provider accepts. OpenCode Go selects the API and endpoint from each model's metadata.
 
 For example, Anthropic takes an API key:
 

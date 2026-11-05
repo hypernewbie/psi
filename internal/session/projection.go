@@ -650,7 +650,6 @@ type EffectiveSystem struct {
 func ReplaySystem(msgs []AgentMessage) EffectiveSystem {
 	var content []string
 	sections := map[string]*string{}
-	var order []string
 	tools := map[string]Tool{}
 	var timestamp int64
 	for _, m := range msgs {
@@ -672,21 +671,11 @@ func ReplaySystem(msgs []AgentMessage) EffectiveSystem {
 				content = append(content, t)
 			}
 		}
-		for _, k := range sectionOrder(s) {
-			v := s.Sections[k]
-			if v == nil {
-				delete(sections, k)
-				for i, old := range order {
-					if old == k {
-						order = append(order[:i], order[i+1:]...)
-						break
-					}
-				}
+		for name, value := range s.Sections {
+			if value == nil {
+				delete(sections, name)
 			} else {
-				if _, ok := sections[k]; !ok {
-					order = append(order, k)
-				}
-				sections[k] = v
+				sections[name] = value
 			}
 		}
 		// Pi removes first, then adds, so a changed declaration can use both.
@@ -704,9 +693,9 @@ func ReplaySystem(msgs []AgentMessage) EffectiveSystem {
 	if base != "" {
 		parts = append(parts, base)
 	}
-	for _, k := range order {
-		if *sections[k] != "" {
-			parts = append(parts, *sections[k])
+	for _, name := range OrderedSectionNames(sections) {
+		if *sections[name] != "" {
+			parts = append(parts, *sections[name])
 		}
 	}
 	var names []string
@@ -719,7 +708,5 @@ func ReplaySystem(msgs []AgentMessage) EffectiveSystem {
 		out = append(out, tools[n])
 	}
 	checkpoint := &SystemMessage{Role: "system", Content: base, Sections: sections, ToolsAdded: out, Timestamp: timestamp}
-	// Preserve section insertion order in the checkpoint's raw representation.
-	checkpoint.Raw = systemRaw(checkpoint, order)
 	return EffectiveSystem{Content: strings.Join(parts, "\n\n"), Tools: out, Checkpoint: checkpoint}
 }

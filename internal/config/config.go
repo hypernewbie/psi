@@ -1085,33 +1085,5 @@ func AssemblePrompt(cwd string, instructions []InstructionFile, skillDescs []str
 // AssemblePromptWithOverrides applies Pi-style CLI system-prompt overrides
 // without removing project context, skill descriptions, or the tool loadout.
 func AssemblePromptWithOverrides(cwd string, instructions []InstructionFile, skillDescs []string, tools []string, systemPrompt string, useSystemPrompt bool, appendSystemPrompts []string) string {
-	var sb strings.Builder
-	base := "You are psi, a minimal Go coding agent. Use the declared tools to inspect and change the workspace. Show file paths clearly."
-	for _, ins := range instructions {
-		if ins.Kind == "system" {
-			base = ins.Content
-		}
-	}
-	if useSystemPrompt {
-		base = systemPrompt
-	}
-	sb.WriteString(base + "\n")
-	sb.WriteString("Available tools: " + strings.Join(tools, ", ") + ".\n")
-	for _, ins := range instructions {
-		if ins.Kind != "system" {
-			sb.WriteString("\n--- " + ins.Path + " ---\n" + ins.Content + "\n")
-		}
-	}
-	for _, d := range skillDescs {
-		if d != "" {
-			sb.WriteString("\n" + d + "\n")
-		}
-	}
-	for _, text := range appendSystemPrompts {
-		if text != "" {
-			sb.WriteString("\n" + text + "\n")
-		}
-	}
-	sb.WriteString("\nWorkspace: " + cwd + "\n")
-	return sb.String()
+	return RenderSections(BuildPromptSections(cwd, instructions, skillDescs, tools, systemPrompt, useSystemPrompt, appendSystemPrompts))
 }
