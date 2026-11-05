@@ -54,29 +54,14 @@ func sectionFields(t *testing.T, record json.RawMessage) ([]string, map[string]*
 	if string(message["content"]) != `""` {
 		t.Fatalf("system content = %s, want an empty string", message["content"])
 	}
-	dec := json.NewDecoder(bytes.NewReader(message["sections"]))
-	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+	var values map[string]*string
+	if err := json.Unmarshal(message["sections"], &values); err != nil {
 		t.Fatalf("sections is not an object: %s", message["sections"])
 	}
-	var keys []string
-	values := map[string]*string{}
-	for dec.More() {
-		token, err := dec.Token()
-		if err != nil {
-			t.Fatal(err)
-		}
-		key := token.(string)
-		var value *string
-		if err := dec.Decode(&value); err != nil {
-			t.Fatal(err)
-		}
-		keys = append(keys, key)
-		values[key] = value
-	}
-	return keys, values
+	return session.OrderedSectionNames(values), values
 }
 
-func TestSystemSectionsWrittenInPromptOrder(t *testing.T) {
+func TestSystemSectionsReplayInPromptOrder(t *testing.T) {
 	store, _, fake, loop, _ := testSetup(t)
 	fake.Responses = []*provider.Response{{Text: "done", StopReason: "stop"}}
 	sections := []config.PromptSection{
@@ -100,7 +85,7 @@ func TestSystemSectionsWrittenInPromptOrder(t *testing.T) {
 	keys, _ := sectionFields(t, records[0])
 	want := []string{"preamble", "tools", "rules", "docs", "addendum", "project_context", "skills", "cwd"}
 	if strings.Join(keys, " ") != strings.Join(want, " ") {
-		t.Fatalf("session section order = %v, want %v", keys, want)
+		t.Fatalf("replay section order = %v, want %v", keys, want)
 	}
 	if len(fake.Calls) != 1 || fake.Calls[0].System != config.RenderSections(sections) {
 		t.Fatalf("request system prompt drifted from rendered sections: %q", fake.Calls[0].System)
@@ -227,9 +212,9 @@ func TestInsertedSectionsSurviveInterruptedRun(t *testing.T) {
 		t.Fatalf("retry duplicated configuration: system records = %d, want %d", got, count)
 	}
 
-	// If resetting section order fails, do not admit a user turn or send it.
+	// If a configuration write fails, do not admit a user turn or send it.
 	before := len(reopened.Entries())
-	cfg.Sections[0], cfg.Sections[1] = cfg.Sections[1], cfg.Sections[0]
+	cfg.Sections[1].Body = "<addendum>\nchanged instructions\n</addendum>"
 	cfg.System = config.RenderSections(cfg.Sections)
 	diskErr := errors.New("injected configuration write failure")
 	reopened.FailWritesForTest(diskErr)

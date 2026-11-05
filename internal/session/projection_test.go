@@ -131,6 +131,34 @@ func TestReplaySystem(t *testing.T) {
 	}
 }
 
+// Sections render by name, so storage order and Pi's first-insertion order do
+// not decide the prompt. A removed section returns to its rank position.
+func TestReplaySystemOrdersSectionsByName(t *testing.T) {
+	s := func(v string) *string { return &v }
+	scrambled := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Sections: map[string]*string{
+		"cwd":        s("<cwd>c</cwd>"),
+		"zeta_extra": s("<zeta_extra>z</zeta_extra>"),
+		"preamble":   s("P"),
+		"tools":      s("<tools>T</tools>"),
+		"loop":       s("<loop>L</loop>"),
+	}, Timestamp: 1}}
+
+	eff := ReplaySystem([]AgentMessage{*scrambled})
+	want := "P\n\n<tools>T</tools>\n\n<cwd>c</cwd>\n\n<loop>L</loop>\n\n<zeta_extra>z</zeta_extra>"
+	if eff.Content != want {
+		t.Fatalf("replay order:\n got %q\nwant %q", eff.Content, want)
+	}
+
+	// Deleting and re-adding a section must not move it after cwd.
+	removed := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Sections: map[string]*string{"tools": nil}, Timestamp: 2}}
+	readded := &AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Sections: map[string]*string{"tools": s("<tools>T2</tools>")}, Timestamp: 3}}
+	eff = ReplaySystem([]AgentMessage{*scrambled, *removed, *readded})
+	want = "P\n\n<tools>T2</tools>\n\n<cwd>c</cwd>\n\n<loop>L</loop>\n\n<zeta_extra>z</zeta_extra>"
+	if eff.Content != want {
+		t.Fatalf("re-added section order:\n got %q\nwant %q", eff.Content, want)
+	}
+}
+
 func TestCompactionProjection(t *testing.T) {
 	mk := func(id string, parent *string, text string) *Entry {
 		return mustEntry(t, "message", id, parent, map[string]any{"message": map[string]any{"role": "user", "content": text, "timestamp": 1}})

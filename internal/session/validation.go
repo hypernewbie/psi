@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -139,79 +138,39 @@ func (s *SystemMessage) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// SetSectionOrder stores the on-disk JSON with sections in the given order.
-// Keys missing from order (nil tombstones for removed sections) are kept at the
-// end, sorted, so a replay still sees them and drops the section.
-func SetSectionOrder(s *SystemMessage, order []string) {
-	seen := make(map[string]bool, len(order))
-	full := make([]string, 0, len(order)+len(s.Sections))
-	for _, key := range order {
-		if key == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		full = append(full, key)
-	}
-	var rest []string
-	for key := range s.Sections {
-		if !seen[key] {
-			rest = append(rest, key)
-		}
-	}
-	sort.Strings(rest)
-	s.Raw = systemRaw(s, append(full, rest...))
+// sectionRank fixes the prompt order of known sections. Order is a property
+// of the name, so replay never depends on JSON key order. Pi itself reorders a
+// prompt when a suppressed section returns; ranking avoids that.
+var sectionRank = map[string]int{
+	"preamble":        0,
+	"tools":           1,
+	"rules":           2,
+	"docs":            3,
+	"addendum":        4,
+	"project_context": 5,
+	"skills":          6,
+	"cwd":             7,
+	"loop":            8,
 }
 
-func sectionOrder(s *SystemMessage) []string {
-	var raw map[string]json.RawMessage
-	if json.Unmarshal(s.Raw, &raw) == nil && raw["sections"] != nil {
-		dec := json.NewDecoder(bytes.NewReader(raw["sections"]))
-		if token, err := dec.Token(); err == nil && token == json.Delim('{') {
-			var keys []string
-			for dec.More() {
-				token, err := dec.Token()
-				if err != nil {
-					break
-				}
-				key, ok := token.(string)
-				if !ok {
-					break
-				}
-				var value json.RawMessage
-				if dec.Decode(&value) != nil {
-					break
-				}
-				keys = append(keys, key)
-			}
-			return keys
+// OrderedSectionNames lists section names in prompt order: ranked names first,
+// then unknown names in lexical order. Tombstones are included; callers skip
+// nil values when rendering.
+func OrderedSectionNames[V any](sections map[string]V) []string {
+	names := make([]string, 0, len(sections))
+	for name := range sections {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		ri, iRanked := sectionRank[names[i]]
+		rj, jRanked := sectionRank[names[j]]
+		if iRanked != jRanked {
+			return iRanked
 		}
-	}
-	var keys []string
-	for key := range s.Sections {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func systemRaw(s *SystemMessage, order []string) json.RawMessage {
-	raw, _ := json.Marshal(systemAlias(*s))
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(raw, &fields)
-	var b bytes.Buffer
-	b.WriteByte('{')
-	for i, key := range order {
-		if i > 0 {
-			b.WriteByte(',')
+		if iRanked {
+			return ri < rj
 		}
-		k, _ := json.Marshal(key)
-		v, _ := json.Marshal(s.Sections[key])
-		b.Write(k)
-		b.WriteByte(':')
-		b.Write(v)
-	}
-	b.WriteByte('}')
-	fields["sections"] = b.Bytes()
-	out, _ := json.Marshal(fields)
-	return out
+		return names[i] < names[j]
+	})
+	return names
 }

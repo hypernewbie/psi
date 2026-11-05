@@ -333,51 +333,23 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 	}
 	// Programmatic callers that build no sections keep the legacy single
 	// section so their sessions stay byte-compatible.
-	order := make([]string, 0, len(cfg.Sections))
 	if len(cfg.Sections) == 0 {
 		sections["psi"] = &cfg.System
-		order = append(order, "psi")
 	} else {
 		for i := range cfg.Sections {
 			body := cfg.Sections[i].Body
 			sections[cfg.Sections[i].Name] = &body
-			order = append(order, cfg.Sections[i].Name)
 		}
 	}
-	// Replay preserves the insertion position of existing keys. A section
-	// restored by /reload would otherwise land after cwd, not in prompt order.
-	var nextOrder []string
-	for _, section := range responseSystemSections(eff.Checkpoint) {
-		if sections[section.Name] != nil {
-			nextOrder = append(nextOrder, section.Name)
-		}
-	}
-	for _, name := range order {
-		if eff.Checkpoint.Sections[name] == nil {
-			nextOrder = append(nextOrder, name)
-		}
-	}
-	reorder := !reflect.DeepEqual(nextOrder, order)
-	if reorder {
-		reset := &session.SystemMessage{Role: "system", Content: "", Sections: map[string]*string{}, Timestamp: time.Now().UnixMilli()}
-		for name := range eff.Checkpoint.Sections {
-			reset.Sections[name] = nil
-		}
-		if _, err := l.store.AppendMessage(session.AgentMessage{Role: "system", System: reset}); err != nil {
-			return err
-		}
-	}
-	if reorder || !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, sections) {
+	if !reflect.DeepEqual(eff.Tools, added) || !reflect.DeepEqual(eff.Checkpoint.Sections, sections) {
 		var removed []session.ToolReference
 		for _, tool := range eff.Tools {
 			name := tool.Name
 			removed = append(removed, session.ToolReference{Name: &name})
 		}
-		msg := session.AgentMessage{Role: "system", System: &session.SystemMessage{
+		if _, err := l.store.AppendMessage(session.AgentMessage{Role: "system", System: &session.SystemMessage{
 			Role: "system", Content: "", Sections: sections, ToolsAdded: added, ToolsRemoved: removed, Timestamp: time.Now().UnixMilli(),
-		}}
-		session.SetSectionOrder(msg.System, order)
-		if _, err := l.store.AppendMessage(msg); err != nil {
+		}}); err != nil {
 			return err
 		}
 	}
@@ -746,59 +718,9 @@ func responseSystemSections(system *session.SystemMessage) []provider.SystemSect
 	if system == nil || len(system.Sections) == 0 {
 		return nil
 	}
-	var order []string
-	if len(system.Raw) > 0 {
-		decoder := json.NewDecoder(strings.NewReader(string(system.Raw)))
-		if token, err := decoder.Token(); err == nil && token == json.Delim('{') {
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					break
-				}
-				key, _ := keyToken.(string)
-				if key != "sections" {
-					var discard json.RawMessage
-					if decoder.Decode(&discard) != nil {
-						break
-					}
-					continue
-				}
-				if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-					break
-				}
-				for decoder.More() {
-					sectionToken, err := decoder.Token()
-					if err != nil {
-						break
-					}
-					name, _ := sectionToken.(string)
-					var discard json.RawMessage
-					if decoder.Decode(&discard) != nil {
-						break
-					}
-					order = append(order, name)
-				}
-				_, _ = decoder.Token()
-			}
-		}
-	}
-	seen := make(map[string]bool, len(order))
-	var sections []provider.SystemSection
-	for _, name := range order {
-		if _, ok := system.Sections[name]; !ok || seen[name] {
-			continue
-		}
-		seen[name] = true
-		sections = append(sections, provider.SystemSection{Name: name, Value: system.Sections[name]})
-	}
-	var remaining []string
-	for name := range system.Sections {
-		if !seen[name] {
-			remaining = append(remaining, name)
-		}
-	}
-	sort.Strings(remaining)
-	for _, name := range remaining {
+	names := session.OrderedSectionNames(system.Sections)
+	sections := make([]provider.SystemSection, 0, len(names))
+	for _, name := range names {
 		sections = append(sections, provider.SystemSection{Name: name, Value: system.Sections[name]})
 	}
 	return sections

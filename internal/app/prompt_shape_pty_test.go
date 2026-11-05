@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"psi/internal/session"
 )
 
 // sessionSystems returns the message payload of every system record in path.
@@ -55,26 +57,11 @@ func sectionBodies(t *testing.T, record json.RawMessage) ([]string, map[string]s
 	if string(message["content"]) != `""` {
 		t.Fatalf("system content = %s, want an empty string", message["content"])
 	}
-	dec := json.NewDecoder(bytes.NewReader(message["sections"]))
-	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+	var bodies map[string]string
+	if err := json.Unmarshal(message["sections"], &bodies); err != nil {
 		t.Fatalf("sections is not an object: %s", message["sections"])
 	}
-	var keys []string
-	bodies := map[string]string{}
-	for dec.More() {
-		token, err := dec.Token()
-		if err != nil {
-			t.Fatal(err)
-		}
-		key := token.(string)
-		var body string
-		if err := dec.Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		keys = append(keys, key)
-		bodies[key] = body
-	}
-	return keys, bodies
+	return session.OrderedSectionNames(bodies), bodies
 }
 
 // TestActualAppPromptSections proves the real app sends the sectioned prompt:
