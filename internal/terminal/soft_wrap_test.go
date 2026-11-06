@@ -223,10 +223,10 @@ func TestSoftWrapOversizedFallbackStaysBoundedAndHard(t *testing.T) {
 	stream := NewMarkdownStream(width, true)
 	stream.SetDisplay(softDisplay())
 	stable, _ := stream.Feed(strings.Repeat("x", maxMarkdownActiveSource+4096))
-	stable = append(stable, stream.Finish()...)
 	if stream.BufferedBytes() > maxMarkdownActiveSource {
 		t.Fatalf("fallback buffer = %d, want <= %d", stream.BufferedBytes(), maxMarkdownActiveSource)
 	}
+	stable = append(stable, stream.Finish()...)
 	if len(stable) == 0 {
 		t.Fatal("oversized fallback emitted no rows")
 	}
@@ -434,6 +434,24 @@ func TestSoftWrapListHardBreakKeepsContinuationMarker(t *testing.T) {
 func TestFrameTailWidthIgnoresSGR(t *testing.T) {
 	if got := frameTailWidth(Frame{Tail: []string{"\x1b[31mred\x1b[0m"}}, 0); got != 3 {
 		t.Fatalf("frameTailWidth counted SGR bytes: %d", got)
+	}
+}
+
+func TestSoftWrapKeepsContainerMarkersAtNarrowWidths(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"nested list", "- outer\n    - inner\n        - nested", "          - nested"},
+		{"nested quote", "> > > > quoted", "  │ │ │ │ quoted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := FormatAssistantMessageWithDisplay(tc.source, 10, true, softDisplay())
+			if !strings.Contains(strings.Join(rows, "\n"), tc.want) {
+				t.Fatalf("soft mode lost container markers: got %q, want row %q", rows, tc.want)
+			}
+		})
 	}
 }
 

@@ -217,9 +217,8 @@ func FormatStyledRow(row StyledRow, width int, noColor bool, palette ...*pitheme
 
 // surfaceErase fills the rest of a row with the surface background. The
 // terminal's background-color erase paints blank cells without writing
-// padding spaces, so a copied row has no trailing whitespace. Emit it before
-// any later erase in the writer, which would otherwise run with the default
-// background and wipe the fill.
+// padding spaces. Selection of blank cells is controlled by the terminal.
+// Writer erases must precede row bytes, or they wipe this fill.
 func surfaceErase(palette *pitheme.Theme, surface ThemeToken, noColor bool) string {
 	if palette == nil || surface == "" || colorDisabled(PresentationSnapshot{NoColor: noColor}) {
 		return ""
