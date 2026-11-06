@@ -61,3 +61,34 @@ func TestReloadResourcesHonorsDisabledOptions(t *testing.T) {
 		t.Fatalf("disabled resources loaded: %s", r.prompt)
 	}
 }
+
+func TestReloadResourcesAppliesQueueModes(t *testing.T) {
+	cwd, agentDir := t.TempDir(), t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &runtime{store: store, agentDir: agentDir, projectTrusted: true, settings: config.Settings{
+		DefaultTools: []string{"read"}, SteeringMode: "one-at-a-time", FollowUpMode: "one-at-a-time",
+	}}
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"steeringMode":"all","followUpMode":"all"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	if r.settings.SteeringMode != "all" || r.settings.FollowUpMode != "all" {
+		t.Fatalf("queue modes not reloaded: steering=%q followUp=%q", r.settings.SteeringMode, r.settings.FollowUpMode)
+	}
+	// A failed reload keeps the last valid modes instead of reverting to defaults.
+	if err := os.WriteFile(settingsPath, []byte(`{"steeringMode":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err == nil {
+		t.Fatal("malformed settings must fail the reload")
+	}
+	if r.settings.SteeringMode != "all" || r.settings.FollowUpMode != "all" {
+		t.Fatalf("failed reload changed queue modes: steering=%q followUp=%q", r.settings.SteeringMode, r.settings.FollowUpMode)
+	}
+}

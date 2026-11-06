@@ -56,8 +56,9 @@ the draft. Queues deliver one entry at a time in their own mode.
   session-local choice. `Ctrl+L` opens the same picker.
 - `/thinking` opens the supported-level picker, or `/thinking <level>` sets one.
   `Shift+Tab` cycles the levels the selected model supports.
-- `/reload` re-reads instructions, skills, and theme/display settings and
-  resources. Model, tool, shell, and network settings are not reloaded.
+- `/reload` re-reads instructions, skills, theme/display settings, and
+  `steeringMode`/`followUpMode` and resources; new queue modes apply to the
+  next run. Model, tool, shell, and network settings are not reloaded.
 
 Startup selection uses `--provider`, `--model`, and `--thinking`; see
 [Command line](cli.md). Model IDs come from the bundled catalog and Pi's local

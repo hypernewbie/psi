@@ -30,7 +30,7 @@ Commands (bounded inline, searchable editor pickers, no fullscreen):
 - `/session` — identity, workspace, provider/API/model, thinking, continuation, usage, and theme diagnostics (no secrets, no invented $0.00)
 - `/settings` — inline list of supported live settings; `Up/Down` wrap, `PageUp/PageDown` move by the visible window, `Enter`/`Space` change the value, `Esc`/`Ctrl+C` close. Changes apply immediately; persisted values merge into the agent `settings.json`. Refused while a run is active.
 - `/version` — psi release, git commit and commit time, and Go toolchain/platform as stamped at build time; `(dirty)` marks a tree with uncommitted or untracked changes at build time. Pi has no such command: it shows its version in the startup header and through `pi --version`
-- `/reload` — reload supported display/theme settings and resources without replaying committed scrollback
+- `/reload` — reload supported display/theme settings, queue modes, and resources without replaying committed scrollback
 - `/history [N|all]` — last N user spans (default 20) or full history, display-only, no mutation
 - `/skill:name [args]` — resolve, persist reproducible input (`psi.input`), show invocation once
 - `/quit` — settle work, restore terminal
