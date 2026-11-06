@@ -103,7 +103,7 @@ func TestActualAppSteeringWhileRunning(t *testing.T) {
 func TestActualAppCancelRestoresQueuedMessagesToEditor(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
-	var mu sync.Mutex
+	started := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -111,13 +111,18 @@ func TestActualAppCancelRestoresQueuedMessagesToEditor(t *testing.T) {
 			b, _ := json.Marshal(data)
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
 		}
-		mu.Lock()
-		defer mu.Unlock()
 		emit("message_start", map[string]any{"message": map[string]any{"id": "slow", "model": "m", "usage": map[string]any{"input_tokens": 1}}})
-		time.Sleep(3 * time.Second)
-		emit("message_stop", map[string]any{})
+		w.(http.Flusher).Flush()
+		// Keep the request active until Escape, regardless of host load.
+		select {
+		case started <- struct{}{}:
+		case <-r.Context().Done():
+			return
+		}
+		<-r.Context().Done()
 	}))
-	defer server.Close()
+	// The PTY cleanup must stop the child before waiting for this server.
+	t.Cleanup(server.Close)
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false},"outputPad":0}`)
 	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":8192}]}}}`)
 	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-key"}}`)
@@ -131,17 +136,18 @@ func TestActualAppCancelRestoresQueuedMessagesToEditor(t *testing.T) {
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", store.File())
 	q.prompt()
 	q.write("SLOW_ASK\r")
+	select {
+	case <-started:
+	case <-time.After(8 * time.Second):
+		t.Fatal("provider request did not start")
+	}
 	q.write("CANCEL_STEER\r")
 	q.wait("Steering: CANCEL_STEER")
 	q.write("CANCEL_FOLLOWUP\x1b\r")
 	q.wait("Follow-up: CANCEL_FOLLOWUP")
 	q.write("\x1b")
 	q.wait("cancelled")
-	q.prompt()
-	draft := q.screen.Text()
-	if !strings.Contains(draft, "CANCEL_STEER") || !strings.Contains(draft, "CANCEL_FOLLOWUP") {
-		t.Fatalf("undelivered queue text was lost on cancel: %q", draft)
-	}
+	q.waitScreen("CANCEL_STEER\n\nCANCEL_FOLLOWUP")
 	rows := append(append([]string{}, q.screen.Scrollback...), strings.Split(q.screen.Text(), "\n")...)
 	joined := strings.Join(rows, "\n")
 	if strings.Contains(joined, "Steering: CANCEL_STEER") || strings.Contains(joined, "Follow-up: CANCEL_FOLLOWUP") {
