@@ -138,6 +138,28 @@ func TestFooterSessionNameSanitizesTerminalControls(t *testing.T) {
 	}
 }
 
+func TestFooterRendersGitBranchBeforeSessionName(t *testing.T) {
+	rows, _ := formatFooter(PresentationSnapshot{
+		WorkingDirectory: filepath.FromSlash("/tmp/work"), GitBranch: "main", SessionName: "notes",
+	}, 80, 3, true)
+	if !strings.Contains(rows[0], filepath.FromSlash("/tmp/work")+" (main) • notes") {
+		t.Fatalf("branch not rendered before session name: %q", rows[0])
+	}
+}
+
+func TestFooterSanitizesGitBranch(t *testing.T) {
+	rows, _ := formatFooter(PresentationSnapshot{
+		WorkingDirectory: "/work", GitBranch: "ma\nin", NoColor: true,
+	}, 80, 3, true)
+	plain := rows[0]
+	if strings.ContainsAny(plain, "\n\r\x1b") {
+		t.Fatalf("branch injected terminal control: %q", plain)
+	}
+	if !strings.Contains(plain, "ma in") {
+		t.Fatalf("branch was not kept as harmless footer text: %q", plain)
+	}
+}
+
 func TestFooterShowsPiAutoCompactMarker(t *testing.T) {
 	rows, _ := formatFooter(PresentationSnapshot{
 		ContextEstimate: "~8%/100k", AutoCompact: true, Model: "m", NoColor: true,
@@ -198,6 +220,21 @@ func TestFooterUsesPiEllipsisForLongPathAndStats(t *testing.T) {
 	}, 12, 3, true)
 	if got := Sanitize(statsRows[1]); got != "↑1234567..." {
 		t.Fatalf("long stats footer row=%q; want Pi-style ellipsis", got)
+	}
+}
+
+func TestFooterRowWidthHoldsWithCacheStats(t *testing.T) {
+	rows, _ := formatFooter(PresentationSnapshot{
+		Usage: "↑126 ↓30 R874 CH87.4%", ContextEstimate: "~8%/100k",
+		Model: "a-very-long-model-name-that-does-not-fit", NoColor: true,
+	}, 40, 3, true)
+	for i, row := range rows {
+		if w := CellWidth(Sanitize(row)); w > 40 {
+			t.Fatalf("footer row %d width=%d; want at most 40", i, w)
+		}
+	}
+	if got := Sanitize(rows[1]); !strings.Contains(got, "CH87.4") {
+		t.Fatalf("cache segments clipped from stats row: %q", got)
 	}
 }
 

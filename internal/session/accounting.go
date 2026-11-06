@@ -6,6 +6,7 @@ type Accounting struct {
 	Usage         Usage
 	Attempts      int
 	ReturnedModel string
+	CacheHitRate  *float64 // cache read share of the latest assistant message, in percent
 }
 
 func (s *Store) Accounting() (Accounting, error) {
@@ -36,6 +37,15 @@ func (s *Store) Accounting() (Accounting, error) {
 		if e.Message != nil && e.Message.Message.Assistant != nil {
 			a := e.Message.Message.Assistant
 			add(a.Usage)
+			prompt := a.Usage.Input + a.Usage.CacheRead + a.Usage.CacheWrite
+			if prompt > 0 {
+				rate := 100 * a.Usage.CacheRead / prompt
+				result.CacheHitRate = &rate
+			} else {
+				// Pi assigns the rate on every assistant message, so a later
+				// message without prompt tokens clears an earlier rate.
+				result.CacheHitRate = nil
+			}
 			result.ReturnedModel = a.Model
 			if a.ResponseModel != nil {
 				result.ReturnedModel = *a.ResponseModel

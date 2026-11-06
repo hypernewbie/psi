@@ -289,6 +289,7 @@ type PresentationSnapshot struct {
 	WorkingDirectory string
 	HomeDirectory    string
 	SessionName      string
+	GitBranch        string
 	Usage            string // only locally stored counters; empty means unavailable
 	ContextEstimate  string // explicitly marked approximation, e.g. ~8%/100k
 	AutoCompact      bool
@@ -347,6 +348,9 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 	}
 	width = max(1, width-1) // reserve the final cell against terminal autowrap
 	path := homeAbbreviated(snapshot.WorkingDirectory, snapshot.HomeDirectory)
+	if snapshot.GitBranch != "" {
+		path += " (" + SanitizeStatusRow(snapshot.GitBranch) + ")"
+	}
 	if snapshot.SessionName != "" {
 		path += " • " + SanitizeStatusRow(snapshot.SessionName)
 	}

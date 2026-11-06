@@ -641,6 +641,11 @@ type runtime struct {
 	signals                  chan os.Signal
 	footerKey                string
 	footerSnapshot           terminal.PresentationSnapshot
+	gitBranchDir             string // working directory the branch cache was built for
+	gitHeadFile              string // HEAD file of the enclosing work tree
+	gitHeadFound             bool   // whether a HEAD file was found
+	gitBranchKey             string // cache key of the last read HEAD file
+	gitBranchValue           string // branch name of the last read HEAD file
 	contextTokens            float64
 	contextWindow            float64
 	// Bridge compact readiness, mirrored from loop-owned state.
@@ -1091,7 +1096,8 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		return
 	}
 	projection := r.store.ProjectionIfCached()
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil, r.settings.HideThinkingBlock)
+	branch := r.gitBranchFor(r.store.Cwd())
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t/%q", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil, r.settings.HideThinkingBlock, branch)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
@@ -1100,21 +1106,29 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		sessionName := r.store.SessionName()
 		snapshot := terminal.PresentationSnapshot{
 			Display:          presentationDisplay(r.settings),
-			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName,
+			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName, GitBranch: branch,
 			Provider: r.ov.Provider, ProviderCount: footerProviderCount(r.models), Model: r.ov.Model,
 			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking), AutoCompact: r.cfg.AutoCompact, Theme: r.theme,
 			NoColor: noColorEnvironment(),
 		}
 		if accounting, err := r.store.Accounting(); err == nil {
+			parts := []string{}
 			if accounting.Usage.Input > 0 {
-				snapshot.Usage = "↑" + formatFooterTokens(accounting.Usage.Input)
+				parts = append(parts, "↑"+formatFooterTokens(accounting.Usage.Input))
 			}
 			if accounting.Usage.Output > 0 {
-				if snapshot.Usage != "" {
-					snapshot.Usage += " "
-				}
-				snapshot.Usage += "↓" + formatFooterTokens(accounting.Usage.Output)
+				parts = append(parts, "↓"+formatFooterTokens(accounting.Usage.Output))
 			}
+			if accounting.Usage.CacheRead > 0 {
+				parts = append(parts, "R"+formatFooterTokens(accounting.Usage.CacheRead))
+			}
+			if accounting.Usage.CacheWrite > 0 {
+				parts = append(parts, "W"+formatFooterTokens(accounting.Usage.CacheWrite))
+			}
+			if (accounting.Usage.CacheRead > 0 || accounting.Usage.CacheWrite > 0) && accounting.CacheHitRate != nil {
+				parts = append(parts, "CH"+formatFooterFixedOneDecimal(*accounting.CacheHitRate, "%"))
+			}
+			snapshot.Usage = strings.Join(parts, " ")
 		}
 		// Bridge telemetry is sampled here, next to the footer estimate, so
 		// both report the same point in time. Neither forces a projection.

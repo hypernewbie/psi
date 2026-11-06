@@ -169,6 +169,52 @@ func TestFooterSnapshotUsesPiTokenFormatting(t *testing.T) {
 	}
 }
 
+func TestFooterCacheStatsMatchPi(t *testing.T) {
+	r := testRuntime(t)
+	_, err := r.store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "m",
+		Usage: session.Usage{Input: 126, Output: 30, CacheRead: 874},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+	r.refreshPresentation(console)
+	if r.footerSnapshot.Usage != "↑126 ↓30 R874 CH87.4%" {
+		t.Fatalf("footer usage=%q; want Pi format ↑126 ↓30 R874 CH87.4%%", r.footerSnapshot.Usage)
+	}
+}
+
+func TestFooterCacheStatsOmitZeroCounters(t *testing.T) {
+	r := testRuntime(t)
+	_, err := r.store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "m",
+		Usage: session.Usage{Input: 126, Output: 30},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+	r.refreshPresentation(console)
+	if r.footerSnapshot.Usage != "↑126 ↓30" {
+		t.Fatalf("footer usage=%q; want ↑126 ↓30 with no cache segments", r.footerSnapshot.Usage)
+	}
+}
+
 func TestFooterPercentFormattingMatchesPi(t *testing.T) {
 	for _, tc := range []struct {
 		percent float64
@@ -209,10 +255,15 @@ func clearProviderAPIKeys(t *testing.T) {
 
 func testRuntime(t *testing.T) *runtime {
 	t.Helper()
+	return testRuntimeWithCwd(t, t.TempDir())
+}
+
+func testRuntimeWithCwd(t *testing.T, cwd string) *runtime {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
-	s, err := session.New(session.OpenOptions{Cwd: t.TempDir(), SessionDir: t.TempDir(), Persist: true})
+	s, err := session.New(session.OpenOptions{Cwd: cwd, SessionDir: t.TempDir(), Persist: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +282,41 @@ func testRuntime(t *testing.T) *runtime {
 		}
 	})
 	return r
+}
+
+func TestFooterSnapshotIncludesGitBranch(t *testing.T) {
+	fixture := t.TempDir()
+	head := filepath.Join(fixture, ".git", "HEAD")
+	if err := os.MkdirAll(filepath.Dir(head), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(head, []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := testRuntimeWithCwd(t, fixture)
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+	r.refreshPresentation(console)
+	if r.footerSnapshot.GitBranch != "main" {
+		t.Fatalf("footer branch=%q; want main", r.footerSnapshot.GitBranch)
+	}
+	if err := os.WriteFile(head, []byte("ref: refs/heads/other\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Second)
+	if err := os.Chtimes(head, future, future); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if r.footerSnapshot.GitBranch != "other" {
+		t.Fatalf("footer branch after checkout=%q; want other", r.footerSnapshot.GitBranch)
+	}
 }
 
 func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
