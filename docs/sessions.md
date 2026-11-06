@@ -26,10 +26,11 @@ session out of the session directory and leave the link stale. A canonical
 name that is already taken by another file is reported instead of a second
 session being written on top of it.
 
-psi names a session file after its session ID, so IDs that are reserved
-device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are
-rejected on every platform. A session file with such an ID keeps its current
-name instead of moving.
+psi names a session file after its session ID. On Windows, IDs that are
+reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+`LPT1`-`LPT9`) cannot name a file and are rejected. Other platforms accept
+them. A session file with such an ID keeps its current name instead of
+moving.
 
 Precedence for the session directory:
 

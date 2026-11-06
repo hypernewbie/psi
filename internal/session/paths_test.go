@@ -103,6 +103,32 @@ func TestAssertValidSessionID(t *testing.T) {
 	}
 }
 
+func TestWindowsDeviceName(t *testing.T) {
+	// psi names a session file after the session ID, so a Windows device
+	// name would produce a path that resolves to a device.
+	devices := []string{"CON", "con", "nul", "PRN", "aux", "COM1", "com9", "LPT1", "lpt9"}
+	for _, id := range devices {
+		if !isWindowsDeviceName(id) {
+			t.Errorf("device name %q not detected", id)
+		}
+	}
+	usable := []string{"console", "comm", "com", "com0", "COM10", "lpt", "session-1", "c1"}
+	for _, id := range usable {
+		if isWindowsDeviceName(id) {
+			t.Errorf("usable name %q rejected", id)
+		}
+	}
+}
+
+func TestReservedSessionIDOnlyAppliesOnWindows(t *testing.T) {
+	// Only Windows resolves CON.jsonl to a device. Elsewhere the name is
+	// a usable file name and psi must not restrict it.
+	want := runtime.GOOS == "windows"
+	if got := reservedSessionID("CON"); got != want {
+		t.Fatalf("reservedSessionID(CON) = %v, want %v on %s", got, want, runtime.GOOS)
+	}
+}
+
 func TestAgentDirEnv(t *testing.T) {
 	t.Setenv("PSI_CODING_AGENT_DIR", "/tmp/psi-agent")
 	if got := AgentDir(); got != "/tmp/psi-agent" {

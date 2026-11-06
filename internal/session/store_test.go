@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -85,14 +86,17 @@ func TestHeaderVersionChecks(t *testing.T) {
 
 func TestReservedSessionIDIsRejected(t *testing.T) {
 	dir := t.TempDir()
+	if runtime.GOOS != "windows" {
+		// Off Windows the name is a usable file name, so psi must not
+		// restrict it.
+		if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "CON"}); err != nil {
+			t.Fatalf("device-name rejection must be Windows-only: %v", err)
+		}
+		return
+	}
 	for _, id := range []string{"CON", "con", "nul", "PRN", "aux", "COM1", "lpt9"} {
 		if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: id}); err == nil {
 			t.Fatalf("expected a reserved-name error for %q", id)
-		}
-	}
-	for _, id := range []string{"console", "comm", "com", "lpt", "com0", "COM10", "session-1"} {
-		if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: id}); err != nil {
-			t.Fatalf("unexpected error for %q: %v", id, err)
 		}
 	}
 }
