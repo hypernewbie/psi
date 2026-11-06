@@ -63,6 +63,10 @@ type bridgePrep struct {
 	// preparation job, so a second request waits instead of competing.
 	work     func() (string, error)
 	expanded string
+
+	// attach is the attachment state of this same slot. It is nil for every
+	// other kind.
+	attach *bridgeAttach
 }
 
 // bridgeHandler serves capability requests on the TUI loop. It owns one
@@ -76,6 +80,7 @@ type bridgeHandler struct {
 	// Loop-owned submission hook and the run currently in flight. They are
 	// refreshed by the loop, never by a worker.
 	start      func(text, display, focus, invocation, source string, compact bool)
+	startInput func(input agent.UserInput, focus string, compact bool) (bool, string)
 	activeLoop *agent.Loop
 
 	// searchDone receives finished pages. searches counts live workers on the
@@ -94,6 +99,10 @@ type bridgeHandler struct {
 	// Phi's mutual exclusion and retired by readiness evidence.
 	reload    *bridgeReload
 	reloadRun func() error
+
+	// Attachment admission state. attachHigh rejects replayed ids; the one
+	// live operation is the shared preparation slot above.
+	attachHigh uint64
 }
 
 // bridgeCompact is one accepted, unanswered compaction.
@@ -178,6 +187,8 @@ func (h *bridgeHandler) handle(req pibridge.Request, runBusy bool) {
 		h.startCompact(req, runBusy)
 	case pibridge.RequestReload:
 		h.startReload(req, runBusy)
+	case pibridge.RequestAttachment:
+		h.startAttachment(req, runBusy)
 	default:
 		req.ReplyUnavailable()
 	}
@@ -693,6 +704,10 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 		return
 	}
 	h.prep = nil
+	if prep.kind == pibridge.RequestAttachment {
+		h.finishAttach(prep, runBusy)
+		return
+	}
 	if prep.kind == pibridge.RequestInvokeSkill {
 		h.finishSkill(prep, runBusy)
 		return

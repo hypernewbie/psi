@@ -774,8 +774,10 @@ func TestSteeringDeliveryFailureKeepsMessageQueued(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := loop.ContinuePending(context.Background(), Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
-		t.Fatalf("ContinuePending must report the failed delivery, not crash: %v", err)
+	// A failed append is a real error now: the run stops before another
+	// provider call, and the message must still be back in the queue.
+	if err := loop.ContinuePending(context.Background(), Config{Model: modelMeta(), Tools: toolDefs()}); err == nil {
+		t.Fatal("ContinuePending must report the failed delivery")
 	}
 	if pending := loop.PendingSteering(); len(pending) != 1 || pending[0] != "undelivered steering" {
 		t.Fatalf("failed delivery must restore the message to the queue, got %q", pending)

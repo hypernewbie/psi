@@ -33,8 +33,8 @@ func TestSteeringQueueRestoredWhenPersistenceFails(t *testing.T) {
 	}
 	appendBrokenSessionTail(t, store.File())
 	loop.Steer("preserve this")
-	if loop.deliverSteering() {
-		t.Fatal("delivery unexpectedly succeeded")
+	if delivered, err := loop.deliverQueuedSteering(); delivered || err == nil {
+		t.Fatalf("delivery = %v, %v; want a reported storage failure", delivered, err)
 	}
 	if got := loop.PendingSteering(); len(got) != 1 || got[0] != "preserve this" {
 		t.Fatalf("failed steering delivery lost message: %q", got)

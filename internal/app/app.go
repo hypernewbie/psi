@@ -649,11 +649,17 @@ type runtime struct {
 	// Native reload fence state. contextRev counts every user message and
 	// compaction boundary; reloadPending latches one admitted reload;
 	// reloadHigh is the highest reload id observed.
-	contextRev          uint64
-	reloadPending       bool
-	reloadHigh          uint64
-	queuedInputs        func() int
-	bridgeWork          func() bool
+	contextRev    uint64
+	reloadPending bool
+	reloadHigh    uint64
+	queuedInputs  func() int
+	bridgeWork    func() bool
+	// Bridge recovery holds verified structured input that was admitted but
+	// never became durable. It is never replayed automatically; inFlight is
+	// the one admitted prompt waiting for RunStart to prove its append.
+	recovery            []agent.UserInput
+	inFlight            *agent.UserInput
+	recoveryNotify      func(string)
 	themeCatalog        *pitheme.Catalog
 	theme               *pitheme.Theme
 	themeSetting        string
@@ -1202,6 +1208,10 @@ func (r *runtime) replace(next *session.Store) error {
 	}
 	r.installConfiguration(&candidate)
 	r.store = next
+	// Undelivered prompts belonged to the replaced session; keeping them
+	// would let a later attachment send content the user has moved away from.
+	r.clearRecovery()
+	r.clearInFlight()
 	if r.cancelACEndTurn != nil {
 		r.cancelACEndTurn()
 	}
@@ -1397,6 +1407,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// Bridge readiness must reflect preparation work that can still install a
 	// configuration, not only runs the loop owns.
 	r.bridgeWork = bridge.busy
+	r.recoveryNotify = func(text string) { notice(terminal.NoticeWarning, text) }
 	frameTimer := time.NewTimer(time.Hour)
 	frameTimer.Stop()
 	defer frameTimer.Stop()
@@ -1627,6 +1638,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
+			r.clearInFlight()
 			r.bridgeRunStarted()
 		case event.SteeringDelivered, event.FollowUpDelivered:
 			// A delivered queued message becomes a normal user turn. Remove it
@@ -1720,7 +1732,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var compactionCountAtStart uint64
 	var resumeAfterCompaction bool
 	var activeConfig agent.Config
-	start := func(text, display, focus, invocation, source string, compact bool) {
+	startInput := func(input agent.UserInput, focus string, compact bool) (bool, string) {
 		resumeThisCompaction := compact && resumeAfterCompaction
 		if compact {
 			resumeAfterCompaction = false
@@ -1729,28 +1741,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if err := r.store.WriteError(); err != nil {
 			r.state = StateStorageBlocked
 			notice(terminal.NoticeError, "Storage is blocked: "+err.Error()+" (open a checked copy or /new)")
-			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
-			console.RefreshCompletion()
-			r.draw(console)
-			return
+			return false, "storage"
 		}
 		if r.authErr != nil && !compact {
 			// A compaction resolves its provider after the preparation, like
 			// Pi: the session is checked before credentials are needed.
 			notice(terminal.NoticeError, r.authErr.Error())
-			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
-			console.RefreshCompletion()
-			r.draw(console)
-			return
+			return false, "unavailable"
 		}
 		// Every submitted message and every compaction boundary moves the
 		// reload fence, so a moved-on session reads stale.
-		if compact || strings.TrimSpace(text) != "" {
+		if compact || !input.Empty() {
 			r.bumpContextRev()
 		}
-		if strings.TrimSpace(display) != "" {
+		if strings.TrimSpace(input.Display) != "" {
 			console.EnsureTranscriptGap()
-			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: display})
+			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: input.Display})
 		}
 		runOutcome, visibleRunText = "", false
 		ctx, stop := context.WithCancel(context.Background())
@@ -1820,6 +1826,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			events <- e
 		})
 		activeLoop = loop
+		// RunStart proves the initial append completed. Until then the input is
+		// retained so a run that dies early can be recovered without re-asking
+		// Phi or flattening verified content into the editor. Only a new
+		// structured prompt touches the marker: a compaction start between
+		// admission and RunStart must not lose it. A native editor submission
+		// while a bridge prompt is in flight is refused, so a non-structured
+		// replacement cannot steal the marker either.
+		r.retainInFlight(input)
 		go func() {
 			if compact {
 				if resumeThisCompaction {
@@ -1827,12 +1841,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 				} else {
 					done <- loop.Compact(ctx, cfg, focus)
 				}
-			} else if invocation != "" {
-				done <- loop.SubmitWithProvenance(ctx, text, invocation, source, cfg)
+			} else if input.Structured() {
+				done <- loop.SubmitContent(ctx, input, cfg)
+			} else if input.Invocation != "" {
+				done <- loop.SubmitWithProvenance(ctx, input.Text(), input.Invocation, input.Source, cfg)
 			} else {
-				done <- loop.Submit(ctx, text, cfg)
+				done <- loop.Submit(ctx, input.Text(), cfg)
 			}
 		}()
+		return true, ""
+	}
+	// start is the editor and command entry point: a refused submission is
+	// handed back to the user as a restored draft.
+	start := func(text, display, focus, invocation, source string, compact bool) {
+		input := agent.UserInput{Content: text, Display: display, Invocation: invocation, Source: source}
+		if admitted, _ := startInput(input, focus, compact); admitted {
+			return
+		}
+		console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+		console.RefreshCompletion()
+		r.draw(console)
 	}
 	startCompact := func(focus string) error {
 		if writeErr := r.store.WriteError(); writeErr != nil {
@@ -1957,6 +1985,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	for {
 		if exiting && !busy {
+			if count := len(r.recovery); count > 0 {
+				fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("%d undelivered attachment prompt(s) were not sent; Phi keeps a saved copy.", count)))
+			}
 			return console.Err()
 		}
 		if suspendPending && !busy {
@@ -2055,10 +2086,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 				return nil
 			}
 		case req := <-bridge.requests():
-			bridge.start, bridge.activeLoop = start, activeLoop
+			bridge.start, bridge.startInput, bridge.activeLoop = start, startInput, activeLoop
 			bridge.handle(req, busy)
 		case <-bridge.completed():
+			bridge.start, bridge.startInput, bridge.activeLoop = start, startInput, activeLoop
 			bridge.finishPreparation(busy)
+			r.draw(console)
+		case <-bridge.timeout():
+			bridge.expireAttachment()
 			r.draw(console)
 		case job := <-bridge.searchResults():
 			bridge.finishSearch(job)
@@ -2086,13 +2121,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 			// on cancellation or failure, restore it to the editor instead.
 			var undelivered []string
 			var lateQueueLoop *agent.Loop
+			if r.recoverInFlight() > 0 {
+				notice(terminal.NoticeWarning, "An attachment prompt was not delivered. Phi keeps a saved copy you can restore.")
+			}
 			if activeLoop != nil {
 				pendingSteering := activeLoop.PendingSteering()
 				pendingFollowUp := activeLoop.PendingFollowUp()
-				if err == nil && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
+				if err == nil && !exiting && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
 					lateQueueLoop = activeLoop
 				} else {
-					undelivered = append(activeLoop.ClearSteering(), activeLoop.ClearFollowUp()...)
+					undelivered = append(r.takeSteering(activeLoop), activeLoop.ClearFollowUp()...)
 				}
 			}
 			if lateQueueLoop != nil {

@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"psi/internal/attachments"
 	pibridgepb "psi/internal/pibridge/pb"
 )
 
@@ -30,6 +31,7 @@ const (
 	RequestTranscript  = "transcript-search"
 	RequestCompact     = "compact"
 	RequestReload      = "reload"
+	RequestAttachment  = "attachments"
 )
 
 // ModelRef is one selectable catalog entry, named the way snapshots name it.
@@ -124,6 +126,13 @@ type Request struct {
 	hasReloadModel   bool
 	reloadRunID      *uint64
 	reloadContextRev *uint64
+
+	attachSession  string
+	attachLeaf     string
+	attachModel    ModelRef
+	hasAttachModel bool
+	attachText     string
+	attachRefs     []attachments.Ref
 }
 
 // Kind names the request. Unrecognized kinds are never forwarded.
@@ -171,6 +180,9 @@ type TranscriptMatch struct {
 
 // Expired reports whether the originating stream already ended.
 func (r Request) Expired() bool { return r.ctx.Err() != nil }
+
+// Generation is the runtime generation the originating stream bound.
+func (r Request) Generation() uint64 { return r.generation }
 
 // send builds one reply envelope and enqueues it. The payload stays a
 // generated oneof wrapper: this package never invents its own wire types.
@@ -411,7 +423,89 @@ func (r Request) ReplyTranscriptUnavailable() bool {
 	})
 }
 
-// ReplyUnavailable answers a request whose capability or host work is gone.
+// AttachmentExpect is the identity one attachment prompt was admitted
+// against. Model presence is significant: an absent expectation matches only
+// an absent live model.
+type AttachmentExpect struct {
+	Session  string
+	Leaf     string
+	Model    ModelRef
+	HasModel bool
+	Text     string
+	Refs     []attachments.Ref
+}
+
+// AttachmentExpectation returns the identity the caller pinned. The refs are
+// copied so later host mutation cannot change what was validated.
+func (r Request) AttachmentExpectation() AttachmentExpect {
+	return AttachmentExpect{
+		Session:  r.attachSession,
+		Leaf:     r.attachLeaf,
+		Model:    r.attachModel,
+		HasModel: r.hasAttachModel,
+		Text:     r.attachText,
+		Refs:     append([]attachments.Ref(nil), r.attachRefs...),
+	}
+}
+
+// AttachmentRoot is the checked handoff root this client retained, nil when
+// the capability was not offered or the pane is shutting down.
+func (r Request) AttachmentRoot() *attachments.Root {
+	if r.client == nil {
+		return nil
+	}
+	return r.client.AttachmentRoot()
+}
+
+// AttachmentOutcome mirrors the wire enum.
+type AttachmentOutcome int
+
+const (
+	AttachmentRefused AttachmentOutcome = iota
+	AttachmentDispatched
+	AttachmentUnknown
+)
+
+// ReplyAttachment answers one attachment prompt. DISPATCHED reports admission
+// only, never model receipt. Refusal reasons come from Phi's fixed vocabulary;
+// anything else is coerced so Phi never discards the ack.
+func (r Request) ReplyAttachment(outcome AttachmentOutcome, reason string) bool {
+	wire := pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_REFUSED
+	switch outcome {
+	case AttachmentDispatched:
+		wire = pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_DISPATCHED
+	case AttachmentUnknown:
+		wire = pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_UNKNOWN
+	}
+	return r.send(func(m *pibridgepb.PiToPhi) {
+		m.Payload = &pibridgepb.PiToPhi_AttachmentPromptAck{AttachmentPromptAck: &pibridgepb.AttachmentPromptAck{
+			RequestId: r.requestID,
+			Outcome:   wire,
+			Reason:    attachmentReason(outcome, reason),
+		}}
+	})
+}
+
+// attachmentReason keeps one ack inside the contract: DISPATCHED carries no
+// reason, UNKNOWN is always uncertain, and REFUSED never invents a reason Phi
+// rejects. "uncertain" is reserved for UNKNOWN.
+func attachmentReason(outcome AttachmentOutcome, reason string) string {
+	switch outcome {
+	case AttachmentDispatched:
+		return ""
+	case AttachmentUnknown:
+		return "uncertain"
+	}
+	switch reason {
+	case "unavailable", "stale", "busy", "queued", "compaction-active",
+		"pending", "command", "unsupported-image", "unsupported-model",
+		"missing-item", "invalid-item", "limit", "storage", "error":
+		return reason
+	default:
+		return "unavailable"
+	}
+}
+
 // The shape stays capability-specific so Phi can fall back correctly.
 func (r Request) ReplyUnavailable() bool {
 	switch r.kind {
@@ -435,6 +529,8 @@ func (r Request) ReplyUnavailable() bool {
 		return r.ReplyCompact(CompactRefused, "unavailable")
 	case RequestReload:
 		return r.ReplyReload(false, "unavailable")
+	case RequestAttachment:
+		return r.ReplyAttachment(AttachmentRefused, "unavailable")
 	default:
 		return false
 	}
@@ -501,6 +597,20 @@ func (c *Client) dispatch(msg *pibridgepb.PhiToPi, ctx context.Context, out *out
 			req.reloadModel, req.hasReloadModel = ModelRef{Provider: model.GetProvider(), Model: model.GetModel()}, true
 		}
 		req.reloadRunID, req.reloadContextRev = reload.ExpectedRunId, reload.ExpectedContextRevision
+	case *pibridgepb.PhiToPi_AttachmentPromptRequest:
+		attach := payload.AttachmentPromptRequest
+		req.kind, req.requestID = RequestAttachment, attach.GetRequestId()
+		req.attachSession, req.attachLeaf = attach.GetExpectedSessionId(), attach.GetExpectedLeafId()
+		if model := attach.GetExpectedModel(); model != nil {
+			req.attachModel, req.hasAttachModel = ModelRef{Provider: model.GetProvider(), Model: model.GetModel()}, true
+		}
+		req.attachText = attach.GetText()
+		for _, ref := range attach.GetAttachments() {
+			req.attachRefs = append(req.attachRefs, attachments.Ref{
+				Basename: ref.GetBasename(), SizeBytes: ref.GetSizeBytes(), MIMEType: ref.GetMimeType(),
+				Kind: ref.GetKind(), SHA256: ref.GetSha256(),
+			})
+		}
 	default:
 		return Request{}, false
 	}
