@@ -96,6 +96,9 @@ type Settings struct {
 	EnableSkills            bool
 	// HideThinkingBlock hides reasoning blocks behind Pi's collapsed label.
 	HideThinkingBlock bool
+	// SoftWrap emits committed prose as complete logical lines so the
+	// terminal wraps them. Copying a paragraph then keeps it intact.
+	SoftWrap          bool
 	Compaction        CompactionConfig
 	ShellPath         string
 	ShellPrefix       string
@@ -121,6 +124,7 @@ func defaultSettings() Settings {
 		FollowUpMode:            "one-at-a-time",
 		DefaultTools:            []string{"read", "bash", "edit", "write"},
 		EnableSkills:            true,
+		SoftWrap:                true,
 		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
 		MaxRetries:              3,
 		HTTPIdleTimeoutMs:       300000,
@@ -137,6 +141,7 @@ type rawSettings struct {
 	} `json:"terminal"`
 	EditorPaddingX         any `json:"editorPaddingX"`
 	OutputPad              any `json:"outputPad"`
+	SoftWrap               any `json:"softWrap"`
 	AutocompleteMaxVisible any `json:"autocompleteMaxVisible"`
 	Markdown               *struct {
 		CodeBlockIndent *string `json:"codeBlockIndent"`
@@ -364,6 +369,14 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 			out.OutputPad = 0
 		}
 		sources["outputPad"] = src
+	}
+	if _, present := data["softWrap"]; present {
+		value, ok := raw.SoftWrap.(bool)
+		if !ok {
+			return fmt.Errorf("softWrap must be a boolean")
+		}
+		out.SoftWrap = value
+		sources["softWrap"] = src
 	}
 	if _, present := data["autocompleteMaxVisible"]; present {
 		value, ok := numericSetting(raw.AutocompleteMaxVisible)

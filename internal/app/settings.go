@@ -57,6 +57,10 @@ func (r *runtime) settingsEntries() []settingsEntry {
 	if r.settings.HideThinkingBlock {
 		hideThinkingSelected = 1
 	}
+	softWrapSelected := 0
+	if r.settings.SoftWrap {
+		softWrapSelected = 1
+	}
 	themeValues, themeSelected := r.themeSettingValues()
 	colorMode := r.settings.TerminalTrueColor
 	if colorMode == "" {
@@ -158,6 +162,27 @@ func (r *runtime) settingsEntries() []settingsEntry {
 					return fmt.Errorf("invalid hide thinking value")
 				}
 				r.settings.HideThinkingBlock = hidden
+				return nil
+			},
+		},
+		{
+			item: terminal.SettingsItem{
+				ID:          "soft-wrap",
+				Label:       "Soft wrap",
+				Description: "Let the terminal wrap committed output for clean copy.",
+				Values: []terminal.SettingsValue{
+					{Label: "off", Value: false},
+					{Label: "on", Value: true},
+				},
+				Selected: softWrapSelected,
+			},
+			persist: []string{"softWrap"},
+			apply: func(r *runtime, _ *terminal.Console, value terminal.SettingsValue) error {
+				soft, ok := value.Value.(bool)
+				if !ok {
+					return fmt.Errorf("invalid soft wrap value")
+				}
+				r.settings.SoftWrap = soft
 				return nil
 			},
 		},
