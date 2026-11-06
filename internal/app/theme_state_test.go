@@ -232,3 +232,32 @@ func TestThemeStateQueryHoldsInterleavedUserKeystrokes(t *testing.T) {
 		t.Fatalf("held text = %q, want 'user-typed-query'", text.String())
 	}
 }
+
+func TestReloadThemeCopiesSoftWrap(t *testing.T) {
+	r := testRuntime(t)
+	console := &terminal.Console{Editor: terminal.NewEditor(), Out: io.Discard}
+	path := filepath.Join(r.agentDir, "settings.json")
+	block := terminal.DocumentBlock{Kind: terminal.DocumentAssistant, Text: "alpha beta gamma delta"}
+	for _, tc := range []struct {
+		body string
+		soft bool
+	}{
+		{`{"softWrap":true}`, true},
+		{`{"softWrap":false}`, false},
+		{`{"softWrap":true}`, true},
+	} {
+		writeAppFile(t, path, tc.body)
+		if err := r.reloadTheme(); err != nil {
+			t.Fatal(err)
+		}
+		r.refreshPresentation(console)
+		snapshot := console.GetPresentation()
+		if r.settings.SoftWrap != tc.soft || snapshot.Display.SoftWrap != tc.soft {
+			t.Fatalf("reload %s: runtime=%t console=%t", tc.body, r.settings.SoftWrap, snapshot.Display.SoftWrap)
+		}
+		rows := terminal.FormatDocumentBlock(block, 12, snapshot)
+		if got := strings.Contains(terminal.Sanitize(strings.Join(rows, "\n")), block.Text); got != tc.soft {
+			t.Fatalf("reload %s did not change committed wrapping: %q", tc.body, rows)
+		}
+	}
+}

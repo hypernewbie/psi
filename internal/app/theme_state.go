@@ -40,6 +40,7 @@ func presentationDisplay(settings config.Settings) terminal.DisplaySettings {
 		OutputPad: settings.OutputPad, EditorPaddingX: settings.EditorPaddingX,
 		AutocompleteMaxVisible: settings.AutocompleteMaxVisible,
 		CodeBlockIndent:        settings.MarkdownCodeBlockIndent,
+		SoftWrap:               settings.SoftWrap,
 		HideThinking:           settings.HideThinkingBlock,
 	}
 }
@@ -340,6 +341,7 @@ func (r *runtime) reloadTheme() error {
 	r.settings.EditorPaddingX = loaded.Settings.EditorPaddingX
 	r.settings.AutocompleteMaxVisible = loaded.Settings.AutocompleteMaxVisible
 	r.settings.MarkdownCodeBlockIndent = loaded.Settings.MarkdownCodeBlockIndent
+	r.settings.SoftWrap = loaded.Settings.SoftWrap
 	r.themeCatalog, r.theme, r.themeSetting, r.themeName = catalog, active, setting, name
 	r.themeMode, r.themeAppearance = mode, appearance
 	r.themeFallback, r.themeDiagnostics = "", catalog.Diagnostics()

@@ -185,14 +185,19 @@ func (m *MarkdownStream) displayRows() []string {
 	if len(source) == 0 {
 		return nil
 	}
+	// The live tail is addressed by logical row, so it stays hard-wrapped.
+	// A soft row's visual height changes as it grows and would desync the
+	// writer's relative cursor movement.
+	display := m.display
+	display.SoftWrap = false
 	var rows []string
 	switch {
 	case m.fallback:
 		rows = wrapAssistantFragment(Sanitize(string(source)), m.width)
 	case m.fenceByte != 0:
-		rows = renderCodeRows(source, m.width, m.noColor, m.palette, m.display)
+		rows = renderCodeRows(source, m.width, m.noColor, m.palette, display)
 	default:
-		rows = renderMarkdownCoreWithStyle(string(source), m.width, m.noColor, m.display, m.style, m.palette)
+		rows = renderMarkdownCoreWithStyle(string(source), m.width, m.noColor, display, m.style, m.palette)
 	}
 	if m.needsSeparator && len(rows) > 0 {
 		rows = append([]string{""}, rows...)
@@ -491,7 +496,12 @@ func renderCodeRows(line []byte, width int, noColor bool, palette *pitheme.Theme
 	spans := []StyledSpan{{Text: Sanitize(text), Token: TokenCodeBlock}}
 	display = display.normalized()
 	prefix := mdIndent(display.transcriptIndent()+display.CodeBlockIndent, TokenText)
-	rows := wrapMarkdown(spans, max(1, width-1), prefix, prefix)
+	var rows []StyledRow
+	if display.SoftWrap {
+		rows = softWrapMarkdown(spans, prefix, prefix)
+	} else {
+		rows = wrapMarkdown(spans, max(1, width-1), prefix, prefix)
+	}
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, row.SerializeWithTheme(palette, colorDisabled(PresentationSnapshot{NoColor: noColor})))

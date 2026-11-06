@@ -107,7 +107,11 @@ func FormatUserMessageWithDisplay(source string, width int, noColor bool, displa
 	}
 	out := make([]string, 0, len(rows)+1)
 	for _, row := range rows {
-		out = append(out, FormatStyledRow(row, width, noColor, selected))
+		if display.SoftWrap {
+			out = append(out, serializeSoftRow(row, width, noColor, selected))
+		} else {
+			out = append(out, FormatStyledRow(row, width, noColor, selected))
+		}
 	}
 	out = append(out, "")
 	return out
@@ -164,6 +168,12 @@ func RenderThinkingMarkdown(source string, width int, noColor bool, display Disp
 // FormatNotice renders one Pi-style semantic status notice. User/provider text
 // stays untrusted; only the fixed semantic style is serialized as SGR.
 func FormatNotice(kind NoticeKind, text string, width int, noColor bool, palette ...*pitheme.Theme) []string {
+	return formatNoticeWithDisplay(kind, text, width, noColor, DefaultDisplaySettings(), palette...)
+}
+
+// formatNoticeWithDisplay renders a notice for one display setting. Notices
+// are plain text, not Markdown: every source newline is a row boundary.
+func formatNoticeWithDisplay(kind NoticeKind, text string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -176,13 +186,21 @@ func FormatNotice(kind NoticeKind, text string, width int, noColor bool, palette
 	case NoticeError:
 		prefix, token = "Error: ", TokenError
 	}
-	rows := wrapMarkdown([]StyledSpan{{Text: prefix + Sanitize(text), Token: token}}, max(1, width-1),
-		[]StyledSpan{{Text: " ", Token: TokenMuted}}, []StyledSpan{{Text: " ", Token: TokenMuted}})
-	out := make([]string, 0, len(rows))
+	display = display.normalized()
+	noticePrefix := []StyledSpan{{Text: " ", Token: TokenMuted}}
 	var selected *pitheme.Theme
 	if len(palette) > 0 {
 		selected = palette[0]
 	}
+	var rows []StyledRow
+	if display.SoftWrap {
+		for _, line := range strings.Split(prefix+Sanitize(text), "\n") {
+			rows = append(rows, softWrapMarkdown([]StyledSpan{{Text: line, Token: token}}, noticePrefix, noticePrefix)...)
+		}
+	} else {
+		rows = wrapMarkdown([]StyledSpan{{Text: prefix + Sanitize(text), Token: token}}, max(1, width-1), noticePrefix, noticePrefix)
+	}
+	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, row.SerializeWithTheme(selected, colorDisabled(PresentationSnapshot{NoColor: noColor})))
 	}
@@ -242,7 +260,7 @@ func renderMarkdownRowsWithIndent(source string, width int, style mdStyle, displ
 	doc := parser.Parser().Parse(gmtext.NewReader(input))
 	markdownParserPool.Put(parser)
 	display = display.normalized()
-	return renderMarkdownBlocks(doc, input, width, style, indent, display.CodeBlockIndent)
+	return renderMarkdownBlocks(doc, input, width, style, indent, display.CodeBlockIndent, display.SoftWrap)
 }
 
 type mdStyle struct {
@@ -325,8 +343,9 @@ func (b *mdTextBuffer) reset() {
 }
 
 type markdownInlineRenderer struct {
-	source []byte
-	spans  []StyledSpan
+	source     []byte
+	spans      []StyledSpan
+	softBreaks bool
 }
 
 func (r *markdownInlineRenderer) add(text string, style mdStyle) {
@@ -351,8 +370,14 @@ func (r *markdownInlineRenderer) walk(node ast.Node, style mdStyle) {
 		if x.HardLineBreak() {
 			r.add("\n", style)
 		} else if x.SoftLineBreak() {
-			// Pi keeps soft line breaks as line breaks in the terminal.
-			r.add("\n", style)
+			if r.softBreaks {
+				// Soft mode joins a paragraph's source lines so copying the
+				// terminal's wrapped output does not insert a newline.
+				r.add(" ", style)
+			} else {
+				// Pi keeps soft line breaks as line breaks in the terminal.
+				r.add("\n", style)
+			}
 		}
 	case *ast.String:
 		r.add(markdownUnescape(string(x.Value)), style)
@@ -411,8 +436,8 @@ func renderInline(node ast.Node, source []byte, style mdStyle) []StyledSpan {
 	return applyMarkdownMarks(mergeStyledSpans(renderer.spans))
 }
 
-func renderInlineChildren(node ast.Node, source []byte, style mdStyle) []StyledSpan {
-	renderer := markdownInlineRenderer{source: source}
+func renderInlineChildren(node ast.Node, source []byte, style mdStyle, softBreaks bool) []StyledSpan {
+	renderer := markdownInlineRenderer{source: source, softBreaks: softBreaks}
 	renderer.children(node, style)
 	return applyMarkdownMarks(mergeStyledSpans(renderer.spans))
 }
@@ -488,6 +513,35 @@ func appendRowSpans(row *StyledRow, spans ...StyledSpan) {
 			row.Spans = append(row.Spans, span)
 		}
 	}
+}
+
+// softWrapMarkdown splits only at source newlines. The terminal adds visual
+// wraps without extra prefixes or newline characters in copied text.
+func softWrapMarkdown(spans []StyledSpan, firstPrefix, continuationPrefix []StyledSpan) []StyledRow {
+	var rows []StyledRow
+	row := StyledRow{Spans: append([]StyledSpan(nil), firstPrefix...)}
+	hasText := false
+	for _, span := range spans {
+		text := strings.ReplaceAll(Sanitize(span.Text), "\t", " ")
+		for i, part := range strings.Split(text, "\n") {
+			if i > 0 {
+				rows = append(rows, row)
+				row = StyledRow{Spans: append([]StyledSpan(nil), continuationPrefix...)}
+				hasText = false
+			}
+			if part != "" {
+				styled := span
+				styled.Text = part
+				row.Spans = append(row.Spans, styled)
+				hasText = true
+			}
+		}
+	}
+	// A trailing newline ends the previous row; it does not add a blank one.
+	if hasText || len(rows) == 0 {
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func wrapMarkdown(spans []StyledSpan, width int, firstPrefix, continuationPrefix []StyledSpan) []StyledRow {
@@ -657,11 +711,11 @@ func mdIndent(text string, token ...ThemeToken) []StyledSpan {
 	return []StyledSpan{{Text: text, Token: selected}}
 }
 
-func renderMarkdownBlocks(parent ast.Node, source []byte, width int, style mdStyle, indent, codeIndent string) []StyledRow {
+func renderMarkdownBlocks(parent ast.Node, source []byte, width int, style mdStyle, indent, codeIndent string, soft bool) []StyledRow {
 	var rows []StyledRow
 	var previous ast.Node
 	for child := parent.FirstChild(); child != nil; child = child.NextSibling() {
-		block := renderMarkdownBlock(child, source, width, style, 0, indent, codeIndent)
+		block := renderMarkdownBlock(child, source, width, style, 0, indent, codeIndent, soft)
 		if len(block) > 0 {
 			if len(rows) > 0 && (child.HasBlankPreviousLines() || markdownAddsSpacingAfter(previous, child)) {
 				rows = append(rows, StyledRow{})
@@ -748,10 +802,13 @@ func markdownAddsSpacingAfter(previous, next ast.Node) bool {
 	}
 }
 
-func renderMarkdownBlock(node ast.Node, source []byte, width int, style mdStyle, depth int, indent, codeIndent string) []StyledRow {
+func renderMarkdownBlock(node ast.Node, source []byte, width int, style mdStyle, depth int, indent, codeIndent string, soft bool) []StyledRow {
 	switch x := node.(type) {
 	case *ast.Paragraph, *ast.TextBlock:
-		spans := renderInlineChildren(x, source, style)
+		spans := renderInlineChildren(x, source, style, soft)
+		if soft {
+			return softWrapMarkdown(spans, mdIndent(indent, style.token), mdIndent(indent, style.token))
+		}
 		spans = markdownPreserveLineIndentation(x, source, spans)
 		return wrapMarkdownWithOptions(spans, width, mdIndent(indent, style.token), mdIndent(indent, style.token), true)
 	case *ast.Heading:
@@ -763,13 +820,17 @@ func renderMarkdownBlock(node ast.Node, source []byte, width int, style mdStyle,
 		if x.Level >= 3 {
 			prefix = strings.Repeat("#", x.Level) + " "
 		}
-		spans := renderInlineChildren(x, source, heading)
-		return wrapMarkdown(spans, width, append(mdIndent(indent, style.token), heading.span(prefix)), mdIndent(indent, style.token))
+		spans := renderInlineChildren(x, source, heading, soft)
+		firstPrefix := append(mdIndent(indent, style.token), heading.span(prefix))
+		if soft {
+			return softWrapMarkdown(spans, firstPrefix, mdIndent(indent, style.token))
+		}
+		return wrapMarkdown(spans, width, firstPrefix, mdIndent(indent, style.token))
 	case *ast.FencedCodeBlock:
 		lang := TruncateToWidth(SanitizeStatusRow(markdownFenceInfo(x, source)), max(0, width-1))
-		return renderCodeLines(x, source, width, lang, codeIndent, indent, style.token)
+		return renderCodeLines(x, source, width, lang, codeIndent, indent, style.token, soft)
 	case *ast.CodeBlock:
-		return renderCodeLines(x, source, width, "", codeIndent, indent, style.token)
+		return renderCodeLines(x, source, width, "", codeIndent, indent, style.token, soft)
 	case *ast.Blockquote:
 		// Pi draws the quote border at the message margin and keeps the quoted
 		// content directly behind it.
@@ -778,13 +839,13 @@ func renderMarkdownBlock(node ast.Node, source []byte, width int, style mdStyle,
 			prefix = append(prefix, StyledSpan{Text: "│ ", Token: TokenQuoteBorder})
 		}
 		prefix, contentWidth := markdownBlockPrefix(prefix, width)
-		quoted := renderMarkdownBlocks(x, source, contentWidth, style.withToken(TokenQuote).withItalic(), "", codeIndent)
+		quoted := renderMarkdownBlocks(x, source, contentWidth, style.withToken(TokenQuote).withItalic(), "", codeIndent, soft)
 		for i := range quoted {
 			quoted[i] = prependStyled(prefix, quoted[i])
 		}
 		return quoted
 	case *ast.List:
-		return renderMarkdownList(x, source, width, style, depth, indent, codeIndent)
+		return renderMarkdownList(x, source, width, style, depth, indent, codeIndent, soft)
 	case *ast.ThematicBreak:
 		prefix, contentWidth := markdownBlockPrefix(mdIndent(indent, style.token), width)
 		line := strings.Repeat("─", min(contentWidth, 80))
@@ -792,20 +853,17 @@ func renderMarkdownBlock(node ast.Node, source []byte, width int, style mdStyle,
 	case *east.Table:
 		return renderMarkdownTable(x, source, width, style, indent)
 	case *ast.HTMLBlock:
-		return renderRawBlock(x, source, width, style, indent)
+		return renderRawBlock(x, source, width, style, indent, soft)
 	default:
 		if node.Type() == ast.TypeBlock {
-			return renderRawBlock(node, source, width, style, indent)
+			return renderRawBlock(node, source, width, style, indent, soft)
 		}
 		return nil
 	}
 }
 
-func renderCodeLines(node ast.Node, source []byte, width int, lang, codeIndent, indent string, base ...ThemeToken) []StyledRow {
-	indentToken := TokenText
-	if len(base) > 0 {
-		indentToken = base[0]
-	}
+func renderCodeLines(node ast.Node, source []byte, width int, lang, codeIndent, indent string, base ThemeToken, soft bool) []StyledRow {
+	indentToken := base
 	label := "```" + lang
 	// Pi keeps the code block at the message margin and indents the code
 	// itself by the configured code block indent.
@@ -821,10 +879,18 @@ func renderCodeLines(node ast.Node, source []byte, width int, lang, codeIndent, 
 		text = strings.TrimSuffix(text, "\n")
 		text = strings.TrimSuffix(text, "\r")
 		spans := []StyledSpan{{Text: Sanitize(text), Token: TokenCodeBlock}}
-		rows = append(rows, wrapMarkdown(spans, width, codePrefix, codePrefix)...)
+		if soft {
+			rows = append(rows, softWrapMarkdown(spans, codePrefix, codePrefix)...)
+		} else {
+			rows = append(rows, wrapMarkdown(spans, width, codePrefix, codePrefix)...)
+		}
 	}
 	if lineCount == 0 {
-		rows = append(rows, wrapMarkdown(nil, width, codePrefix, codePrefix)...)
+		if soft {
+			rows = append(rows, softWrapMarkdown(nil, codePrefix, codePrefix)...)
+		} else {
+			rows = append(rows, wrapMarkdown(nil, width, codePrefix, codePrefix)...)
+		}
 	}
 	rows = append(rows, markdownFenceRow("```", fencePrefix, width, indentToken))
 	return rows
@@ -839,7 +905,7 @@ func markdownFenceRow(label string, prefix []StyledSpan, width int, token ThemeT
 	return StyledRow{Spans: spans}
 }
 
-func renderRawBlock(node ast.Node, source []byte, width int, style mdStyle, indent string) []StyledRow {
+func renderRawBlock(node ast.Node, source []byte, width int, style mdStyle, indent string, soft bool) []StyledRow {
 	var raw []byte
 	if lines := node.Lines(); lines != nil {
 		for i := 0; i < lines.Len(); i++ {
@@ -858,7 +924,11 @@ func renderRawBlock(node ast.Node, source []byte, width int, style mdStyle, inde
 	var rows []StyledRow
 	for _, line := range strings.Split(text, "\n") {
 		spans := []StyledSpan{style.span(strings.TrimSuffix(line, "\r"))}
-		rows = append(rows, wrapMarkdownWithOptions(spans, width, mdIndent(indent, style.token), mdIndent(indent, style.token), true)...)
+		if soft {
+			rows = append(rows, softWrapMarkdown(spans, mdIndent(indent, style.token), mdIndent(indent, style.token))...)
+		} else {
+			rows = append(rows, wrapMarkdownWithOptions(spans, width, mdIndent(indent, style.token), mdIndent(indent, style.token), true)...)
+		}
 	}
 	return rows
 }
@@ -880,7 +950,7 @@ func markdownListItemWidth(first, continuation []StyledSpan, width int) int {
 	return max(1, width-used)
 }
 
-func renderMarkdownList(list *ast.List, source []byte, width int, style mdStyle, depth int, indentBase, codeIndent string) []StyledRow {
+func renderMarkdownList(list *ast.List, source []byte, width int, style mdStyle, depth int, indentBase, codeIndent string, soft bool) []StyledRow {
 	var rows []StyledRow
 	itemIndex := 0
 	for item := list.FirstChild(); item != nil; item = item.NextSibling() {
@@ -908,23 +978,33 @@ func renderMarkdownList(list *ast.List, source []byte, width int, style mdStyle,
 			}
 			previous = child
 			if _, ok := child.(*ast.Paragraph); ok {
-				spans := renderInlineChildren(child, source, style)
+				spans := renderInlineChildren(child, source, style, soft)
 				prefix := first
 				if visible {
 					prefix = continuation
 				}
-				part := wrapMarkdown(spans, width, prefix, continuation)
+				var part []StyledRow
+				if soft {
+					part = softWrapMarkdown(spans, prefix, continuation)
+				} else {
+					part = wrapMarkdown(spans, width, prefix, continuation)
+				}
 				rows = append(rows, part...)
 				visible = visible || len(part) > 0
 				continue
 			}
 			if _, ok := child.(*ast.TextBlock); ok {
-				spans := renderInlineChildren(child, source, style)
+				spans := renderInlineChildren(child, source, style, soft)
 				prefix := first
 				if visible {
 					prefix = continuation
 				}
-				part := wrapMarkdown(spans, width, prefix, continuation)
+				var part []StyledRow
+				if soft {
+					part = softWrapMarkdown(spans, prefix, continuation)
+				} else {
+					part = wrapMarkdown(spans, width, prefix, continuation)
+				}
 				rows = append(rows, part...)
 				visible = visible || len(part) > 0
 				continue
@@ -933,12 +1013,12 @@ func renderMarkdownList(list *ast.List, source []byte, width int, style mdStyle,
 				if visible && len(rows) > 0 {
 					// Pi increases nested list depth by one four-space level.
 				}
-				part := renderMarkdownList(nested, source, width, style, depth+1, indentBase, codeIndent)
+				part := renderMarkdownList(nested, source, width, style, depth+1, indentBase, codeIndent, soft)
 				rows = append(rows, part...)
 				visible = visible || len(part) > 0
 				continue
 			}
-			part := renderMarkdownBlock(child, source, markdownListItemWidth(first, continuation, width), style, depth, "", codeIndent)
+			part := renderMarkdownBlock(child, source, markdownListItemWidth(first, continuation, width), style, depth, "", codeIndent, soft)
 			if len(part) > 0 {
 				prefix := first
 				if visible {

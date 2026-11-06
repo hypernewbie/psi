@@ -83,7 +83,7 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 	case DocumentBoundary:
 		return []string{"--- " + Sanitize(block.Text) + " ---", ""}
 	case DocumentNotice:
-		return FormatNotice(block.NoticeKind, block.Text, width, noColor, theme)
+		return formatNoticeWithDisplay(block.NoticeKind, block.Text, width, noColor, display, theme)
 	case DocumentGap:
 		return []string{""}
 	case DocumentStatus:
@@ -93,7 +93,7 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 	case DocumentAccent:
 		return formatColoredMessage(block.Text, TokenAccent, width, noColor, theme)
 	case DocumentRaw:
-		return formatRawDocument(block.Text, width)
+		return formatRawDocument(block.Text, width, display)
 	default:
 		return nil
 	}
@@ -153,7 +153,7 @@ func FormatDocument(blocks []DocumentBlock, width int, presentation Presentation
 	return rows
 }
 
-func formatRawDocument(text string, width int) []string {
+func formatRawDocument(text string, width int, display DisplaySettings) []string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	if text == "" {
@@ -166,6 +166,10 @@ func formatRawDocument(text string, width int) []string {
 		plain := Sanitize(line)
 		if plain == "" {
 			rows = append(rows, "")
+			continue
+		}
+		if display.SoftWrap {
+			rows = append(rows, strings.ReplaceAll(plain, "\t", " "))
 			continue
 		}
 		wrapped := wrapMarkdown([]StyledSpan{{Text: plain, Token: TokenText}}, max(1, width-1), nil, nil)
