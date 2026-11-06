@@ -36,7 +36,13 @@ Print mode (`--print/-p`), Pi's JSON event mode, HTML export, and `@file`
 arguments are not supported.
 
 `--session-id <id>` reuses the session with that ID in this workspace, or
-creates it. `--session <path|id>` opens an existing file or ID prefix.
+creates it. `--session <path|id>` opens an existing file or ID prefix. ID
+lookup starts with a 1KB header read per candidate, not a transcript scan.
+Long headers extend the read up to 1MiB plus an overflow byte; files without a
+valid header in that range are skipped during directory lookup. Use an
+explicit file path to bypass the lookup limit. The selected file still goes
+through normal session loading and validation. See `psi --docs sessions` for
+exact-ID fallback rules.
 
 ## Models
 

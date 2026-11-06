@@ -420,7 +420,7 @@ Usage: psi [options] [messages...]
 Pi-compatible options:
   --continue, -c             Continue the most recent session
   --resume, -r               Select a session to resume
-  --session <path|id>        Open session file or ID prefix in session directory
+  --session <path|id>        Open session file or ID prefix (header-only ID lookup)
   --session-id <id>          Use the current directory's existing session with the ID, creating it otherwise
   --session-dir <dir>        Session directory
   --provider <name>          Select provider; use configured model if omitted
@@ -885,9 +885,9 @@ func confirmWorkspaceMismatch(console *terminal.Console, lifecycle *terminalLife
 }
 
 // findSessionID resolves an exact session ID to its file: the canonical
-// path first, then one legacy discovery pass. It returns an empty path
-// when no existing session matches.
-func findSessionID(dir, cwd, id string, discover func(string, string) ([]session.SessionInfo, error)) (string, error) {
+// path first, then one bounded header pass. It returns an empty path when no
+// existing session matches.
+func findSessionID(dir, cwd, id string, discover func(string) ([]session.SessionInfo, error)) (string, error) {
 	hit, err := session.FindExact(dir, cwd, id)
 	if err != nil {
 		return "", err
@@ -895,12 +895,12 @@ func findSessionID(dir, cwd, id string, discover func(string, string) ([]session
 	if hit != "" {
 		return hit, nil
 	}
-	infos, err := discover(dir, cwd)
+	infos, err := discover(dir)
 	if err != nil {
 		return "", err
 	}
 	for _, info := range infos {
-		if info.ID == id {
+		if info.ID == id && session.SameDir(info.Cwd, cwd) {
 			return info.Path, nil
 		}
 	}
@@ -913,7 +913,7 @@ func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.
 	// Pi --session-id semantics: use the current directory's existing
 	// session with the ID, creating it otherwise.
 	if o.SessionID != "" {
-		path, err := findSessionID(dir, cwd, o.SessionID, workspaceSessions)
+		path, err := findSessionID(dir, cwd, o.SessionID, session.DiscoverHeaders)
 		if err != nil {
 			return nil, err
 		}
@@ -937,7 +937,7 @@ func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.
 			if strings.ContainsAny(path, `/\\`) || strings.HasSuffix(path, ".jsonl") {
 				return nil, err
 			}
-			infos, discoverErr := session.Discover(dir)
+			infos, discoverErr := session.DiscoverHeaders(dir)
 			if discoverErr != nil {
 				return nil, discoverErr
 			}

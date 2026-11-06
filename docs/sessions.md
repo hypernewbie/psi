@@ -57,13 +57,23 @@ psi --session <path> --name "release prep"
 moves by page, `Enter` opens, `Esc` cancels. Opening the session you are already
 in is a no-op.
 
-`--session` accepts a full path or a unique ID prefix. If the session belongs to
-a different workspace, psi asks before continuing there. `--session-id` uses
-that exact ID in the current workspace: the canonical `<id>.jsonl` file is
-tried first without scanning the directory. A legacy filename is found by one
-discovery pass only when the canonical file is absent; an existing canonical
-file with a malformed header, a different ID, or a different workspace is an
-error. Otherwise a new session is created with the ID.
+`--session` accepts a full path or a unique ID prefix. ID lookup starts with
+the first 1KB of each candidate file and parses only its header, not its
+messages. Long headers or leading blank lines extend the read up to 1MiB,
+plus one byte to detect overflow. Files with missing, malformed, or oversized
+headers are skipped during directory lookup. Non-regular files, such as pipes,
+are also skipped, including links to them. Links to regular files still work.
+An explicit file path bypasses the header lookup limit. The selected session
+still goes through normal session loading and validation. If the session
+belongs to a different workspace, psi asks before continuing there.
+
+`--session-id` uses that exact ID in the current workspace: the canonical
+`<id>.jsonl` file is tried first without scanning the directory. A legacy
+filename is found by one header pass only when the canonical file is absent.
+An existing canonical file with a malformed or oversized header, a different
+ID, or a different workspace is an error. Unsupported session versions are
+reported as errors for both canonical and legacy filenames. Otherwise a new
+session is created with the ID.
 
 ## Inside a session
 

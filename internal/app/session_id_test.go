@@ -1,8 +1,10 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"psi/internal/config"
@@ -182,6 +184,42 @@ func TestOpenSessionIDRenamesLegacySession(t *testing.T) {
 	}
 }
 
+func TestOpenSessionIDDoesNotReuseLegacyFromOtherWorkspace(t *testing.T) {
+	cwd, otherCwd, dir := t.TempDir(), t.TempDir(), t.TempDir()
+	data := fmt.Sprintf(`{"type":"session","version":3,"id":"shared-id","cwd":%q}`+"\n", otherCwd)
+	if err := os.WriteFile(filepath.Join(dir, "legacy.jsonl"), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSession(Options{SessionID: "shared-id"}, cwd, t.TempDir(), config.Settings{}, config.StartupOverrides{SessionDir: dir}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Header().Cwd != cwd || filepath.Base(store.File()) != "shared-id.jsonl" {
+		t.Fatalf("reused a different workspace: header = %+v, file = %s", store.Header(), store.File())
+	}
+}
+
+func TestOpenSessionIDRejectsUnsupportedLegacySession(t *testing.T) {
+	for _, opts := range []Options{{SessionID: "old-id"}, {SessionPath: "old-"}} {
+		t.Run(fmt.Sprintf("id=%s,prefix=%s", opts.SessionID, opts.SessionPath), func(t *testing.T) {
+			cwd, dir := t.TempDir(), t.TempDir()
+			data := fmt.Sprintf(`{"type":"session","version":2,"id":"old-id","cwd":%q}`+"\n", cwd)
+			path := filepath.Join(dir, "legacy.jsonl")
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := openSession(opts, cwd, t.TempDir(), config.Settings{}, config.StartupOverrides{SessionDir: dir}, nil, nil)
+			if err == nil || !strings.Contains(err.Error(), "not supported") {
+				t.Fatalf("existing unsupported session must not be treated as absent: %v", err)
+			}
+			files, err := os.ReadDir(dir)
+			if err != nil || len(files) != 1 || files[0].Name() != "legacy.jsonl" {
+				t.Fatalf("session files changed: %v, error = %v", files, err)
+			}
+		})
+	}
+}
+
 func TestFindSessionIDDirectHitSkipsDiscovery(t *testing.T) {
 	cwd, dir := t.TempDir(), t.TempDir()
 	const id = "direct-hit-1"
@@ -192,7 +230,7 @@ func TestFindSessionIDDirectHitSkipsDiscovery(t *testing.T) {
 	if _, err := s.AppendMessage(agentMessageUser("seed")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := findSessionID(dir, cwd, id, func(string, string) ([]session.SessionInfo, error) {
+	got, err := findSessionID(dir, cwd, id, func(string) ([]session.SessionInfo, error) {
 		t.Fatal("discovery must not run on a canonical hit")
 		return nil, nil
 	})

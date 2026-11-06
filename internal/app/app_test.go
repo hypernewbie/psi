@@ -146,6 +146,37 @@ func TestOpenSessionResolvesPiSessionIDPrefix(t *testing.T) {
 	}
 }
 
+// A corrupt file with a header-shaped later record must not make an
+// otherwise unique session prefix ambiguous.
+func TestOpenSessionPrefixIgnoresMalformedHeaderDecoy(t *testing.T) {
+	cwd, agentDir, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: cwd, SessionDir: sessionDir, Persist: true, ID: "prefix-real"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("existing session")); err != nil {
+		t.Fatal(err)
+	}
+	decoy := fmt.Sprintf("broken first record\n"+`{"type":"session","version":3,"id":"prefix-fake","cwd":%q}`+"\n", cwd)
+	if err := os.WriteFile(filepath.Join(sessionDir, "decoy.jsonl"), []byte(decoy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := openSession(Options{SessionPath: "prefix-"}, cwd, agentDir, config.Settings{}, config.StartupOverrides{SessionDir: sessionDir}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Header().ID != "prefix-real" {
+		t.Fatalf("opened %q, want prefix-real", opened.Header().ID)
+	}
+	other := fmt.Sprintf(`{"type":"session","version":3,"id":"prefix-other","cwd":%q}`+"\n", cwd)
+	if err := os.WriteFile(filepath.Join(sessionDir, "other.jsonl"), []byte(other), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openSession(Options{SessionPath: "prefix-"}, cwd, agentDir, config.Settings{}, config.StartupOverrides{SessionDir: sessionDir}, nil, nil); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("two matching headers must be ambiguous, got %v", err)
+	}
+}
+
 func TestFooterSnapshotUsesPiTokenFormatting(t *testing.T) {
 	r := testRuntime(t)
 	_, err := r.store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{

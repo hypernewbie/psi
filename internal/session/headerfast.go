@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	headerFastBufSize = 4096
+	headerFastBufSize = 1024
 	maxHeaderFastScan = 1024 * 1024
 )
 
@@ -19,94 +19,36 @@ func readHeaderFast(path string) (*SessionHeader, error) {
 		return nil, err
 	}
 	defer f.Close()
-	br := bufio.NewReaderSize(f, headerFastBufSize)
-	var scanned int64
-	var pending []byte
-	for scanned < maxHeaderFastScan {
-		rem := int(maxHeaderFastScan - scanned)
-		chunk := make([]byte, headerFastBufSize)
-		if rem < len(chunk) {
-			chunk = chunk[:rem]
+	return readHeaderPrefix(f, path)
+}
+
+// Start with 1KB, extending only for a long header or leading blank lines.
+// Keep unsupported headers with their errors so ID lookup does not treat an
+// existing legacy session as absent and create a second one under the same ID.
+func readHeaderPrefix(r io.Reader, path string) (*SessionHeader, error) {
+	br := bufio.NewReaderSize(io.LimitReader(r, maxHeaderFastScan+1), headerFastBufSize)
+	var scanned int
+	for {
+		line, err := br.ReadBytes('\n')
+		scanned += len(line)
+		if scanned > maxHeaderFastScan {
+			return nil, fmt.Errorf("session header exceeds %d-byte scan limit: %s", maxHeaderFastScan, path)
 		}
-		n, err := br.Read(chunk)
-		if n > 0 {
-			scanned += int64(n)
-			pending = append(pending, chunk[:n]...)
-			for {
-				idx := bytes.IndexByte(pending, '\n')
-				if idx == -1 {
-					break
-				}
-				line := pending[:idx]
-				pending = pending[idx+1:]
-				line = bytes.TrimSuffix(line, []byte("\r"))
-				trim := bytes.TrimSpace(line)
-				if len(trim) == 0 {
-					continue
-				}
-				_, header, perr := metadataRecord(trim)
-				if perr != nil {
-					continue
-				}
-				if header != nil {
-					if header.ID == "" {
-						return nil, fmt.Errorf("session header missing id")
-					}
-					if verr := checkVersion(header, path); verr != nil {
-						return nil, verr
-					}
-					return header, nil
-				}
-				return nil, fmt.Errorf("missing session header")
-			}
-		}
-		if err == io.EOF {
-			trim := bytes.TrimSpace(pending)
-			if len(trim) == 0 {
-				return nil, fmt.Errorf("missing session header")
-			}
-			line := bytes.TrimSuffix(pending, []byte("\r"))
-			trimLine := bytes.TrimSpace(line)
-			_, header, perr := metadataRecord(trimLine)
-			if perr != nil {
-				return nil, perr
-			}
-			if header != nil {
-				if header.ID == "" {
-					return nil, fmt.Errorf("session header missing id")
-				}
-				if verr := checkVersion(header, path); verr != nil {
-					return nil, verr
-				}
-				return header, nil
-			}
-			return nil, fmt.Errorf("missing session header")
-		}
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return nil, err
 		}
-	}
-	// probe for extra byte
-	one := make([]byte, 1)
-	if _, err := br.Read(one); err == nil {
-		return nil, fmt.Errorf("session header exceeds %d-byte scan limit: %s", maxHeaderFastScan, path)
-	}
-	if len(bytes.TrimSpace(pending)) > 0 {
-		line := bytes.TrimSuffix(pending, []byte("\r"))
-		trimLine := bytes.TrimSpace(line)
-		_, header, perr := metadataRecord(trimLine)
-		if perr != nil {
-			return nil, perr
+		if data := bytes.TrimSpace(line); len(data) > 0 {
+			_, header, parseErr := metadataRecord(data)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			if header == nil {
+				return nil, fmt.Errorf("missing session header")
+			}
+			return header, checkVersion(header, path)
 		}
-		if header != nil {
-			if header.ID == "" {
-				return nil, fmt.Errorf("session header missing id")
-			}
-			if verr := checkVersion(header, path); verr != nil {
-				return nil, verr
-			}
-			return header, nil
+		if err == io.EOF {
+			return nil, fmt.Errorf("missing session header")
 		}
 	}
-	return nil, fmt.Errorf("missing session header")
 }

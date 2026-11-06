@@ -15,7 +15,11 @@ type fileStat struct {
 	mtime   time.Time
 }
 
-func discoverFast(sessionDir string) ([]SessionInfo, error) {
+// DiscoverHeaders lists session identities without parsing message bodies.
+// Reads start at 1KB, extending only for headers up to maxHeaderFastScan.
+// MessageCount is zero and FirstMessage is a placeholder; use Discover for
+// transcript metadata and ownership status.
+func DiscoverHeaders(sessionDir string) ([]SessionInfo, error) {
 	dirents, err := os.ReadDir(sessionDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -37,6 +41,15 @@ func discoverFast(sessionDir string) ([]SessionInfo, error) {
 			}
 			st = st2
 		}
+		if st.Mode()&os.ModeSymlink != 0 {
+			st, err = os.Stat(p)
+			if err != nil {
+				continue
+			}
+		}
+		if !st.Mode().IsRegular() {
+			continue
+		}
 		files = append(files, fileStat{path: p, modUnix: st.ModTime().UnixNano(), mtime: st.ModTime()})
 	}
 	sort.Slice(files, func(i, j int) bool {
@@ -47,8 +60,8 @@ func discoverFast(sessionDir string) ([]SessionInfo, error) {
 	})
 	var out []SessionInfo
 	for _, f := range files {
-		h, err := readHeaderFast(f.path)
-		if err != nil {
+		h, headerErr := readHeaderFast(f.path)
+		if h == nil {
 			continue
 		}
 		info := SessionInfo{
@@ -62,10 +75,8 @@ func discoverFast(sessionDir string) ([]SessionInfo, error) {
 		if t, err := time.Parse(time.RFC3339Nano, h.Timestamp); err == nil {
 			info.Created = t
 		}
-		if held, err := probeSharedLock(f.path); err == nil && held {
-			info.Unavailable = "locked by another psi process"
-		} else if err != nil && !os.IsNotExist(err) {
-			info.Unavailable = "cannot inspect ownership lock"
+		if headerErr != nil {
+			info.Unavailable = headerErr.Error()
 		}
 		out = append(out, info)
 	}
