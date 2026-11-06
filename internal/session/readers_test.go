@@ -276,3 +276,57 @@ func TestActiveCustomEntriesLoadsOnlyMatchingActiveBranch(t *testing.T) {
 		t.Fatalf("branched entries=%v err=%v", got, err)
 	}
 }
+
+func TestFindExactRejectsMismatchedIdentity(t *testing.T) {
+	t.Run("IDMismatch", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "actual-id"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "hello"}}); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(s.File())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(s.File(), filepath.Join(s.Dir(), "requested-id.jsonl")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := FindExact(dir, "/tmp/work", "requested-id"); err == nil {
+			t.Fatal("expected an error for a mismatched header ID")
+		}
+		after, err := os.ReadFile(filepath.Join(s.Dir(), "requested-id.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatal("mismatched candidate was modified")
+		}
+	})
+	t.Run("WorkspaceMismatch", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := New(OpenOptions{Cwd: "/tmp/other", SessionDir: dir, Persist: true, ID: "ws-id"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "hello"}}); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(s.File())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := FindExact(dir, "/tmp/work", "ws-id"); err == nil {
+			t.Fatal("expected an error for a wrong-workspace candidate")
+		}
+		after, err := os.ReadFile(s.File())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatal("wrong-workspace candidate was modified")
+		}
+	})
+}

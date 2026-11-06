@@ -92,6 +92,9 @@ func TestStoreNewAndAppend(t *testing.T) {
 	if s.File() == "" {
 		t.Fatalf("persisted session should have a file")
 	}
+	if got, want := filepath.Base(s.File()), s.Header().ID+".jsonl"; got != want {
+		t.Fatalf("staged filename = %s, want %s", got, want)
+	}
 	// Setup-only entries stay in memory (no file yet).
 	if _, err := os.Stat(s.File()); !os.IsNotExist(err) {
 		t.Fatalf("file should not exist before first user message")
@@ -108,6 +111,9 @@ func TestStoreNewAndAppend(t *testing.T) {
 	}
 	if _, err := os.Stat(s.File()); err != nil {
 		t.Fatalf("file should exist after user message: %v", err)
+	}
+	if got, want := filepath.Base(s.File()), s.Header().ID+".jsonl"; got != want {
+		t.Fatalf("flushed filename = %s, want %s", got, want)
 	}
 	// Prefix preservation: header + thinking change + user message all present.
 	h, entries, _, err := ReadFileEntries(s.File())

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -502,6 +503,39 @@ func TestRPCExtensionUIResponseIsSilent(t *testing.T) {
 	}
 	if len(log.objects(t)) != 0 {
 		t.Fatalf("extension_ui_response emitted output: %v", log.objects(t))
+	}
+}
+
+func TestRPCActivationCanonicalizesLegacySession(t *testing.T) {
+	work, agentDir, dir := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := writeTestFile(t, agentDir, "models.json", rpcTestModels); err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.New(session.OpenOptions{Cwd: work, SessionDir: dir, AgentDir: agentDir, Persist: true, ID: "rpc-legacy-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := created.AppendMessage(agentMessageUser("rpc seed")); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(created.Dir(), "legacy-rpc.jsonl")
+	if err := os.Rename(created.File(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.Settings{}
+	_, _, _, _, _, _, activated, err := activateSession(Options{SessionPath: legacy, NoTools: true, NoSkills: true, NoContextFiles: true}, work, agentDir, &settings, false, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := activated.TryLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer activated.Unlock()
+	if got, want := activated.File(), filepath.Join(activated.Dir(), activated.Header().ID+".jsonl"); got != want {
+		t.Fatalf("activated file = %s, want %s", got, want)
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy path still present, stat err = %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -69,6 +70,33 @@ func discoverFast(sessionDir string) ([]SessionInfo, error) {
 		out = append(out, info)
 	}
 	return out, nil
+}
+
+// FindExact returns the canonical path for an exact session ID without
+// scanning the session directory. It returns an empty path and nil error
+// when the canonical file does not exist, matching FindMostRecent.
+func FindExact(sessionDir, cwd, id string) (string, error) {
+	if err := AssertValidSessionID(id); err != nil {
+		return "", err
+	}
+	candidate := filepath.Join(sessionDir, id+".jsonl")
+	if _, err := os.Stat(candidate); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	header, err := readHeaderFast(candidate)
+	if err != nil {
+		return "", fmt.Errorf("cannot use session file %s: %w", candidate, err)
+	}
+	if header.ID != id {
+		return "", fmt.Errorf("session file %s has ID %q, want %q", candidate, header.ID, id)
+	}
+	if !SameDir(header.Cwd, cwd) {
+		return "", fmt.Errorf("session %q belongs to a different workspace", id)
+	}
+	return candidate, nil
 }
 
 func findRecentFast(sessionDir, cwd string) (string, error) {

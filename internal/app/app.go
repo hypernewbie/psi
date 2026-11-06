@@ -873,20 +873,50 @@ func confirmWorkspaceMismatch(console *terminal.Console, lifecycle *terminalLife
 	return !cancelled && selected == 0, err
 }
 
+// findSessionID resolves an exact session ID to its file: the canonical
+// path first, then one legacy discovery pass. It returns an empty path
+// when no existing session matches.
+func findSessionID(dir, cwd, id string, discover func(string, string) ([]session.SessionInfo, error)) (string, error) {
+	hit, err := session.FindExact(dir, cwd, id)
+	if err != nil {
+		return "", err
+	}
+	if hit != "" {
+		return hit, nil
+	}
+	infos, err := discover(dir, cwd)
+	if err != nil {
+		return "", err
+	}
+	for _, info := range infos {
+		if info.ID == id {
+			return info.Path, nil
+		}
+	}
+	return "", nil
+}
+
 func openSession(o Options, cwd, agentDir string, st config.Settings, ov config.StartupOverrides, console *terminal.Console, lifecycle *terminalLifecycle) (*session.Store, error) {
 	dir := session.SessionDirOverride(ov.SessionDir, "", "", cwd, agentDir)
 	persist := !ov.NoSession
 	// Pi --session-id semantics: use the current directory's existing
 	// session with the ID, creating it otherwise.
 	if o.SessionID != "" {
-		infos, err := workspaceSessions(dir, cwd)
+		path, err := findSessionID(dir, cwd, o.SessionID, workspaceSessions)
 		if err != nil {
 			return nil, err
 		}
-		for _, info := range infos {
-			if info.ID == o.SessionID {
-				return session.OpenFile(info.Path, cwd, persist)
+		if path != "" {
+			store, err := session.OpenFile(path, cwd, persist)
+			if err != nil {
+				return nil, err
 			}
+			// The candidate may have been replaced between the header
+			// probe and the full open. Recheck the opened identity.
+			if store.Header().ID != o.SessionID || !session.SameDir(store.Header().Cwd, cwd) {
+				return nil, fmt.Errorf("session file %s no longer matches ID %q", path, o.SessionID)
+			}
+			return store, nil
 		}
 		return session.New(session.OpenOptions{Cwd: cwd, SessionDir: dir, AgentDir: agentDir, Persist: persist, ID: o.SessionID})
 	}

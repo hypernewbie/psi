@@ -16,8 +16,9 @@ type durableFile interface {
 	Close() error
 }
 type storageOps struct {
-	open func(string, int, os.FileMode) (durableFile, error)
-	stat func(string) (os.FileInfo, error)
+	open    func(string, int, os.FileMode) (durableFile, error)
+	stat    func(string) (os.FileInfo, error)
+	syncDir func(string) error
 }
 
 func (s *Store) openDurable(path string, flags int, mode os.FileMode) (durableFile, error) {
@@ -31,6 +32,12 @@ func (s *Store) statDurable() (os.FileInfo, error) {
 		return s.storage.stat(s.file)
 	}
 	return os.Stat(s.file)
+}
+func (s *Store) syncDirDurable(dir string) error {
+	if s.storage != nil && s.storage.syncDir != nil {
+		return s.storage.syncDir(dir)
+	}
+	return syncSessionDir(dir)
 }
 func writeDurable(f durableFile, data []byte) error {
 	n, err := f.Write(data)

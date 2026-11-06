@@ -58,7 +58,7 @@ environment variable. See [Providers](providers.md).
 ```sh
 psi --continue
 psi --resume
-psi --session ~/.pi/agent/sessions/--work-proj--/2026-01-01T00-00-00.jsonl
+psi --session ~/.pi/agent/sessions/--work-proj--/0193f2b1-7c4a-7d1e-9f0a-3b6c8d2e5a01.jsonl
 ```
 
 - `-c`, `--continue` resumes the most recent session for this folder.

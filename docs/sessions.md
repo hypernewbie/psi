@@ -6,10 +6,20 @@ compactions, and session metadata.
 
 ## Storage
 
-Default location: `<agentDir>/sessions/--<workspace path>--/<timestamp>.jsonl`,
+Default location: `<agentDir>/sessions/--<workspace path>--/<session_id>.jsonl`,
 with `/`, `\`, and `:` replaced by `-`. The agent directory is
 `$HOME/.pi/agent` unless `PI_CODING_AGENT_DIR` or `PSI_CODING_AGENT_DIR` changes
-it.
+it. New sessions, `/new`, and `/clone` use the canonical name immediately. The
+file itself is created on the first user or assistant message; setup entries
+alone do not create it.
+
+A session saved under an older timestamp-based name moves to its canonical
+name when a persisted session is activated. The move holds both the old and
+new writer locks, never replaces an existing file, and leaves the transcript
+bytes unchanged. A name collision or a platform without a no-overwrite move
+fails activation with an error instead of replacing the target. Read-only
+opens and `--no-session` never rename. The old path is retired: saved paths
+to it stop working, and a symbolic link that pointed at it becomes stale.
 
 Precedence for the session directory:
 
@@ -37,8 +47,11 @@ in is a no-op.
 
 `--session` accepts a full path or a unique ID prefix. If the session belongs to
 a different workspace, psi asks before continuing there. `--session-id` uses
-that exact ID in the current workspace: an existing session is reused, otherwise
-a new one is created with it.
+that exact ID in the current workspace: the canonical `<id>.jsonl` file is
+tried first without scanning the directory. A legacy filename is found by one
+discovery pass only when the canonical file is absent; an existing canonical
+file with a malformed header, a different ID, or a different workspace is an
+error. Otherwise a new session is created with the ID.
 
 ## Inside a session
 
