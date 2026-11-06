@@ -84,7 +84,10 @@ fixed reasons (`unavailable`, `stale`, `busy`, `queued`, `compaction-active`,
 `invalid-item`, `limit`, `storage`, `error`). `DISPATCHED` reports admission,
 not model receipt: an idle prompt started a run, and a prompt sent during a
 running turn entered the steering queue. A lost receipt is not success; psi
-never resends a prompt and never answers one request twice.
+never resends a prompt and never answers one request twice. If psi itself
+cannot enqueue an acknowledgment (a dead stream, a full outbox), the prompt
+already admitted stays admitted; Phi learns that as `UNKNOWN`, not as a
+refusal that would replay it.
 
 **Delivery and recovery.** Prepared content enters the session as text and
 image blocks, so a steered image reaches the next provider request. If a run

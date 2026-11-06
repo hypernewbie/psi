@@ -1800,7 +1800,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 		// retained so a run that dies early can be recovered without re-asking
 		// Phi or flattening verified content into the editor. Only a new
 		// structured prompt touches the marker: a compaction start between
-		// admission and RunStart must not lose it.
+		// admission and RunStart must not lose it. A native editor submission
+		// while a bridge prompt is in flight is refused, so a non-structured
+		// replacement cannot steal the marker either.
 		if input.Structured() {
 			retained := input
 			r.inFlight = &retained

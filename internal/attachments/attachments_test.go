@@ -366,13 +366,14 @@ func rename(ref Ref, name string) Ref {
 // A cancelled context refuses before any payload byte is read, so a lost
 // bridge stream cannot keep a worker reading a large file.
 func TestPrepareRefusesOnACancelledContextBeforeReading(t *testing.T) {
+	// A cancelled context must refuse before even opening the root: the
+	// ref names an absent file, so a Check or Lstat would return missing-item
+	// rather than unavailable.
 	root, _ := openRoot(t)
-	// The ref names a file that does not exist: if the read ran, the error
-	// would be "missing item" instead of "unavailable".
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := root.Prepare(ctx, "", []Ref{imageRef("absent.png", testPNG)}); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("err = %v, want unavailable before the read", err)
+		t.Fatalf("err = %v, want unavailable before any filesystem access", err)
 	}
 	// A context cancelled mid-preparation still discards earlier refs.
 	root2, dir2 := openRoot(t)

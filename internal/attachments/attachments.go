@@ -228,6 +228,11 @@ func Validate(text string, refs []Ref) (hasImage bool, imageBytes uint64, err er
 // Prepare verifies every ref and returns one user message. All refs must pass
 // or no content is returned, so a later failure cannot leave partial input.
 func (r *Root) Prepare(ctx context.Context, text string, refs []Ref) (Prepared, error) {
+	if err := ctx.Err(); err != nil {
+		// A cancelled stream must refuse before even opening the root, not
+		// after a first Lstat or Check.
+		return Prepared{}, ErrUnavailable
+	}
 	_, imageBytes, err := Validate(text, refs)
 	if err != nil {
 		return Prepared{}, err
