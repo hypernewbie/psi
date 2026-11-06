@@ -10,7 +10,9 @@ import (
 	"psi/internal/session"
 )
 
-func TestAdvertisedModelsHaveRequestPathsOrPreciseUnavailableReasons(t *testing.T) {
+// Every advertised model either has a request path or stays out of the
+// picker. The picker must not offer a model whose request cannot be built.
+func TestAdvertisedModelsHaveRequestPathsOrStayOutOfThePicker(t *testing.T) {
 	r := testRuntime(t)
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
 	// Give every provider below a credential, so the picker checks the new
