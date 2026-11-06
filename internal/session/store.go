@@ -22,6 +22,7 @@ type Store struct {
 	byID             map[string]*Entry
 	leafID           string
 	file             string
+	opened           string
 	dir              string
 	cwd              string
 	persist          bool
@@ -68,6 +69,9 @@ func New(opts OpenOptions) (*Store, error) {
 		if err := AssertValidSessionID(opts.ID); err != nil {
 			return nil, err
 		}
+		if s.persist && reservedSessionID(opts.ID) {
+			return nil, fmt.Errorf("session ID %q cannot be used as a session file name", opts.ID)
+		}
 	}
 	id := opts.ID
 	if id == "" {
@@ -84,9 +88,16 @@ func New(opts OpenOptions) (*Store, error) {
 			return nil, err
 		}
 		s.dir = dir
-		ts := strings.ReplaceAll(strings.ReplaceAll(now, ":", "-"), ".", "-")
-		s.file = filepath.Join(dir, fmt.Sprintf("%s_%s.jsonl", ts, id))
+		s.file = filepath.Join(dir, id+".jsonl")
 		s.flushed = false
+		if _, err := os.Lstat(s.file); err == nil {
+			if opts.ID != "" {
+				return nil, fmt.Errorf("session ID %q is already used by %s", opts.ID, s.file)
+			}
+			return nil, fmt.Errorf("session file already exists: %s", s.file)
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
 	s.rebuildIndex()
 	return s, nil
@@ -94,6 +105,10 @@ func New(opts OpenOptions) (*Store, error) {
 
 // OpenFile opens an explicit session path.
 func OpenFile(path, cwd string, persist bool) (*Store, error) {
+	opened := path
+	if abs, err := filepath.Abs(path); err == nil {
+		opened = abs
+	}
 	if persist {
 		resolved, err := canonicalSessionPath(path)
 		if err != nil {
@@ -141,7 +156,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	} else if incomplete {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
-	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
+	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, opened: opened, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
 	s.rebuildIndex()
 	s.knownInfo, err = os.Stat(path)
 	if err != nil {
@@ -968,6 +983,10 @@ func mustMarshal(v any) json.RawMessage {
 
 // TryLock acquires the advisory psi writer lock. Non-blocking: second psi
 // process gets an error instead of waiting.
+//
+// A persisted session whose filename is not yet <session_id>.jsonl moves
+// to its canonical name while both the source and target locks are held.
+// The move never replaces an existing target.
 func (s *Store) TryLock() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -977,12 +996,89 @@ func (s *Store) TryLock() error {
 	if s.lock != nil {
 		return fmt.Errorf("session already locked")
 	}
+	if err := AssertValidSessionID(s.header.ID); err != nil {
+		return fmt.Errorf("cannot canonicalize session filename: %w", err)
+	}
+	target := filepath.Join(s.dir, s.header.ID+".jsonl")
+	if s.file == target {
+		return s.lockOnly()
+	}
+	// A session opened through a symbolic link keeps its current name:
+	// renaming the link target would move the session out of the session
+	// directory and leave the link stale. A reserved device name cannot
+	// become a file name either, so it keeps its current name as well.
+	if s.opened != "" {
+		if fi, err := os.Lstat(s.opened); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return s.lockOnly()
+		}
+	}
+	if reservedSessionID(s.header.ID) {
+		return s.lockOnly()
+	}
+	source := s.file
+	srcLock, err := acquireLock(source)
+	if err != nil {
+		return err
+	}
+	dstLock, err := acquireLock(target)
+	if err != nil {
+		srcLock.Release()
+		return err
+	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			dstLock.Release()
+			srcLock.Release()
+		}
+	}()
+	// The source may have been replaced between OpenFile and TryLock.
+	// Revalidate identity under both locks before the move.
+	st, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("cannot inspect session source %s: %w", source, err)
+	}
+	if !st.Mode().IsRegular() || s.knownInfo == nil || !os.SameFile(st, s.knownInfo) || st.Size() != s.knownSize || !st.ModTime().Equal(s.knownInfo.ModTime()) {
+		return fmt.Errorf("session file changed externally, refusing to rename: %s", source)
+	}
+	if err := checkSessionLinks(source); err != nil {
+		return err
+	}
+	if err := renameNoReplace(source, target); err != nil {
+		s.recoverRenamePath(target)
+		return fmt.Errorf("cannot rename session %s to %s: %w", source, target, err)
+	}
+	if err := s.syncDirDurable(s.dir); err != nil {
+		s.recoverRenamePath(target)
+		return fmt.Errorf("cannot sync session directory after renaming %s to %s: %w", source, target, err)
+	}
+	s.file = target
+	s.lock = dstLock
+	srcLock.Release()
+	succeeded = true
+	return nil
+}
+
+// lockOnly takes the writer lock on the current path without renaming.
+func (s *Store) lockOnly() error {
 	l, err := acquireLock(s.file)
 	if err != nil {
 		return err
 	}
 	s.lock = l
 	return nil
+}
+
+// recoverRenamePath re-inspects the rename target after a failed move or
+// directory sync. The move may have completed despite the error; the
+// store follows the target only when it is the known file. Content
+// metadata stays untouched so later appends still detect external changes.
+func (s *Store) recoverRenamePath(target string) {
+	info, err := os.Lstat(target)
+	if err != nil || !info.Mode().IsRegular() || s.knownInfo == nil || !os.SameFile(info, s.knownInfo) {
+		return
+	}
+	s.file = target
 }
 
 // Unlock releases the advisory lock.

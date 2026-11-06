@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,6 +84,46 @@ func TestHeaderVersionChecks(t *testing.T) {
 	}
 }
 
+func TestReservedSessionIDIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	if runtime.GOOS != "windows" {
+		// Off Windows the name is a usable file name, so psi must not
+		// restrict it.
+		if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "CON"}); err != nil {
+			t.Fatalf("device-name rejection must be Windows-only: %v", err)
+		}
+		return
+	}
+	for _, id := range []string{"CON", "con", "nul", "PRN", "aux", "COM1", "lpt9"} {
+		if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: id}); err == nil {
+			t.Fatalf("expected a reserved-name error for %q", id)
+		}
+	}
+}
+
+func TestNewRefusesOccupiedCanonicalPath(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "taken-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "taken-id"}); err == nil {
+		t.Fatal("expected an error for an occupied canonical path")
+	} else if !strings.Contains(err.Error(), "taken-id") {
+		t.Fatalf("error does not name the taken ID: %v", err)
+	}
+	link := filepath.Join(s.Dir(), "linked-id.jsonl")
+	if err := os.Symlink(filepath.Base(s.File()), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "linked-id"}); err == nil {
+		t.Fatal("expected an error for a canonical path taken by a symbolic link")
+	}
+}
+
 func TestStoreNewAndAppend(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true})
@@ -91,6 +132,9 @@ func TestStoreNewAndAppend(t *testing.T) {
 	}
 	if s.File() == "" {
 		t.Fatalf("persisted session should have a file")
+	}
+	if got, want := filepath.Base(s.File()), s.Header().ID+".jsonl"; got != want {
+		t.Fatalf("staged filename = %s, want %s", got, want)
 	}
 	// Setup-only entries stay in memory (no file yet).
 	if _, err := os.Stat(s.File()); !os.IsNotExist(err) {
@@ -108,6 +152,9 @@ func TestStoreNewAndAppend(t *testing.T) {
 	}
 	if _, err := os.Stat(s.File()); err != nil {
 		t.Fatalf("file should exist after user message: %v", err)
+	}
+	if got, want := filepath.Base(s.File()), s.Header().ID+".jsonl"; got != want {
+		t.Fatalf("flushed filename = %s, want %s", got, want)
 	}
 	// Prefix preservation: header + thinking change + user message all present.
 	h, entries, _, err := ReadFileEntries(s.File())

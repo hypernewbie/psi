@@ -42,6 +42,8 @@ Additional storage rules:
 - Preserve the original file prefix byte-for-byte; never rewrite a whole file to append.
 - Detect truncated-tail before append; stop, do not silently concatenate or discard.
 - Refuse unsupported versions without replacing the file with an empty session.
+- Persisted sessions live at `<session_id>.jsonl` (UUIDv7 for generated IDs). Persisted activation renames a legacy file to its canonical name under both writer locks; collisions and unsupported platforms fail without replacing the target. Read-only and `--no-session` opens never rename. A session opened through a symbolic link keeps its current name. Session IDs that are reserved Windows device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are rejected on Windows, because a file named after one resolves to a device; other platforms accept them.
+- A rename moves the directory entry only; JSONL record bytes and the UUIDv7 ID format do not change. Directory durability uses the existing directory sync; Windows has no directory-fsync primitive, so only file payloads are synced there.
 - Two psi processes must not mutate one session concurrently (advisory lock + generation check).
 - Pi does not honor the psi lock; concurrent Pi+psi writes are out of scope (documented).
 

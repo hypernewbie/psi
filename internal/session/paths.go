@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -114,4 +115,34 @@ func expandHome(p string) string {
 		return strings.TrimPrefix(p, "file://")
 	}
 	return p
+}
+
+// windowsDeviceNames are Win32 device names. psi names a session file after
+// its session ID, and on Windows a file called CON.jsonl or NUL.jsonl
+// resolves to a device instead of a file.
+var windowsDeviceNames = map[string]bool{
+	"CON": true,
+	"PRN": true,
+	"AUX": true,
+	"NUL": true,
+}
+
+// isWindowsDeviceName reports whether an ID names a Win32 device. The check
+// ignores case, so con and CON both qualify.
+func isWindowsDeviceName(id string) bool {
+	upper := strings.ToUpper(id)
+	if windowsDeviceNames[upper] {
+		return true
+	}
+	if len(upper) == 4 && (strings.HasPrefix(upper, "COM") || strings.HasPrefix(upper, "LPT")) {
+		return upper[3] >= '1' && upper[3] <= '9'
+	}
+	return false
+}
+
+// reservedSessionID reports whether an ID cannot be used as a session file
+// name on this platform. Only Windows has device names; elsewhere every
+// valid ID is a usable file name.
+func reservedSessionID(id string) bool {
+	return runtime.GOOS == "windows" && isWindowsDeviceName(id)
 }
