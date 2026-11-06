@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,20 +286,23 @@ func (s DisplaySettings) transcriptIndent() string {
 }
 
 type PresentationSnapshot struct {
-	Display          DisplaySettings
-	WorkingDirectory string
-	HomeDirectory    string
-	SessionName      string
-	GitBranch        string
-	Usage            string // only locally stored counters; empty means unavailable
-	ContextEstimate  string // explicitly marked approximation, e.g. ~8%/100k
-	AutoCompact      bool
-	Provider         string
-	ProviderCount    int
-	Model            string
-	Thinking         string
-	NoColor          bool
-	Theme            *pitheme.Theme
+	Display             DisplaySettings
+	WorkingDirectory    string
+	HomeDirectory       string
+	SessionName         string
+	GitBranch           string
+	Usage               string  // only locally stored counters; empty means unavailable
+	ContextEstimate     string  // explicitly marked approximation, e.g. ~8%/100k
+	ContextPercent      float64 // numeric estimate used to fill the inline bar
+	ContextPercentLabel string  // preformatted percentage, e.g. 2.4%
+	ContextWindowLabel  string  // preformatted context window, e.g. 1.0M
+	AutoCompact         bool
+	Provider            string
+	ProviderCount       int
+	Model               string
+	Thinking            string
+	NoColor             bool
+	Theme               *pitheme.Theme
 }
 
 type EditorView struct {
@@ -342,6 +346,136 @@ func truncateFooterText(text string, width int, ellipsis string) string {
 	return TruncateToWidth(text, width-ellipsisWidth) + ellipsis
 }
 
+const (
+	footerBarMinWidth  = 9 // brackets plus a track wide enough for three bands
+	footerBarMaxWidth  = 24
+	footerBarGreenEnd  = 40
+	footerBarYellowEnd = 70
+)
+
+var footerBarPartials = []rune{'▏', '▎', '▍', '▌', '▋', '▊', '▉'}
+
+// footerBarPercent clamps the reported usage so the bar and its label always
+// agree on the band, even when a snapshot carries NaN or an out-of-range value.
+func footerBarPercent(percent float64) float64 {
+	if math.IsNaN(percent) || percent < 0 {
+		return 0
+	}
+	if math.IsInf(percent, 1) || percent > 100 {
+		return 100
+	}
+	return percent
+}
+
+// footerBarZones splits the track into the green, yellow, and red bands,
+// keeping every band wide enough to show its fill. The width covers the two
+// brackets, so the track is two cells narrower. A width below
+// footerBarMinWidth yields empty bands.
+func footerBarZones(width int) (green, yellow, red int) {
+	if width < footerBarMinWidth {
+		return 0, 0, 0
+	}
+	usable := width - 2
+	green = max(1, min(usable-2, int(math.Round(float64(usable)*footerBarGreenEnd/100))))
+	yellow = int(math.Round(float64(usable)*footerBarYellowEnd/100)) - green
+	yellow = max(1, min(usable-green-1, yellow))
+	return green, yellow, usable - green - yellow
+}
+
+// footerBarToken colors the usage text with the band its percentage falls in,
+// matching the bar's green/yellow/red split.
+func footerBarToken(percent float64) ThemeToken {
+	switch {
+	case percent < footerBarGreenEnd:
+		return TokenSuccess
+	case percent < footerBarYellowEnd:
+		return TokenWarning
+	default:
+		return TokenError
+	}
+}
+
+// footerBarCells renders one band with eighth-block precision so low usage
+// stays visible instead of rounding to an empty track.
+func footerBarCells(eighths, cells int) (filled, empty string) {
+	eighths = max(0, min(eighths, cells*8))
+	full, part := eighths/8, eighths%8
+	filledCells := full
+	filled = strings.Repeat("█", full)
+	if part > 0 {
+		filled += string(footerBarPartials[part-1])
+		filledCells++
+	}
+	return filled, strings.Repeat("░", cells-filledCells)
+}
+
+// footerBarSpans draws the context bar as three adjacent bands: consumed cells
+// fill with blocks colored by their own band, so the bar turns from green
+// through yellow to red as usage grows.
+func footerBarSpans(percent float64, width int) []StyledSpan {
+	if width < footerBarMinWidth {
+		return nil
+	}
+	percent = footerBarPercent(percent)
+	green, yellow, red := footerBarZones(width)
+	eighths := int(math.Round(percent * float64(green+yellow+red) * 8 / 100))
+	if percent > 0 && eighths == 0 {
+		eighths = 1
+	}
+	spans := []StyledSpan{{Text: "[", Token: TokenMuted}}
+	offset := 0
+	for _, band := range [...]struct {
+		cells int
+		token ThemeToken
+	}{{green, TokenSuccess}, {yellow, TokenWarning}, {red, TokenError}} {
+		filled, empty := footerBarCells(eighths-offset*8, band.cells)
+		if filled != "" {
+			spans = append(spans, StyledSpan{Text: filled, Token: band.token})
+		}
+		if empty != "" {
+			spans = append(spans, StyledSpan{Text: empty, Token: TokenDim})
+		}
+		offset += band.cells
+	}
+	return append(spans, StyledSpan{Text: "]", Token: TokenMuted})
+}
+
+// footerStatsRow prefers the inline context bar, then falls back to Pi's
+// textual estimate when the bar and its label cannot fit.
+func footerStatsRow(snapshot PresentationSnapshot, width int) StyledRow {
+	usage := SanitizeStatusRow(snapshot.Usage)
+	auto := ""
+	if snapshot.AutoCompact && snapshot.ContextEstimate != "" {
+		auto = " (auto)"
+	}
+	if snapshot.ContextPercentLabel != "" && snapshot.ContextWindowLabel != "" {
+		label := "~" + SanitizeStatusRow(snapshot.ContextPercentLabel) + " / " + SanitizeStatusRow(snapshot.ContextWindowLabel)
+		avail := width - CellWidth(label) - CellWidth(auto) - 1
+		if usage != "" {
+			avail -= CellWidth(usage) + 1
+		}
+		bandToken := footerBarToken(footerBarPercent(snapshot.ContextPercent))
+		barWidth := max(footerBarMinWidth, min(footerBarMaxWidth, avail))
+		for ; barWidth >= footerBarMinWidth; barWidth-- {
+			var spans []StyledSpan
+			if usage != "" {
+				spans = append(spans, StyledSpan{Text: usage, Token: TokenMuted}, StyledSpan{Text: " ", Token: TokenText})
+			}
+			spans = append(spans, footerBarSpans(snapshot.ContextPercent, barWidth)...)
+			spans = append(spans, StyledSpan{Text: " " + label, Token: bandToken})
+			if auto != "" {
+				spans = append(spans, StyledSpan{Text: auto, Token: TokenMuted})
+			}
+			row := StyledRow{Spans: spans}
+			if row.Width() <= width {
+				return row
+			}
+		}
+	}
+	text := strings.TrimSpace(usage + " " + snapshot.ContextEstimate + auto)
+	return StyledRow{Spans: []StyledSpan{{Text: truncateFooterText(text, width, "..."), Token: TokenMuted}}}
+}
+
 func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor bool) ([]string, []int) {
 	if height <= 0 || width <= 0 {
 		return nil, nil
@@ -355,11 +489,8 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 		path += " • " + SanitizeStatusRow(snapshot.SessionName)
 	}
 	path = truncateFooterText(path, width, "...")
-	contextEstimate := snapshot.ContextEstimate
-	if snapshot.AutoCompact && contextEstimate != "" {
-		contextEstimate += " (auto)"
-	}
-	secondLeft := truncateFooterText(strings.TrimSpace(snapshot.Usage+" "+contextEstimate), width, "...")
+	leftRow := ClipStyledRow(footerStatsRow(snapshot, width), width)
+	statsWidth := leftRow.Width()
 	modelSide := SanitizeStatusRow(snapshot.Model)
 	if snapshot.Thinking != "" {
 		modelSide += " • " + SanitizeStatusRow(snapshot.Thinking)
@@ -369,13 +500,11 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 		withProvider := "(" + SanitizeStatusRow(snapshot.Provider) + ") " + modelSide
 		// Pi includes the provider only when the complete label fits alongside
 		// the existing stats and its minimum two-cell separator.
-		if CellWidth(secondLeft)+2+CellWidth(withProvider) <= width {
+		if statsWidth+2+CellWidth(withProvider) <= width {
 			right = withProvider
 		}
 	}
 	pathRow := ClipStyledRow(StyledRow{Spans: []StyledSpan{{Text: path, Token: TokenMuted}}}, width)
-	leftRow := ClipStyledRow(StyledRow{Spans: []StyledSpan{{Text: secondLeft, Token: TokenMuted}}}, width)
-	statsWidth := leftRow.Width()
 	rightWidth := CellWidth(right)
 	gap := 0
 	// Pi keeps the stats left and truncates the model side when the minimum gap cannot fit.

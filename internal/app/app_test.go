@@ -335,6 +335,15 @@ func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
 	if r.footerSnapshot.ContextEstimate == "" {
 		t.Fatal("empty session lost the baseline estimate")
 	}
+	if r.footerSnapshot.ContextPercentLabel == "" || r.footerSnapshot.ContextWindowLabel != "100k" {
+		t.Fatalf("footer context bar labels=%q/%q; want a formatted percent and 100k", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextWindowLabel)
+	}
+	if got := formatFooterFixedOneDecimal(r.footerSnapshot.ContextPercent, "%"); got != r.footerSnapshot.ContextPercentLabel {
+		t.Fatalf("footer bar percent=%q but label=%q", got, r.footerSnapshot.ContextPercentLabel)
+	}
+	if got, want := r.footerSnapshot.ContextEstimate, "~"+r.footerSnapshot.ContextPercentLabel+"/100k"; got != want {
+		t.Fatalf("footer estimate=%q; want %q", got, want)
+	}
 	if r.store.ProjectionIfCached() != nil {
 		t.Fatal("footer built a projection for an empty session")
 	}
@@ -346,6 +355,9 @@ func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
 	if r.footerSnapshot.ContextEstimate != "" {
 		t.Fatalf("existing session without usage fabricated an estimate: %q", r.footerSnapshot.ContextEstimate)
 	}
+	if r.footerSnapshot.ContextPercentLabel != "" || r.footerSnapshot.ContextWindowLabel != "" {
+		t.Fatalf("footer fabricated context bar labels without an estimate: %q/%q", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextWindowLabel)
+	}
 	if r.store.ProjectionIfCached() != nil {
 		t.Fatal("footer built a projection for an existing session")
 	}
@@ -356,6 +368,9 @@ func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
 	r.refreshPresentation(console)
 	if r.footerSnapshot.ContextEstimate == "" {
 		t.Fatal("footer ignored a projection cached after the last redraw")
+	}
+	if r.footerSnapshot.ContextPercentLabel == "" || r.footerSnapshot.ContextWindowLabel != "100k" {
+		t.Fatalf("footer context bar labels missing after projection: %q/%q", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextWindowLabel)
 	}
 }
 
@@ -603,6 +618,9 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	write("hello\r")
 	wait("APP_OK")
 	waitEditor()
+	if footer := screen.Text(); !strings.Contains(footer, "% / 8.2k") || !strings.Contains(footer, "[") || !strings.Contains(footer, "░") {
+		t.Fatalf("actual app footer lacks the inline context bar: %q", footer)
+	}
 	body := <-requests
 	initialSessions, err := session.Discover(session.DefaultSessionDir(ws, agentDir))
 	if err != nil || len(initialSessions) != 1 {
