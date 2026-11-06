@@ -18,7 +18,8 @@ name when a persisted session is activated. The move holds both the old and
 new writer locks, never replaces an existing file, and leaves the transcript
 bytes unchanged. A name collision or a platform without a no-overwrite move
 fails activation with an error instead of replacing the target. Read-only
-opens and `--no-session` never rename.
+opens and `--no-session` never rename. The old name is retired after the
+move: a saved path to it no longer opens the session.
 
 The canonical path must be a regular file. A session opened through a
 symbolic link keeps its current name: renaming the link target would move the

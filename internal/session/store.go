@@ -91,6 +91,9 @@ func New(opts OpenOptions) (*Store, error) {
 		s.file = filepath.Join(dir, id+".jsonl")
 		s.flushed = false
 		if _, err := os.Lstat(s.file); err == nil {
+			if opts.ID != "" {
+				return nil, fmt.Errorf("session ID %q is already used by %s", opts.ID, s.file)
+			}
 			return nil, fmt.Errorf("session file already exists: %s", s.file)
 		} else if !os.IsNotExist(err) {
 			return nil, err

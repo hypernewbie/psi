@@ -112,6 +112,8 @@ func TestNewRefusesOccupiedCanonicalPath(t *testing.T) {
 	}
 	if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "taken-id"}); err == nil {
 		t.Fatal("expected an error for an occupied canonical path")
+	} else if !strings.Contains(err.Error(), "taken-id") {
+		t.Fatalf("error does not name the taken ID: %v", err)
 	}
 	link := filepath.Join(s.Dir(), "linked-id.jsonl")
 	if err := os.Symlink(filepath.Base(s.File()), link); err != nil {
