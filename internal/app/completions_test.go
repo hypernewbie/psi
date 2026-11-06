@@ -6,15 +6,26 @@ import (
 	"psi/internal/config"
 	"psi/internal/modelmeta"
 	"psi/internal/provider"
+	"psi/internal/providerregistry"
 	"psi/internal/session"
 )
 
-func TestAdvertisedModelsHaveRequestPathsOrPreciseUnavailableReasons(t *testing.T) {
+// Every advertised model either has a request path or stays out of the
+// picker. The picker must not offer a model whose request cannot be built.
+func TestAdvertisedModelsHaveRequestPathsOrStayOutOfThePicker(t *testing.T) {
 	r := testRuntime(t)
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
+	// Give every provider below a credential, so the picker checks the new
+	// filtering rule instead of an empty catalog.
+	families := []string{"minimax", "opencode-go", "deepseek", "zai", "google", "xiaomi", "moonshotai", "qwen-token-plan", "openrouter", "xai", "groq", "mistral"}
+	for _, family := range families {
+		if spec, ok := providerregistry.Lookup(family); ok && spec.Environment != "" {
+			t.Setenv(spec.Environment, "synthetic-"+family+"-key")
+		}
+	}
 	checked, unavailable := 0, 0
 	selector := modelSelector(r)
-	for _, family := range []string{"minimax", "opencode-go", "deepseek", "zai", "google", "xiaomi", "moonshotai", "qwen-token-plan", "openrouter", "xai", "groq", "mistral"} {
+	for _, family := range families {
 		for _, meta := range config.BundledModels(family) {
 			if meta.API != "anthropic-messages" && meta.API != "openai-completions" && meta.API != "google-generative-ai" && meta.API != "openai-responses" && meta.API != "mistral-conversations" {
 				continue
@@ -27,14 +38,11 @@ func TestAdvertisedModelsHaveRequestPathsOrPreciseUnavailableReasons(t *testing.
 				if !containsStr(buildErr.Error(), "unsupported") {
 					t.Errorf("%s/%s has unclear unavailable reason %q", family, model.ID, buildErr)
 				}
-				found := false
+				// A model whose request cannot be built is not offered at all.
 				for _, item := range selector.Items {
-					if item.ID == family+"/"+model.ID && item.Unavailable != "" && containsStr(item.Unavailable, "unsupported") {
-						found = true
+					if item.ID == family+"/"+model.ID {
+						t.Errorf("picker offered unusable %s/%s", family, model.ID)
 					}
-				}
-				if !found {
-					t.Errorf("picker did not expose %s/%s as unavailable", family, model.ID)
 				}
 				continue
 			}

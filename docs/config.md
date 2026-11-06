@@ -98,8 +98,11 @@ Psi reads the cache at startup and uses it only when it is newer than the bundle
 After Pi updates the cache, restart Psi to load the new data.
 Explicit models and overrides in `models.json` take precedence over the cache.
 `/model` searches the local catalog and configured models without a network request.
+It lists only models the session can use: a provider without a credential in `auth.json`, `models.json`, or its environment variable does not appear, and neither does a model whose request cannot be built.
+The bridge `pi.models.v1` list and the RPC `get_available_models` command apply the same rule.
+`--list-models` reports every catalog entry that passes activation, including models whose provider is not logged in; unlike `/model`, it does not apply the request-construction filter.
 
-Provider model lists change over time. Use `/model` to select a model in the local catalog. Do not assume that an example model ID is present or available. OpenCode Go models select their own registered API and catalog endpoint; unsupported cached APIs remain visible as unavailable.
+Provider model lists change over time. Use `/model` to select a model in the local catalog. Do not assume that an example model ID is present or available. OpenCode Go models select their own registered API and catalog endpoint.
 
 Existing `modelOverrides` apply without a duplicate `models[]` entry.
 

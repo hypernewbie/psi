@@ -53,8 +53,9 @@ one message per turn) or `all`.
 
 ## Change the model or thinking level
 
-- `/model` opens a searchable model picker, or `/model [provider/]model` sets a
-  session-local choice. `Ctrl+L` opens the same picker.
+- `/model` opens a searchable model picker for providers that already have a
+  credential, or `/model [provider/]model` sets a session-local choice. `Ctrl+L`
+  opens the same picker.
 - `/thinking` opens the supported-level picker, or `/thinking <level>` sets one.
   `Shift+Tab` cycles the levels the selected model supports.
 - `/reload` re-reads instructions, skills, theme/display settings, and

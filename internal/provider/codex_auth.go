@@ -104,9 +104,19 @@ func (a *CodexAuth) loadShared(ctx context.Context) (map[string]json.RawMessage,
 func (a *CodexAuth) Check() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, entry, err := a.loadShared(ctx)
+	all, _, err := a.loadShared(ctx)
 	if err != nil {
 		return err
+	}
+	return codexCredentialCheck(all)
+}
+
+// codexCredentialCheck validates the Codex OAuth entry in one auth.json
+// snapshot.
+func codexCredentialCheck(entries map[string]json.RawMessage) error {
+	var entry codexCredential
+	if json.Unmarshal(entries["openai-codex"], &entry) != nil || entry.Type != "oauth" || (entry.Access == "" && entry.Refresh == "") {
+		return fmt.Errorf("no Codex OAuth login; run /login openai-codex in Pi (no API-key fallback)")
 	}
 	if entry.Expires <= time.Now().UnixMilli() {
 		if entry.Refresh == "" {
@@ -114,7 +124,7 @@ func (a *CodexAuth) Check() error {
 		}
 		return nil
 	}
-	_, err = codexAccount(entry)
+	_, err := codexAccount(entry)
 	return err
 }
 

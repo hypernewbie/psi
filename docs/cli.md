@@ -26,7 +26,9 @@ stdin; redirected stdin fails with `noninteractive input: psi needs a terminal
 stdin and writing JSONL events on stdout: `prompt`, `abort`, `get_state`,
 `get_available_models`, `set_model`, `get_available_thinking_levels`,
 `set_thinking_level`, `compact`, `get_session_stats`, and
-`extension_ui_response`. It has no terminal UI, theme, or picker.
+`extension_ui_response`. `get_available_models` lists only providers with a
+usable credential, the same rule as `/model`. It has no terminal UI, theme, or
+picker.
 
 Print mode (`--print/-p`), Pi's JSON event mode, HTML export, and `@file`
 arguments are not supported.

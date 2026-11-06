@@ -22,6 +22,10 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	// The picker offers only providers with a stored login. Keep the Anthropic
+	// key and add a synthetic Codex OAuth entry so the served model stays usable
+	// offline while the uncredentialed providers stay hidden.
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), fmt.Sprintf(`{"anthropic":{"type":"api_key","key":"synthetic-review-key"},"openai-codex":{"type":"oauth","access":"dummy-test-access","refresh":"dummy-test-refresh","accountId":"test-account","expires":%d}}`, time.Now().Add(time.Hour).UnixMilli()))
 	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +64,9 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.wait("0 matches")
 	q.prompt()
 	q.write("\x15gpt-5.6-luna")
-	q.wait("6 matches") // opencode-go, openai-codex, and OpenRouter upstream variants
+	// opencode-go and OpenRouter also ship this ID, but without a credential
+	// their entries must not appear.
+	q.wait("1 matches")
 	q.prompt()
 	q.write("\r")
 	q.wait("gpt-5.6-luna • thinking off")

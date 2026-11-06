@@ -31,7 +31,8 @@ Eleven capabilities are advertised:
 - `pi.state.v2`: state snapshots (session, leaf, model, thinking, optional
   context telemetry, optional compact readiness) and replies to
   `StateRequest`.
-- `pi.models.v1`: list the resolved catalog and switch the live model.
+- `pi.models.v1`: list the live session's selectable models (providers with a
+  usable credential only, like `/model`) and switch the live model.
 - `pi.thinking.v1`: list the live model's thinking levels and switch.
 - `pi.history.v1`: read editor recall, newest first.
 - `pi.context.v1`: token/window/percent telemetry, present only when known.

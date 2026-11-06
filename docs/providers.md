@@ -62,9 +62,10 @@ psi --provider anthropic --model claude-sonnet-4-5
 psi --model anthropic/claude-sonnet-4-5:high
 ```
 
-Inside a session, `/model` opens a searchable picker and `/thinking` sets the
-reasoning level. Both changes apply to the current session only. `Ctrl+L` and
-`Shift+Tab` are shortcuts for the same two pickers.
+Inside a session, `/model` opens a searchable picker of models whose provider is
+already credentialed and `/thinking` sets the reasoning level. Both changes
+apply to the current session only. `Ctrl+L` and `Shift+Tab` are shortcuts for
+the same two pickers.
 
 A `:<thinking>` suffix is accepted in `--model` and in `defaultModel`. The level
 is clamped to what the model supports: `off`, `minimal`, `low`, `medium`,

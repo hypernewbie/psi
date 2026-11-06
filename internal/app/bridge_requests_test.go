@@ -169,7 +169,11 @@ func addModel(r *runtime, providerID string, meta config.ModelMeta) {
 }
 
 func TestBridgeModelsListReportsOnlySelectableEntries(t *testing.T) {
+	clearProviderAPIKeys(t)
 	r := testRuntime(t)
+	// testRuntime clears ANTHROPIC_API_KEY; restore it so the provider is
+	// credentialed, and openai-codex stays without its OAuth login.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
 	addModel(r, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
 	f, h := startBridgeRuntime(t, r)
 
@@ -190,9 +194,13 @@ func TestBridgeModelsListReportsOnlySelectableEntries(t *testing.T) {
 		if entry.GetProvider() == "" || entry.GetModel() == "" {
 			t.Fatalf("catalog entry is not selectable: %+v", entry)
 		}
-		if entry.GetProvider() == "anthropic" {
-			seen[entry.GetModel()] = true
+		// The catalog also ships openai-codex models, but the fixture agent
+		// directory has no OAuth login: an uncredentialed provider must not be
+		// offered, or every switch to it would fail at request time.
+		if entry.GetProvider() != "anthropic" {
+			t.Fatalf("uncredentialed provider was listed: %+v", entry)
 		}
+		seen[entry.GetModel()] = true
 	}
 	if !seen["m"] || !seen["m2"] {
 		t.Fatalf("catalog is missing selectable models: %v", seen)

@@ -21,6 +21,7 @@ import (
 
 	"psi/internal/config"
 	"psi/internal/provider"
+	"psi/internal/providerregistry"
 	"psi/internal/session"
 	"psi/internal/terminal"
 	"psi/internal/testutil"
@@ -193,6 +194,15 @@ func TestFooterTokenFormattingMatchesPi(t *testing.T) {
 	} {
 		if got := formatFooterTokens(tc.tokens); got != tc.want {
 			t.Errorf("formatFooterTokens(%v)=%q; want Pi format %q", tc.tokens, got, tc.want)
+		}
+	}
+}
+
+func clearProviderAPIKeys(t *testing.T) {
+	t.Helper()
+	for _, family := range providerregistry.IDs() {
+		if spec, ok := providerregistry.Lookup(family); ok && spec.Environment != "" {
+			t.Setenv(spec.Environment, "")
 		}
 	}
 }

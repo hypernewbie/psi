@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"psi/internal/config"
 	"psi/internal/providerregistry"
 )
+
+// authReads counts shared auth.json reads. The model lists resolve every
+// provider from one read, and the tests keep that guarantee.
+var authReads atomic.Int64
 
 // SelectAPIKey preserves the Anthropic-compatible caller and its no-fallback
 // behavior. New API-key providers use SelectProviderAPIKey.
@@ -27,66 +32,96 @@ func SelectProviderAPIKey(env map[string]string, authPath, providerID, configure
 	if !ok || spec.Auth != providerregistry.AuthAPIKey {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
 	}
-	if authPath == "" {
-		agentDir := env["PI_CODING_AGENT_DIR"]
-		if agentDir == "" {
-			home, _ := os.UserHomeDir()
-			agentDir = filepath.Join(home, ".pi", "agent")
-		}
-		authPath = filepath.Join(agentDir, "auth.json")
+	authPath = resolveAuthPath(env, authPath)
+	entries, err := AuthEntries(authPath)
+	if err != nil {
+		return "", "", err
 	}
+	return apiKeyFromEntries(env, entries, authPath, providerID, configuredKey)
+}
+
+// resolveAuthPath uses the agent directory when the caller has no path.
+func resolveAuthPath(env map[string]string, authPath string) string {
+	if authPath != "" {
+		return authPath
+	}
+	agentDir := env["PI_CODING_AGENT_DIR"]
+	if agentDir == "" {
+		home, _ := os.UserHomeDir()
+		agentDir = filepath.Join(home, ".pi", "agent")
+	}
+	return filepath.Join(agentDir, "auth.json")
+}
+
+// AuthEntries reads auth.json once through the shared lease and returns its
+// provider entries. A missing file yields no entries and no error, so
+// providers can fall back to their models.json key or environment variable.
+// A busy or malformed file returns an error instead of a partial view.
+func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
+	authReads.Add(1)
 	data, readErr := readAuthShared(authPath)
-	if readErr != nil && !os.IsNotExist(readErr) {
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return nil, nil
+		}
 		if _, statErr := os.Lstat(authPath); os.IsNotExist(statErr) {
-			readErr = os.ErrNotExist
-		} else {
-			return "", "", fmt.Errorf("cannot read auth.json: %w", readErr)
+			return nil, nil
 		}
+		return nil, fmt.Errorf("cannot read auth.json: %w", readErr)
 	}
-	if readErr == nil {
-		var entries map[string]json.RawMessage
-		if err := json.Unmarshal(data, &entries); err != nil {
-			return "", "", fmt.Errorf("auth.json is malformed")
+	var entries map[string]json.RawMessage
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("auth.json is malformed")
+	}
+	return entries, nil
+}
+
+// apiKeyFromEntries resolves one provider's API key from one auth.json
+// snapshot. It keeps the precedence and the no-fallback rules of
+// SelectProviderAPIKey.
+func apiKeyFromEntries(env map[string]string, entries map[string]json.RawMessage, authPath, providerID, configuredKey string) (key, source string, err error) {
+	spec, ok := providerregistry.Lookup(providerID)
+	if !ok || spec.Auth != providerregistry.AuthAPIKey {
+		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
+	}
+	if raw, present := entries[providerID]; present {
+		var entry struct {
+			Type string `json:"type"`
+			Key  string `json:"key"`
 		}
-		if raw, present := entries[providerID]; present {
-			var entry struct {
-				Type string `json:"type"`
-				Key  string `json:"key"`
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			if providerID == "anthropic" {
+				return "", "", fmt.Errorf("auth.json Anthropic credential must be an API-key object")
 			}
-			if err := json.Unmarshal(raw, &entry); err != nil {
-				if providerID == "anthropic" {
-					return "", "", fmt.Errorf("auth.json Anthropic credential must be an API-key object")
-				}
-				return "", "", fmt.Errorf("auth.json credential for %s must be an API-key object", providerID)
-			}
-			if entry.Type == "oauth" || entry.Type == "oauth_token" {
-				if providerID == "anthropic" {
-					return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no API-key fallback (select API-key access explicitly in auth.json)")
-				}
-				return "", "", fmt.Errorf("%s OAuth credentials are unsupported for API-key access; no fallback", providerID)
-			}
-			if entry.Type != "" && entry.Type != "api_key" {
-				if providerID == "anthropic" {
-					return "", "", fmt.Errorf("unsupported Anthropic credential type")
-				}
-				return "", "", fmt.Errorf("unsupported %s credential type", providerID)
-			}
-			if entry.Key == "" {
-				if providerID == "anthropic" {
-					return "", "", fmt.Errorf("auth.json Anthropic API key is empty")
-				}
-				return "", "", fmt.Errorf("auth.json %s API key is empty", providerID)
-			}
-			key, err := config.ResolveCredentialWithEnv(entry.Key, envLookup(env))
-			if err != nil {
-				return "", "", credentialError(providerID, err)
-			}
-			return key, "auth.json:" + providerID, nil
+			return "", "", fmt.Errorf("auth.json credential for %s must be an API-key object", providerID)
 		}
-		if providerID == "anthropic" {
-			if _, present := entries["anthropic-oauth"]; present {
-				return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no silent API-key fallback")
+		if entry.Type == "oauth" || entry.Type == "oauth_token" {
+			if providerID == "anthropic" {
+				return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no API-key fallback (select API-key access explicitly in auth.json)")
 			}
+			return "", "", fmt.Errorf("%s OAuth credentials are unsupported for API-key access; no fallback", providerID)
+		}
+		if entry.Type != "" && entry.Type != "api_key" {
+			if providerID == "anthropic" {
+				return "", "", fmt.Errorf("unsupported Anthropic credential type")
+			}
+			return "", "", fmt.Errorf("unsupported %s credential type", providerID)
+		}
+		if entry.Key == "" {
+			if providerID == "anthropic" {
+				return "", "", fmt.Errorf("auth.json Anthropic API key is empty")
+			}
+			return "", "", fmt.Errorf("auth.json %s API key is empty", providerID)
+		}
+		key, err := config.ResolveCredentialWithEnv(entry.Key, envLookup(env))
+		if err != nil {
+			return "", "", credentialError(providerID, err)
+		}
+		return key, "auth.json:" + providerID, nil
+	}
+	if providerID == "anthropic" {
+		if _, present := entries["anthropic-oauth"]; present {
+			return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no silent API-key fallback")
 		}
 	}
 	if configuredKey != "" {
@@ -106,6 +141,57 @@ func SelectProviderAPIKey(env map[string]string, authPath, providerID, configure
 		return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)
 	}
 	return "", "", fmt.Errorf("no %s credential: set %s, add an API-key entry to auth.json, or configure providers.%s.apiKey in models.json", spec.Name, spec.Environment, providerID)
+}
+
+// CredentialState is one provider's resolved credential.
+type CredentialState struct {
+	// Usable reports that the provider has a credential this session can use.
+	Usable bool
+	// Source names the credential, such as "auth.json:anthropic" or
+	// "ANTHROPIC_API_KEY".
+	Source string
+	// Err explains why the provider has no usable credential.
+	Err error
+}
+
+// Credentials resolves every provider's credential from one consistent
+// auth.json read. Reading once keeps the model lists fast and gives every
+// provider the same view of the login file, so a busy lock cannot stall the
+// list once per provider.
+func Credentials(env map[string]string, authPath string, configured map[string]string) map[string]CredentialState {
+	authPath = resolveAuthPath(env, authPath)
+	entries, readErr := AuthEntries(authPath)
+	out := map[string]CredentialState{}
+	for _, providerID := range providerregistry.IDs() {
+		spec, ok := providerregistry.Lookup(providerID)
+		if !ok {
+			continue
+		}
+		switch spec.Auth {
+		case providerregistry.AuthCodexOAuth:
+			if readErr != nil {
+				out[providerID] = CredentialState{Err: readErr}
+				continue
+			}
+			if err := codexCredentialCheck(entries); err != nil {
+				out[providerID] = CredentialState{Err: err}
+				continue
+			}
+			out[providerID] = CredentialState{Usable: true, Source: "auth.json:" + providerID}
+		case providerregistry.AuthAPIKey:
+			if readErr != nil {
+				out[providerID] = CredentialState{Err: readErr}
+				continue
+			}
+			_, source, err := apiKeyFromEntries(env, entries, authPath, providerID, configured[providerID])
+			if err != nil {
+				out[providerID] = CredentialState{Err: err}
+				continue
+			}
+			out[providerID] = CredentialState{Usable: true, Source: source}
+		}
+	}
+	return out
 }
 
 func credentialError(providerID string, err error) error {
