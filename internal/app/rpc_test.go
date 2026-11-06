@@ -450,6 +450,30 @@ func TestRPCSetThinkingLevel(t *testing.T) {
 	}
 }
 
+// A level the model can apply is applied even when it is not advertised: the
+// provider clamps it, so no valid level is refused at this surface.
+func TestRPCSetThinkingLevelAcceptsEveryValidLevel(t *testing.T) {
+	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
+	s.r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
+	t.Setenv("ZAI_API_KEY", "synthetic-zai-key")
+	if err := s.r.configure(config.StartupOverrides{Provider: "zai", Model: "glm-5.3", Thinking: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	advertised := provider.SupportedThinking(s.r.cfg.Model)
+	if len(advertised) >= len(config.ValidThinkingLevels) {
+		t.Skipf("fixture model advertises every level: %v", advertised)
+	}
+	for _, level := range config.ValidThinkingLevels {
+		res := s.handle(rpcCommand{ID: strptr("t-" + level), Type: "set_thinking_level", Level: level})
+		if res == nil || !res.Success {
+			t.Fatalf("valid level %q was refused: %+v", level, res)
+		}
+		if s.r.ov.Thinking != level {
+			t.Fatalf("level %q not applied: %q", level, s.r.ov.Thinking)
+		}
+	}
+}
+
 func TestRPCCompactEmptyThenAfterExchange(t *testing.T) {
 	long := strings.Repeat("context filler for the compaction budget. ", 60)
 	fake := &provider.Fake{

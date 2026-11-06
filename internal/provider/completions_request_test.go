@@ -218,3 +218,67 @@ func TestOpenAICompletionsModelSpecificFields(t *testing.T) {
 		t.Fatalf("unsupported strict field was sent: %#v", body["tools"])
 	}
 }
+
+// An Anthropic-route model over Completions carries Pi's three cache markers:
+// the instruction message, the last tool definition, and the last
+// conversation text part. Earlier messages stay unmarked.
+func TestCompletionsAnthropicCacheControlMarksPrompt(t *testing.T) {
+	model := ModelMeta{ID: "anthropic/synthetic", API: "openai-completions", Provider: "openrouter", Reasoning: true, MaxTokens: 8192,
+		ThinkingLevelMap: map[string]*string{"low": completionString("low")},
+		Compat:           completionCompat(t, map[string]any{"thinkingFormat": "openrouter", "cacheControlFormat": "anthropic"})}
+	body, err := BuildCompletionsRequest(Request{Model: model, System: "rules", Thinking: "low",
+		Tools:    []ToolDef{{Name: "read"}},
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "first"}}}, {Role: "user", Content: []Block{{Type: "text", Text: "second"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := map[string]any{"type": "ephemeral"}
+	messages := body["messages"].([]any)
+	system := messages[0].(map[string]any)
+	instruction := system["content"].([]any)[0].(map[string]any)
+	if instruction["cache_control"].(map[string]any)["type"] != marker["type"] || instruction["text"] != "rules" {
+		t.Fatalf("instruction marker = %#v", system["content"])
+	}
+	if first, isString := messages[1].(map[string]any)["content"].(string); !isString || first != "first" {
+		t.Fatalf("earlier message was rewritten or marked: %#v", messages[1])
+	}
+	last := messages[2].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if last["cache_control"].(map[string]any)["type"] != "ephemeral" {
+		t.Fatalf("last message marker = %#v", last)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	if tool["cache_control"].(map[string]any)["type"] != "ephemeral" {
+		t.Fatalf("last tool marker = %#v", tool)
+	}
+	if _, nested := tool["function"].(map[string]any)["cache_control"]; nested {
+		t.Fatalf("marker was nested inside the tool function: %#v", tool)
+	}
+}
+
+// Pi detects Anthropic-style caching for OpenRouter's Anthropic routes even
+// without the field, and psi refuses a format it cannot send.
+func TestCompletionsAnthropicCacheControlDetectionAndRefusal(t *testing.T) {
+	detected := ModelMeta{ID: "anthropic/synthetic", API: "openai-completions", Provider: "openrouter", Reasoning: true, MaxTokens: 8192,
+		Compat: completionCompat(t, map[string]any{"thinkingFormat": "openrouter"})}
+	body, err := BuildCompletionsRequest(Request{Model: detected, System: "rules", Thinking: "off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, marked := body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"]; !marked {
+		t.Fatalf("detected Anthropic route sent no instruction marker: %#v", body["messages"])
+	}
+	plain := ModelMeta{ID: "synthetic-deepseek", API: "openai-completions", Provider: "deepseek", Reasoning: true, MaxTokens: 8192,
+		Compat: completionCompat(t, map[string]any{"thinkingFormat": "deepseek"})}
+	plainBody, err := BuildCompletionsRequest(Request{Model: plain, System: "rules", Thinking: "off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content, isString := plainBody["messages"].([]any)[0].(map[string]any)["content"].(string); !isString || content != "rules" {
+		t.Fatalf("non-Anthropic format rewrote the instruction message: %#v", plainBody["messages"])
+	}
+	refused := ModelMeta{ID: "synthetic", API: "openai-completions", Provider: "openrouter", Reasoning: true, MaxTokens: 8192,
+		Compat: completionCompat(t, map[string]any{"cacheControlFormat": "openai"})}
+	if _, err := BuildCompletionsRequest(Request{Model: refused, Thinking: "off"}); err == nil || !strings.Contains(err.Error(), "cacheControlFormat") {
+		t.Fatalf("unsupported cacheControlFormat accepted: %v", err)
+	}
+}

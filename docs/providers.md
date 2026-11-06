@@ -97,9 +97,20 @@ Declare extra models or override a catalog entry in
 ```
 
 Per-model keys psi reads: `id`, `api`, `baseUrl`, `contextWindow`, `maxTokens`,
-`reasoning`, `input`, `headers`, `thinkingLevelMap`, and provider
+`reasoning`, `input`, `headers`, `thinkingLevelMap`, `compat`, and provider
 `modelOverrides`. The same schema as Pi applies; a key psi does not implement is
-ignored rather than rejected.
+ignored rather than rejected, but an `openai-completions`, `openai-responses`,
+`google-generative-ai`, or `mistral-conversations` model refuses a `compat`
+field psi does not know instead of ignoring it. MiniMax and OpenCode Go
+`anthropic-messages` models also refuse a known feature that adapter cannot
+replay, so such a model stays unavailable instead of running without it. The
+first-party Anthropic adapter ignores compatibility fields.
+
+An `openai-completions` model whose `compat.cacheControlFormat` is `anthropic`
+receives Anthropic-style prompt-cache markers on the instruction message, the
+last tool, and the last conversation text part. psi also detects this for
+`openrouter` models whose id starts with `anthropic/`, as Pi does. No cache
+retention (`ttl`) is sent.
 
 Provider selection precedence matches Pi: command-line flags, then the session's
 recorded model, then `defaultProvider`/`defaultModel` from settings. See

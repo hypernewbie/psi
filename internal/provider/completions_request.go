@@ -15,6 +15,7 @@ type completionsCompat struct {
 	requiresToolResultName, requiresAssistant   bool
 	requiresThinkingAsText, requiresReasoning   bool
 	thinkingFormat                              string
+	cacheControlFormat                          string
 	zaiToolStream                               bool
 }
 
@@ -31,6 +32,7 @@ var completionsCompatFields = map[string]bool{
 	"requiresThinkingAsText":                      true,
 	"requiresReasoningContentOnAssistantMessages": true,
 	"thinkingFormat":                              true,
+	"cacheControlFormat":                          true,
 	"zaiToolStream":                               true,
 	"sendSessionAffinityHeaders":                  true,
 	"supportsMidConvoSystemMessages":              true,
@@ -120,6 +122,18 @@ func resolveCompletionsCompat(model ModelMeta) (completionsCompat, error) {
 	}
 	if compat.thinkingFormat != "deepseek" && compat.thinkingFormat != "zai" && compat.thinkingFormat != "openai" && compat.thinkingFormat != "qwen" && compat.thinkingFormat != "openrouter" {
 		return compat, fmt.Errorf("model %q uses unsupported thinkingFormat %q", model.ID, compat.thinkingFormat)
+	}
+	// Pi detects Anthropic-style prompt caching for OpenRouter's Anthropic
+	// routes, so a model entry without the field keeps that behavior.
+	detectedCacheControl := ""
+	if model.ProviderID() == "openrouter" && strings.HasPrefix(model.ID, "anthropic/") {
+		detectedCacheControl = "anthropic"
+	}
+	if compat.cacheControlFormat, err = stringValue("cacheControlFormat", detectedCacheControl); err != nil {
+		return compat, err
+	}
+	if compat.cacheControlFormat != "" && compat.cacheControlFormat != "anthropic" {
+		return compat, fmt.Errorf("model %q uses unsupported cacheControlFormat %q", model.ID, compat.cacheControlFormat)
 	}
 	// Mid-conversation system messages never enter psi requests: the
 	// transcript carries a single leading system prompt, so these capability
@@ -254,7 +268,72 @@ func BuildCompletionsRequest(req Request) (map[string]any, error) {
 	} else if hasCompletionsToolHistory(req.Messages) {
 		params["tools"] = []any{}
 	}
+	if compat.cacheControlFormat == "anthropic" {
+		applyAnthropicCacheControl(params, messages)
+	}
 	return params, nil
+}
+
+// applyAnthropicCacheControl marks the prompt the way Anthropic-compatible
+// endpoints cache it: the first instruction message, the last tool, and the
+// last conversation text part. OpenRouter forwards these markers to the
+// Anthropic route, and Pi sends the same three.
+func applyAnthropicCacheControl(params map[string]any, messages []any) {
+	marker := map[string]any{"type": "ephemeral"}
+	for _, raw := range messages {
+		message, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if role := message["role"]; role == "system" || role == "developer" {
+			markCacheControlText(message, marker)
+			break
+		}
+	}
+lastConversationMessage:
+	for i := len(messages) - 1; i >= 0; i-- {
+		message, ok := messages[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch message["role"] {
+		case "user", "assistant", "tool":
+			if markCacheControlText(message, marker) {
+				break lastConversationMessage
+			}
+		}
+	}
+	tools, ok := params["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		return
+	}
+	if last, ok := tools[len(tools)-1].(map[string]any); ok {
+		last["cache_control"] = marker
+	}
+}
+
+// markCacheControlText marks the last text part of one message. A string body
+// becomes a single text part so it can carry the marker. A message without
+// text, such as an image-only turn, is left unmarked.
+func markCacheControlText(message map[string]any, marker map[string]any) bool {
+	switch content := message["content"].(type) {
+	case string:
+		if content == "" {
+			return false
+		}
+		message["content"] = []any{map[string]any{"type": "text", "text": content, "cache_control": marker}}
+		return true
+	case []any:
+		for i := len(content) - 1; i >= 0; i-- {
+			part, ok := content[i].(map[string]any)
+			if !ok || part["type"] != "text" {
+				continue
+			}
+			part["cache_control"] = marker
+			return true
+		}
+	}
+	return false
 }
 
 func hasCompletionsToolHistory(messages []Message) bool {

@@ -5,15 +5,27 @@ import (
 	"strings"
 )
 
+// SupportsThinking reports whether the model can apply this level. A valid
+// level the model does not advertise still applies: the adapters clamp it, so
+// this predicate serves every switch surface.
+func SupportsThinking(model ModelMeta, level string) bool {
+	_, err := BuildRequest(Request{Model: model, Thinking: level})
+	return err == nil
+}
+
 func SupportedThinking(model ModelMeta) []string {
 	var levels []string
 	for _, level := range ValidLevels {
-		if (model.API == "google-generative-ai" || model.API == "openai-responses" || model.API == "openai-completions" || model.API == "mistral-conversations") && model.Reasoning {
+		if model.Reasoning {
 			mapped, exists := model.ThinkingLevelMap[level]
+			// A null mapping marks the level unsupported, so it is not
+			// advertised even when the adapter could clamp it.
 			if exists && mapped == nil {
 				continue
 			}
-			if (level == "xhigh" || level == "max") && !exists {
+			// xhigh and max need an explicit mapping, except on the Anthropic
+			// budget path, where psi maps them to a token budget itself.
+			if (level == "xhigh" || level == "max") && !exists && model.API != "anthropic-messages" {
 				continue
 			}
 		}

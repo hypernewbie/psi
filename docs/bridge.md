@@ -33,7 +33,11 @@ Eleven capabilities are advertised:
   `StateRequest`.
 - `pi.models.v1`: list the live session's selectable models (providers with a
   usable credential only, like `/model`) and switch the live model.
-- `pi.thinking.v1`: list the live model's thinking levels and switch.
+- `pi.thinking.v1`: list the live model's advertised thinking levels and
+  switch. A switch accepts any of `off`, `minimal`, `low`, `medium`, `high`,
+  `xhigh`, and `max`; the provider clamps a level the model does not advertise
+  and the session records the requested level. Only a level the model cannot
+  apply is refused.
 - `pi.history.v1`: read editor recall, newest first.
 - `pi.context.v1`: token/window/percent telemetry, present only when known.
 - `pi.skills.v1`: list session skills and dispatch one through the native

@@ -523,14 +523,8 @@ func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "set_thinking_level", "unsupported thinking level")
 		return &out
 	}
-	supported := false
-	for _, candidate := range provider.SupportedThinking(r.cfg.Model) {
-		if candidate == level {
-			supported = true
-			break
-		}
-	}
-	if !supported {
+	// An unadvertised level is applied, not refused: the provider clamps it.
+	if !provider.SupportsThinking(r.cfg.Model, level) {
 		out := rpcErr(cmd.ID, "set_thinking_level", "unsupported thinking level: "+level)
 		return &out
 	}

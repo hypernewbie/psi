@@ -598,8 +598,8 @@ func (h *bridgeHandler) startModelSwitch(req pibridge.Request, runBusy bool) {
 	h.begin(req, next)
 }
 
-// startThinkingSwitch admits a level change for the live model. A level the
-// model does not accept is refused before any candidate work.
+// startThinkingSwitch admits a level change for the live model. An
+// unadvertised level is admitted because the provider clamps it.
 func (h *bridgeHandler) startThinkingSwitch(req pibridge.Request, runBusy bool) {
 	if h.refuse(req, runBusy) {
 		return
@@ -613,7 +613,7 @@ func (h *bridgeHandler) startThinkingSwitch(req pibridge.Request, runBusy bool) 
 		req.ReplySetThinking(false, "model-changed")
 		return
 	}
-	if !supportedLevel(h.r.cfg.Model, level) {
+	if !provider.SupportsThinking(h.r.cfg.Model, level) {
 		req.ReplySetThinking(false, "unsupported-level")
 		return
 	}
@@ -669,16 +669,6 @@ func (h *bridgeHandler) beginWork(req pibridge.Request, work func() (string, err
 		prep.expanded, prep.err = prep.work()
 		close(prep.done)
 	}()
-}
-
-// supportedLevel reports whether the model accepts this thinking level.
-func supportedLevel(model provider.ModelMeta, level string) bool {
-	for _, candidate := range provider.SupportedThinking(model) {
-		if candidate == level {
-			return true
-		}
-	}
-	return false
 }
 
 // refuse reports whether native state is too busy for a bridge mutation. The
@@ -758,10 +748,6 @@ func (h *bridgeHandler) applyThinking(prep *bridgePrep, cand *runtime, discard f
 	req := prep.request
 	if cand.ov.Provider != req.Provider() || cand.ov.Model != req.Model() {
 		discard("model-changed")
-		return
-	}
-	if !supportedLevel(cand.cfg.Model, cand.ov.Thinking) {
-		discard("unsupported-level")
 		return
 	}
 	if _, err := h.r.store.AppendThinkingLevelChange(cand.ov.Thinking); err != nil {

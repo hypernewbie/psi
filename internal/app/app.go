@@ -2934,14 +2934,7 @@ func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error)
 		return false, nil
 	}
 	lvl := strings.TrimSpace(arg)
-	found := false
-	for _, v := range config.ValidThinkingLevels {
-		if v == lvl {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !provider.SupportsThinking(r.cfg.Model, lvl) {
 		return false, fmt.Errorf("unsupported thinking level %q", lvl)
 	}
 	if lvl == r.ov.Thinking {

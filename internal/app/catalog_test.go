@@ -16,6 +16,7 @@ import (
 	"psi/internal/event"
 	"psi/internal/modelmeta"
 	"psi/internal/provider"
+	"psi/internal/providerregistry"
 	"psi/internal/session"
 	"psi/internal/terminal"
 )
@@ -137,7 +138,7 @@ func TestModelPickerListsOnlyCredentialedUsableModels(t *testing.T) {
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"zai": {Models: []config.ModelMeta{
 		{ID: "synthetic-zai", API: "openai-completions", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024, Input: []string{"text"}},
 		{ID: "synthetic-zai-broken", API: "synthetic-unregistered-api", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024},
-		{ID: "synthetic-zai-unbuildable", API: "openai-completions", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024, Compat: modelmeta.Compat{"cacheControlFormat": json.RawMessage(`"anthropic"`)}},
+		{ID: "synthetic-zai-unbuildable", API: "openai-completions", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024, Compat: modelmeta.Compat{"syntheticUnknownCompatField": json.RawMessage(`true`)}},
 	}}}}
 	if items := modelSelector(r).Items; len(items) != 0 {
 		t.Fatalf("picker offered models without a credential: %v", items)
@@ -301,6 +302,18 @@ func TestCompactionActivityFollowsPiPhases(t *testing.T) {
 	for state, want := range cases {
 		if got := compactionActivity(state); got != want {
 			t.Fatalf("compaction %s: got %q, want %q", state, got, want)
+		}
+	}
+}
+
+// No bundled model may advertise no thinking level: an empty list leaves every
+// switch surface refusing and the picker with nothing to offer.
+func TestEveryBundledModelAdvertisesAThinkingLevel(t *testing.T) {
+	for _, family := range providerregistry.IDs() {
+		for _, meta := range config.BundledModels(family) {
+			if levels := provider.SupportedThinking(providerModel(family, meta)); len(levels) == 0 {
+				t.Errorf("%s/%s advertises no thinking level", family, meta.ID)
+			}
 		}
 	}
 }

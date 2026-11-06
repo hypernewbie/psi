@@ -494,6 +494,72 @@ func TestBridgeThinkingListMatchesLiveModel(t *testing.T) {
 	}
 }
 
+// A level the model can apply is applied even when it is not advertised: the
+// provider clamps it, so a valid level is not a rejection.
+func TestBridgeThinkingClampsUnadvertisedLevel(t *testing.T) {
+	r := testRuntime(t)
+	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
+	t.Setenv("ZAI_API_KEY", "synthetic-zai-key")
+	if err := r.configure(config.StartupOverrides{Provider: "zai", Model: "glm-5.3", Thinking: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, advertised := range provider.SupportedThinking(r.cfg.Model) {
+		if advertised == "minimal" {
+			t.Skip("fixture model advertises minimal")
+		}
+	}
+	f, h := startBridgeRuntime(t, r)
+	before := countEntries(t, r)
+
+	f.inject <- setThinking("req-clamped", "minimal", r.ov.Provider, r.ov.Model)
+	h.handle(nextRequest(t, r.bridge), false)
+	select {
+	case <-h.completed():
+	case <-time.After(10 * time.Second):
+		t.Fatal("preparation did not finish")
+	}
+	h.finishPreparation(false)
+	ack := f.waitFrame(t, "level clamp", func(frame *pibridgepb.PiToPhi) bool {
+		return frame.GetSetThinkingAck() != nil
+	}).GetSetThinkingAck()
+	if !ack.GetOk() {
+		t.Fatalf("unadvertised level was refused: %+v", ack)
+	}
+	if r.ov.Thinking != "minimal" {
+		t.Fatalf("requested level not applied: %q", r.ov.Thinking)
+	}
+	if countEntries(t, r) != before+1 {
+		t.Fatal("accepted level did not record a thinking change")
+	}
+}
+
+// A level the model cannot apply is refused before any candidate work, so the
+// bridge keeps answering with a known reason instead of an empty outcome.
+func TestBridgeThinkingUnappliableLevelRefused(t *testing.T) {
+	r := testRuntime(t)
+	r.models.Providers["anthropic"] = config.ProviderMeta{Models: []config.ModelMeta{{ID: "m", Reasoning: false, MaxTokens: 16384}}}
+	if err := r.configure(config.StartupOverrides{Provider: "anthropic", Model: "m", Thinking: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	f, h := startBridgeRuntime(t, r)
+	before := countEntries(t, r)
+
+	f.inject <- setThinking("req-unusable", "high", r.ov.Provider, r.ov.Model)
+	h.handle(nextRequest(t, r.bridge), false)
+	if h.busy() {
+		t.Fatal("unappliable level started a preparation")
+	}
+	ack := f.waitFrame(t, "level refusal", func(frame *pibridgepb.PiToPhi) bool {
+		return frame.GetSetThinkingAck() != nil
+	}).GetSetThinkingAck()
+	if ack.GetOk() || ack.GetReason() != "unsupported-level" {
+		t.Fatalf("unexpected ack: %+v", ack)
+	}
+	if countEntries(t, r) != before {
+		t.Fatal("refused level changed the session")
+	}
+}
+
 // A level the live model does not accept is refused before any candidate work,
 // so a stale picker cannot install an unsupported level.
 func TestBridgeThinkingUnsupportedLevelRefused(t *testing.T) {

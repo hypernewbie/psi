@@ -23,7 +23,7 @@ func TestAdvertisedModelsHaveRequestPathsOrStayOutOfThePicker(t *testing.T) {
 			t.Setenv(spec.Environment, "synthetic-"+family+"-key")
 		}
 	}
-	checked, unavailable := 0, 0
+	checked := 0
 	selector := modelSelector(r)
 	for _, family := range families {
 		for _, meta := range config.BundledModels(family) {
@@ -34,10 +34,7 @@ func TestAdvertisedModelsHaveRequestPathsOrStayOutOfThePicker(t *testing.T) {
 			model := providerModel(family, meta)
 			_, buildErr := provider.BuildRequest(provider.Request{Model: model, Thinking: "off"})
 			if buildErr != nil {
-				unavailable++
-				if !containsStr(buildErr.Error(), "unsupported") {
-					t.Errorf("%s/%s has unclear unavailable reason %q", family, model.ID, buildErr)
-				}
+				t.Errorf("%s/%s cannot build a request: %v", family, model.ID, buildErr)
 				// A model whose request cannot be built is not offered at all.
 				for _, item := range selector.Items {
 					if item.ID == family+"/"+model.ID {
@@ -53,8 +50,8 @@ func TestAdvertisedModelsHaveRequestPathsOrStayOutOfThePicker(t *testing.T) {
 			}
 		}
 	}
-	if checked == 0 || unavailable == 0 {
-		t.Fatalf("catalog compatibility coverage: checked=%d unavailable=%d", checked, unavailable)
+	if checked == 0 {
+		t.Fatal("catalog compatibility coverage: no models checked")
 	}
 }
 
@@ -68,7 +65,7 @@ func TestRestoreUnsupportedCompletionModelKeepsImportedHistoryReadable(t *testin
 	}
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"opencode-go": {Models: []config.ModelMeta{{
 		ID: "future-model", API: "openai-completions", BaseURL: "https://opencode.ai/inference/go/v1", Reasoning: true, MaxTokens: 8192, Input: []string{"text"},
-		Compat: modelmeta.Compat{"cacheControlFormat": []byte("\"anthropic\"")},
+		Compat: modelmeta.Compat{"syntheticUnknownCompatField": []byte("true")},
 	}}}}}
 	if err := r.restore(); err != nil {
 		t.Fatal(err)
