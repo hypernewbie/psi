@@ -15,38 +15,85 @@ import (
 
 func modelSelector(r *runtime) *Selector {
 	var items []session.SessionInfo
-	for _, family := range providerregistry.IDs() {
-		options, credential := r.usableModelOptions(family)
-		for _, option := range options {
-			m := option.Model
-			items = append(items, session.SessionInfo{ID: family + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", credential, m.API, m.ContextWindow, m.MaxTokens)})
-		}
+	for _, model := range r.usableModels() {
+		m := model.option.Model
+		items = append(items, session.SessionInfo{ID: model.provider + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", model.credential, m.API, m.ContextWindow, m.MaxTokens)})
 	}
 	selector := NewSelector(items, r.ov.Provider+"/"+r.ov.Model)
 	selector.Models = true
 	return selector
 }
 
-// usableModelOptions is the model-list rule shared by /model, the bridge, and
-// RPC. A provider needs a usable credential, and each model must pass both
-// activation and request construction. The checks are local; credential
-// validity is still established by the request.
-func (r *runtime) usableModelOptions(family string) ([]config.ModelOption, string) {
-	credential, usable := r.credentialAvailability(family)
-	if !usable {
-		return nil, ""
-	}
-	var options []config.ModelOption
-	for _, option := range r.models.ModelOptions(family) {
-		if !option.Available {
+// usableModel is one model the session can use, with the credential detail
+// shown for the selected row.
+type usableModel struct {
+	provider   string
+	option     config.ModelOption
+	credential string
+}
+
+// usableModels lists the models the session can use. A provider needs a
+// usable credential, and each model must pass activation and request
+// construction. The credentials come from one auth.json read, so a busy login
+// file cannot stall the list once per provider.
+func (r *runtime) usableModels() []usableModel {
+	states := r.credentialStates()
+	var models []usableModel
+	for _, family := range providerregistry.IDs() {
+		state := states[family]
+		if !state.usable {
 			continue
 		}
-		if _, err := provider.BuildRequest(provider.Request{Model: providerModel(family, option.Model), Thinking: "off"}); err != nil {
-			continue
+		for _, option := range r.models.ModelOptions(family) {
+			if !option.Available {
+				continue
+			}
+			if _, err := provider.BuildRequest(provider.Request{Model: providerModel(family, option.Model), Thinking: "off"}); err != nil {
+				continue
+			}
+			models = append(models, usableModel{provider: family, option: option, credential: state.detail})
 		}
-		options = append(options, option)
 	}
-	return options, credential
+	return models
+}
+
+// credentialState is one provider's credential as the UI describes it.
+type credentialState struct {
+	detail string
+	usable bool
+}
+
+// credentialStates resolves every provider's credential from one auth.json
+// snapshot.
+func (r *runtime) credentialStates() map[string]credentialState {
+	configured := make(map[string]string, len(r.models.Providers))
+	for family, meta := range r.models.Providers {
+		configured[family] = meta.APIKey
+	}
+	states := provider.Credentials(envMap(), filepath.Join(r.agentDir, "auth.json"), configured)
+	out := make(map[string]credentialState, len(states))
+	for family, state := range states {
+		spec, _ := providerregistry.Lookup(family)
+		switch spec.Auth {
+		case providerregistry.AuthCodexOAuth:
+			if state.Usable {
+				out[family] = credentialState{detail: "OAuth login present (access checked on request)", usable: true}
+				continue
+			}
+			out[family] = credentialState{detail: "OAuth login unavailable (run Pi /login)"}
+		default:
+			if state.Usable {
+				out[family] = credentialState{detail: "credential available (" + state.Source + ")", usable: true}
+				continue
+			}
+			reason := "credential unavailable"
+			if state.Err != nil {
+				reason += ": " + state.Err.Error()
+			}
+			out[family] = credentialState{detail: reason}
+		}
+	}
+	return out
 }
 
 func thinkingSelector(r *runtime) *Selector {
@@ -58,33 +105,6 @@ func thinkingSelector(r *runtime) *Selector {
 	selector := NewSelector(items, r.ov.Thinking)
 	selector.Thinking = true
 	return selector
-}
-
-// credentialAvailability reports whether the provider has a usable credential
-// and describes it for the selected-model detail row.
-func (r *runtime) credentialAvailability(family string) (detail string, usable bool) {
-	path := filepath.Join(r.agentDir, "auth.json")
-	spec, ok := providerregistry.Lookup(family)
-	if !ok {
-		return "credential status unavailable: unknown provider", false
-	}
-	switch spec.Auth {
-	case providerregistry.AuthCodexOAuth:
-		auth := provider.CodexAuth{Path: path}
-		if err := auth.Check(); err == nil {
-			return "OAuth login present (access checked on request)", true
-		}
-		return "OAuth login unavailable (run Pi /login)", false
-	case providerregistry.AuthAPIKey:
-		configured := r.models.Providers[family].APIKey
-		_, source, err := provider.SelectProviderAPIKey(envMap(), path, family, configured)
-		if err != nil {
-			return "credential unavailable: " + err.Error(), false
-		}
-		return "credential available (" + source + ")", true
-	default:
-		return "credential status unavailable: unsupported auth kind", false
-	}
 }
 
 func continuable(proj *session.Projection) string {

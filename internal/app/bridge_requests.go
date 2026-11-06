@@ -12,7 +12,6 @@ import (
 	"psi/internal/config"
 	"psi/internal/pibridge"
 	"psi/internal/provider"
-	"psi/internal/providerregistry"
 	"psi/internal/session"
 	"psi/internal/skills"
 	"psi/internal/terminal"
@@ -192,11 +191,8 @@ func (h *bridgeHandler) listModels(req pibridge.Request) {
 		return
 	}
 	var models []pibridge.ModelRef
-	for _, providerID := range providerregistry.IDs() {
-		options, _ := h.r.usableModelOptions(providerID)
-		for _, option := range options {
-			models = append(models, pibridge.ModelRef{Provider: providerID, Model: option.Model.ID})
-		}
+	for _, model := range h.r.usableModels() {
+		models = append(models, pibridge.ModelRef{Provider: model.provider, Model: model.option.Model.ID})
 	}
 	sort.Slice(models, func(i, j int) bool {
 		if models[i].Provider == models[j].Provider {

@@ -24,7 +24,6 @@ import (
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/provider"
-	"psi/internal/providerregistry"
 	"psi/internal/skills"
 	"psi/internal/tools"
 )
@@ -447,15 +446,12 @@ func rpcAvailableModels(r *runtime) []rpcModel {
 	if r.models == nil {
 		return nil
 	}
-	for _, providerID := range providerregistry.IDs() {
-		options, _ := r.usableModelOptions(providerID)
-		for _, option := range options {
-			name := option.Model.Name
-			if name == "" {
-				name = option.Model.ID
-			}
-			out = append(out, rpcModel{Provider: providerID, ID: option.Model.ID, Name: name})
+	for _, model := range r.usableModels() {
+		name := model.option.Model.Name
+		if name == "" {
+			name = model.option.Model.ID
 		}
+		out = append(out, rpcModel{Provider: model.provider, ID: model.option.Model.ID, Name: name})
 	}
 	return out
 }
