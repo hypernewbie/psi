@@ -508,11 +508,14 @@ func TestAttachmentReadinessFollowsRootAndModel(t *testing.T) {
 func TestAttachmentDispatchRechecksIdentityAndRoot(t *testing.T) {
 	cases := []struct {
 		name   string
-		mutate func(*runtime, string)
+		mutate func(*bridgeHandler, string)
 		reason string
 	}{
-		{name: "generation moved", mutate: func(r *runtime, _ string) { r.generation++ }, reason: "stale"},
-		{name: "root removed", mutate: func(_ *runtime, root string) {
+		// Age the admission record, not the live generation: bumping the
+		// runtime would rotate the client and drop this very ack on
+		// reconnect, by design. An old record pins the same stale fence.
+		{name: "generation moved", mutate: func(h *bridgeHandler, _ string) { h.prep.gen-- }, reason: "stale"},
+		{name: "root removed", mutate: func(_ *bridgeHandler, root string) {
 			if err := os.RemoveAll(root); err != nil {
 				t.Fatal(err)
 			}
@@ -538,7 +541,7 @@ func TestAttachmentDispatchRechecksIdentityAndRoot(t *testing.T) {
 				t.Fatal("admitted attachment did not occupy the preparation slot")
 			}
 			waitPreparation(t, h)
-			tc.mutate(r, root)
+			tc.mutate(h, root)
 			h.finishPreparation(false)
 
 			ack := attachmentAck(t, f, "41")
