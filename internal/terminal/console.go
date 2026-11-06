@@ -82,6 +82,12 @@ type Console struct {
 	loopRows            []string
 	loopText            string
 	thinking            bool
+	thinkingStream      *MarkdownStream
+	thinkingWidth       int
+	thinkingRows        []string
+	thinkingLive        bool
+	thinkingLabelShown  bool
+	thinkingBlockIndex  int
 	dirty               bool
 	frameDepth          int
 	pendingAppend       strings.Builder
@@ -371,6 +377,20 @@ func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
 		c.markdownStream.SetTheme(snapshot.Theme)
 		c.markdownStream.SetDisplay(snapshot.Display)
 		c.streamRows = c.markdownStream.DisplayTail()
+	}
+	if c.thinkingStream != nil {
+		c.thinkingStream.noColor = snapshot.NoColor
+		c.thinkingStream.SetTheme(snapshot.Theme)
+		c.thinkingStream.SetDisplay(snapshot.Display)
+		c.thinkingStream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+		if snapshot.Display.HideThinking {
+			c.thinkingRows = nil
+			// The redraw renders the ledger block as the label; a later delta
+			// must not append a second one for the same run.
+			c.thinkingLabelShown = true
+		} else {
+			c.thinkingRows = c.thinkingStream.DisplayTail()
+		}
 	}
 	if len(c.completionItems) > 0 {
 		c.renderCompletionRows()
@@ -946,6 +966,10 @@ func (c *Console) Draw() {
 // renderer. Stable rows append to native scrollback; only its active block is
 // retained in the composed tail.
 func (c *Console) MarkdownWrite(p []byte) (int, error) {
+	// One live stream at a time: a text run ends the reasoning run.
+	if err := c.CloseThinking(); err != nil {
+		return 0, err
+	}
 	if c.markdownStream == nil {
 		c.markdownWidth = c.currentWidth()
 		c.markdownStream = NewMarkdownStream(c.markdownWidth, c.presentation.NoColor)
@@ -969,6 +993,84 @@ func (c *Console) MarkdownWrite(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+// ThinkingWrite streams reasoning source into the transcript. The source is
+// always retained in the document ledger so the visibility toggle can reveal
+// it later; hidden runs show only Pi's collapsed label.
+func (c *Console) ThinkingWrite(p []byte) (int, error) {
+	text := Sanitize(string(p))
+	if text == "" {
+		return len(p), nil
+	}
+	// One live stream at a time: a reasoning run ends the text run.
+	if err := c.CloseMarkdown(); err != nil {
+		return 0, err
+	}
+	if c.thinkingStream == nil {
+		c.thinkingWidth = c.currentWidth()
+		c.thinkingStream = NewMarkdownStream(c.thinkingWidth, c.presentation.NoColor)
+		c.thinkingStream.SetTheme(c.presentation.Theme)
+		c.thinkingStream.SetDisplay(c.presentation.Display)
+		c.thinkingStream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+	}
+	stable, _ := c.thinkingStream.Feed(text)
+	appendText := ""
+	if !c.thinkingLive {
+		// Whitespace-only reasoning never becomes a visible block, but it stays
+		// in the stream so the words around it keep their spacing.
+		if strings.TrimSpace(c.thinkingStream.Source()) == "" {
+			return len(p), nil
+		}
+		streamPrefix := c.recordDocumentBlock(DocumentBlock{Kind: DocumentThinking, Streaming: true})
+		c.thinkingBlockIndex = len(c.documentBlocks) - 1
+		c.thinkingLive = true
+		appendText = streamPrefix
+	}
+	c.documentBlocks[c.thinkingBlockIndex].Text = c.thinkingStream.CommittedSource()
+	if c.presentation.Display.HideThinking {
+		c.thinkingRows = nil
+		if !c.thinkingLabelShown {
+			c.thinkingLabelShown = true
+			appendText += rowsAppend(FormatThinkingLabel(c.currentWidth(), c.presentation.NoColor, c.presentation.Display, c.presentation.Theme))
+		}
+	} else {
+		c.thinkingRows = c.thinkingStream.DisplayTail()
+		appendText += markdownRowsAppend(stable)
+	}
+	if err := c.emitComposed(appendText); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// CloseThinking settles the live reasoning run and keeps its source in the
+// ledger.
+func (c *Console) CloseThinking() error {
+	if c.thinkingStream == nil {
+		return c.err
+	}
+	rows := c.thinkingStream.Finish()
+	hadOutput := c.thinkingStream.HasOutput()
+	if c.thinkingLive {
+		block := &c.documentBlocks[c.thinkingBlockIndex]
+		block.Text = c.thinkingStream.TakeFinishedSource()
+		block.Streaming = false
+		if !hadOutput {
+			c.documentBlocks = append(c.documentBlocks[:c.thinkingBlockIndex], c.documentBlocks[c.thinkingBlockIndex+1:]...)
+		}
+	}
+	c.thinkingStream = nil
+	c.thinkingRows = nil
+	c.thinkingLive = false
+	c.thinkingLabelShown = false
+	for _, row := range rows {
+		hadOutput = hadOutput || strings.TrimSpace(Sanitize(row)) != ""
+	}
+	if !hadOutput || c.presentation.Display.HideThinking {
+		return c.emitComposed("")
+	}
+	return c.emitComposed(markdownRowsAppend(rows) + "\r\n")
 }
 
 // CloseMarkdown settles the current assistant message at a tool or run boundary.
@@ -1064,6 +1166,13 @@ func (c *Console) emitComposed(appendText string) error {
 		c.markdownStream.SetWidth(width)
 		c.streamRows = c.markdownStream.DisplayTail()
 	}
+	if c.thinkingStream != nil && c.thinkingWidth != width {
+		c.thinkingWidth = width
+		c.thinkingStream.SetWidth(width)
+		if !c.presentation.Display.HideThinking {
+			c.thinkingRows = c.thinkingStream.DisplayTail()
+		}
+	}
 	var fragmentRows []string
 	hasStream := false
 	if c.markdownStream != nil && len(c.streamRows) > 0 {
@@ -1075,6 +1184,9 @@ func (c *Console) emitComposed(appendText string) error {
 	}
 	if len(c.steeringRows) > 0 {
 		fragmentRows = append(append([]string(nil), c.steeringRows...), fragmentRows...)
+	}
+	if len(c.thinkingRows) > 0 {
+		fragmentRows = append(append([]string(nil), c.thinkingRows...), fragmentRows...)
 	}
 	if c.thinking {
 		fragmentRows = append(append([]string(nil), fragmentRows...), FormatThinkingRow(width, c.presentation.NoColor, c.presentation.Display, c.presentation.Theme))

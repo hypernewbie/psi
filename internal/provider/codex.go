@@ -27,7 +27,7 @@ func NewCodexClient(baseURL, authPath string, maxRetry int, idle time.Duration) 
 	return &CodexClient{Client: base, Auth: &CodexAuth{Path: authPath, HTTP: base.HTTP}}
 }
 
-func (c *CodexClient) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
+func (c *CodexClient) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	body, err := BuildCodexRequest(req)
 	if err != nil {
 		return nil, err
@@ -44,11 +44,11 @@ func (c *CodexClient) Send(ctx context.Context, req Request, onText func(string)
 		if err != nil {
 			return nil, err
 		}
-		return c.sendCodex(ctx, raw, token, account, req, onText)
+		return c.sendCodex(ctx, raw, token, account, req, onDelta)
 	})
 }
 
-func (c *CodexClient) sendCodex(ctx context.Context, raw []byte, token, account string, req Request, onText func(string)) (*Response, error) {
+func (c *CodexClient) sendCodex(ctx context.Context, raw []byte, token, account string, req Request, onDelta func(Delta)) (*Response, error) {
 	endpoint := c.BaseURL
 	if !strings.HasSuffix(endpoint, "/codex/responses") {
 		if strings.HasSuffix(endpoint, "/codex") {
@@ -85,7 +85,7 @@ func (c *CodexClient) sendCodex(ctx context.Context, raw []byte, token, account 
 		resp.Body = structReadCloser{Reader: r, Closer: resp.Body}
 		return nil, classifyHTTPError(resp)
 	}
-	result, err := parseCodexSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	result, err := parseCodexSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(strings.ReplaceAll(err.Error(), token, "[redacted]"))
 		serr := fmt.Errorf("Codex stream interrupted (not retried): %s", message)

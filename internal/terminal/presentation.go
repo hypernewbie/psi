@@ -16,6 +16,7 @@ type ThemeToken string
 
 const (
 	TokenText               ThemeToken = "text"
+	TokenThinkingText       ThemeToken = "thinkingText"
 	TokenMuted              ThemeToken = "muted"
 	TokenBorder             ThemeToken = "border"
 	TokenAccent             ThemeToken = "accent"
@@ -255,6 +256,8 @@ type DisplaySettings struct {
 	EditorPaddingX         int
 	AutocompleteMaxVisible int
 	CodeBlockIndent        string
+	// HideThinking collapses reasoning blocks to Pi's "Thinking..." label.
+	HideThinking bool
 }
 
 func DefaultDisplaySettings() DisplaySettings {

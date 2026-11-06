@@ -8,6 +8,7 @@ type Type string
 
 const (
 	TextDelta         Type = "text_delta"
+	ThinkingDelta     Type = "thinking_delta"
 	AssistantStart    Type = "assistant_start"
 	RunStart          Type = "run_start"
 	RunEnd            Type = "run_end"

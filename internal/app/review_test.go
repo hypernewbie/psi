@@ -133,7 +133,7 @@ replExited:
 
 type pacedFrameProvider struct{ finished chan struct{} }
 
-func (p *pacedFrameProvider) Send(ctx context.Context, _ provider.Request, onText func(string)) (*provider.Response, error) {
+func (p *pacedFrameProvider) Send(ctx context.Context, _ provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	defer close(p.finished)
 	var text strings.Builder
 	for i := 0; i < 10_000; i++ {
@@ -141,7 +141,7 @@ func (p *pacedFrameProvider) Send(ctx context.Context, _ provider.Request, onTex
 			return nil, err
 		}
 		text.WriteByte('a')
-		onText("a")
+		onDelta(provider.Delta{Kind: provider.DeltaText, Text: "a"})
 		if (i+1)%333 == 0 {
 			timer := time.NewTimer(33 * time.Millisecond)
 			select {
@@ -153,7 +153,7 @@ func (p *pacedFrameProvider) Send(ctx context.Context, _ provider.Request, onTex
 		}
 	}
 	text.WriteString("FRAME_DONE")
-	onText("FRAME_DONE")
+	onDelta(provider.Delta{Kind: provider.DeltaText, Text: "FRAME_DONE"})
 	return &provider.Response{Text: text.String(), StopReason: "end_turn", Usage: provider.Usage{Input: 1, Output: 10_001}}, nil
 }
 

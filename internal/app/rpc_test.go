@@ -316,7 +316,7 @@ func newRPCBlockingProvider() *rpcBlockingProvider {
 	return &rpcBlockingProvider{entered: make(chan struct{}), release: make(chan struct{})}
 }
 
-func (b *rpcBlockingProvider) Send(ctx context.Context, req provider.Request, onText func(string)) (*provider.Response, error) {
+func (b *rpcBlockingProvider) Send(ctx context.Context, req provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	b.once.Do(func() { close(b.entered) })
 	select {
 	case <-b.release:

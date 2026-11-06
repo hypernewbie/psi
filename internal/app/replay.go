@@ -52,6 +52,8 @@ func renderTimelineItems(emit func(string) bool, items []session.TranscriptItem,
 			lines = terminal.FormatUserMessageWithDisplay(it.Text, width, noColor, display, palette...)
 		case session.KindAssistant:
 			lines = terminal.FormatAssistantMessageWithDisplay(it.Text, width, noColor, display, palette...)
+		case session.KindThinking:
+			lines = terminal.FormatThinkingBlock(it.Text, width, noColor, display, palette...)
 		case session.KindTool:
 			name, state := it.ToolName, it.ToolState
 			if name == "" {

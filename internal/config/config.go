@@ -94,12 +94,14 @@ type Settings struct {
 	DefaultTools            []string
 	Skills                  []string
 	EnableSkills            bool
-	Compaction              CompactionConfig
-	ShellPath               string
-	ShellPrefix             string
-	HTTPIdleTimeoutMs       int64 // milliseconds; 0 or -1 disables the idle timer
-	MaxRetries              int
-	QuietStartup            bool
+	// HideThinkingBlock hides reasoning blocks behind Pi's collapsed label.
+	HideThinkingBlock bool
+	Compaction        CompactionConfig
+	ShellPath         string
+	ShellPrefix       string
+	HTTPIdleTimeoutMs int64 // milliseconds; 0 or -1 disables the idle timer
+	MaxRetries        int
+	QuietStartup      bool
 	// DefaultProjectTrust is the global trust default: "ask", "always", or
 	// "never". It matches pi's defaultProjectTrust setting.
 	DefaultProjectTrust string
@@ -148,6 +150,7 @@ type rawSettings struct {
 	DefaultTools        []string `json:"defaultTools"`
 	Skills              any      `json:"skills"`
 	EnableSkillCommands *bool    `json:"enableSkillCommands"`
+	HideThinkingBlock   *bool    `json:"hideThinkingBlock"`
 	Compaction          *struct {
 		Enabled          *bool `json:"enabled"`
 		ReserveTokens    *int  `json:"reserveTokens"`
@@ -446,6 +449,10 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 	if raw.EnableSkillCommands != nil {
 		out.EnableSkills = *raw.EnableSkillCommands
 		set("enableSkillCommands", "set")
+	}
+	if raw.HideThinkingBlock != nil {
+		out.HideThinkingBlock = *raw.HideThinkingBlock
+		set("hideThinkingBlock", "set")
 	}
 	if raw.Compaction != nil {
 		if raw.Compaction.Enabled != nil {

@@ -70,6 +70,10 @@ func renderStoreHistoryAtWidthWithDisplayAndColor(store *session.Store, arg stri
 	}
 	var spacing toolBatchSpacing
 	complete, err := store.Timeline(all, n, func(it session.TranscriptItem) bool {
+		// History stays display-only and keeps hiding reasoning.
+		if it.Kind == session.KindThinking {
+			return true
+		}
 		return renderTimelineItems(emit, []session.TranscriptItem{it}, width, display, noColor, &spacing, palette...)
 	})
 	if err != nil || !complete {

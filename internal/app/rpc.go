@@ -165,6 +165,8 @@ func (s *rpcRunner) sink(ev event.Event) {
 				"type": "text_delta", "contentIndex": 0, "delta": ev.Text,
 			},
 		})
+	// event.ThinkingDelta is intentionally ignored: RPC mode carries visible
+	// assistant text only, and reasoning deltas are out of scope.
 	case event.ToolStart:
 		s.sweepDurable()
 		s.mu.Lock()

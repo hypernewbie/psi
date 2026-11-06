@@ -53,6 +53,10 @@ func (r *runtime) settingsEntries() []settingsEntry {
 	if r.settings.QuietStartup {
 		quiet = 1
 	}
+	hideThinkingSelected := 0
+	if r.settings.HideThinkingBlock {
+		hideThinkingSelected = 1
+	}
 	themeValues, themeSelected := r.themeSettingValues()
 	colorMode := r.settings.TerminalTrueColor
 	if colorMode == "" {
@@ -133,6 +137,27 @@ func (r *runtime) settingsEntries() []settingsEntry {
 					return fmt.Errorf("invalid output padding")
 				}
 				r.settings.OutputPad = rows
+				return nil
+			},
+		},
+		{
+			item: terminal.SettingsItem{
+				ID:          "hide-thinking",
+				Label:       "Hide thinking",
+				Description: "Hide thinking blocks in assistant responses.",
+				Values: []terminal.SettingsValue{
+					{Label: "off", Value: false},
+					{Label: "on", Value: true},
+				},
+				Selected: hideThinkingSelected,
+			},
+			persist: []string{"hideThinkingBlock"},
+			apply: func(r *runtime, _ *terminal.Console, value terminal.SettingsValue) error {
+				hidden, ok := value.Value.(bool)
+				if !ok {
+					return fmt.Errorf("invalid hide thinking value")
+				}
+				r.settings.HideThinkingBlock = hidden
 				return nil
 			},
 		},

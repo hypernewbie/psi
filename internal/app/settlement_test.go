@@ -19,9 +19,9 @@ type failingPersistProvider struct {
 	produced chan struct{}
 }
 
-func (p *failingPersistProvider) Send(_ context.Context, _ provider.Request, onText func(string)) (*provider.Response, error) {
+func (p *failingPersistProvider) Send(_ context.Context, _ provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	text := "visible before write failure"
-	onText(text)
+	onDelta(provider.Delta{Kind: provider.DeltaText, Text: text})
 	p.store.FailWritesForTest(errors.New("injected response append failure"))
 	close(p.produced)
 	return &provider.Response{Text: text, StopReason: "stop"}, nil

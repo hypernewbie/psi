@@ -206,8 +206,35 @@ func validateProviderAPI(model ModelMeta, api string) error {
 	return nil
 }
 
-// Provider streams text deltas and returns one completed message.
+// DeltaKind identifies the content of a streamed fragment.
+type DeltaKind string
+
+const (
+	DeltaText     DeltaKind = "text"
+	DeltaThinking DeltaKind = "thinking"
+)
+
+// Delta is one streamed fragment. Text and thinking stay separate kinds so
+// the transcript can style and store them differently.
+type Delta struct {
+	Kind DeltaKind
+	Text string
+}
+
+// TextOnly adapts a text-only callback to the delta callback.
+func TextOnly(fn func(string)) func(Delta) {
+	if fn == nil {
+		return nil
+	}
+	return func(d Delta) {
+		if d.Kind == DeltaText {
+			fn(d.Text)
+		}
+	}
+}
+
+// Provider streams content deltas and returns one completed message.
 type Provider interface {
-	Send(ctx context.Context, req Request, onText func(string)) (*Response, error)
+	Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error)
 	CloseIdle()
 }

@@ -88,7 +88,7 @@ func HotkeysText() string {
 		"  Enter submit · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows (edges browse history)",
 		"  Ctrl+P/N history · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
 		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
-		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+L select model · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+L select model · Ctrl+T hide/show reasoning · Ctrl+C cancels run (idle: clear draft, empty exits)",
 		"  Ctrl+D delete/exit · paste literal, no submit",
 	}, "\n")
 }

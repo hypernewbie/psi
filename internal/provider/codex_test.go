@@ -32,6 +32,25 @@ func codexEvent(typ string, fields map[string]any) string {
 	return "event: " + typ + "\r\ndata: " + string(data) + "\r\n\r\n"
 }
 
+// TestCodexSummaryPartDoneOnMessageItemIsRejected covers malformed input:
+// a reasoning summary part boundary on a message item must not inject a
+// thinking delta into a text run.
+func TestCodexSummaryPartDoneOnMessageItemIsRejected(t *testing.T) {
+	item := map[string]any{"type": "message", "id": "msg_test", "phase": "final_answer", "content": []any{}}
+	stream := codexEvent("response.output_item.added", map[string]any{"output_index": 0, "item": item}) +
+		codexEvent("response.reasoning_summary_part.done", map[string]any{"output_index": 0})
+	var deltas []Delta
+	_, err := parseCodexSSE(strings.NewReader(stream), 0, context.Background(), func(d Delta) {
+		deltas = append(deltas, d)
+	}, Request{Model: testCodexModel()})
+	if err == nil {
+		t.Fatal("expected an error for a reasoning summary boundary on a message item")
+	}
+	if len(deltas) != 0 {
+		t.Fatalf("deltas = %v, want none", deltas)
+	}
+}
+
 func codexTextStream(text string) string {
 	item := map[string]any{"type": "message", "id": "msg_test", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": text}}}
 	return codexEvent("response.output_item.added", map[string]any{"output_index": 0, "item": item}) +
@@ -142,7 +161,7 @@ func TestCodexHTTPHeadersUsageAndSubscriptionOnly(t *testing.T) {
 	defer c.CloseIdle()
 	c.SessionID = "test-session"
 	var text strings.Builder
-	resp, err := c.Send(context.Background(), Request{Model: testCodexModel(), Thinking: "xhigh"}, func(s string) { text.WriteString(s) })
+	resp, err := c.Send(context.Background(), Request{Model: testCodexModel(), Thinking: "xhigh"}, TextOnly(func(s string) { text.WriteString(s) }))
 	if err != nil {
 		t.Fatal(err)
 	}

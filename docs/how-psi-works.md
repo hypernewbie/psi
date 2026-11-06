@@ -19,6 +19,11 @@ calls. psi records the response, runs each tool call, and records the results.
 That completes one turn. If the tool results require another model request, the
 run continues with another turn. Otherwise the run ends.
 
+Streamed reasoning is shown as its own italic block before the answer. It is
+kept in the session file, so replay and resume show the same blocks. `Ctrl+T`
+collapses the block to one `Thinking...` label; the reasoning stays in the
+file either way.
+
 Tool calls in one assistant response run concurrently. `write` and `edit` share
 one per-file queue so mutations serialize; `read` and `bash` do not queue.
 Results settle in call order behind a barrier the next request cannot cross.

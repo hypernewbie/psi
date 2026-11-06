@@ -181,10 +181,16 @@ func renderMarkdownCore(source string, width int, noColor bool, palette ...*pith
 }
 
 func renderMarkdownCoreWithDisplay(source string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
+	return renderMarkdownCoreWithStyle(source, width, noColor, display, mdStyle{token: TokenText}, palette...)
+}
+
+// renderMarkdownCoreWithStyle renders markdown with a base text style. Code
+// fences and code blocks keep their own tokens; only the base text changes.
+func renderMarkdownCoreWithStyle(source string, width int, noColor bool, display DisplaySettings, style mdStyle, palette ...*pitheme.Theme) []string {
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
-	rows := renderMarkdownRowsWithDisplay(source, width, mdStyle{token: TokenText}, display)
+	rows := renderMarkdownRowsWithDisplay(source, width, style, display)
 	var selected *pitheme.Theme
 	if len(palette) > 0 {
 		selected = palette[0]

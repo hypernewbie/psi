@@ -67,7 +67,7 @@ func TestPartialStreamIsNotRetried(t *testing.T) {
 	client := NewClient(srv.URL+"/v1", "test-key", 3, time.Second)
 	defer client.CloseIdle()
 	var text strings.Builder
-	_, err := client.Send(context.Background(), Request{Model: ModelMeta{ID: "m"}, Thinking: "off"}, func(s string) { text.WriteString(s) })
+	_, err := client.Send(context.Background(), Request{Model: ModelMeta{ID: "m"}, Thinking: "off"}, TextOnly(func(s string) { text.WriteString(s) }))
 	if err == nil || calls.Load() != 1 || text.String() != "partial" {
 		t.Fatalf("partial replay: calls=%d text=%q err=%v", calls.Load(), text.String(), err)
 	}

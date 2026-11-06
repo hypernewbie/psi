@@ -55,14 +55,14 @@ func TestSettingsCommandRejectsArguments(t *testing.T) {
 	}
 }
 
-func TestSettingsPickerHasEightRows(t *testing.T) {
+func TestSettingsPickerHasNineRows(t *testing.T) {
 	r := testSettingsRuntime(t)
 	picker := r.newSettingsPicker()
 	labels := make([]string, len(picker.Items))
 	for i, item := range picker.Items {
 		labels[i] = item.Label
 	}
-	want := []string{"Auto-compact", "Editor padding", "Output padding", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode"}
+	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode"}
 	if strings.Join(labels, "|") != strings.Join(want, "|") {
 		t.Fatalf("labels = %v", labels)
 	}

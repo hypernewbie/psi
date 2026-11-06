@@ -23,7 +23,7 @@ func NewCompletionsClient(baseURL, apiKey string, maxRetry int, idle time.Durati
 	return &CompletionsClient{Client: base}
 }
 
-func (c *CompletionsClient) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
+func (c *CompletionsClient) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("model endpoint is required for openai-completions")
 	}
@@ -39,11 +39,11 @@ func (c *CompletionsClient) Send(ctx context.Context, req Request, onText func(s
 		return nil, fmt.Errorf("cannot encode OpenAI Completions request")
 	}
 	return sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) {
-		return c.sendCompletions(ctx, raw, req, onText)
+		return c.sendCompletions(ctx, raw, req, onDelta)
 	})
 }
 
-func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req Request, onText func(string)) (*Response, error) {
+func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req Request, onDelta func(Delta)) (*Response, error) {
 	endpoint := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
@@ -72,7 +72,7 @@ func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req
 		resp.Body = structReadCloser{Reader: reader, Closer: resp.Body}
 		return nil, classifyHTTPError(resp)
 	}
-	result, err := parseCompletionsSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	result, err := parseCompletionsSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(err.Error())
 		wrapped := fmt.Errorf("OpenAI Completions stream interrupted (not retried): %s", message)
@@ -107,7 +107,7 @@ type completionStreamPart struct {
 	tool  *completionToolState
 }
 
-func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
+func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, onDelta func(Delta), req Request) (*Response, error) {
 	sr := newStreamReader(ctx, r, idle)
 	defer sr.close()
 	scanner := bufio.NewScanner(io.LimitReader(sr, maxStreamBytes+1))
@@ -229,6 +229,7 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 		if choice.Delta == nil {
 			return nil
 		}
+		thinkingDelta := ""
 		for _, field := range []string{"reasoning_content", "reasoning", "reasoning_text"} {
 			raw, ok := choice.Delta[field]
 			if !ok || len(raw) == 0 || string(raw) == "null" {
@@ -250,6 +251,7 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 				parts = append(parts, completionStreamPart{kind: "thinking"})
 			}
 			thinking.WriteString(delta)
+			thinkingDelta = delta
 			break
 		}
 		if raw, ok := choice.Delta["reasoning_details"]; ok {
@@ -264,9 +266,19 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 						thinkingStarted = true
 						parts = append(parts, completionStreamPart{kind: "thinking"})
 					}
+					if thinkingDelta == "" {
+						detailText, _ := reasoningString(detail, "text")
+						if detailText == "" {
+							detailText, _ = reasoningString(detail, "summary")
+						}
+						thinkingDelta = detailText
+					}
 					reasoningDetails.append(detail)
 				}
 			}
+		}
+		if thinkingDelta != "" && onDelta != nil {
+			onDelta(Delta{Kind: DeltaThinking, Text: thinkingDelta})
 		}
 		if raw, ok := choice.Delta["content"]; ok && len(raw) > 0 && string(raw) != "null" {
 			var delta string
@@ -279,8 +291,8 @@ func parseCompletionsSSE(r io.Reader, idle time.Duration, ctx context.Context, o
 					parts = append(parts, completionStreamPart{kind: "text"})
 				}
 				text.WriteString(delta)
-				if onText != nil {
-					onText(delta)
+				if onDelta != nil {
+					onDelta(Delta{Kind: DeltaText, Text: delta})
 				}
 			}
 		}

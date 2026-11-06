@@ -54,8 +54,8 @@ Psi does not support these Pi options:
 
 Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/picker selection),
 `Ctrl+P/N` history, five-row slash completion, `Ctrl+L` model picker, `Shift+Tab` thinking cycle,
-`Ctrl+C` cancels a picker/run (idle clears, empty exits), `Ctrl+D` delete/exit, paste literal,
-`Escape` dismisses completion or cancels a picker.
+`Ctrl+T` hide/show reasoning, `Ctrl+C` cancels a picker/run (idle clears, empty exits),
+`Ctrl+D` delete/exit, paste literal, `Escape` dismisses completion or cancels a picker.
 
 Cancel a run, then keep typing: `Ctrl+C` stops provider/tool/compact work with
 settled cleanup and truthful transcript; next prompt appears after persistence.

@@ -40,6 +40,7 @@ func presentationDisplay(settings config.Settings) terminal.DisplaySettings {
 		OutputPad: settings.OutputPad, EditorPaddingX: settings.EditorPaddingX,
 		AutocompleteMaxVisible: settings.AutocompleteMaxVisible,
 		CodeBlockIndent:        settings.MarkdownCodeBlockIndent,
+		HideThinking:           settings.HideThinkingBlock,
 	}
 }
 

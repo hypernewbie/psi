@@ -65,7 +65,7 @@ func (e *ProviderError) Error() string {
 	return fmt.Sprintf("%s (status %d): %s", e.Kind, e.Status, e.Message)
 }
 
-func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
+func (c *Client) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	body, err := BuildAnthropicRequest(req)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func (c *Client) Send(ctx context.Context, req Request, onText func(string)) (*R
 	if err != nil {
 		return nil, err
 	}
-	result, err := sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) { return c.doOnce(ctx, raw, onText, req) })
+	result, err := sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) { return c.doOnce(ctx, raw, onDelta, req) })
 	if err == nil && result != nil {
 		result.ThinkingLevel = ""
 		if req.Model.AdaptiveThinking && req.Model.MidConvoEffort {
@@ -138,7 +138,7 @@ func sendWithRetryObserved(ctx context.Context, maxRetry int, observer func(Retr
 	}
 }
 
-func (c *Client) doOnce(ctx context.Context, raw []byte, onText func(string), req Request) (*Response, error) {
+func (c *Client) doOnce(ctx context.Context, raw []byte, onDelta func(Delta), req Request) (*Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/messages", bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("invalid provider endpoint")
@@ -164,7 +164,7 @@ func (c *Client) doOnce(ctx context.Context, raw []byte, onText func(string), re
 		resp.Body = structReadCloser{Reader: r, Closer: resp.Body}
 		return nil, classifyHTTPError(resp)
 	}
-	result, err := parseSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	result, err := parseSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		// Once HTTP streaming starts, never invisibly replay an incomplete turn.
 		// Deliberately do not wrap a retryable ProviderError here.
@@ -369,7 +369,7 @@ func (s *streamReader) Read(p []byte) (int, error) {
 
 const maxStreamBytes = 32 * 1024 * 1024
 
-func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
+func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onDelta func(Delta), req Request) (*Response, error) {
 	sr := newStreamReader(ctx, r, idle)
 	defer sr.close()
 	br := bufio.NewReader(sr)
@@ -452,12 +452,15 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 			switch b.Type {
 			case "text":
 				pb.text.WriteString(b.Text)
-				if b.Text != "" && onText != nil {
-					onText(b.Text)
+				if b.Text != "" && onDelta != nil {
+					onDelta(Delta{Kind: DeltaText, Text: b.Text})
 				}
 			case "thinking":
 				pb.thinking.WriteString(b.Thinking)
 				pb.sig.WriteString(b.Signature)
+				if b.Thinking != "" && onDelta != nil {
+					onDelta(Delta{Kind: DeltaThinking, Text: b.Thinking})
+				}
 			case "redacted_thinking":
 				pb.block.Type, pb.block.Redacted, pb.thinking, pb.sig = "thinking", true, strings.Builder{}, strings.Builder{}
 				pb.sig.WriteString(b.Data)
@@ -486,14 +489,17 @@ func parseSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(
 					return fmt.Errorf("text delta in non-text block")
 				}
 				pb.text.WriteString(p.Delta.Text)
-				if onText != nil {
-					onText(p.Delta.Text)
+				if onDelta != nil {
+					onDelta(Delta{Kind: DeltaText, Text: p.Delta.Text})
 				}
 			case "thinking_delta":
 				if pb.block.Type != "thinking" {
 					return fmt.Errorf("thinking delta in non-thinking block")
 				}
 				pb.thinking.WriteString(p.Delta.Thinking)
+				if p.Delta.Thinking != "" && onDelta != nil {
+					onDelta(Delta{Kind: DeltaThinking, Text: p.Delta.Thinking})
+				}
 			case "signature_delta":
 				if pb.block.Type != "thinking" {
 					return fmt.Errorf("signature delta in non-thinking block")

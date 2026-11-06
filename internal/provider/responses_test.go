@@ -243,7 +243,7 @@ func TestResponsesLoopbackPathHeadersStreamAndUsage(t *testing.T) {
 	model := responsesTestModel("synthetic-responses")
 	model.BaseURL = client.BaseURL
 	var streamed strings.Builder
-	response, err := client.Send(context.Background(), Request{Model: model, System: "rules", Thinking: "off", Tools: []ToolDef{{Name: "read", Schema: map[string]any{"type": "object", "properties": map[string]any{}}}}, Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "read file"}}}}}, func(delta string) { streamed.WriteString(delta) })
+	response, err := client.Send(context.Background(), Request{Model: model, System: "rules", Thinking: "off", Tools: []ToolDef{{Name: "read", Schema: map[string]any{"type": "object", "properties": map[string]any{}}}}, Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "read file"}}}}}, TextOnly(func(delta string) { streamed.WriteString(delta) }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,12 +371,12 @@ func TestResponsesInterruptedStreamIsNeverRetried(t *testing.T) {
 	done := make(chan error, 1)
 	deltas := make(chan string, 1)
 	go func() {
-		_, err := client.Send(ctx, Request{Model: responsesTestModel("model"), Thinking: "off"}, func(delta string) {
+		_, err := client.Send(ctx, Request{Model: responsesTestModel("model"), Thinking: "off"}, TextOnly(func(delta string) {
 			select {
 			case deltas <- delta:
 			default:
 			}
-		})
+		}))
 		done <- err
 	}()
 	<-started

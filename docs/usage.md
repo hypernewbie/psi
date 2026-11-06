@@ -65,6 +65,18 @@ Startup selection uses `--provider`, `--model`, and `--thinking`; see
 [Command line](cli.md). Model IDs come from the bundled catalog and Pi's local
 cache; psi never refreshes it over the network.
 
+## Read or hide reasoning
+
+When the model streams reasoning, psi shows it as an italic block before the
+answer. `Ctrl+T` hides the block behind one `Thinking...` label and shows it
+again on the next press. The toggle also works during a run and is saved as
+`hideThinkingBlock` in the agent `settings.json`, so the choice survives a
+restart. `/settings` lists the same switch under `Hide thinking`.
+
+Reasoning stays in the session file, so a resumed or replayed session shows the
+same blocks in the same order. A run that ends early keeps the reasoning that
+arrived before the interruption.
+
 ## Continue or start over
 
 Sessions are saved automatically unless `--no-session` is used.

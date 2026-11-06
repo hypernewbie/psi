@@ -91,7 +91,7 @@ func TestMistralToolCallIDsAreNineAlphanumerics(t *testing.T) {
 		{Role: "user", Content: []Block{{Type: "text", Text: "continue"}}},
 	}
 	var streamed strings.Builder
-	response, err := client.Send(context.Background(), Request{Model: mistralTestModel(), Thinking: "off", Messages: history}, func(delta string) { streamed.WriteString(delta) })
+	response, err := client.Send(context.Background(), Request{Model: mistralTestModel(), Thinking: "off", Messages: history}, TextOnly(func(delta string) { streamed.WriteString(delta) }))
 	if err != nil {
 		t.Fatal(err)
 	}

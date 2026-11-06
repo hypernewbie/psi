@@ -62,7 +62,7 @@ func TestGoogleClientRequestPathHeadersStreamAndUsage(t *testing.T) {
 	model.ThinkingLevelMap = map[string]*string{"off": nil, "minimal": completionString("minimal"), "low": completionString("low")}
 	client := NewGoogleClient(model.BaseURL, "synthetic-google-key", 0, time.Second)
 	var streamed strings.Builder
-	resp, err := client.Send(context.Background(), Request{Model: model, System: "system", Thinking: "off", Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}}, func(delta string) { streamed.WriteString(delta) })
+	resp, err := client.Send(context.Background(), Request{Model: model, System: "system", Thinking: "off", Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}}, TextOnly(func(delta string) { streamed.WriteString(delta) }))
 	client.CloseIdle()
 	if err != nil {
 		t.Fatal(err)

@@ -23,7 +23,7 @@ func NewMistralClient(baseURL, apiKey string, maxRetry int, idle time.Duration) 
 	return &MistralClient{Client: base}
 }
 
-func (c *MistralClient) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
+func (c *MistralClient) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("model endpoint is required for mistral-conversations")
 	}
@@ -42,7 +42,7 @@ func (c *MistralClient) Send(ctx context.Context, req Request, onText func(strin
 		return nil, fmt.Errorf("cannot encode Mistral request")
 	}
 	return sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) {
-		return c.sendMistral(ctx, raw, req, onText)
+		return c.sendMistral(ctx, raw, req, onDelta)
 	})
 }
 
@@ -95,7 +95,7 @@ func toMistralWireMessages(messages []any) []any {
 	return out
 }
 
-func (c *MistralClient) sendMistral(ctx context.Context, raw []byte, req Request, onText func(string)) (*Response, error) {
+func (c *MistralClient) sendMistral(ctx context.Context, raw []byte, req Request, onDelta func(Delta)) (*Response, error) {
 	endpoint := strings.TrimRight(c.BaseURL, "/") + "/v1/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
@@ -121,7 +121,7 @@ func (c *MistralClient) sendMistral(ctx context.Context, raw []byte, req Request
 		resp.Body = structReadCloser{Reader: reader, Closer: resp.Body}
 		return nil, classifyHTTPError(resp)
 	}
-	result, err := parseMistralSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	result, err := parseMistralSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(err.Error())
 		wrapped := fmt.Errorf("Mistral stream interrupted (not retried): %s", message)
@@ -139,7 +139,7 @@ type mistralStreamPart struct {
 	tool *completionToolState
 }
 
-func parseMistralSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
+func parseMistralSSE(r io.Reader, idle time.Duration, ctx context.Context, onDelta func(Delta), req Request) (*Response, error) {
 	sr := newStreamReader(ctx, r, idle)
 	defer sr.close()
 	scanner := bufio.NewScanner(io.LimitReader(sr, maxStreamBytes+1))
@@ -189,8 +189,8 @@ func parseMistralSSE(r io.Reader, idle time.Duration, ctx context.Context, onTex
 			parts = append(parts, &mistralStreamPart{kind: "text"})
 		}
 		parts[len(parts)-1].text.WriteString(delta)
-		if onText != nil {
-			onText(delta)
+		if onDelta != nil {
+			onDelta(Delta{Kind: DeltaText, Text: delta})
 		}
 	}
 	appendThinking := func(delta string) {
@@ -201,6 +201,9 @@ func parseMistralSSE(r io.Reader, idle time.Duration, ctx context.Context, onTex
 			parts = append(parts, &mistralStreamPart{kind: "thinking"})
 		}
 		parts[len(parts)-1].text.WriteString(delta)
+		if onDelta != nil {
+			onDelta(Delta{Kind: DeltaThinking, Text: delta})
+		}
 	}
 
 	consume := func() error {

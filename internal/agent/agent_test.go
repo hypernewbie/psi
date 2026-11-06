@@ -399,7 +399,7 @@ type blockingProvider struct {
 	release chan struct{}
 }
 
-func (b *blockingProvider) Send(ctx context.Context, req provider.Request, onText func(string)) (*provider.Response, error) {
+func (b *blockingProvider) Send(ctx context.Context, req provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	select {
 	case b.entered <- struct{}{}:
 	default:
@@ -409,7 +409,7 @@ func (b *blockingProvider) Send(ctx context.Context, req provider.Request, onTex
 		return nil, ctx.Err()
 	case <-b.release:
 	}
-	return b.Provider.Send(ctx, req, onText)
+	return b.Provider.Send(ctx, req, onDelta)
 }
 
 func (b *blockingProvider) CloseIdle() {

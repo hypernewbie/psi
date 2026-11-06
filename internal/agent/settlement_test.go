@@ -77,9 +77,9 @@ type failResponsePersistProvider struct {
 	store *session.Store
 }
 
-func (p failResponsePersistProvider) Send(_ context.Context, _ provider.Request, onText func(string)) (*provider.Response, error) {
+func (p failResponsePersistProvider) Send(_ context.Context, _ provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	text := "visible but not saved"
-	onText(text)
+	onDelta(provider.Delta{Kind: provider.DeltaText, Text: text})
 	p.store.FailWritesForTest(errors.New("injected assistant append failure"))
 	return &provider.Response{Text: text, StopReason: "stop"}, nil
 }

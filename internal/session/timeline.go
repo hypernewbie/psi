@@ -14,6 +14,7 @@ type TranscriptKind string
 const (
 	KindUser            TranscriptKind = "user"
 	KindAssistant       TranscriptKind = "assistant"
+	KindThinking        TranscriptKind = "thinking"
 	KindTool            TranscriptKind = "tool"
 	KindCompaction      TranscriptKind = "compaction"
 	KindBranchSummary   TranscriptKind = "branch_summary"
@@ -210,22 +211,45 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 			add(e, KindUser, text)
 		case m.Assistant != nil:
 			var text strings.Builder
+			var thinking strings.Builder
 			flush := func() {
 				if text.Len() > 0 {
 					add(e, KindAssistant, text.String())
 					text.Reset()
 				}
 			}
+			flushThinking := func() {
+				if thinking.Len() > 0 {
+					add(e, KindThinking, thinking.String())
+					thinking.Reset()
+				}
+			}
 			for _, b := range m.Assistant.Content {
+				if b.Thinking != nil {
+					run := strings.TrimSpace(b.Thinking.Thinking)
+					if run == "" {
+						continue
+					}
+					// A reasoning run keeps its place in the message order.
+					flush()
+					if thinking.Len() > 0 {
+						thinking.WriteString("\n\n")
+					}
+					thinking.WriteString(run)
+					continue
+				}
 				if b.Text != nil {
+					flushThinking()
 					text.WriteString(b.Text.Text)
 				}
 				if b.Call != nil {
+					flushThinking()
 					flush()
 					t := tools[b.Call.ID]
 					out = append(out, TranscriptItem{Kind: KindTool, Text: t.name + ": " + t.state, ToolName: t.name, ToolState: t.state, ToolSummary: t.summary, SourceID: e.ID(), BlockIDs: []string{b.Call.ID}, Note: t.note, Historical: historical})
 				}
 			}
+			flushThinking()
 			flush()
 		case m.ToolResult != nil:
 			t := tools[m.ToolResult.ToolCallID]

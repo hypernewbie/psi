@@ -133,6 +133,22 @@ func (w StreamOutput) CloseStream() error {
 	return w.Console.CloseMarkdown()
 }
 
+type ThinkingOutput struct{ Console *Console }
+
+func (w ThinkingOutput) Write(p []byte) (int, error) {
+	if w.Console == nil {
+		return 0, fmt.Errorf("thinking output has no console")
+	}
+	return w.Console.ThinkingWrite(p)
+}
+
+func (w ThinkingOutput) CloseStream() error {
+	if w.Console == nil {
+		return fmt.Errorf("thinking output has no console")
+	}
+	return w.Console.CloseThinking()
+}
+
 // Streamer buffers deltas until the event loop's frame timer or an operation
 // boundary. It shares the console writer and bounds pending output by bytes.
 type Streamer struct {

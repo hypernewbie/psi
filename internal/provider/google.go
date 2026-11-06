@@ -26,7 +26,7 @@ func NewGoogleClient(baseURL, apiKey string, maxRetry int, idle time.Duration) *
 	return &GoogleClient{Client: base}
 }
 
-func (c *GoogleClient) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
+func (c *GoogleClient) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	baseURL := c.BaseURL
 	if baseURL == "" {
 		baseURL = providerregistry.DefaultEndpoint(req.Model.ProviderID(), "google-generative-ai")
@@ -49,7 +49,7 @@ func (c *GoogleClient) Send(ctx context.Context, req Request, onText func(string
 		return nil, fmt.Errorf("cannot encode Google Generative AI request")
 	}
 	return sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) {
-		return c.sendGoogle(ctx, baseURL, raw, req, onText)
+		return c.sendGoogle(ctx, baseURL, raw, req, onDelta)
 	})
 }
 
@@ -62,7 +62,7 @@ func hasGoogleAPIKeyHeader(headers map[string]string) bool {
 	return false
 }
 
-func (c *GoogleClient) sendGoogle(ctx context.Context, baseURL string, body []byte, req Request, onText func(string)) (*Response, error) {
+func (c *GoogleClient) sendGoogle(ctx context.Context, baseURL string, body []byte, req Request, onDelta func(Delta)) (*Response, error) {
 	endpoint, err := googleStreamEndpoint(baseURL, req.Model.ID)
 	if err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (c *GoogleClient) sendGoogle(ctx context.Context, baseURL string, body []by
 		resp.Body = structReadCloser{Reader: reader, Closer: resp.Body}
 		return nil, classifyHTTPError(resp)
 	}
-	result, err := parseGoogleSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	result, err := parseGoogleSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(err.Error())
 		wrapped := fmt.Errorf("Google Generative AI stream interrupted (not retried): %s", message)
@@ -135,7 +135,7 @@ type googleSSEChunk struct {
 	} `json:"usageMetadata"`
 }
 
-func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
+func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onDelta func(Delta), req Request) (*Response, error) {
 	reader := newStreamReader(ctx, r, idle)
 	defer reader.close()
 	scanner := bufio.NewScanner(io.LimitReader(reader, maxStreamBytes+1))
@@ -252,10 +252,13 @@ func parseGoogleSSE(r io.Reader, idle time.Duration, ctx context.Context, onText
 				}
 				if thought {
 					textBuffer.append(response, "thinking", text, signature)
+					if text != "" && onDelta != nil {
+						onDelta(Delta{Kind: DeltaThinking, Text: text})
+					}
 				} else {
 					textBuffer.append(response, "text", text, signature)
-					if text != "" && onText != nil {
-						onText(text)
+					if text != "" && onDelta != nil {
+						onDelta(Delta{Kind: DeltaText, Text: text})
 					}
 				}
 			}

@@ -40,7 +40,7 @@ func TestParseSSEFragmented(t *testing.T) {
 		"event: message_stop\ndata: {}\n\n",
 	}
 	var deltas []string
-	resp, err := parseSSE(sseStream(chunks), 5*time.Second, context.Background(), func(s string) { deltas = append(deltas, s) }, Request{Model: ModelMeta{ID: "claude-x"}})
+	resp, err := parseSSE(sseStream(chunks), 5*time.Second, context.Background(), TextOnly(func(s string) { deltas = append(deltas, s) }), Request{Model: ModelMeta{ID: "claude-x"}})
 	if err != nil {
 		t.Fatal(err)
 	}

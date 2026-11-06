@@ -126,7 +126,7 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 type observedProvider struct{ closed int }
 
 func (p *observedProvider) CloseIdle() { p.closed++ }
-func (p *observedProvider) Send(context.Context, provider.Request, func(string)) (*provider.Response, error) {
+func (p *observedProvider) Send(context.Context, provider.Request, func(provider.Delta)) (*provider.Response, error) {
 	panic("no provider call permitted")
 }
 

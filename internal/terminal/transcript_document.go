@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"psi/internal/event"
+	pitheme "psi/internal/theme"
 )
 
 // DocumentKind identifies display-safe source retained for resize relayout.
@@ -13,6 +14,7 @@ const (
 	DocumentRaw       DocumentKind = "raw"
 	DocumentUser      DocumentKind = "user"
 	DocumentAssistant DocumentKind = "assistant"
+	DocumentThinking  DocumentKind = "thinking"
 	DocumentTool      DocumentKind = "tool"
 	DocumentMetadata  DocumentKind = "metadata"
 	DocumentBoundary  DocumentKind = "boundary"
@@ -47,6 +49,16 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 			return RenderMarkdownWithDisplay(block.Text, width, noColor, display, theme)
 		}
 		return FormatAssistantMessageWithDisplay(block.Text, width, noColor, display, theme)
+	case DocumentThinking:
+		if block.Streaming {
+			// A live run exists only after non-whitespace reasoning arrived.
+			// Hidden mode has no fragment tail, so the ledger owns the label.
+			if display.HideThinking {
+				return FormatThinkingLabel(width, noColor, display, theme)
+			}
+			return RenderMarkdownWithDisplay(block.Text, width, noColor, display, theme)
+		}
+		return FormatThinkingBlock(block.Text, width, noColor, display, theme)
 	case DocumentTool:
 		name, state := block.ToolName, block.ToolState
 		if name == "" {
@@ -70,6 +82,39 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 	default:
 		return nil
 	}
+}
+
+// FormatThinkingLabel renders Pi's collapsed reasoning label.
+func FormatThinkingLabel(width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
+	row := StyledRow{Spans: []StyledSpan{{Text: display.transcriptIndent() + "Thinking...", Token: TokenThinkingText, Italic: true}}}
+	var selected *pitheme.Theme
+	if len(palette) > 0 {
+		selected = palette[0]
+	}
+	return []string{row.SerializeWithTheme(selected, colorDisabled(PresentationSnapshot{NoColor: noColor}))}
+}
+
+// FormatThinkingBlock renders one reasoning run. An empty run renders
+// nothing, like Pi. A hidden run collapses to the label.
+func FormatThinkingBlock(source string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
+	if strings.TrimSpace(source) == "" {
+		return nil
+	}
+	if display.HideThinking {
+		return FormatThinkingLabel(width, noColor, display, palette...)
+	}
+	stream := NewMarkdownStream(max(1, width), noColor)
+	stream.SetDisplay(display)
+	stream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+	if len(palette) > 0 {
+		stream.SetTheme(palette[0])
+	}
+	stable, _ := stream.Feed(source)
+	rows := append(stable, stream.Finish()...)
+	if len(rows) > 0 {
+		rows = append(rows, "")
+	}
+	return rows
 }
 
 // FormatDocument lays out the complete displayed ledger. Tool rows stay grouped

@@ -44,6 +44,7 @@ never change `--docs`; it reads embedded bytes only.
 | Queues | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`, as in Pi |
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
 | Display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | bounded inline spacing and code-block indent |
+| Reasoning display | `hideThinkingBlock` | `true` collapses reasoning blocks to one `Thinking...` label; `Ctrl+T` toggles and saves it |
 | Shell | `shellPath`, `shellCommandPrefix` | `shellPath` selects the shell; `shellCommandPrefix` prepends commands; project values require consent |
 | Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries` | default idle timeout 300000 ms; 0 disables it; at most 10 retries |
 | Instructions | user/project files | see below |

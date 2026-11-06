@@ -26,14 +26,14 @@ func TestContextLimitRecovery(t *testing.T) {
 			requests, toolRuns := 0, 0
 			var phases []event.Event
 			limit := &provider.ProviderError{Kind: provider.ErrContextLimit, Status: 400, Message: "synthetic context limit"}
-			fake := reviewProvider(func(_ context.Context, req provider.Request, text func(string)) (*provider.Response, error) {
+			fake := reviewProvider(func(_ context.Context, req provider.Request, delta func(provider.Delta)) (*provider.Response, error) {
 				requests++
 				switch requests {
 				case 1:
 					return &provider.Response{ToolCalls: []provider.Block{{Type: "toolCall", ID: "once", Name: "write", Arguments: map[string]any{"path": "once.txt", "content": "once"}}}}, nil
 				case 2:
 					if mode == "partial response" {
-						text("visible partial")
+						delta(provider.Delta{Kind: provider.DeltaText, Text: "visible partial"})
 					}
 					return nil, limit
 				case 3, 4:

@@ -26,9 +26,9 @@ func TestFakeProvider(t *testing.T) {
 
 		var streamed strings.Builder
 		req := Request{Model: ModelMeta{ID: "fake-model"}}
-		resp, err := fake.Send(context.Background(), req, func(s string) {
+		resp, err := fake.Send(context.Background(), req, TextOnly(func(s string) {
 			streamed.WriteString(s)
-		})
+		}))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -88,12 +88,12 @@ func TestFakeProvider(t *testing.T) {
 			TextDeltas: [][]string{{"delta1", "delta2", "delta3"}},
 		}
 		count := 0
-		_, err := fake.Send(ctx, Request{}, func(s string) {
+		_, err := fake.Send(ctx, Request{}, TextOnly(func(s string) {
 			count++
 			if count == 1 {
 				cancel()
 			}
-		})
+		}))
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled during deltas, got %v", err)
 		}
@@ -189,9 +189,9 @@ func TestFakeProvider(t *testing.T) {
 						Model: ModelMeta{ID: fmt.Sprintf("model-%d-%d", writerID, i)},
 					}
 					var streamed strings.Builder
-					resp, err := fake.Send(context.Background(), req, func(s string) {
+					resp, err := fake.Send(context.Background(), req, TextOnly(func(s string) {
 						streamed.WriteString(s)
-					})
+					}))
 					if err != nil || resp == nil {
 						t.Errorf("Send failed for writer %d, iter %d: %v", writerID, i, err)
 					}

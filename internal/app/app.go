@@ -1055,7 +1055,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		return
 	}
 	projection := r.store.ProjectionIfCached()
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil)
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil, r.settings.HideThinkingBlock)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
@@ -1315,6 +1315,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		notice(terminal.NoticeWarning, "Theme file watching is unavailable; use /reload to apply theme changes.")
 	}
 	stream := terminal.NewStreamer(terminal.StreamOutput{Console: console}, true)
+	thinkingStream := terminal.NewStreamer(terminal.ThinkingOutput{Console: console}, true)
 	status := terminal.NewStatusWriter(out)
 	events := make(chan event.Event, 64)
 	done := make(chan error, 1)
@@ -1566,6 +1567,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if r.state != StateCancelling {
 				console.SetThinking(true)
 			}
+		case event.ThinkingDelta:
+			// Reasoning is visible output: it ends the tool group and replaces
+			// the transient activity row.
+			if strings.TrimSpace(ev.Text) != "" {
+				finishTools()
+				console.SetThinking(false)
+				r.state = StateStreaming
+				visibleRunText = true
+			}
+			// Keep arrival order: text that arrived first renders first.
+			if stream.Pending() {
+				stream.Flush()
+			}
+			thinkingStream.Delta(ev.Text)
 		case event.TextDelta:
 			// Tool-only responses are one compact chain, even across requests.
 			// A blank delta is not a visible assistant block.
@@ -1574,6 +1589,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.SetThinking(false)
 				r.state = StateStreaming
 				visibleRunText = true
+			}
+			// Keep arrival order: reasoning that arrived first renders first.
+			if thinkingStream.Pending() {
+				thinkingStream.Flush()
 			}
 			stream.Delta(ev.Text)
 		case event.RunStart:
@@ -1599,6 +1618,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		case event.ToolStart:
 			console.SetThinking(false)
+			thinkingStream.Close()
 			stream.Close()
 			r.state = StateRunningTool
 			r.activeTools = append(r.activeTools, activeTool{name: ev.ToolName, callID: ev.ToolCallID, summary: ev.Summary})
@@ -1633,6 +1653,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		case event.CompactionStart:
 			console.SetThinking(false)
+			thinkingStream.Close()
 			stream.Close()
 			r.state = StateCompacting
 			r.compactActive = true
@@ -1963,6 +1984,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			frameTick = nil
 			_, beforeFrames, _, _ := console.FrameStats()
 			console.BeginFrame()
+			thinkingStream.Flush()
 			stream.Flush()
 			if busy && activityText != "" && time.Since(lastSpinner) >= 80*time.Millisecond {
 				spinnerIndex = (spinnerIndex + 1) % len(spinnerFrames)
@@ -2060,6 +2082,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Editor.RestoreDraft(combined, len([]rune(combined)))
 				console.RefreshCompletion()
 			}
+			thinkingStream.Close()
 			stream.Close()
 			console.SetThinking(false)
 			console.ClearToolRow()
@@ -2085,7 +2108,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				} else if visibleRunText && runOutcome == event.OutcomeInterrupted {
 					notice(terminal.NoticeWarning, "The run was interrupted. Any streamed partial response was saved with an interrupted outcome; review it before continuing.")
 				} else if visibleRunText {
-					notice(terminal.NoticeWarning, "Visible response text was saved, but the operation was cancelled.")
+					notice(terminal.NoticeWarning, "Visible output was saved, but the operation was cancelled.")
 				} else {
 					notice(terminal.NoticeWarning, "Request cancelled.")
 				}
@@ -2371,6 +2394,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if !busy && !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
 				openSelector(modelSelector(r), console.Editor.Text(), console.Editor.Pos(), "", true)
+				continue
+			}
+			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 20 {
+				// Ctrl+T toggles Pi's reasoning visibility, also during a run.
+				r.settings.HideThinkingBlock = !r.settings.HideThinkingBlock
+				if err := r.persistSettingsValue([]string{"hideThinkingBlock"}, r.settings.HideThinkingBlock); err != nil {
+					notice(terminal.NoticeError, "Saved for this session only: "+err.Error())
+				}
+				r.footerKey = ""
+				console.RequestFullRedraw()
+				r.draw(console)
+				state := "visible"
+				if r.settings.HideThinkingBlock {
+					state = "hidden"
+				}
+				console.Status("Thinking blocks: " + state)
 				continue
 			}
 			if !busy && !input.Paste && string(input.Key) == "\x1b[Z" {

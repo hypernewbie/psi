@@ -63,7 +63,7 @@ type codexSlot struct {
 	text, thinking, args strings.Builder
 }
 
-func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
+func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onDelta func(Delta), req Request) (*Response, error) {
 	sr := newStreamReader(ctx, r, idle)
 	defer sr.close()
 	scanner := bufio.NewScanner(io.LimitReader(sr, maxStreamBytes+1))
@@ -143,16 +143,25 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 					return fmt.Errorf("Codex text delta has wrong item type")
 				}
 				slot.text.WriteString(event.Delta)
-				if onText != nil {
-					onText(event.Delta)
+				if onDelta != nil {
+					onDelta(Delta{Kind: DeltaText, Text: event.Delta})
 				}
 			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 				if slot.item.Type != "reasoning" {
 					return fmt.Errorf("Codex reasoning delta has wrong item type")
 				}
 				slot.thinking.WriteString(event.Delta)
+				if event.Delta != "" && onDelta != nil {
+					onDelta(Delta{Kind: DeltaThinking, Text: event.Delta})
+				}
 			case "response.reasoning_summary_part.done":
+				if slot.item.Type != "reasoning" {
+					return fmt.Errorf("Codex reasoning summary has wrong item type")
+				}
 				slot.thinking.WriteString("\n\n")
+				if onDelta != nil {
+					onDelta(Delta{Kind: DeltaThinking, Text: "\n\n"})
+				}
 			case "response.function_call_arguments.delta":
 				if slot.item.Type != "function_call" {
 					return fmt.Errorf("Codex argument delta has wrong item type")
@@ -279,8 +288,8 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onText 
 			if slot.text.Len() > 0 && slot.text.String() != content {
 				return result, fmt.Errorf("Codex completed text differs from its deltas")
 			}
-			if slot.text.Len() == 0 && content != "" && onText != nil {
-				onText(content)
+			if slot.text.Len() == 0 && content != "" && onDelta != nil {
+				onDelta(Delta{Kind: DeltaText, Text: content})
 			}
 			sig := map[string]any{"v": 1, "id": item.ID}
 			if item.Phase != "" {

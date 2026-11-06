@@ -8,14 +8,15 @@ import (
 
 // Fake is a scripted provider for tests (Phase 1 Step 11 + Phase 6 boundary).
 type Fake struct {
-	mu         sync.Mutex
-	Responses  []*Response
-	Errors     []error
-	Calls      []Request
-	TextDeltas [][]string
+	mu             sync.Mutex
+	Responses      []*Response
+	Errors         []error
+	Calls          []Request
+	TextDeltas     [][]string
+	ThinkingDeltas [][]string
 }
 
-func (f *Fake) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
+func (f *Fake) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	f.mu.Lock()
 	f.Calls = append(f.Calls, req)
 	idx := len(f.Calls) - 1
@@ -24,6 +25,11 @@ func (f *Fake) Send(ctx context.Context, req Request, onText func(string)) (*Res
 	if idx < len(f.TextDeltas) && f.TextDeltas[idx] != nil {
 		deltas = make([]string, len(f.TextDeltas[idx]))
 		copy(deltas, f.TextDeltas[idx])
+	}
+	var thinking []string
+	if idx < len(f.ThinkingDeltas) && f.ThinkingDeltas[idx] != nil {
+		thinking = make([]string, len(f.ThinkingDeltas[idx]))
+		copy(thinking, f.ThinkingDeltas[idx])
 	}
 	var errVal error
 	if idx < len(f.Errors) {
@@ -40,12 +46,20 @@ func (f *Fake) Send(ctx context.Context, req Request, onText func(string)) (*Res
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	for _, d := range thinking {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if onDelta != nil {
+			onDelta(Delta{Kind: DeltaThinking, Text: d})
+		}
+	}
 	for _, d := range deltas {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if onText != nil {
-			onText(d)
+		if onDelta != nil {
+			onDelta(Delta{Kind: DeltaText, Text: d})
 		}
 	}
 	if errVal != nil {

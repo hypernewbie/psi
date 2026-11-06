@@ -12,6 +12,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `/command` and `/skill:name` completion stays in the editor tail (at most five rows) with Pi's `→` selection pointer; `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
 - Search pickers replace the editor region, as Pi's `showSelector` does. The picker owns its border, its `> ` query row, and its bounded list. Search uses case-insensitive substring matching in the editor query; `Up/Down` select, `PageUp/PageDown` move by the visible list size (at most ten), `Enter` applies, `Esc` or `Ctrl+C` cancels and restores the prior draft
 - `Ctrl+L` opens the model picker; `Shift+Tab` cycles the selected model's supported thinking levels
+- `Ctrl+T` hides or shows reasoning blocks. The toggle works during a run, repaints the transcript, and is saved as `hideThinkingBlock` in the agent `settings.json`
 - Completion and picker search never scan files or call a provider; picker queries are not conversation messages
 - `Ctrl+C` cancels a picker; during a run it cancels the run. When idle it clears the draft first and exits only when the draft is empty
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty

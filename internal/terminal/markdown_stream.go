@@ -18,6 +18,7 @@ type MarkdownStream struct {
 	noColor bool
 	palette *pitheme.Theme
 	display DisplaySettings
+	style   mdStyle
 	filter  Sanitizer
 
 	pending          []byte
@@ -52,7 +53,12 @@ type MarkdownStream struct {
 }
 
 func NewMarkdownStream(width int, noColor bool) *MarkdownStream {
-	return &MarkdownStream{width: max(1, width), noColor: noColor, display: DefaultDisplaySettings(), listBase: -1, candidateStart: -1}
+	return &MarkdownStream{width: max(1, width), noColor: noColor, display: DefaultDisplaySettings(), style: mdStyle{token: TokenText}, listBase: -1, candidateStart: -1}
+}
+
+// SetStyle sets the base text style of the rendered blocks.
+func (m *MarkdownStream) SetStyle(style mdStyle) {
+	m.style = style
 }
 
 // Feed returns stable rows and a borrowed active-tail slice. The tail remains
@@ -93,7 +99,7 @@ func (m *MarkdownStream) Finish() []string {
 			rows = append(rows, "")
 			m.needsSeparator = false
 		}
-		rows = append(rows, renderMarkdownCoreWithDisplay(string(m.pending), m.width, m.noColor, m.display, m.palette)...)
+		rows = append(rows, renderMarkdownCoreWithStyle(string(m.pending), m.width, m.noColor, m.display, m.style, m.palette)...)
 		m.seenOutput = m.seenOutput || len(rows) > 0
 	}
 	if m.fallback && m.fenceByte != 0 {
@@ -174,7 +180,7 @@ func (m *MarkdownStream) DisplayTail() []string {
 	case m.fenceByte != 0:
 		rows = renderCodeRows(source, m.width, m.noColor, m.palette, m.display)
 	default:
-		rows = renderMarkdownCoreWithDisplay(string(source), m.width, m.noColor, m.display, m.palette)
+		rows = renderMarkdownCoreWithStyle(string(source), m.width, m.noColor, m.display, m.style, m.palette)
 	}
 	if m.needsSeparator && len(rows) > 0 {
 		rows = append([]string{""}, rows...)
@@ -413,7 +419,7 @@ func (m *MarkdownStream) commitBlock(source []byte, stable *[]string) {
 	if strings.TrimSpace(string(source)) == "" {
 		return
 	}
-	rows := renderMarkdownCoreWithDisplay(string(source), m.width, m.noColor, m.display, m.palette)
+	rows := renderMarkdownCoreWithStyle(string(source), m.width, m.noColor, m.display, m.style, m.palette)
 	if len(rows) == 0 {
 		return
 	}

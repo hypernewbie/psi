@@ -18,9 +18,9 @@ type cancelAfterFirstCompactionSummary struct {
 	calls  int
 }
 
-func (p *cancelAfterFirstCompactionSummary) Send(ctx context.Context, request provider.Request, onText func(string)) (*provider.Response, error) {
+func (p *cancelAfterFirstCompactionSummary) Send(ctx context.Context, request provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	p.calls++
-	response, err := p.fake.Send(ctx, request, onText)
+	response, err := p.fake.Send(ctx, request, onDelta)
 	if p.calls == 1 {
 		p.cancel()
 	}

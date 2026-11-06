@@ -26,7 +26,7 @@ func NewResponsesClient(baseURL, apiKey string, maxRetry int, idle time.Duration
 	return &ResponsesClient{Client: base}
 }
 
-func (c *ResponsesClient) Send(ctx context.Context, req Request, onText func(string)) (*Response, error) {
+func (c *ResponsesClient) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	if req.Model.API != "openai-responses" || req.Model.ProviderID() != "opencode-go" && req.Model.ProviderID() != "xai" {
 		return nil, fmt.Errorf("openai-responses is only enabled for the registered OpenCode Go and xAI providers")
 	}
@@ -56,7 +56,7 @@ func (c *ResponsesClient) Send(ctx context.Context, req Request, onText func(str
 		return nil, fmt.Errorf("cannot encode OpenAI Responses request")
 	}
 	return sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) {
-		return c.sendResponses(ctx, baseURL, compat, raw, req, onText)
+		return c.sendResponses(ctx, baseURL, compat, raw, req, onDelta)
 	})
 }
 
@@ -76,7 +76,7 @@ func responsesEndpoint(baseURL string) (string, error) {
 	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/responses", nil
 }
 
-func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, compat responsesCompat, body []byte, req Request, onText func(string)) (*Response, error) {
+func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, compat responsesCompat, body []byte, req Request, onDelta func(Delta)) (*Response, error) {
 	endpoint, err := responsesEndpoint(baseURL)
 	if err != nil {
 		return nil, err
@@ -118,7 +118,7 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 		resp.Body = structReadCloser{Reader: reader, Closer: resp.Body}
 		return nil, classifyHTTPError(resp)
 	}
-	result, err := parseResponsesSSE(resp.Body, c.IdleTimeout, ctx, onText, req)
+	result, err := parseResponsesSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(err.Error())
 		wrapped := fmt.Errorf("OpenAI Responses stream interrupted (not retried): %s", message)
@@ -183,7 +183,7 @@ type responsesSlot struct {
 	streamedText         bool
 }
 
-func parseResponsesSSE(r io.Reader, idle time.Duration, ctx context.Context, onText func(string), req Request) (*Response, error) {
+func parseResponsesSSE(r io.Reader, idle time.Duration, ctx context.Context, onDelta func(Delta), req Request) (*Response, error) {
 	reader := newStreamReader(ctx, r, idle)
 	defer reader.close()
 	scanner := bufio.NewScanner(io.LimitReader(reader, maxStreamBytes+1))
@@ -311,7 +311,7 @@ func parseResponsesSSE(r io.Reader, idle time.Duration, ctx context.Context, onT
 				slot.item = item
 				slot.raw = append(json.RawMessage(nil), event.Item...)
 				slot.done = true
-				if err := finalizeResponsesSlot(slot, onText); err != nil {
+				if err := finalizeResponsesSlot(slot, onDelta); err != nil {
 					return err
 				}
 			}
@@ -327,19 +327,25 @@ func parseResponsesSSE(r io.Reader, idle time.Duration, ctx context.Context, onT
 				}
 				slot.text.WriteString(event.Delta)
 				slot.streamedText = true
-				if onText != nil {
-					onText(event.Delta)
+				if onDelta != nil {
+					onDelta(Delta{Kind: DeltaText, Text: event.Delta})
 				}
 			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 				if slot.item.Type != "reasoning" {
 					return fmt.Errorf("OpenAI Responses reasoning delta has wrong item type")
 				}
 				slot.thinking.WriteString(event.Delta)
+				if event.Delta != "" && onDelta != nil {
+					onDelta(Delta{Kind: DeltaThinking, Text: event.Delta})
+				}
 			case "response.reasoning_summary_part.done":
 				if slot.item.Type != "reasoning" {
 					return fmt.Errorf("OpenAI Responses reasoning summary has wrong item type")
 				}
 				slot.thinking.WriteString("\n\n")
+				if onDelta != nil {
+					onDelta(Delta{Kind: DeltaThinking, Text: "\n\n"})
+				}
 			case "response.function_call_arguments.delta":
 				if slot.item.Type != "function_call" {
 					return fmt.Errorf("OpenAI Responses argument delta has wrong item type")
@@ -479,7 +485,7 @@ func decodeResponsesItem(raw json.RawMessage) (responsesOutputItem, error) {
 	return item, nil
 }
 
-func finalizeResponsesSlot(slot *responsesSlot, onText func(string)) error {
+func finalizeResponsesSlot(slot *responsesSlot, onDelta func(Delta)) error {
 	switch slot.item.Type {
 	case "message":
 		var final strings.Builder
@@ -496,8 +502,8 @@ func finalizeResponsesSlot(slot *responsesSlot, onText func(string)) error {
 		if slot.text.Len() > 0 && slot.text.String() != final.String() {
 			return fmt.Errorf("OpenAI Responses completed text differs from its deltas")
 		}
-		if !slot.streamedText && final.Len() > 0 && onText != nil {
-			onText(final.String())
+		if !slot.streamedText && final.Len() > 0 && onDelta != nil {
+			onDelta(Delta{Kind: DeltaText, Text: final.String()})
 		}
 	case "function_call":
 		if slot.item.Arguments != "" {

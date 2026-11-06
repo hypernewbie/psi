@@ -481,10 +481,17 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		// Completion barrier (P2-014, P2-055): track streamed prefix for reconciliation.
 		// Transient deltas vs durable completion are distinct; final is authoritative.
 		var streamed strings.Builder
+		var streamedThinking strings.Builder
 		l.sink(event.Event{Type: event.AssistantStart})
-		resp, err := l.prov.Send(ctx, req, func(s string) {
-			streamed.WriteString(s)
-			l.emitText(s, event.OutcomeTransient)
+		resp, err := l.prov.Send(ctx, req, func(d provider.Delta) {
+			switch d.Kind {
+			case provider.DeltaThinking:
+				streamedThinking.WriteString(d.Text)
+				l.emitChunked(d.Text, event.ThinkingDelta, event.OutcomeTransient)
+			default:
+				streamed.WriteString(d.Text)
+				l.emitChunked(d.Text, event.TextDelta, event.OutcomeTransient)
+			}
 		})
 		if err != nil {
 			outcome = event.OutcomeInterrupted
@@ -507,7 +514,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				outcome = event.OutcomeUnsaved
 				return perr
 			}
-			if aerr := l.savePartial(streamed.String(), stop, cfg); aerr != nil {
+			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cfg); aerr != nil {
 				outcome = event.OutcomeUnsaved
 				return aerr
 			}
@@ -518,7 +525,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		}
 		if resp == nil {
 			outcome = event.OutcomeInterrupted
-			if err := l.savePartial(streamed.String(), "error", cfg); err != nil {
+			if err := l.savePartial(streamed.String(), streamedThinking.String(), "error", cfg); err != nil {
 				outcome = event.OutcomeUnsaved
 				return err
 			}
@@ -540,7 +547,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		}
 		if !strings.HasPrefix(resp.Text, streamed.String()) {
 			outcome = event.OutcomeInterrupted
-			if err := l.savePartial(streamed.String(), "error", cfg); err != nil {
+			if err := l.savePartial(streamed.String(), streamedThinking.String(), "error", cfg); err != nil {
 				outcome = event.OutcomeUnsaved
 				return err
 			}
@@ -550,8 +557,14 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			outcome = event.OutcomeUnsaved
 			return fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
 		}
+		// A provider may return reasoning only in the final response. Show the
+		// part that never arrived as a delta, before the text tail, so the
+		// transcript keeps the content order. A mismatch never fails the turn.
+		if suffix := unstreamedThinking(resp.Thinking, streamedThinking.String()); suffix != "" {
+			l.emitChunked(suffix, event.ThinkingDelta, event.OutcomeDurable)
+		}
 		if suffix := resp.Text[streamed.Len():]; suffix != "" {
-			l.emitText(suffix, event.OutcomeDurable)
+			l.emitChunked(suffix, event.TextDelta, event.OutcomeDurable)
 		}
 		// Settlement barrier: persistence precedes RunEnd and the next prompt.
 		if resp.StopReason == "error" || resp.StopReason == "aborted" {
@@ -634,8 +647,17 @@ func (l *Loop) maybeAdaptiveCompact(ctx context.Context, cfg Config, canContinue
 	return l.compactWithReason(ctx, cfg, "", event.CompactionAdaptive)
 }
 
+// unstreamedThinking returns the tail of the final reasoning that was never
+// streamed. It returns "" when the final reasoning contradicts the stream.
+func unstreamedThinking(final, streamed string) string {
+	if !strings.HasPrefix(final, streamed) {
+		return ""
+	}
+	return final[len(streamed):]
+}
+
 // The app's 64-item event queue retains at most 512 KiB of text payload.
-func (l *Loop) emitText(text, outcome string) {
+func (l *Loop) emitChunked(text string, typ event.Type, outcome string) {
 	for len(text) > 0 {
 		n := min(len(text), 8*1024)
 		if n < len(text) {
@@ -646,18 +668,21 @@ func (l *Loop) emitText(text, outcome string) {
 				n = min(len(text), 8*1024)
 			}
 		}
-		l.sink(event.Event{Type: event.TextDelta, Text: strings.Clone(text[:n]), Outcome: outcome})
+		l.sink(event.Event{Type: typ, Text: strings.Clone(text[:n]), Outcome: outcome})
 		text = text[n:]
 	}
 }
 
-func (l *Loop) savePartial(text, stop string, cfg Config) error {
-	if text == "" {
+// savePartial stores the visible part of an interrupted turn. Thinking that
+// arrived before the failure is kept with the text, like Pi's partial message.
+// toSessionAssistant orders the thinking block before the text block.
+func (l *Loop) savePartial(text, thinking, stop string, cfg Config) error {
+	if text == "" && thinking == "" {
 		return nil
 	}
-	partial := toSessionAssistant(&provider.Response{Text: text, StopReason: stop}, cfg)
-	if _, err := l.store.AppendMessage(partial); err != nil {
-		return fmt.Errorf("storage failure, stopping: %w (unsaved partial text %d bytes)", err, len(text))
+	partial := &provider.Response{Text: text, Thinking: thinking, StopReason: stop}
+	if _, err := l.store.AppendMessage(toSessionAssistant(partial, cfg)); err != nil {
+		return fmt.Errorf("storage failure, stopping: %w (unsaved partial output %d bytes)", err, len(text)+len(thinking))
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 func TestEventConstants(t *testing.T) {
 	expectedTypes := map[Type]string{
 		TextDelta:         "text_delta",
+		ThinkingDelta:     "thinking_delta",
 		AssistantStart:    "assistant_start",
 		RunStart:          "run_start",
 		RunEnd:            "run_end",

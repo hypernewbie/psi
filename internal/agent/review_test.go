@@ -16,10 +16,10 @@ import (
 	"psi/internal/tools"
 )
 
-type reviewProvider func(context.Context, provider.Request, func(string)) (*provider.Response, error)
+type reviewProvider func(context.Context, provider.Request, func(provider.Delta)) (*provider.Response, error)
 
-func (f reviewProvider) Send(ctx context.Context, req provider.Request, text func(string)) (*provider.Response, error) {
-	return f(ctx, req, text)
+func (f reviewProvider) Send(ctx context.Context, req provider.Request, delta func(provider.Delta)) (*provider.Response, error) {
+	return f(ctx, req, delta)
 }
 func (f reviewProvider) CloseIdle() {}
 
@@ -32,7 +32,7 @@ func TestTextEventsHaveBoundedUTF8Payloads(t *testing.T) {
 		}
 		visible.WriteString(e.Text)
 	}}
-	loop.emitText(text, event.OutcomeTransient)
+	loop.emitChunked(text, event.TextDelta, event.OutcomeTransient)
 	if visible.String() != text {
 		t.Fatal("event chunks lost or repeated text")
 	}
@@ -54,9 +54,9 @@ func TestFinalTextSettlementMatchesVisibleText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			store, _ := session.New(session.OpenOptions{Cwd: dir, Persist: false})
-			p := reviewProvider(func(_ context.Context, _ provider.Request, text func(string)) (*provider.Response, error) {
+			p := reviewProvider(func(_ context.Context, _ provider.Request, delta func(provider.Delta)) (*provider.Response, error) {
 				if tc.delta != "" {
-					text(tc.delta)
+					delta(provider.Delta{Kind: provider.DeltaText, Text: tc.delta})
 				}
 				return &provider.Response{Text: tc.final, Content: tc.content, StopReason: "stop"}, nil
 			})
@@ -99,8 +99,8 @@ func TestInterruptedVisibleTextIsDurableWithoutExecutableCalls(t *testing.T) {
 			store, _ := session.New(session.OpenOptions{Cwd: dir, Persist: false})
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			p := reviewProvider(func(_ context.Context, _ provider.Request, text func(string)) (*provider.Response, error) {
-				text("partial")
+			p := reviewProvider(func(_ context.Context, _ provider.Request, delta func(provider.Delta)) (*provider.Response, error) {
+				delta(provider.Delta{Kind: provider.DeltaText, Text: "partial"})
 				if cancelled {
 					cancel()
 					return nil, ctx.Err()

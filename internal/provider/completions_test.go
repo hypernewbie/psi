@@ -53,7 +53,7 @@ func TestOpenCodeCompletionsLoopbackPathHeadersStreamAndUsage(t *testing.T) {
 	model := completionsTestModel("opencode-go", "open-code-synthetic")
 	model.Compat = modelmeta.Compat{"maxTokensField": json.RawMessage(`"max_tokens"`), "supportsStore": json.RawMessage(`false`), "supportsStrictMode": json.RawMessage(`true`)}
 	var streamed strings.Builder
-	response, err := client.Send(context.Background(), Request{Model: model, Thinking: "off", System: "rules", Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}}, func(delta string) { streamed.WriteString(delta) })
+	response, err := client.Send(context.Background(), Request{Model: model, Thinking: "off", System: "rules", Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}}, TextOnly(func(delta string) { streamed.WriteString(delta) }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,12 +168,12 @@ func TestCompletionsRetryOnlyBeforeStreamAndNeverRetryPartial(t *testing.T) {
 	done := make(chan error, 1)
 	gotDelta := make(chan struct{}, 1)
 	go func() {
-		_, err := partialClient.Send(ctx, Request{Model: model, Thinking: "off"}, func(string) {
+		_, err := partialClient.Send(ctx, Request{Model: model, Thinking: "off"}, TextOnly(func(string) {
 			select {
 			case gotDelta <- struct{}{}:
 			default:
 			}
-		})
+		}))
 		done <- err
 	}()
 	<-started

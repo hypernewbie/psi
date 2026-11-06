@@ -15,6 +15,8 @@ func transcriptDocumentBlock(it session.TranscriptItem) terminal.DocumentBlock {
 		block.Kind = terminal.DocumentUser
 	case session.KindAssistant:
 		block.Kind = terminal.DocumentAssistant
+	case session.KindThinking:
+		block.Kind = terminal.DocumentThinking
 	case session.KindTool:
 		block.Kind = terminal.DocumentTool
 		if it.Note != "" && !block.Summary.Available {
