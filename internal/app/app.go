@@ -1332,6 +1332,11 @@ func (r *runtime) draw(console *terminal.Console) {
 	if row, ok := r.liveToolRow(console); ok {
 		console.SetToolRowNoDraw(row)
 	}
+	r.refreshPickerRows(console)
+	console.Draw()
+}
+
+func (r *runtime) refreshPickerRows(console *terminal.Console) {
 	if r.settingsPicker != nil {
 		width, rows := console.PickerSize()
 		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
@@ -1341,7 +1346,6 @@ func (r *runtime) draw(console *terminal.Console) {
 	} else {
 		console.ClearPickerRows()
 	}
-	console.Draw()
 }
 
 // newLoop builds the agent loop with the configured queue modes, so every
@@ -1557,7 +1561,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if input.Resize {
-					console.RequestFullRedraw()
+					console.RequestResizeDraw()
 					continue
 				}
 				if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
@@ -1572,7 +1576,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				pendingInputBytes += len(input.Key)
 			case sig := <-signals:
 				if isResize(sig) {
-					console.RequestFullRedraw()
+					console.RequestResizeDraw()
 					continue
 				}
 				switch {
@@ -1998,7 +2002,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 	defer resizeTimer.Stop()
 	var resizeTimeout <-chan time.Time
 	requestResizeDraw := func() {
-		console.RequestFullRedraw()
+		// A scheduled frame may draw before the resize timer fires. Prepare
+		// picker rows now so that frame uses the new width and row budget.
+		r.refreshPickerRows(console)
+		console.RequestResizeDraw()
 		if !resizeTimer.Stop() {
 			select {
 			case <-resizeTimer.C:

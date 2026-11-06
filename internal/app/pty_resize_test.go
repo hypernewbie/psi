@@ -134,6 +134,20 @@ func TestActualAppPTYResize(t *testing.T) {
 		}
 	}
 	waitEditor := func() { waitForEditorScreen(t, chunks, screen, &pending) }
+	resize := func(width, height int) {
+		t.Helper()
+		pending = ""
+		if err := pty.Setsize(master, &pty.Winsize{Rows: uint16(height), Cols: uint16(width)}); err != nil {
+			t.Fatal(err)
+		}
+		screen.Resize(width, height)
+		// Old text plus any PTY chunk is not a resize acknowledgement: it
+		// can match before the clear, halfway through a retained-source
+		// rebuild. Wait for the new clear and the complete synchronized
+		// redraw before checking content or changing geometry again.
+		wait("\x1b[2J\x1b[H\x1b[3J")
+		wait("\x1b[?2026l")
+	}
 	wait("/ commands")
 	waitEditor()
 
@@ -143,29 +157,10 @@ func TestActualAppPTYResize(t *testing.T) {
 	// Phase 1: Resize with active draft across sizes
 	for _, size := range [][2]int{{120, 40}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
 		width, height := size[0], size[1]
-		if err := pty.Setsize(master, &pty.Winsize{Rows: uint16(height), Cols: uint16(width)}); err != nil {
-			t.Fatal(err)
+		resize(width, height)
+		if !semanticEditorReady(screen) || !strings.Contains(screen.Text(), "my-draft-line") {
+			t.Fatalf("draft lost on resize to %dx%d: cursor=(%d,%d) visible=%v screen=%q", width, height, screen.CursorCol, screen.CursorRow, screen.CursorVisible, screen.Text())
 		}
-		screen.Resize(width, height)
-		beforeResize := screen.WriteCalls
-		timer := time.NewTimer(4 * time.Second)
-		redrawDetected := false
-		for !redrawDetected {
-			select {
-			case chunk, ok := <-chunks:
-				if !ok {
-					t.Fatalf("process exited on resize %dx%d", width, height)
-				}
-				pending += chunk
-				screen.Feed([]byte(chunk))
-				if screen.WriteCalls > beforeResize && semanticEditorReady(screen) && strings.Contains(screen.Text(), "my-draft-line") {
-					redrawDetected = true
-				}
-			case <-timer.C:
-				t.Fatalf("draft resize to %dx%d did not redraw within timeout: cursor=(%d,%d) visible=%v screen=%q", width, height, screen.CursorCol, screen.CursorRow, screen.CursorVisible, screen.Text())
-			}
-		}
-		timer.Stop()
 	}
 
 	write("\x15") // Ctrl+U clear draft
@@ -175,29 +170,10 @@ func TestActualAppPTYResize(t *testing.T) {
 	// Phase 2: Resize during streaming
 	for _, size := range [][2]int{{120, 40}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
 		width, height := size[0], size[1]
-		if err := pty.Setsize(master, &pty.Winsize{Rows: uint16(height), Cols: uint16(width)}); err != nil {
-			t.Fatal(err)
+		resize(width, height)
+		if text := screen.Text(); !strings.Contains(text, "Working") && !strings.Contains(text, "Esc/Ctrl+C") && !strings.Contains(text, "STREAM_START") {
+			t.Fatalf("stream status lost on resize to %dx%d: screen=%q", width, height, text)
 		}
-		screen.Resize(width, height)
-		beforeResize := screen.WriteCalls
-		timer := time.NewTimer(4 * time.Second)
-		redrawDetected := false
-		for !redrawDetected {
-			select {
-			case chunk, ok := <-chunks:
-				if !ok {
-					t.Fatalf("process exited on stream resize %dx%d", width, height)
-				}
-				pending += chunk
-				screen.Feed([]byte(chunk))
-				if screen.WriteCalls > beforeResize && (strings.Contains(screen.Text(), "Working") || strings.Contains(screen.Text(), "Esc/Ctrl+C") || strings.Contains(screen.Text(), "STREAM_START")) {
-					redrawDetected = true
-				}
-			case <-timer.C:
-				t.Fatalf("stream resize to %dx%d did not redraw within timeout: screen=%q", width, height, screen.Text())
-			}
-		}
-		timer.Stop()
 	}
 
 	releaseStreamFn()
@@ -206,25 +182,7 @@ func TestActualAppPTYResize(t *testing.T) {
 
 	// Rebuild once more after settlement. The completed assistant block must
 	// survive a full main-screen clear and reappear from retained source.
-	if err := pty.Setsize(master, &pty.Winsize{Rows: 16, Cols: 60}); err != nil {
-		t.Fatal(err)
-	}
-	screen.Resize(60, 16)
-	beforeResize := screen.WriteCalls
-	deadline := time.NewTimer(4 * time.Second)
-	for screen.WriteCalls == beforeResize {
-		select {
-		case chunk, ok := <-chunks:
-			if !ok {
-				t.Fatal("process exited on settled-conversation resize")
-			}
-			pending += chunk
-			screen.Feed([]byte(chunk))
-		case <-deadline.C:
-			t.Fatalf("settled-conversation resize did not redraw: screen=%q", screen.Text())
-		}
-	}
-	deadline.Stop()
+	resize(60, 16)
 	waitVisible("STREAM_STARTSTREAM_DONE")
 
 	// Phase 3: Resize while model picker is open
@@ -233,29 +191,10 @@ func TestActualAppPTYResize(t *testing.T) {
 
 	for _, size := range [][2]int{{120, 40}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
 		width, height := size[0], size[1]
-		if err := pty.Setsize(master, &pty.Winsize{Rows: uint16(height), Cols: uint16(width)}); err != nil {
-			t.Fatal(err)
+		resize(width, height)
+		if !strings.Contains(screen.Text(), "local-model") {
+			t.Fatalf("selected model lost on resize to %dx%d: screen=%q", width, height, screen.Text())
 		}
-		screen.Resize(width, height)
-		beforeResize := screen.WriteCalls
-		timer := time.NewTimer(4 * time.Second)
-		redrawDetected := false
-		for !redrawDetected {
-			select {
-			case chunk, ok := <-chunks:
-				if !ok {
-					t.Fatalf("process exited on picker resize %dx%d", width, height)
-				}
-				pending += chunk
-				screen.Feed([]byte(chunk))
-				if screen.WriteCalls > beforeResize && strings.Contains(screen.Text(), "local-model") {
-					redrawDetected = true
-				}
-			case <-timer.C:
-				t.Fatalf("picker resize to %dx%d did not redraw within timeout: screen=%q (pending=%q)", width, height, screen.Text(), pending)
-			}
-		}
-		timer.Stop()
 	}
 
 	write("\x1b") // Cancel picker
