@@ -56,7 +56,7 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 			if display.HideThinking {
 				return FormatThinkingLabel(width, noColor, display, theme)
 			}
-			return RenderMarkdownWithDisplay(block.Text, width, noColor, display, theme)
+			return RenderThinkingMarkdown(block.Text, width, noColor, display, theme)
 		}
 		return FormatThinkingBlock(block.Text, width, noColor, display, theme)
 	case DocumentTool:

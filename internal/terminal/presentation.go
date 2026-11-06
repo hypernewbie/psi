@@ -310,6 +310,8 @@ type EditorView struct {
 	CellWidth []int
 	CursorRow int
 	CursorCol int
+	// fragmentRows counts the fragment suffix actually retained by the layout.
+	fragmentRows int
 }
 
 func homeAbbreviated(path, home string) string {
@@ -663,6 +665,7 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 		}
 		return row.SerializeWithTheme(snapshot.Theme, noColor), row.Width()
 	}
+	fragmentCount := len(fragmentRows)
 	rows := make([]string, 0, len(fragmentRows)+borderCount+bodyBudget+footerCount)
 	cells := make([]int, 0, cap(rows))
 	for _, row := range fragmentRows {
@@ -690,11 +693,12 @@ func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapsh
 	cells = append(cells, footerWidths...)
 	if len(rows) > height {
 		// Height fallback must not discard the focused row or cancellation signal.
+		fragmentCount = max(0, fragmentCount-(len(rows)-height))
 		rows = rows[len(rows)-height:]
 		cells = cells[len(cells)-height:]
 		cursorRow = min(len(rows)-1, max(0, cursorRow-(len(rows)-(height))))
 	}
-	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(layout.CursorCol+editorPad, max(0, width-1))}
+	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(layout.CursorCol+editorPad, max(0, width-1)), fragmentRows: fragmentCount}
 }
 
 // ComposeConsoleViewPicker renders an application-owned picker in place of the
@@ -763,6 +767,7 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 	if len(fragment) > fragmentCount {
 		fragment = fragment[len(fragment)-fragmentCount:]
 	}
+	fragmentCount = len(fragment)
 
 	border := StyledRow{Spans: []StyledSpan{{Text: strings.Repeat("─", max(1, width-1)), Token: thinkingToken(snapshot.Thinking)}}}
 	if activity != "" && keepTop {
@@ -814,11 +819,12 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 	cells = append(cells, footerWidths...)
 	if len(rows) > height {
 		// Height fallback must not discard the focused row or cancellation signal.
+		fragmentCount = max(0, fragmentCount-(len(rows)-height))
 		rows = rows[len(rows)-height:]
 		cells = cells[len(cells)-height:]
 		cursorRow = min(len(rows)-1, max(0, cursorRow-(len(rows)-(height))))
 	}
-	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(cursorCol, max(0, width-1))}
+	return EditorView{Rows: rows, CellWidth: cells, CursorRow: cursorRow, CursorCol: min(cursorCol, max(0, width-1)), fragmentRows: fragmentCount}
 }
 
 // piBorderRow builds Pi's editor border row. The working status sits at the

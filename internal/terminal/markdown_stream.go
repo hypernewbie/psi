@@ -47,6 +47,9 @@ type MarkdownStream struct {
 	seenOutput     bool
 	tailRows       []string
 	tailCells      int
+	emittedRows    int
+	emittedPlain   []string
+	needsRedraw    bool
 	source         strings.Builder
 	finishedSource string
 	finishedOutput bool
@@ -108,6 +111,7 @@ func (m *MarkdownStream) Finish() []string {
 	m.finishedSource = m.source.String()
 	m.source.Reset()
 	m.finishedOutput = m.seenOutput
+	rows = m.skipEmitted(rows)
 	m.reset()
 	return rows
 }
@@ -169,6 +173,14 @@ func (m *MarkdownStream) Tail() []string { return append([]string(nil), m.tailRo
 // Feed itself only appends a plain active preview, so tiny provider deltas do
 // not repeatedly parse the growing block.
 func (m *MarkdownStream) DisplayTail() []string {
+	rows := m.displayRows()
+	if m.emittedRows >= len(rows) {
+		return nil
+	}
+	return append([]string(nil), rows[m.emittedRows:]...)
+}
+
+func (m *MarkdownStream) displayRows() []string {
 	source := m.previewSource()
 	if len(source) == 0 {
 		return nil
@@ -186,6 +198,85 @@ func (m *MarkdownStream) DisplayTail() []string {
 		rows = append([]string{""}, rows...)
 	}
 	return rows
+}
+
+// SplitRows returns the rows to commit and the live tail in one render.
+// redraw reports that later source changed rows already displayed.
+func (m *MarkdownStream) SplitRows(keep int) (committed, tail []string, redraw bool) {
+	if keep < 0 {
+		return nil, nil, false
+	}
+	rows := m.displayRows()
+	if m.needsRedraw || m.emittedChanged(rows) {
+		return nil, nil, true
+	}
+	if m.canCommitRows() && len(rows) > m.emittedRows+keep {
+		end := len(rows) - keep
+		if end > m.emittedRows {
+			committed = append([]string(nil), rows[m.emittedRows:end]...)
+			m.setEmitted(rows, end)
+		}
+	}
+	if m.emittedRows >= len(rows) {
+		return committed, nil, false
+	}
+	return committed, append([]string(nil), rows[m.emittedRows:]...), false
+}
+
+// MarkDisplayed records that the full active block was rendered by a document
+// redraw, so the next tail contains only rows that are not on screen.
+func (m *MarkdownStream) MarkDisplayed() {
+	rows := m.displayRows()
+	m.setEmitted(rows, len(rows))
+	m.needsRedraw = false
+}
+
+func (m *MarkdownStream) setEmitted(rows []string, n int) {
+	m.emittedRows = 0
+	clear(m.emittedPlain)
+	m.emittedPlain = m.emittedPlain[:0]
+	m.appendEmitted(rows[:n])
+}
+
+func (m *MarkdownStream) appendEmitted(rows []string) {
+	m.emittedRows += len(rows)
+	for _, row := range rows {
+		m.emittedPlain = append(m.emittedPlain, Sanitize(row))
+	}
+}
+
+func (m *MarkdownStream) emittedChanged(rows []string) bool {
+	if len(rows) < m.emittedRows || len(m.emittedPlain) != m.emittedRows {
+		return m.emittedRows > 0
+	}
+	for i := 0; i < m.emittedRows; i++ {
+		if Sanitize(rows[i]) != m.emittedPlain[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MarkdownStream) skipEmitted(rows []string) []string {
+	if m.emittedRows <= 0 {
+		return rows
+	}
+	n := min(m.emittedRows, len(rows))
+	m.emittedRows -= n
+	if m.emittedRows > len(rows)-n {
+		m.emittedRows = 0
+	}
+	return rows[n:]
+}
+
+// shortcut: inline spans and tables stay active until close; upgrade only if
+// committed rows can be revised safely.
+func (m *MarkdownStream) canCommitRows() bool {
+	if m.fallback || m.fenceByte != 0 || m.fallbackNoResume {
+		return false
+	}
+	source := string(m.previewSource())
+	return !strings.ContainsAny(source, "|*_`[]<\\")
 }
 
 func (m *MarkdownStream) normalizeNewlines(text string) string {
@@ -388,6 +479,8 @@ func (m *MarkdownStream) commitFenceStart(stable *[]string) {
 }
 
 func (m *MarkdownStream) commitCodeLine(line []byte, stable *[]string) {
+	// The next partial line can match the old preview and mask its settlement.
+	m.needsRedraw = m.needsRedraw || m.emittedRows > 0
 	m.fenceHasLine = true
 	*stable = append(*stable, renderCodeRows(line, m.width, m.noColor, m.palette, m.display)...)
 	m.seenOutput = true
@@ -424,9 +517,14 @@ func (m *MarkdownStream) commitBlock(source []byte, stable *[]string) {
 		return
 	}
 	if m.needsSeparator {
-		*stable = append(*stable, "")
+		rows = append([]string{""}, rows...)
 	}
+	// A whole block may settle before SplitRows sees the changed rendering.
+	m.needsRedraw = m.needsRedraw || m.emittedChanged(rows)
+	rows = m.skipEmitted(rows)
 	*stable = append(*stable, rows...)
+	m.emittedRows = 0
+	m.emittedPlain = nil
 	m.needsSeparator = true
 	m.seenOutput = true
 }
@@ -563,13 +661,14 @@ func (m *MarkdownStream) flushOversizedFallbackLine(stable *[]string) {
 			}
 			end = size
 		}
-		m.appendRawFallbackFragment(string(m.fallbackLine[:end]), stable)
+		m.appendRawFallbackLine(string(m.fallbackLine[:end]), stable)
 		clear(m.fallbackLine[:end])
 		m.fallbackLine = m.fallbackLine[end:]
 	}
 }
 
 func (m *MarkdownStream) appendRawFallbackLine(line string, stable *[]string) {
+	m.needsRedraw = m.needsRedraw || m.emittedRows > 0
 	if m.needsSeparator {
 		*stable = append(*stable, "")
 		m.needsSeparator = false
@@ -579,15 +678,6 @@ func (m *MarkdownStream) appendRawFallbackLine(line string, stable *[]string) {
 	} else {
 		*stable = append(*stable, wrapAssistantFragment(Sanitize(line), m.width)...)
 	}
-	m.seenOutput = true
-}
-
-func (m *MarkdownStream) appendRawFallbackFragment(fragment string, stable *[]string) {
-	if m.needsSeparator {
-		*stable = append(*stable, "")
-		m.needsSeparator = false
-	}
-	*stable = append(*stable, wrapAssistantFragment(Sanitize(fragment), m.width)...)
 	m.seenOutput = true
 }
 
@@ -685,6 +775,9 @@ func (m *MarkdownStream) reset() {
 	m.needsSeparator = false
 	m.seenOutput = false
 	m.activePreviewLen = 0
+	m.emittedRows = 0
+	m.emittedPlain = nil
+	m.needsRedraw = false
 	m.blockGeneration++
 	m.tailGeneration = m.blockGeneration
 	m.resetBlockState()

@@ -119,16 +119,23 @@ func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.S
 	enc.SetEscapeHTML(false)
 	s := &rpcRunner{r: r, out: enc}
 	s.loop = r.newLoop(s.sink)
-	t.Cleanup(func() {
-		s.cancelActive()
-		if s.r.store != nil {
-			s.r.store.Unlock()
-		}
-		if prov != nil {
-			prov.CloseIdle()
-		}
-	})
+	t.Cleanup(func() { closeRPCTestRunner(s, prov) })
 	return s, store, log
+}
+
+// closeRPCTestRunner mirrors the production EOF path: cancel the run, wait for
+// it to settle, then release the store and provider. TempDir removal races the
+// run's session writes if the store is unlocked first. Every step is safe to
+// repeat, so a test can call this before its registered cleanup.
+func closeRPCTestRunner(s *rpcRunner, prov provider.Provider) {
+	s.cancelActive()
+	s.waitIdle(10 * time.Second)
+	if s.r.store != nil {
+		s.r.store.Unlock()
+	}
+	if prov != nil {
+		prov.CloseIdle()
+	}
 }
 
 func writeTestFile(t *testing.T, dir, name, content string) error {
@@ -518,6 +525,61 @@ func TestRPCCompactEmptyThenAfterExchange(t *testing.T) {
 	}
 	if !hasEvent(objs, "compaction_end", nil) {
 		t.Fatalf("missing compaction_end: %v", objs)
+	}
+}
+
+// gatedProvider holds a run inside Send until the test releases it, so cleanup
+// order is observable instead of timing-dependent.
+type gatedProvider struct {
+	entered   chan struct{}
+	cancelled chan struct{}
+	release   chan struct{}
+	unlocked  chan struct{}
+	store     *session.Store
+}
+
+func (p *gatedProvider) Send(ctx context.Context, req provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
+	close(p.entered)
+	<-ctx.Done()
+	close(p.cancelled)
+	<-p.release
+	// Cleanup must not release the store while this run still writes to it.
+	if p.store != nil {
+		if err := p.store.TryLock(); err == nil {
+			p.store.Unlock()
+			close(p.unlocked)
+		}
+	}
+	return &provider.Response{Text: "hi", StopReason: "stop"}, nil
+}
+
+func (p *gatedProvider) CloseIdle() {}
+
+func TestRPCTestRunnerCleanupWaitsForActiveRun(t *testing.T) {
+	prov := &gatedProvider{
+		entered: make(chan struct{}), cancelled: make(chan struct{}),
+		release: make(chan struct{}), unlocked: make(chan struct{}),
+	}
+	s, store, _ := newRPCTestRunner(t, prov, nil)
+	prov.store = store
+	if resp := s.handle(rpcCommand{ID: strptr("p"), Type: "prompt", Message: "hello"}); resp == nil || !resp.Success {
+		t.Fatalf("prompt = %+v", resp)
+	}
+	<-prov.entered
+	// Let the run settle only after cleanup cancels it, so settlement happens
+	// while cleanup is waiting rather than before it starts.
+	go func() {
+		<-prov.cancelled
+		close(prov.release)
+	}()
+	closeRPCTestRunner(s, prov)
+	if s.isRunning() {
+		t.Fatal("cleanup returned while the run was still active")
+	}
+	select {
+	case <-prov.unlocked:
+		t.Fatal("cleanup released the store while the run was still active")
+	default:
 	}
 }
 

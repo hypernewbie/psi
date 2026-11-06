@@ -148,6 +148,19 @@ func RenderMarkdownWithDisplay(source string, width int, noColor bool, display D
 	return append(stable, stream.Finish()...)
 }
 
+// RenderThinkingMarkdown rebuilds a live reasoning stream without settling its
+// active block. In particular, an open code fence must stay open after redraw.
+func RenderThinkingMarkdown(source string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
+	stream := NewMarkdownStream(width, noColor)
+	stream.SetDisplay(display)
+	stream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+	if len(palette) > 0 {
+		stream.SetTheme(palette[0])
+	}
+	stable, _ := stream.Feed(source)
+	return append(stable, stream.DisplayTail()...)
+}
+
 // FormatNotice renders one Pi-style semantic status notice. User/provider text
 // stays untrusted; only the fixed semantic style is serialized as SGR.
 func FormatNotice(kind NoticeKind, text string, width int, noColor bool, palette ...*pitheme.Theme) []string {

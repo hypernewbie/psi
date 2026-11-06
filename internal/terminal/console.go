@@ -35,6 +35,10 @@ type Input struct {
 // All drawing occurs in the application's event-loop goroutine through one Writer.
 const maxActiveFragmentBytes = 64 * 1024
 
+// liveThinkingTailRows keeps only a small rendered tail in the composed
+// fragment. Older rows are appended to native scrollback as they complete.
+const liveThinkingTailRows = 4
+
 type Console struct {
 	In     *os.File
 	Out    io.Writer
@@ -999,8 +1003,7 @@ func (c *Console) MarkdownWrite(p []byte) (int, error) {
 // always retained in the document ledger so the visibility toggle can reveal
 // it later; hidden runs show only Pi's collapsed label.
 func (c *Console) ThinkingWrite(p []byte) (int, error) {
-	text := Sanitize(string(p))
-	if text == "" {
+	if len(p) == 0 {
 		return len(p), nil
 	}
 	// One live stream at a time: a reasoning run ends the text run.
@@ -1014,7 +1017,8 @@ func (c *Console) ThinkingWrite(p []byte) (int, error) {
 		c.thinkingStream.SetDisplay(c.presentation.Display)
 		c.thinkingStream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
 	}
-	stable, _ := c.thinkingStream.Feed(text)
+	// The stream's sanitizer retains incomplete UTF-8 and control sequences.
+	stable, _ := c.thinkingStream.Feed(string(p))
 	appendText := ""
 	if !c.thinkingLive {
 		// Whitespace-only reasoning never becomes a visible block, but it stays
@@ -1027,7 +1031,7 @@ func (c *Console) ThinkingWrite(p []byte) (int, error) {
 		c.thinkingLive = true
 		appendText = streamPrefix
 	}
-	c.documentBlocks[c.thinkingBlockIndex].Text = c.thinkingStream.CommittedSource()
+	c.documentBlocks[c.thinkingBlockIndex].Text = c.thinkingStream.Source()
 	if c.presentation.Display.HideThinking {
 		c.thinkingRows = nil
 		if !c.thinkingLabelShown {
@@ -1035,8 +1039,13 @@ func (c *Console) ThinkingWrite(p []byte) (int, error) {
 			appendText += rowsAppend(FormatThinkingLabel(c.currentWidth(), c.presentation.NoColor, c.presentation.Display, c.presentation.Theme))
 		}
 	} else {
-		c.thinkingRows = c.thinkingStream.DisplayTail()
+		committed, tail, redraw := c.thinkingStream.SplitRows(liveThinkingTailRows)
+		if redraw {
+			c.fullDocumentRedraw = true
+		}
+		c.thinkingRows = tail
 		appendText += markdownRowsAppend(stable)
+		appendText += markdownRowsAppend(committed)
 	}
 	if err := c.emitComposed(appendText); err != nil {
 		return 0, err
@@ -1049,6 +1058,10 @@ func (c *Console) ThinkingWrite(p []byte) (int, error) {
 func (c *Console) CloseThinking() error {
 	if c.thinkingStream == nil {
 		return c.err
+	}
+	if !c.presentation.Display.HideThinking && c.thinkingStream.emittedRows > 0 && c.thinkingStream.fenceByte != 0 {
+		// Finishing a fence can replace its displayed preview or add an empty line.
+		c.fullDocumentRedraw = true
 	}
 	rows := c.thinkingStream.Finish()
 	hadOutput := c.thinkingStream.HasOutput()
@@ -1100,6 +1113,16 @@ func (c *Console) CloseMarkdown() error {
 	return c.emitComposed(markdownRowsAppend(rows) + "\r\n")
 }
 
+// markThinkingDisplayed records the rows already rendered by a full document
+// redraw. The next live frame then appends only rows that are not on screen.
+func (c *Console) markThinkingDisplayed() {
+	if c.thinkingStream == nil || !c.thinkingLive || c.presentation.Display.HideThinking {
+		return
+	}
+	c.thinkingStream.MarkDisplayed()
+	c.thinkingRows = c.thinkingStream.DisplayTail()
+}
+
 func markdownRowsAppend(rows []string) string {
 	if len(rows) == 0 {
 		return ""
@@ -1141,6 +1164,7 @@ func (c *Console) emitComposed(appendText string) error {
 			err := c.emit(Frame{FullRedraw: true, DocumentRows: FormatDocument(c.documentBlocks, width, c.presentation),
 				Width: width, Height: height})
 			if err == nil {
+				c.markThinkingDisplayed()
 				c.fullDocumentRedraw = false
 				c.lastW, c.lastH = width, height
 			}
@@ -1185,7 +1209,7 @@ func (c *Console) emitComposed(appendText string) error {
 	if len(c.steeringRows) > 0 {
 		fragmentRows = append(append([]string(nil), c.steeringRows...), fragmentRows...)
 	}
-	if len(c.thinkingRows) > 0 {
+	if len(c.thinkingRows) > 0 && !c.fullDocumentRedraw {
 		fragmentRows = append(append([]string(nil), c.thinkingRows...), fragmentRows...)
 	}
 	if c.thinking {
@@ -1204,6 +1228,14 @@ func (c *Console) emitComposed(appendText string) error {
 		}
 		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.completionRows)
 	}
+	if len(c.thinkingRows) > 0 && !c.fullDocumentRedraw && c.thinkingStream.canCommitRows() {
+		// The layout can have less space than the usual four-row tail. Commit
+		// its clipped prefix rather than silently folding those reasoning rows.
+		clipped := min(len(c.thinkingRows), max(0, len(fragmentRows)-view.fragmentRows))
+		c.thinkingStream.appendEmitted(c.thinkingRows[:clipped])
+		appendText += markdownRowsAppend(c.thinkingRows[:clipped])
+		c.thinkingRows = c.thinkingRows[clipped:]
+	}
 	hideCursor := c.activity != "" || (c.picker != nil && c.picker.mode == PickerChoice)
 	fullRedraw := c.fullDocumentRedraw
 	if fullRedraw {
@@ -1221,6 +1253,9 @@ func (c *Console) emitComposed(appendText string) error {
 		Height: height, Width: width}
 	err := c.emit(f)
 	if err == nil {
+		if fullRedraw {
+			c.markThinkingDisplayed()
+		}
 		c.fullDocumentRedraw = false
 		c.lastW, c.lastH = width, height
 	}
