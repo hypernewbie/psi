@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"psi/internal/config"
 	"psi/internal/event"
@@ -102,8 +105,11 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 	if count != 24 {
 		t.Fatalf("public snapshot model count changed: %d", count)
 	}
+	// The picker lists only providers with a credential, so the catalog paging
+	// check needs a synthetic login for both advertised provider protocols.
+	writeAppFile(t, filepath.Join(r.agentDir, "auth.json"), fmt.Sprintf(`{"anthropic":{"type":"api_key","key":"synthetic-anthropic-key"},"openai-codex":{"type":"oauth","access":"synthetic-access","refresh":"synthetic-refresh","accountId":"synthetic-account","expires":%d}}`, time.Now().Add(time.Hour).UnixMilli()))
 	wantPickerItems := 0
-	for _, providerID := range providerregistry.IDs() {
+	for _, providerID := range []string{"anthropic", "openai-codex"} {
 		wantPickerItems += len(r.models.ModelOptions(providerID))
 	}
 	selector := modelSelector(r)
@@ -120,6 +126,48 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 	selected := selector.SelectedItem()
 	if selected == nil || selected.ID != "anthropic/claude-opus-4-6" {
 		t.Fatal("filtered model selection lost its stable identity")
+	}
+}
+
+// /model offers only models the session can use: the provider must have a
+// credential, and the model must pass the same activation path a request uses.
+func TestModelPickerListsOnlyCredentialedUsableModels(t *testing.T) {
+	for _, family := range providerregistry.IDs() {
+		if spec, ok := providerregistry.Lookup(family); ok && spec.Environment != "" {
+			t.Setenv(spec.Environment, "")
+		}
+	}
+	r := testRuntime(t)
+	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"zai": {Models: []config.ModelMeta{
+		{ID: "synthetic-zai", API: "openai-completions", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024, Input: []string{"text"}},
+		{ID: "synthetic-zai-broken", API: "synthetic-unregistered-api", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024},
+	}}}}
+	if items := modelSelector(r).Items; len(items) != 0 {
+		t.Fatalf("picker offered models without a credential: %v", items)
+	}
+	t.Setenv("ZAI_API_KEY", "synthetic-zai-key")
+	want := 0
+	for _, option := range r.models.ModelOptions("zai") {
+		if option.Available {
+			want++
+		}
+	}
+	selector := modelSelector(r)
+	if len(selector.Items) != want {
+		t.Fatalf("picker items = %d, want the %d usable zai models: %v", len(selector.Items), want, selector.Items)
+	}
+	seen := map[string]bool{}
+	for _, item := range selector.Items {
+		if !strings.HasPrefix(item.ID, "zai/") {
+			t.Fatalf("picker leaked a provider without a credential: %s", item.ID)
+		}
+		if !strings.HasPrefix(item.FirstMessage, "credential available (ZAI_API_KEY); ") {
+			t.Fatalf("picker lost the credential source: %q", item.FirstMessage)
+		}
+		seen[item.ID] = true
+	}
+	if !seen["zai/synthetic-zai"] || seen["zai/synthetic-zai-broken"] {
+		t.Fatalf("picker did not filter by model usability: %v", seen)
 	}
 }
 

@@ -16,9 +16,10 @@ export ANTHROPIC_API_KEY="..."
 ./psi
 ```
 
-Use `/model` to select a locally available provider and model. Each API-key
-provider needs its own environment variable; see `docs/config.md`. The `--provider`
-and `--model` options accept the exact IDs shown by `/model`.
+Use `/model` to select a provider and model that are already logged in; providers
+without a credential are not listed. Each API-key provider needs its own
+environment variable; see `docs/config.md`. The `--provider` and `--model`
+options accept the exact IDs shown by `/model`.
 
 Model lists come from the bundled public snapshot and Pi's local cache. Psi
 does not fetch catalogs from the network. OpenCode Go's API and endpoint are

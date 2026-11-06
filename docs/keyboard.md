@@ -24,7 +24,7 @@ Commands (bounded inline, searchable editor pickers, no fullscreen):
 - `/help` — commands, keys, limits, examples
 - `/new` — new session (keeps scrollback, resets recall)
 - `/resume [filter]` — search workspace sessions, use arrows/PageUp/PageDown and Enter; same-session no-op
-- `/model` — searchable model picker with Pi's `→` selection pointer, `✓` current marker, provider badges, and selected-model credential details; `/model [provider/]model` applies a direct session-local choice
+- `/model` — searchable model picker with Pi's `→` selection pointer, `✓` current marker, provider badges, and selected-model credential details; only providers with a credential in `auth.json`, `models.json`, or the environment are listed; `/model [provider/]model` applies a direct session-local choice
 - `/thinking` — searchable supported-level picker with Pi's `→` pointer; `/thinking [level]` applies a direct session-local choice
 - `/compact [focus]` — real cancellable summary, start/settled outcome
 - `/session` — identity, workspace, provider/API/model, thinking, continuation, usage, and theme diagnostics (no secrets, no invented $0.00)
