@@ -1147,7 +1147,18 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 				r.contextTokens = float64(estimated)
 				r.contextWindow = float64(r.cfg.Model.ContextWindow)
 				percent := 100 * float64(estimated) / float64(r.cfg.Model.ContextWindow)
-				snapshot.ContextEstimate = "~" + formatFooterFixedOneDecimal(percent, "%") + "/" + formatFooterTokens(float64(r.cfg.Model.ContextWindow))
+				percentLabel := formatFooterFixedOneDecimal(percent, "%")
+				// Keep the bar's fill and color thresholds on the same rounded value
+				// that the footer prints.
+				displayPercent := percent
+				if rounded, err := strconv.ParseFloat(strings.TrimSuffix(percentLabel, "%"), 64); err == nil {
+					displayPercent = rounded
+				}
+				windowLabel := formatFooterTokens(float64(r.cfg.Model.ContextWindow))
+				snapshot.ContextPercent = displayPercent
+				snapshot.ContextPercentLabel = percentLabel
+				snapshot.ContextWindowLabel = windowLabel
+				snapshot.ContextEstimate = "~" + percentLabel + "/" + windowLabel
 			}
 		}
 		r.footerKey, r.footerSnapshot = key, snapshot

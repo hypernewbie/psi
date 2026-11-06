@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -157,6 +158,171 @@ func TestFooterSanitizesGitBranch(t *testing.T) {
 	}
 	if !strings.Contains(plain, "ma in") {
 		t.Fatalf("branch was not kept as harmless footer text: %q", plain)
+	}
+}
+
+func TestFooterDrawsInlineContextBar(t *testing.T) {
+	rows, widths := formatFooter(PresentationSnapshot{
+		Usage: "↑27k ↓5.1k", ContextEstimate: "~2.4%/1.0M",
+		ContextPercent: 2.4, ContextPercentLabel: "2.4%", ContextWindowLabel: "1.0M",
+		AutoCompact: true, Model: "m", NoColor: true,
+	}, 80, 3, true)
+	line := Sanitize(rows[1])
+	for _, want := range []string{"↑27k ↓5.1k [", "] ~2.4% / 1.0M (auto)", "░"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("inline context bar missing %q: %q", want, line)
+		}
+	}
+	if got := strings.Count(line, "|"); got != 0 {
+		t.Fatalf("inline context bar shows %d band dividers, want none: %q", got, line)
+	}
+	if !strings.ContainsAny(line, "▏▎▍▌▋▊▉█") {
+		t.Fatalf("inline context bar has no fill: %q", line)
+	}
+	if strings.Contains(rows[1], "\x1b[") {
+		t.Fatalf("NO_COLOR footer emitted SGR: %q", rows[1])
+	}
+	if widths[1] > 79 {
+		t.Fatalf("footer exceeded its wrap-safe width: %d", widths[1])
+	}
+}
+
+func TestFooterBarRendersExactWidth(t *testing.T) {
+	for _, tc := range []struct {
+		percent float64
+		width   int
+	}{
+		{0, footerBarMinWidth},
+		{2.4, 13},
+		{50, 13},
+		{100, footerBarMaxWidth},
+	} {
+		bar := StyledRow{Spans: footerBarSpans(tc.percent, tc.width)}
+		if got := bar.Width(); got != tc.width {
+			t.Fatalf("bar at %v%% width=%d: rendered width=%d", tc.percent, tc.width, got)
+		}
+		plain := bar.Plain()
+		if tc.percent == 0 && strings.ContainsAny(plain, "█▏▎▍▌▋▊▉") {
+			t.Fatalf("zero-percent bar has fill: %q", plain)
+		}
+		if tc.percent == 100 && strings.Contains(plain, "░") {
+			t.Fatalf("full bar has an empty track: %q", plain)
+		}
+	}
+}
+
+func TestFooterBarZonesKeepEveryBandVisible(t *testing.T) {
+	for width := footerBarMinWidth; width <= footerBarMaxWidth; width++ {
+		green, yellow, red := footerBarZones(width)
+		if green < 1 || yellow < 1 || red < 1 {
+			t.Fatalf("width=%d: band widths (%d,%d,%d) hide a band", width, green, yellow, red)
+		}
+		track := green + yellow + red
+		if track != width-2 {
+			t.Fatalf("width=%d: track=%d, want %d", width, track, width-2)
+		}
+		if got, want := green, int(math.Round(0.40*float64(track))); got < want-1 || got > want+1 {
+			t.Fatalf("width=%d: green band=%d, want ~%d", width, got, want)
+		}
+		if got, want := green+yellow, int(math.Round(0.70*float64(track))); got < want-1 || got > want+1 {
+			t.Fatalf("width=%d: yellow ends at %d, want ~%d", width, got, want)
+		}
+	}
+	if green, yellow, red := footerBarZones(footerBarMinWidth - 1); green+yellow+red != 0 {
+		t.Fatalf("narrow width produced bands (%d,%d,%d)", green, yellow, red)
+	}
+}
+
+func TestFooterClampsInvalidContextPercent(t *testing.T) {
+	for _, tc := range []struct {
+		percent float64
+		color   string
+	}{
+		{math.NaN(), "\x1b[32m"},
+		{-25, "\x1b[32m"},
+		{150, "\x1b[31m"},
+		{math.Inf(1), "\x1b[31m"},
+	} {
+		rows, _ := formatFooter(PresentationSnapshot{
+			ContextPercent: tc.percent, ContextPercentLabel: "x%", ContextWindowLabel: "1M", Model: "m",
+		}, 80, 3, false)
+		if !strings.Contains(rows[1], tc.color+" ~x% / 1M") {
+			t.Errorf("percent %v colored the label without %q: %q", tc.percent, tc.color, rows[1])
+		}
+		if tc.color == "\x1b[32m" && strings.Contains(rows[1], "\x1b[31m") {
+			t.Errorf("percent %v put red in the bar: %q", tc.percent, rows[1])
+		}
+	}
+}
+
+func TestFooterContextBarColorBands(t *testing.T) {
+	const (
+		green  = "\x1b[32m"
+		yellow = "\x1b[33m"
+		red    = "\x1b[31m"
+	)
+	// Band colors follow cell quantization, so the probes stay well inside
+	// each band instead of pinning the rounded 40% and 70% boundaries.
+	for _, tc := range []struct {
+		percent float64
+		want    []string
+		absent  []string
+	}{
+		{10, []string{green}, []string{yellow, red}},
+		{30, []string{green}, []string{yellow, red}},
+		{50, []string{green, yellow}, []string{red}},
+		{65, []string{green, yellow}, []string{red}},
+		{85, []string{green, yellow, red}, nil},
+		{100, []string{green, yellow, red}, nil},
+	} {
+		rows, _ := formatFooter(PresentationSnapshot{
+			ContextPercent: tc.percent, ContextPercentLabel: "x%", ContextWindowLabel: "1M", Model: "m",
+		}, 80, 3, false)
+		for _, want := range tc.want {
+			if !strings.Contains(rows[1], want) {
+				t.Errorf("context bar at %v%% lacks color %q: %q", tc.percent, want, rows[1])
+			}
+		}
+		for _, absent := range tc.absent {
+			if strings.Contains(rows[1], absent) {
+				t.Errorf("context bar at %v%% shows unused band color %q: %q", tc.percent, absent, rows[1])
+			}
+		}
+	}
+}
+
+func TestFooterColorsContextLabelByBand(t *testing.T) {
+	for _, tc := range []struct {
+		percent float64
+		label   string
+		color   string
+	}{
+		{12, "12.0%", "\x1b[32m"},
+		{55, "55.0%", "\x1b[33m"},
+		{99.9, "99.9%", "\x1b[31m"},
+	} {
+		rows, _ := formatFooter(PresentationSnapshot{
+			ContextPercent: tc.percent, ContextPercentLabel: tc.label, ContextWindowLabel: "1.0M", Model: "m",
+		}, 80, 3, false)
+		want := tc.color + " ~" + tc.label + " / 1.0M"
+		if !strings.Contains(rows[1], want) {
+			t.Errorf("context label at %v%% lacks %q: %q", tc.percent, want, rows[1])
+		}
+	}
+}
+
+func TestFooterFallsBackToTextOnNarrowTerminal(t *testing.T) {
+	rows, widths := formatFooter(PresentationSnapshot{
+		Usage: "↑27k ↓5.1k", ContextEstimate: "~2.4%/1.0M",
+		ContextPercent: 2.4, ContextPercentLabel: "2.4%", ContextWindowLabel: "1.0M",
+		Model: "m", NoColor: true,
+	}, 24, 3, true)
+	line := Sanitize(rows[1])
+	if strings.Contains(line, "[") || !strings.Contains(line, "~2.4%/1.0M") {
+		t.Fatalf("narrow footer did not fall back to the textual estimate: %q", line)
+	}
+	if widths[1] > 23 {
+		t.Fatalf("narrow footer exceeded its wrap-safe width: %d", widths[1])
 	}
 }
 
