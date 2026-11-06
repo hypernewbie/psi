@@ -288,10 +288,10 @@ func TestHelloCarriesIdentityMetadataAndCapabilities(t *testing.T) {
 	if h.GetProtocolVersion() != 1 || h.GetRuntimeId() == "" || h.GetSessionId() != "session-7" {
 		t.Fatalf("hello mismatch: %+v", h)
 	}
-	if got := h.GetCapabilities(); len(got) != len(hostCapabilities) {
+	if got := h.GetCapabilities(); len(got) != len(baseCapabilities) {
 		t.Fatalf("capabilities: %v", got)
 	}
-	for i, name := range hostCapabilities {
+	for i, name := range baseCapabilities {
 		if h.GetCapabilities()[i] != name {
 			t.Fatalf("capabilities: %v", h.GetCapabilities())
 		}

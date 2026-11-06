@@ -122,9 +122,11 @@ func (l *Loop) ContinuePending(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer l.end()
-	delivered := l.deliverSteering()
+	delivered, err := l.deliverQueuedSteering()
+	if err != nil {
+		return err
+	}
 	if !delivered {
-		var err error
 		delivered, err = l.deliverFollowUp()
 		if err != nil {
 			return err
@@ -144,7 +146,10 @@ func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resume
 	if err := l.compactWithReason(ctx, cfg, focus, event.CompactionManual); err != nil {
 		return err
 	}
-	queued := l.deliverSteering()
+	queued, err := l.deliverQueuedSteering()
+	if err != nil {
+		return err
+	}
 	if resumePrompt != "" {
 		if _, err := l.store.AppendMessage(userMsg(resumePrompt)); err != nil {
 			return fmt.Errorf("storage failure, stopping: %w", err)
@@ -153,7 +158,6 @@ func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resume
 		return l.run(ctx, cfg, true)
 	}
 	if !queued {
-		var err error
 		queued, err = l.deliverFollowUp()
 		if err != nil {
 			return err

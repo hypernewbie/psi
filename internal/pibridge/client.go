@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"psi/internal/attachments"
 	pibridgepb "psi/internal/pibridge/pb"
 )
 
@@ -50,6 +51,7 @@ const (
 	capCompact      = "pi.compact.v1"
 	capReload       = "pi.reload.v1"
 	capSyncboard    = "pi.syncboard.v1"
+	capAttachments  = "pi.attachments.v3"
 
 	// attachDeadline must stay below Phi's own 5s hello deadline: that status
 	// is terminal, so the local timeout has to fire first for the retry to
@@ -72,9 +74,10 @@ const (
 	requestQueue = 16
 )
 
-// hostCapabilities is advertised on every Hello. A capability is listed only
-// once its handler answers every host path; deferred work stays unadvertised.
-var hostCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact, capSyncboard, capReload}
+// baseCapabilities is advertised by every bridge client. Attachments are added
+// per client only when Phi's handoff root opens safely; a capability is listed
+// only once its handler answers every host path.
+var baseCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact, capSyncboard, capReload}
 
 var (
 	errAcceptTimeout = errors.New("pibridge: attach not accepted")
@@ -134,6 +137,22 @@ type Snapshot struct {
 	// never idle.
 	Reload    ReloadReadiness
 	HasReload bool
+
+	// Attachment readiness is copied host state. Absence means the capability
+	// is unavailable, never idle.
+	Attachment    AttachmentReadiness
+	HasAttachment bool
+}
+
+// AttachmentReadiness is one sampled view of attachment admission state.
+// Image availability is present only when the live model is known.
+type AttachmentReadiness struct {
+	Idle              bool
+	HasPending        bool
+	CompactionActive  bool
+	BridgePending     bool
+	ImageAvailable    bool
+	HasImageAvailable bool
 }
 
 // CompactReadiness is one sampled view of compaction admission state.
@@ -178,6 +197,11 @@ type Client struct {
 	// the lifetime of the client so a host select arm never sees it appear.
 	requests chan Request
 
+	// offered is this client's immutable Hello capability list. The handoff
+	// root is retained only while the capability is offered.
+	offered []string
+	root    *attachments.Root
+
 	// caps is the last negotiated set. It is only valid on a live
 	// stream: the run loop clears it when the stream dies.
 	capsMu sync.RWMutex
@@ -192,13 +216,14 @@ type Client struct {
 
 // FromEnv builds a client when Phi provisioned this process. It returns nil
 // when the environment is absent, partial, or not a local unix endpoint.
-// All five keys are cleared before returning, including the attachment root
-// this MVP does not use.
+// All five keys are cleared before returning; the attachment root is retained
+// only when it opens safely.
 func FromEnv(initial Snapshot) *Client {
 	endpoint := os.Getenv(envEndpoint)
 	paneID := os.Getenv(envPaneID)
 	processID := os.Getenv(envProcessID)
 	token := os.Getenv(envToken)
+	attachmentRoot := os.Getenv(envAttachmentRoot)
 	for _, key := range []string{envEndpoint, envPaneID, envProcessID, envToken, envAttachmentRoot} {
 		_ = os.Unsetenv(key)
 	}
@@ -224,6 +249,13 @@ func FromEnv(initial Snapshot) *Client {
 		snap:      initial,
 		wake:      make(chan struct{}, 1),
 		requests:  make(chan Request, requestQueue),
+		offered:   append([]string(nil), baseCapabilities...),
+	}
+	if attachmentRoot != "" {
+		if root, err := attachments.Open(attachmentRoot); err == nil {
+			c.root = root
+			c.offered = append(c.offered, capAttachments)
+		}
 	}
 	return c
 }
@@ -254,8 +286,8 @@ func (c *Client) Start() {
 	go c.run(ctx)
 }
 
-// Close cancels the stream and waits for the goroutine. It is idempotent
-// and returns at once when Start was never called.
+// Close cancels the stream and waits for the goroutine, then releases the
+// handoff root. It is idempotent and safe when Start was never called.
 func (c *Client) Close() {
 	if c == nil {
 		return
@@ -263,11 +295,38 @@ func (c *Client) Close() {
 	c.startMu.Lock()
 	cancel, done := c.cancel, c.done
 	c.startMu.Unlock()
-	if cancel == nil {
-		return
+	if cancel != nil {
+		cancel()
+		<-done
 	}
-	cancel()
-	<-done
+	c.startMu.Lock()
+	root := c.root
+	c.root = nil
+	c.startMu.Unlock()
+	if root != nil {
+		_ = root.Close()
+	}
+}
+
+// AttachmentRoot is the retained handoff directory, nil when the capability
+// was not offered. A late call after Close returns nil.
+func (c *Client) AttachmentRoot() *attachments.Root {
+	if c == nil {
+		return nil
+	}
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	return c.root
+}
+
+// AttachmentsAvailable reports whether this client offered the capability.
+func (c *Client) AttachmentsAvailable() bool {
+	if c == nil {
+		return false
+	}
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	return c.root != nil
 }
 
 // Sync publishes identity changes. Unchanged snapshots are dropped here so
@@ -594,6 +653,8 @@ func capabilityOf(kind string) string {
 		return capReload
 	case RequestState:
 		return capState
+	case RequestAttachment:
+		return capAttachments
 	}
 	return ""
 }
@@ -605,7 +666,7 @@ func (c *Client) awaitAccepted(ctx context.Context, msgs <-chan *pibridgepb.PhiT
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	offered := map[string]bool{}
-	for _, name := range hostCapabilities {
+	for _, name := range c.offered {
 		offered[name] = true
 	}
 	for {
@@ -656,7 +717,7 @@ func (c *Client) hello() (*pibridgepb.PiToPhi, uint64, string, bool) {
 		ProtocolVersion:      protocolVersion,
 		SessionId:            c.snap.SessionID,
 		RuntimeId:            runtimeID,
-		Capabilities:         append([]string(nil), hostCapabilities...),
+		Capabilities:         append([]string(nil), c.offered...),
 		CurrentState:         snap,
 		JournalFirstSequence: first,
 		JournalLastSequence:  last,
@@ -728,6 +789,18 @@ func (c *Client) snapshotLocked(requestID string) *pibridgepb.StateSnapshot {
 			ready.HighWater = proto.Uint64(c.snap.Reload.HighWater)
 		}
 		snap.ReloadReadiness = ready
+	}
+	if c.snap.HasAttachment {
+		ready := &pibridgepb.AttachmentReadiness{
+			Idle:               c.snap.Attachment.Idle,
+			HasPendingMessages: c.snap.Attachment.HasPending,
+			CompactionActive:   c.snap.Attachment.CompactionActive,
+			BridgePending:      c.snap.Attachment.BridgePending,
+		}
+		if c.snap.Attachment.HasImageAvailable {
+			ready.ImageAvailable = proto.Bool(c.snap.Attachment.ImageAvailable)
+		}
+		snap.AttachmentReadiness = ready
 	}
 	return snap
 }

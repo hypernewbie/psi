@@ -61,18 +61,58 @@ type Loop struct {
 	prov         provider.Provider
 	sink         func(event.Event)
 	steerMu      sync.Mutex
-	steering     []queuedInput
+	steering     []UserInput
 	followUps    []string
 	steeringMode string
 	followUpMode string
+	// pendingBytes counts decoded image bytes still owned by queued or
+	// temporarily delivering steering input.
+	pendingBytes uint64
 }
 
-// queuedInput is one undelivered steering message. Provenance rides with the
-// content so a queued skill keeps the invocation it was dispatched from.
-type queuedInput struct {
-	text       string
-	invocation string
-	source     string
+// UserInput is one user message. Content is a string or
+// []session.UserContentBlock. Display is the safe transcript rendering and
+// never carries image data. ImageBytes is the verified decoded image total.
+type UserInput struct {
+	Content    any
+	Display    string
+	Invocation string
+	Source     string
+	ImageBytes uint64
+}
+
+// Structured reports whether the content carries blocks rather than text.
+func (in UserInput) Structured() bool {
+	_, ok := in.Content.([]session.UserContentBlock)
+	return ok
+}
+
+// Text returns the plain text content. Structured input has none.
+func (in UserInput) Text() string {
+	if text, ok := in.Content.(string); ok {
+		return text
+	}
+	return ""
+}
+
+// Empty reports whether the input carries no visible text and no usable block.
+func (in UserInput) Empty() bool {
+	switch content := in.Content.(type) {
+	case string:
+		return strings.TrimSpace(content) == ""
+	case []session.UserContentBlock:
+		for _, block := range content {
+			if block.Text != nil && block.Text.Text != "" {
+				return false
+			}
+			if block.Image != nil && block.Image.Data != "" && block.Image.MimeType != "" {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
 }
 
 func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink func(event.Event)) *Loop {
@@ -97,21 +137,31 @@ func (l *Loop) Steer(text string) {
 // SteerWithProvenance queues a user message plus the invocation that produced
 // it, so a dispatched skill keeps its provenance through late delivery.
 func (l *Loop) SteerWithProvenance(text, invocation, source string) {
-	if strings.TrimSpace(text) == "" {
+	l.SteerContent(UserInput{Content: text, Display: text, Invocation: invocation, Source: source})
+}
+
+// SteerContent queues one structured or text message. Images stay structured
+// until delivery, so a steered attachment reaches the next model request.
+func (l *Loop) SteerContent(input UserInput) {
+	if input.Empty() {
 		return
 	}
+	if input.Display == "" {
+		input.Display = input.Text()
+	}
 	l.steerMu.Lock()
-	l.steering = append(l.steering, queuedInput{text: text, invocation: invocation, source: source})
+	l.steering = append(l.steering, input)
+	l.pendingBytes += input.ImageBytes
 	l.steerMu.Unlock()
 }
 
-// PendingSteering returns queued, undelivered steering messages.
+// PendingSteering returns queued, undelivered steering displays.
 func (l *Loop) PendingSteering() []string {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
 	out := make([]string, len(l.steering))
 	for i, msg := range l.steering {
-		out[i] = msg.text
+		out[i] = msg.Display
 	}
 	return out
 }
@@ -170,7 +220,9 @@ func takeQueued[T any](mode string, queue *[]T) []T {
 	return taken
 }
 
-func (l *Loop) takeSteering() []queuedInput {
+// takeSteering removes the batch one turn may deliver. Bytes stay counted
+// until each append is durable.
+func (l *Loop) takeSteering() []UserInput {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
 	return takeQueued(l.steeringMode, &l.steering)
@@ -182,15 +234,34 @@ func (l *Loop) takeFollowUp() []string {
 	return takeQueued(l.followUpMode, &l.followUps)
 }
 
-// ClearSteering takes and clears the queued steering messages.
-func (l *Loop) ClearSteering() []string {
+// PendingContentBytes is the decoded image total still owned by queued or
+// delivering steering input.
+func (l *Loop) PendingContentBytes() uint64 {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
-	out := make([]string, len(l.steering))
-	for i, msg := range l.steering {
-		out[i] = msg.text
-	}
+	return l.pendingBytes
+}
+
+// TakeSteering removes the queued input for structured recovery. Display text
+// alone cannot reconstruct an image, so callers that recover must take it.
+func (l *Loop) TakeSteering() []UserInput {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	out := l.steering
 	l.steering = nil
+	for _, msg := range out {
+		l.pendingBytes -= msg.ImageBytes
+	}
+	return out
+}
+
+// ClearSteering takes and clears the queued steering display text.
+func (l *Loop) ClearSteering() []string {
+	input := l.TakeSteering()
+	out := make([]string, len(input))
+	for i, msg := range input {
+		out[i] = msg.Display
+	}
 	return out
 }
 
@@ -203,17 +274,18 @@ func (l *Loop) ClearFollowUp() []string {
 	return out
 }
 
-// deliverSteering moves queued messages into the session and reports whether
-// anything was delivered. Delivered messages render as normal user messages.
-func (l *Loop) deliverSteering() bool {
-	delivered, err := l.deliverQueuedSteering()
-	if err != nil {
-		// Storage failure stops the run like any other append failure; the
-		// undelivered messages stay queued and are not silently dropped.
-		l.sink(event.Event{Type: event.Error, Text: fmt.Sprintf("storage failure, stopping: %v", err)})
-		return false
+// releasePending drops bytes that a successful append made durable.
+func (l *Loop) releasePending(bytes uint64) {
+	if bytes == 0 {
+		return
 	}
-	return delivered
+	l.steerMu.Lock()
+	if bytes >= l.pendingBytes {
+		l.pendingBytes = 0
+	} else {
+		l.pendingBytes -= bytes
+	}
+	l.steerMu.Unlock()
 }
 
 // deliverQueuedSteering appends queued messages in order and restores the
@@ -221,22 +293,25 @@ func (l *Loop) deliverSteering() bool {
 func (l *Loop) deliverQueuedSteering() (bool, error) {
 	msgs := l.takeSteering()
 	for i, msg := range msgs {
-		uid, err := l.store.AppendMessage(userMsg(msg.text))
+		uid, err := l.store.AppendMessage(userMsg(msg.Content))
 		if err != nil {
 			l.steerMu.Lock()
 			l.steering = append(msgs[i:], l.steering...)
 			l.steerMu.Unlock()
 			return false, fmt.Errorf("storage failure, stopping: %w", err)
 		}
-		if msg.invocation != "" {
-			if _, err := l.store.AppendProvenance(uid, msg.invocation, msg.source); err != nil {
+		// The user message is durable from here: release its bytes and report
+		// it even if the provenance append fails.
+		l.releasePending(msg.ImageBytes)
+		if msg.Invocation != "" {
+			if _, err := l.store.AppendProvenance(uid, msg.Invocation, msg.Source); err != nil {
 				l.steerMu.Lock()
 				l.steering = append(msgs[i+1:], l.steering...)
 				l.steerMu.Unlock()
 				return false, fmt.Errorf("storage failure, stopping: %w", err)
 			}
 		}
-		l.sink(event.Event{Type: event.SteeringDelivered, Text: msg.text})
+		l.sink(event.Event{Type: event.SteeringDelivered, Text: msg.Display})
 	}
 	return len(msgs) > 0, nil
 }
@@ -271,6 +346,25 @@ func (l *Loop) begin() error {
 func (l *Loop) end() { l.mu.Lock(); l.running = false; l.mu.Unlock() }
 
 func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
+	return l.submit(ctx, UserInput{Content: text, Display: text}, cfg)
+}
+
+// SubmitContent submits structured text/image content through the same path as
+// text submissions, so session shape and validation stay identical.
+func (l *Loop) SubmitContent(ctx context.Context, input UserInput, cfg Config) error {
+	return l.submit(ctx, input, cfg)
+}
+
+// SubmitWithProvenance stores the expanded user input plus visible invocation provenance (P2-043, P2-054).
+// Ordering: user message, then psi.input custom entry (target -> invocation), then provider request.
+// Provenance is state-only (type "custom"), so model context is unchanged (pi ignores "custom").
+func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, source string, cfg Config) error {
+	input := UserInput{Content: text, Display: text, Invocation: invocation, Source: source}
+	return l.submit(ctx, input, cfg)
+}
+
+// submit owns the one admission path every user message shares.
+func (l *Loop) submit(ctx context.Context, input UserInput, cfg Config) error {
 	if err := l.begin(); err != nil {
 		return err
 	}
@@ -278,7 +372,7 @@ func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(text) == "" {
+	if input.Empty() {
 		return fmt.Errorf("empty submission rejected")
 	}
 	proj, err := l.store.Projection()
@@ -305,55 +399,12 @@ func (l *Loop) Submit(ctx context.Context, text string, cfg Config) error {
 	if err := l.syncConfiguration(proj, cfg); err != nil {
 		return err
 	}
-	uid, err := l.store.AppendMessage(userMsg(text))
+	uid, err := l.store.AppendMessage(userMsg(input.Content))
 	if err != nil {
 		return fmt.Errorf("storage failure, stopping: %w", err)
 	}
-	_ = uid
-	return l.run(ctx, cfg, false)
-}
-
-// SubmitWithProvenance stores the expanded user input plus visible invocation provenance (P2-043, P2-054).
-// Ordering: user message, then psi.input custom entry (target -> invocation), then provider request.
-// Provenance is state-only (type "custom"), so model context is unchanged (pi ignores "custom").
-func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, source string, cfg Config) error {
-	if err := l.begin(); err != nil {
-		return err
-	}
-	defer l.end()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if strings.TrimSpace(text) == "" {
-		return fmt.Errorf("empty submission rejected")
-	}
-	proj, err := l.store.Projection()
-	if err != nil {
-		return err
-	}
-	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
-		return err
-	}
-	if cfg.Thinking == "" {
-		cfg.Thinking = "off"
-	}
-	refreshDynamicConfig(&cfg)
-	request, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
-	if err != nil {
-		return err
-	}
-	if _, err := provider.BuildRequest(request); err != nil {
-		return err
-	}
-	if err := l.syncConfiguration(proj, cfg); err != nil {
-		return err
-	}
-	uid, err := l.store.AppendMessage(userMsg(text))
-	if err != nil {
-		return fmt.Errorf("storage failure, stopping: %w", err)
-	}
-	if invocation != "" {
-		if _, err := l.store.AppendProvenance(uid, invocation, source); err != nil {
+	if input.Invocation != "" {
+		if _, err := l.store.AppendProvenance(uid, input.Invocation, input.Source); err != nil {
 			return fmt.Errorf("storage failure, stopping: %w", err)
 		}
 	}
@@ -366,8 +417,8 @@ func refreshDynamicConfig(cfg *Config) {
 	}
 }
 
-func userMsg(text string) session.AgentMessage {
-	return session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: text, Timestamp: time.Now().UnixMilli()}}
+func userMsg(content any) session.AgentMessage {
+	return session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: content, Timestamp: time.Now().UnixMilli()}}
 }
 
 func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
@@ -433,12 +484,16 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			return err
 		}
 		// Turn boundary: deliver steering queued while the previous turn ran,
+		// Turn boundary: deliver steering queued while the previous turn ran,
 		// before the next model request (Pi's getSteeringMessages poll). Pi skips
 		// this poll when the previous iteration already delivered a batch, so
 		// one-at-a-time mode never puts two messages in the same turn.
 		deliveredThisTurn := skipInitialSteeringPoll
 		if !deliveredThisTurn {
-			deliveredThisTurn = l.deliverSteering()
+			var err error
+			if deliveredThisTurn, err = l.deliverQueuedSteering(); err != nil {
+				return err
+			}
 		}
 		skipInitialSteeringPoll = false
 		refreshDynamicConfig(&cfg)
@@ -467,7 +522,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			// post-response boundary (or restored to the editor when the run ends).
 			// Poll only when this turn has not already delivered a batch.
 			if !deliveredThisTurn {
-				l.deliverSteering()
+				if _, err := l.deliverQueuedSteering(); err != nil {
+					return err
+				}
 			}
 			proj, err = l.store.Projection()
 			if err != nil {
@@ -579,7 +636,10 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		if len(resp.ToolCalls) == 0 {
 			// Deliver steering before follow-ups. Follow-ups wait until the
 			// current run has no more tool calls or steering messages.
-			deliveredSteering := l.deliverSteering()
+			deliveredSteering, steerErr := l.deliverQueuedSteering()
+			if steerErr != nil {
+				return steerErr
+			}
 			deliveredFollowUp := false
 			if !deliveredSteering {
 				var deliverErr error

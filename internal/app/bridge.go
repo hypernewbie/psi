@@ -1,8 +1,10 @@
 package app
 
 import (
+	"fmt"
 	"math"
 
+	"psi/internal/agent"
 	"psi/internal/event"
 	"psi/internal/pibridge"
 )
@@ -62,6 +64,26 @@ func bridgeSnapshot(r *runtime) pibridge.Snapshot {
 		HighWater:      r.reloadHigh,
 		HasHighWater:   true,
 	}
+	// Attachment readiness is sampled, never inferred: it exists only for a
+	// bridge that actually retained a valid root, and image availability is
+	// present only when the live model is known.
+	if r.bridge != nil && r.bridge.AttachmentsAvailable() {
+		snap.HasAttachment = true
+		// An occupied recovery batch refuses new prompts, so it is pending
+		// work for this capability even though no run owns it.
+		recovered := len(r.recovery) > 0
+		ready := pibridge.AttachmentReadiness{
+			Idle:             r.state == StateIdle && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork && !recovered,
+			HasPending:       queued || recovered,
+			CompactionActive: r.compactActive,
+			BridgePending:    prepWork || r.compactPending || r.reloadPending,
+		}
+		if r.cfg.Model.ID != "" {
+			ready.ImageAvailable = r.cfg.Model.InputImage
+			ready.HasImageAvailable = true
+		}
+		snap.Attachment = ready
+	}
 	return snap
 }
 
@@ -116,6 +138,70 @@ func (r *runtime) bridgeRunSettled(outcome pibridge.Outcome) {
 		return
 	}
 	r.bridge.RunSettled(outcome)
+}
+
+// noteRecovery moves admitted structured input into the recovery batch. The
+// content stays structured, so an image is never flattened into editor text,
+// and the batch is never replayed without a new user action.
+func (r *runtime) noteRecovery(inputs ...agent.UserInput) int {
+	if r == nil {
+		return 0
+	}
+	added := 0
+	for _, input := range inputs {
+		if !input.Structured() || input.Empty() {
+			continue
+		}
+		r.recovery = append(r.recovery, input)
+		added++
+	}
+	return added
+}
+
+// takeSteering splits a stopped run's queued input into structured recovery
+// and the ordinary text the editor already restores.
+func (r *runtime) takeSteering(loop *agent.Loop) []string {
+	if loop == nil {
+		return nil
+	}
+	var texts []string
+	var structured []agent.UserInput
+	for _, input := range loop.TakeSteering() {
+		if input.Structured() {
+			structured = append(structured, input)
+			continue
+		}
+		texts = append(texts, input.Display)
+	}
+	r.noteRecovery(structured...)
+	if len(structured) > 0 && r.recoveryNotify != nil {
+		r.recoveryNotify("An undelivered attachment prompt was not sent. Phi keeps a saved copy you can restore.")
+	}
+	return texts
+}
+
+// recoveryBytes is the decoded image total retained for undelivered input.
+func (r *runtime) recoveryBytes() uint64 {
+	var total uint64
+	for _, input := range r.recovery {
+		total += input.ImageBytes
+	}
+	if r.inFlight != nil {
+		total += r.inFlight.ImageBytes
+	}
+	return total
+}
+
+// clearRecovery drops the batch when the session it belonged to is replaced.
+func (r *runtime) clearRecovery() {
+	if r == nil || len(r.recovery) == 0 {
+		return
+	}
+	count := len(r.recovery)
+	r.recovery = nil
+	if r.recoveryNotify != nil {
+		r.recoveryNotify(fmt.Sprintf("%d undelivered attachment prompt(s) were discarded when the session changed", count))
+	}
 }
 
 // safeContextValue rejects the values a consumer must never see as a
