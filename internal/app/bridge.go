@@ -180,6 +180,35 @@ func (r *runtime) takeSteering(loop *agent.Loop) []string {
 	return texts
 }
 
+// retainInFlight keeps one admitted structured prompt until RunStart proves
+// its initial append durable. Only a structured prompt touches the marker.
+func (r *runtime) retainInFlight(input agent.UserInput) {
+	if r == nil || !input.Structured() {
+		return
+	}
+	retained := input
+	r.inFlight = &retained
+}
+
+// clearInFlight drops the retained prompt without recovering it. RunStart
+// and session replacement call it once durability or discard is proven.
+func (r *runtime) clearInFlight() {
+	if r != nil {
+		r.inFlight = nil
+	}
+}
+
+// recoverInFlight moves the retained prompt into the recovery batch. It
+// reports how many inputs were kept; the caller notifies the user.
+func (r *runtime) recoverInFlight() int {
+	if r == nil || r.inFlight == nil {
+		return 0
+	}
+	added := r.noteRecovery(*r.inFlight)
+	r.inFlight = nil
+	return added
+}
+
 // recoveryBytes is the decoded image total retained for undelivered input.
 func (r *runtime) recoveryBytes() uint64 {
 	var total uint64

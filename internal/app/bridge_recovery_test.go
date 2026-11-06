@@ -149,9 +149,6 @@ func TestCancelledSteeringBecomesRecoveryWithoutReplay(t *testing.T) {
 	if len(r.recovery) != 1 {
 		t.Fatalf("recovery = %+v, want the steered image", r.recovery)
 	}
-	if _, err := r.store.ActivePath(); err != nil {
-		t.Fatal(err)
-	}
 	path, err := r.store.ActivePath()
 	if err != nil {
 		t.Fatal(err)
@@ -165,5 +162,49 @@ func TestCancelledSteeringBecomesRecoveryWithoutReplay(t *testing.T) {
 	}
 	if got := loop.PendingSteering(); len(got) != 0 {
 		t.Fatalf("steering = %q, want it drained into recovery", got)
+	}
+}
+
+// The in-flight marker keeps one admitted prompt until RunStart proves its
+// append: text never touches it, recovery moves it once, and RunStart or
+// session replacement clears it without keeping bytes counted.
+func TestInFlightRetainRecoverAndClear(t *testing.T) {
+	r := testRuntime(t)
+	r.retainInFlight(agent.UserInput{Content: "plain", Display: "plain"})
+	if r.inFlight != nil {
+		t.Fatal("plain text touched the in-flight marker")
+	}
+
+	r.retainInFlight(recoveryInput(1024))
+	if r.inFlight == nil || !r.inFlight.Structured() {
+		t.Fatalf("in-flight = %+v, want the structured prompt", r.inFlight)
+	}
+	if got := r.recoveryBytes(); got != 1024 {
+		t.Fatalf("recovery bytes = %d, want the retained 1024", got)
+	}
+
+	if added := r.recoverInFlight(); added != 1 {
+		t.Fatalf("recovered = %d, want 1", added)
+	}
+	if r.inFlight != nil {
+		t.Fatal("recovery left the marker installed")
+	}
+	if len(r.recovery) != 1 || !r.recovery[0].Structured() {
+		t.Fatalf("recovery = %+v, want the moved prompt", r.recovery)
+	}
+	if got := r.recoveryBytes(); got != 1024 {
+		t.Fatalf("recovery bytes after move = %d, want 1024", got)
+	}
+	if added := r.recoverInFlight(); added != 0 {
+		t.Fatalf("second recovery = %d, want 0", added)
+	}
+
+	r.retainInFlight(recoveryInput(8))
+	r.clearInFlight()
+	if r.inFlight != nil {
+		t.Fatal("RunStart left the marker installed")
+	}
+	if got := r.recoveryBytes(); got != 1024 {
+		t.Fatalf("recovery bytes after clear = %d, want only the batch's 1024", got)
 	}
 }

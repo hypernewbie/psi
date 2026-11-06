@@ -1181,7 +1181,7 @@ func (r *runtime) replace(next *session.Store) error {
 	// Undelivered prompts belonged to the replaced session; keeping them
 	// would let a later attachment send content the user has moved away from.
 	r.clearRecovery()
-	r.inFlight = nil
+	r.clearInFlight()
 	if r.cancelACEndTurn != nil {
 		r.cancelACEndTurn()
 	}
@@ -1608,7 +1608,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
-			r.inFlight = nil
+			r.clearInFlight()
 			r.bridgeRunStarted()
 		case event.SteeringDelivered, event.FollowUpDelivered:
 			// A delivered queued message becomes a normal user turn. Remove it
@@ -1803,10 +1803,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		// admission and RunStart must not lose it. A native editor submission
 		// while a bridge prompt is in flight is refused, so a non-structured
 		// replacement cannot steal the marker either.
-		if input.Structured() {
-			retained := input
-			r.inFlight = &retained
-		}
+		r.retainInFlight(input)
 		go func() {
 			if compact {
 				if resumeThisCompaction {
@@ -2094,11 +2091,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			// on cancellation or failure, restore it to the editor instead.
 			var undelivered []string
 			var lateQueueLoop *agent.Loop
-			if r.inFlight != nil {
-				if r.noteRecovery(*r.inFlight) > 0 {
-					notice(terminal.NoticeWarning, "An attachment prompt was not delivered. Phi keeps a saved copy you can restore.")
-				}
-				r.inFlight = nil
+			if r.recoverInFlight() > 0 {
+				notice(terminal.NoticeWarning, "An attachment prompt was not delivered. Phi keeps a saved copy you can restore.")
 			}
 			if activeLoop != nil {
 				pendingSteering := activeLoop.PendingSteering()

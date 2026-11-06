@@ -66,7 +66,7 @@ and a lowercase SHA-256. Limits: 25 MiB per file, 50 MiB per prompt, 64 KiB of
 prompt text, and 50 MiB of decoded image bytes across preparation, the running
 loop's queue, an admitted prompt that has not started yet, and recovered input.
 
-Images must be `.png` or `.jpg`/`.jpeg` with a matching `image/png` or
+Images must be `.png` or `.jpg` with a matching `image/png` or
 `image/jpeg` and a matching signature, and the live model must accept image
 input. Ordinary files must declare `application/octet-stream`; psi verifies
 their bytes and then keeps only a JSON-quoted absolute path text block for the

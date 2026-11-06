@@ -310,6 +310,7 @@ func TestValidateEnforcesDeclaredBounds(t *testing.T) {
 		{name: "separator", refs: []Ref{rename(png, "a/b.png")}, want: ErrInvalid},
 		{name: "duplicate", refs: []Ref{png, png}, want: ErrInvalid},
 		{name: "bad kind", refs: []Ref{func() Ref { r := png; r.Kind = "blob"; return r }()}, want: ErrInvalid},
+		{name: "empty image", refs: []Ref{rename(bigImage(0), "empty.png")}, want: ErrInvalid},
 		{name: "bad image mime", refs: []Ref{func() Ref { r := png; r.MIMEType = "image/gif"; return r }()}, want: ErrUnsupportedImage},
 		{name: "wrong suffix", refs: []Ref{rename(png, "att-1.jpeg")}, want: ErrUnsupportedImage},
 		{name: "uppercase digest", refs: []Ref{func() Ref { r := png; r.SHA256 = strings.ToUpper(r.SHA256); return r }()}, want: ErrInvalid},
@@ -333,6 +334,10 @@ func TestValidateEnforcesDeclaredBounds(t *testing.T) {
 }
 
 func TestValidateAcceptsTheDeclaredBoundary(t *testing.T) {
+	name128 := strings.Repeat("a", MaxNameBytes-len(".png")) + ".png"
+	if _, _, err := Validate("", []Ref{rename(bigImage(1), name128)}); err != nil {
+		t.Fatalf("128-byte basename = %v, want accepted", err)
+	}
 	perFile := uint64(MaxTotalBytes / MaxRefs)
 	refs := make([]Ref, MaxRefs)
 	for i := range refs {

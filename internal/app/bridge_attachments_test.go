@@ -502,3 +502,94 @@ func TestAttachmentReadinessFollowsRootAndModel(t *testing.T) {
 		t.Fatal("image availability published without a known model")
 	}
 }
+
+// Dispatch rechecks every fence the worker could not observe. The worker
+// already succeeded here, so each refusal proves the second check fired.
+func TestAttachmentDispatchRechecksIdentityAndRoot(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*runtime, string)
+		reason string
+	}{
+		{name: "generation moved", mutate: func(r *runtime, _ string) { r.generation++ }, reason: "stale"},
+		{name: "root removed", mutate: func(_ *runtime, root string) {
+			if err := os.RemoveAll(root); err != nil {
+				t.Fatal(err)
+			}
+		}, reason: "unavailable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := testRuntime(t)
+			r.state = StateIdle
+			r.cfg.Model.InputImage = true
+			root := t.TempDir()
+			data := writeAttachmentPNG(t, root)
+			t.Setenv("PHI_PI_ATTACHMENT_ROOT", root)
+			f, h := startBridgeRuntime(t, r)
+			h.startInput = func(agent.UserInput, string, bool) (bool, string) {
+				t.Fatal("recheck refusal launched a run")
+				return false, ""
+			}
+
+			f.inject <- attachmentPrompt(r, "41", "look", attachmentImageRef("a.png", data))
+			h.handle(nextRequest(t, r.bridge), false)
+			if h.prep == nil {
+				t.Fatal("admitted attachment did not occupy the preparation slot")
+			}
+			waitPreparation(t, h)
+			tc.mutate(r, root)
+			h.finishPreparation(false)
+
+			ack := attachmentAck(t, f, "41")
+			if ack.GetOutcome() != pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_REFUSED || ack.GetReason() != tc.reason {
+				t.Fatalf("ack = %v %q, want REFUSED %q", ack.GetOutcome(), ack.GetReason(), tc.reason)
+			}
+		})
+	}
+}
+
+// A run that ends while preparation is in flight turns the prompt back into
+// an idle launch: verified content is neither lost nor forced into steering.
+func TestAttachmentPrepOutlivingRunStartsNewRun(t *testing.T) {
+	r := testRuntime(t)
+	r.cfg.Model.InputImage = true
+	root := t.TempDir()
+	data := writeAttachmentPNG(t, root)
+	t.Setenv("PHI_PI_ATTACHMENT_ROOT", root)
+	f, h := startBridgeRuntime(t, r)
+	r.state = StateStreaming
+	loop := agent.New(r.store, r.reg, r.prov, nil)
+	h.activeLoop = loop
+	var launched agent.UserInput
+	launches := 0
+	h.startInput = func(input agent.UserInput, _ string, _ bool) (bool, string) {
+		launched, launches = input, launches+1
+		return true, ""
+	}
+
+	f.inject <- attachmentPrompt(r, "43", "look", attachmentImageRef("a.png", data))
+	h.handle(nextRequest(t, r.bridge), true)
+	if h.prep == nil {
+		t.Fatal("steering attachment did not occupy the preparation slot")
+	}
+	waitPreparation(t, h)
+	// The run settled before dispatch: idle state, no live loop.
+	r.state = StateIdle
+	h.activeLoop = nil
+	h.finishPreparation(false)
+
+	ack := attachmentAck(t, f, "43")
+	if ack.GetOutcome() != pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_DISPATCHED {
+		t.Fatalf("ack = %v %q, want DISPATCHED", ack.GetOutcome(), ack.GetReason())
+	}
+	if launches != 1 {
+		t.Fatalf("launches = %d, want 1", launches)
+	}
+	if !launched.Structured() || launched.ImageBytes != uint64(len(data)) {
+		t.Fatalf("launched = %+v, want the verified structured prompt", launched)
+	}
+	if got := loop.PendingSteering(); len(got) != 0 {
+		t.Fatalf("steering = %q, want nothing steered into the settled run", got)
+	}
+}
