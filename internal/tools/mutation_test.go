@@ -619,6 +619,13 @@ func TestMutationQueueAbortedWaiterInQueueDoesNotBlockSuccessors(t *testing.T) {
 	leakcheck.Verify(t)
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "wait-abort.txt")
+	// Pre-create the file so every registration resolves the same mutation
+	// key. A file that first springs into existence mid-run changes the key on
+	// symlinked temporary directories (macOS /var vs /private/var) and lets a
+	// late registration bypass the queue entirely.
+	if err := os.WriteFile(filePath, []byte("seed"), 0o666); err != nil {
+		t.Fatal(err)
+	}
 	queue := NewMutationQueue()
 
 	w1Started := make(chan struct{})
@@ -636,6 +643,30 @@ func TestMutationQueueAbortedWaiterInQueueDoesNotBlockSuccessors(t *testing.T) {
 		},
 	}
 
+	// waitTailChange blocks until the queue's tail for key is replaced, so the
+	// test observes registration order explicitly instead of sleeping.
+	waitTailChange := func(key string, before chan struct{}) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			queue.mu.Lock()
+			now := queue.tails[key]
+			queue.mu.Unlock()
+			if now != before {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatal("mutation queue tail never advanced")
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
+	key, err := mutationKey(dir, "wait-abort.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// W1 holds slot
 	w1Done := make(chan Result, 1)
 	go func() {
@@ -646,6 +677,9 @@ func TestMutationQueueAbortedWaiterInQueueDoesNotBlockSuccessors(t *testing.T) {
 		})
 	}()
 	<-w1Started
+	queue.mu.Lock()
+	tailAfterW1 := queue.tails[key]
+	queue.mu.Unlock()
 
 	// W2 queues behind W1, then is cancelled
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -657,10 +691,14 @@ func TestMutationQueueAbortedWaiterInQueueDoesNotBlockSuccessors(t *testing.T) {
 			Arguments: map[string]any{"path": "wait-abort.txt", "content": "w2"},
 		})
 	}()
-	time.Sleep(10 * time.Millisecond)
+	waitTailChange(key, tailAfterW1)
+	queue.mu.Lock()
+	tailAfterW2 := queue.tails[key]
+	queue.mu.Unlock()
 	cancel2()
 
-	// W3 queues behind W2
+	// W3 queues behind W2; wait for its registration so releaseW1 cannot
+	// race it into a different ordering.
 	w3Done := make(chan Result, 1)
 	go func() {
 		w3Done <- writeTool.ExecuteCtx(context.Background(), Invocation{
@@ -669,6 +707,7 @@ func TestMutationQueueAbortedWaiterInQueueDoesNotBlockSuccessors(t *testing.T) {
 			Arguments: map[string]any{"path": "wait-abort.txt", "content": "w3"},
 		})
 	}()
+	waitTailChange(key, tailAfterW2)
 
 	close(releaseW1)
 
