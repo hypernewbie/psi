@@ -1279,6 +1279,14 @@ func (r *runtime) draw(console *terminal.Console) {
 	console.Draw()
 }
 
+// newLoop builds the agent loop with the configured queue modes, so every
+// caller delivers queued input the way settings.json asks.
+func (r *runtime) newLoop(sink func(event.Event)) *agent.Loop {
+	loop := agent.New(r.store, r.reg, r.prov, sink)
+	loop.SetQueueModes(r.settings.SteeringMode, r.settings.FollowUpMode)
+	return loop
+}
+
 func (r *runtime) repl(console *terminal.Console) error {
 	// Some embedded callers construct runtime directly instead of going through
 	// Run. Keep the loop feature safe for those callers as well.
@@ -1755,7 +1763,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			})
 		}
 		activeConfig = cfg
-		loop := agent.New(r.store, r.reg, r.prov, func(e event.Event) {
+		loop := r.newLoop(func(e event.Event) {
 			seq++
 			e.Generation, e.Seq, e.SessionID = gen, seq, r.store.Header().ID
 			events <- e

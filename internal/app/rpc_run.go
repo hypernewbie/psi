@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"psi/internal/agent"
 	"psi/internal/config"
 	"psi/internal/providerregistry"
 	"psi/internal/session"
@@ -158,7 +157,7 @@ func runRPC(o Options, version string) error {
 	// The RPC child runs without bridge environment variables, so the
 	// syncboard tool stays hidden by the same availability predicate the
 	// terminal loop uses.
-	s.loop = agent.New(store, r.reg, r.prov, s.sink)
+	s.loop = r.newLoop(s.sink)
 
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)

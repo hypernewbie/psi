@@ -7,9 +7,10 @@ import (
 	"psi/internal/skills"
 )
 
-// reloadResources refreshes the prompt inputs and skill catalog without
-// changing session identity, model selection, or project trust. Prepare the
-// new values before installing them so a read failure leaves the old prompt.
+// reloadResources refreshes the prompt inputs, skill catalog, and queue modes
+// without changing session identity, model selection, or project trust. Prepare
+// the new values before installing them so a read failure leaves the old prompt
+// and the old queue modes.
 func (r *runtime) reloadResources() error {
 	cwd := r.store.Cwd()
 	loaded, err := config.LoadSettings(filepath.Join(r.agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json"), r.projectTrusted)
@@ -36,6 +37,9 @@ func (r *runtime) reloadResources() error {
 	prompt := config.RenderSections(sections)
 	r.skills, r.prompt, r.sections = sk, prompt, sections
 	r.settings.Skills = loaded.Settings.Skills
+	// newLoop applies these to every loop built after the reload.
+	r.settings.SteeringMode = loaded.Settings.SteeringMode
+	r.settings.FollowUpMode = loaded.Settings.FollowUpMode
 	r.cfg.System = prompt
 	r.cfg.Sections = sections
 	r.syncBridge()

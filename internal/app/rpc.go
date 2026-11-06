@@ -419,6 +419,10 @@ func (s *rpcRunner) getState(cmd rpcCommand) *rpcResponse {
 	if proj, err := r.store.Projection(); err == nil {
 		count = len(proj.Flat)
 	}
+	steering, followUp := r.settings.SteeringMode, r.settings.FollowUpMode
+	if s.loop != nil {
+		steering, followUp = s.loop.QueueModes()
+	}
 	data := map[string]any{
 		"model": map[string]any{
 			"provider": r.ov.Provider, "id": r.ov.Model,
@@ -427,8 +431,8 @@ func (s *rpcRunner) getState(cmd rpcCommand) *rpcResponse {
 		"thinkingLevel":         r.ov.Thinking,
 		"isStreaming":           running,
 		"isCompacting":          compacting,
-		"steeringMode":          "all",
-		"followUpMode":          "one-at-a-time",
+		"steeringMode":          steering,
+		"followUpMode":          followUp,
 		"sessionFile":           r.store.File(),
 		"sessionId":             r.store.Header().ID,
 		"sessionName":           r.store.SessionName(),
@@ -505,7 +509,7 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = cand.ov, cand.cfg, cand.prov, cand.authErr, cand.reg
-	s.loop = agent.New(r.store, r.reg, r.prov, s.sink)
+	s.loop = r.newLoop(s.sink)
 	out := rpcOK(cmd.ID, "set_model", rpcModel{Provider: providerID, ID: modelID, Name: rpcModelName(r.models, providerID, modelID)})
 	return &out
 }

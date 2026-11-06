@@ -114,7 +114,10 @@ Cancellation records known unstarted calls without executing them.
 A storage failure blocks further writes until the operator opens another checked session or creates a new session.
 
 During a run, the editor stays active and `Enter` queues a steering message, as in Pi.
-`Alt+Enter` queues follow-up messages until the run ends; psi uses Pi's default one-at-a-time mode and does not expose Pi's optional `all` mode. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
+`Alt+Enter` queues follow-up messages until the run ends. `steeringMode` and `followUpMode`
+select `one-at-a-time` (Pi's default, one message per turn) or `all`; psi has no
+interactive command to change them and `/settings` does not list them, so edit
+`settings.json` instead. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
 
 Context-limit recovery permits at most one compaction and retry before visible partial output.
 Synthetic loop/provider tests cover that path.
