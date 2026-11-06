@@ -121,6 +121,7 @@ The bridge is silent: errors never reach the TUI.
   wait immediately.
 - Terminal failures (unauthenticated, permission denied, failed precondition,
   cancelled, deadline exceeded) stop the client for the rest of the process.
+  This includes rejections that arrive while psi sends its initial Hello.
 - A missing `Accepted` within 4 s counts as transient. Phi's own hello
   deadline is 5 s, and its exceeded status is terminal, so the local timer
   fires first and keeps the retry.

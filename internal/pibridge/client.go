@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	mrand "math/rand/v2"
 	"os"
 	"runtime"
@@ -477,7 +478,7 @@ func retryable(err error) bool {
 // accepted this attempt, so a fresh failure after a healthy stream starts
 // again from the minimum delay.
 func (c *Client) runOnce(parent context.Context) (served bool, err error) {
-	hello, gen, runtimeID, ok := c.hello()
+	hello, _, _, ok := c.hello()
 	if !ok {
 		return false, errNotReady
 	}
@@ -498,8 +499,14 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	return c.serveStream(ctx, cancel, stream, hello)
+}
+
+func (c *Client) serveStream(ctx context.Context, cancel context.CancelFunc, stream pibridgepb.Integration_ConnectClient, hello *pibridgepb.PiToPhi) (served bool, err error) {
+	gen, runtimeID := hello.GetRuntimeGeneration(), hello.GetHello().GetRuntimeId()
 	deadline := time.Now().Add(attachDeadline)
-	if err := sendFrame(ctx, cancel, stream, hello, writeBudget(deadline)); err != nil {
+	// An early rejection can make Send return EOF; Recv carries Phi's status.
+	if err := sendFrame(ctx, cancel, stream, hello, writeBudget(deadline)); err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
 
