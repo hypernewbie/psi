@@ -835,10 +835,13 @@ func renderMarkdownBlock(node ast.Node, source []byte, width int, style mdStyle,
 		// Pi draws the quote border at the message margin and keeps the quoted
 		// content directly behind it.
 		prefix := mdIndent(indent, style.token)
-		if width >= 3 {
+		if soft || width >= 3 {
 			prefix = append(prefix, StyledSpan{Text: "│ ", Token: TokenQuoteBorder})
 		}
-		prefix, contentWidth := markdownBlockPrefix(prefix, width)
+		contentWidth := max(1, width-(StyledRow{Spans: prefix}).Width())
+		if !soft {
+			prefix, contentWidth = markdownBlockPrefix(prefix, width)
+		}
 		quoted := renderMarkdownBlocks(x, source, contentWidth, style.withToken(TokenQuote).withItalic(), "", codeIndent, soft)
 		for i := range quoted {
 			quoted[i] = prependStyled(prefix, quoted[i])
@@ -968,8 +971,12 @@ func renderMarkdownList(list *ast.List, source []byte, width int, style mdStyle,
 		}
 		itemIndex++
 		indent := indentBase + strings.Repeat("    ", depth)
-		first := markdownClipPrefix(append(mdIndent(indent, style.token), StyledSpan{Text: marker, Token: TokenListBullet}), width)
-		continuation := markdownClipPrefix(mdIndent(indent+strings.Repeat(" ", CellWidth(marker)), style.token), width)
+		first := append(mdIndent(indent, style.token), StyledSpan{Text: marker, Token: TokenListBullet})
+		continuation := mdIndent(indent+strings.Repeat(" ", CellWidth(marker)), style.token)
+		if !soft {
+			first = markdownClipPrefix(first, width)
+			continuation = markdownClipPrefix(continuation, width)
+		}
 		visible := false
 		var previous ast.Node
 		for child := listItem.FirstChild(); child != nil; child = child.NextSibling() {
