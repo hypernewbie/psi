@@ -184,8 +184,8 @@ func (h *bridgeHandler) handle(req pibridge.Request, runBusy bool) {
 	}
 }
 
-// listModels answers from the loaded catalog without reconfiguring a provider
-// or re-reading files. Only entries the activation path accepts are offered.
+// listModels answers from the loaded catalog without reconfiguring a provider.
+// Credential and request checks are local and use the same rule as /model.
 func (h *bridgeHandler) listModels(req pibridge.Request) {
 	if h.r.models == nil {
 		req.ReplyModelsUnavailable()
@@ -193,10 +193,8 @@ func (h *bridgeHandler) listModels(req pibridge.Request) {
 	}
 	var models []pibridge.ModelRef
 	for _, providerID := range providerregistry.IDs() {
-		for _, option := range h.r.models.ModelOptions(providerID) {
-			if !option.Available {
-				continue
-			}
+		options, _ := h.r.usableModelOptions(providerID)
+		for _, option := range options {
 			models = append(models, pibridge.ModelRef{Provider: providerID, Model: option.Model.ID})
 		}
 	}

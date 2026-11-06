@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
@@ -15,27 +16,37 @@ import (
 func modelSelector(r *runtime) *Selector {
 	var items []session.SessionInfo
 	for _, family := range providerregistry.IDs() {
-		credential, usable := r.credentialAvailability(family)
-		if !usable {
-			// Like Pi, the picker offers only providers the session can use:
-			// a missing credential would make every selection fail at request
-			// time, so those models do not appear at all.
-			continue
-		}
-		for _, option := range r.models.ModelOptions(family) {
-			if !option.Available {
-				continue
-			}
+		options, credential := r.usableModelOptions(family)
+		for _, option := range options {
 			m := option.Model
-			if _, err := provider.BuildRequest(provider.Request{Model: providerModel(family, m), Thinking: "off"}); err != nil {
-				continue
-			}
 			items = append(items, session.SessionInfo{ID: family + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", credential, m.API, m.ContextWindow, m.MaxTokens)})
 		}
 	}
 	selector := NewSelector(items, r.ov.Provider+"/"+r.ov.Model)
 	selector.Models = true
 	return selector
+}
+
+// usableModelOptions is the model-list rule shared by /model, the bridge, and
+// RPC. A provider needs a usable credential, and each model must pass both
+// activation and request construction. The checks are local; credential
+// validity is still established by the request.
+func (r *runtime) usableModelOptions(family string) ([]config.ModelOption, string) {
+	credential, usable := r.credentialAvailability(family)
+	if !usable {
+		return nil, ""
+	}
+	var options []config.ModelOption
+	for _, option := range r.models.ModelOptions(family) {
+		if !option.Available {
+			continue
+		}
+		if _, err := provider.BuildRequest(provider.Request{Model: providerModel(family, option.Model), Thinking: "off"}); err != nil {
+			continue
+		}
+		options = append(options, option)
+	}
+	return options, credential
 }
 
 func thinkingSelector(r *runtime) *Selector {

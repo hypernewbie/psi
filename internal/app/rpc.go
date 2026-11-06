@@ -312,7 +312,7 @@ func (s *rpcRunner) handle(cmd rpcCommand) *rpcResponse {
 	case "get_state":
 		return s.getState(cmd)
 	case "get_available_models":
-		out := rpcOK(cmd.ID, "get_available_models", map[string]any{"models": rpcAvailableModels(s.r.models)})
+		out := rpcOK(cmd.ID, "get_available_models", map[string]any{"models": rpcAvailableModels(s.r)})
 		return &out
 	case "set_model":
 		return s.setModel(cmd)
@@ -440,18 +440,16 @@ func (s *rpcRunner) getState(cmd rpcCommand) *rpcResponse {
 	return &out
 }
 
-// rpcAvailableModels enumerates the same selectable catalog the bridge
-// offers, with display names for clients that list models.
-func rpcAvailableModels(models *config.ModelsFile) []rpcModel {
+// rpcAvailableModels enumerates the same selectable, credentialed catalog the
+// bridge and /model offer, with display names for clients that list models.
+func rpcAvailableModels(r *runtime) []rpcModel {
 	var out []rpcModel
-	if models == nil {
+	if r.models == nil {
 		return nil
 	}
 	for _, providerID := range providerregistry.IDs() {
-		for _, option := range models.ModelOptions(providerID) {
-			if !option.Available {
-				continue
-			}
+		options, _ := r.usableModelOptions(providerID)
+		for _, option := range options {
 			name := option.Model.Name
 			if name == "" {
 				name = option.Model.ID

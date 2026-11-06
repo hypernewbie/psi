@@ -14,8 +14,8 @@ import (
 
 	"psi/internal/config"
 	"psi/internal/event"
+	"psi/internal/modelmeta"
 	"psi/internal/provider"
-	"psi/internal/providerregistry"
 	"psi/internal/session"
 	"psi/internal/terminal"
 )
@@ -132,25 +132,33 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 // /model offers only models the session can use: the provider must have a
 // credential, and the model must pass the same activation path a request uses.
 func TestModelPickerListsOnlyCredentialedUsableModels(t *testing.T) {
-	for _, family := range providerregistry.IDs() {
-		if spec, ok := providerregistry.Lookup(family); ok && spec.Environment != "" {
-			t.Setenv(spec.Environment, "")
-		}
-	}
+	clearProviderAPIKeys(t)
 	r := testRuntime(t)
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"zai": {Models: []config.ModelMeta{
 		{ID: "synthetic-zai", API: "openai-completions", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024, Input: []string{"text"}},
 		{ID: "synthetic-zai-broken", API: "synthetic-unregistered-api", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024},
+		{ID: "synthetic-zai-unbuildable", API: "openai-completions", BaseURL: "https://api.z.ai/api/coding/paas/v4", MaxTokens: 1024, Compat: modelmeta.Compat{"cacheControlFormat": json.RawMessage(`"anthropic"`)}},
 	}}}}
 	if items := modelSelector(r).Items; len(items) != 0 {
 		t.Fatalf("picker offered models without a credential: %v", items)
 	}
 	t.Setenv("ZAI_API_KEY", "synthetic-zai-key")
 	want := 0
+	unbuildableResolved := false
 	for _, option := range r.models.ModelOptions("zai") {
-		if option.Available {
-			want++
+		if !option.Available {
+			continue
 		}
+		if _, err := provider.BuildRequest(provider.Request{Model: providerModel("zai", option.Model), Thinking: "off"}); err != nil {
+			if option.Model.ID == "synthetic-zai-unbuildable" {
+				unbuildableResolved = true
+			}
+			continue
+		}
+		want++
+	}
+	if !unbuildableResolved {
+		t.Fatal("fixture must resolve successfully but fail request construction")
 	}
 	selector := modelSelector(r)
 	if len(selector.Items) != want {
@@ -166,7 +174,7 @@ func TestModelPickerListsOnlyCredentialedUsableModels(t *testing.T) {
 		}
 		seen[item.ID] = true
 	}
-	if !seen["zai/synthetic-zai"] || seen["zai/synthetic-zai-broken"] {
+	if !seen["zai/synthetic-zai"] || seen["zai/synthetic-zai-broken"] || seen["zai/synthetic-zai-unbuildable"] {
 		t.Fatalf("picker did not filter by model usability: %v", seen)
 	}
 }

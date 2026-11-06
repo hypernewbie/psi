@@ -336,6 +336,41 @@ func TestRPCAbortIdleSucceeds(t *testing.T) {
 	}
 }
 
+// get_available_models offers the same credentialed, selectable catalog as
+// /model and the bridge: an unlogged-in provider must not be listed, or every
+// switch to it fails at request time.
+func TestRPCGetAvailableModelsListsOnlyCredentialedProviders(t *testing.T) {
+	clearProviderAPIKeys(t)
+	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
+	resp := s.handle(rpcCommand{ID: strptr("g"), Type: "get_available_models"})
+	if resp == nil || !resp.Success {
+		t.Fatalf("get_available_models = %+v", resp)
+	}
+	if entries := resp.Data.(map[string]any)["models"].([]rpcModel); len(entries) != 0 {
+		t.Fatalf("models listed without a credential: %v", entries)
+	}
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-rpc-test")
+	resp = s.handle(rpcCommand{ID: strptr("g2"), Type: "get_available_models"})
+	if resp == nil || !resp.Success {
+		t.Fatalf("get_available_models with a credential = %+v", resp)
+	}
+	entries, _ := resp.Data.(map[string]any)["models"].([]rpcModel)
+	if len(entries) == 0 {
+		t.Fatal("credentialed provider was not listed")
+	}
+	seen := map[string]rpcModel{}
+	for _, entry := range entries {
+		if entry.Provider != "anthropic" {
+			t.Fatalf("uncredentialed provider was listed: %+v", entry)
+		}
+		seen[entry.ID] = entry
+	}
+	if seen["rpc-test-model"].Name != "RPC Test" || seen["rpc-test-model-2"].Name != "RPC Test 2" {
+		t.Fatalf("configured models or display names missing: %v", entries)
+	}
+}
+
 func TestRPCGetStateShape(t *testing.T) {
 	s, store, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
 	resp := s.handle(rpcCommand{ID: strptr("g"), Type: "get_state"})
