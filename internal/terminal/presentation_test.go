@@ -140,9 +140,9 @@ func TestFooterSessionNameSanitizesTerminalControls(t *testing.T) {
 
 func TestFooterRendersGitBranchBeforeSessionName(t *testing.T) {
 	rows, _ := formatFooter(PresentationSnapshot{
-		WorkingDirectory: "/tmp/work", GitBranch: "main", SessionName: "notes",
+		WorkingDirectory: filepath.FromSlash("/tmp/work"), GitBranch: "main", SessionName: "notes",
 	}, 80, 3, true)
-	if !strings.Contains(rows[0], "/tmp/work (main) • notes") {
+	if !strings.Contains(rows[0], filepath.FromSlash("/tmp/work")+" (main) • notes") {
 		t.Fatalf("branch not rendered before session name: %q", rows[0])
 	}
 }

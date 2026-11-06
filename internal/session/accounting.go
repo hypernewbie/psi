@@ -41,6 +41,10 @@ func (s *Store) Accounting() (Accounting, error) {
 			if prompt > 0 {
 				rate := 100 * a.Usage.CacheRead / prompt
 				result.CacheHitRate = &rate
+			} else {
+				// Pi assigns the rate on every assistant message, so a later
+				// message without prompt tokens clears an earlier rate.
+				result.CacheHitRate = nil
 			}
 			result.ReturnedModel = a.Model
 			if a.ResponseModel != nil {

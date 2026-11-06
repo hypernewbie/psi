@@ -24,6 +24,22 @@ func TestAccountingCacheHitRateUsesLatestAssistantMessage(t *testing.T) {
 	}
 }
 
+func TestAccountingCacheHitRateClearedWhenLatestMessageHasNoPromptTokens(t *testing.T) {
+	store, err := New(OpenOptions{Cwd: "/tmp/ws", Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendUsageMessage(t, store, Usage{Input: 126, CacheRead: 874, CacheWrite: 0}, "stop")
+	appendUsageMessage(t, store, Usage{Output: 5}, "stop")
+	accounting, err := store.Accounting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounting.CacheHitRate != nil {
+		t.Fatalf("CacheHitRate=%v; want nil when the latest assistant message has no prompt tokens", *accounting.CacheHitRate)
+	}
+}
+
 func TestAccountingCacheHitRateIsAbsentWithoutAssistantMessages(t *testing.T) {
 	t.Run("user only", func(t *testing.T) {
 		store, err := New(OpenOptions{Cwd: "/tmp/ws", Persist: false})

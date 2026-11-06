@@ -28,7 +28,9 @@ func gitHeadPath(dir string) (string, bool) {
 				}
 				return "", false
 			}
-			if info.Mode().IsRegular() {
+			if info.Mode().IsRegular() && info.Size() <= 4096 {
+				// A work-tree pointer is one short line. An oversized file is
+				// never a pointer, so keep walking up instead of reading it.
 				content, readErr := os.ReadFile(gitPath)
 				if readErr != nil {
 					return "", false
