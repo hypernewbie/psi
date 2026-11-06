@@ -83,6 +83,20 @@ func TestHeaderVersionChecks(t *testing.T) {
 	}
 }
 
+func TestReservedSessionIDIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	for _, id := range []string{"CON", "con", "nul", "PRN", "aux", "COM1", "lpt9"} {
+		if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: id}); err == nil {
+			t.Fatalf("expected a reserved-name error for %q", id)
+		}
+	}
+	for _, id := range []string{"console", "comm", "com", "lpt", "com0", "COM10", "session-1"} {
+		if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: id}); err != nil {
+			t.Fatalf("unexpected error for %q: %v", id, err)
+		}
+	}
+}
+
 func TestNewRefusesOccupiedCanonicalPath(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "taken-id"})

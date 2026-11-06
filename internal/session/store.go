@@ -69,6 +69,9 @@ func New(opts OpenOptions) (*Store, error) {
 		if err := AssertValidSessionID(opts.ID); err != nil {
 			return nil, err
 		}
+		if s.persist && reservedSessionID(opts.ID) {
+			return nil, fmt.Errorf("session ID %q cannot be used as a session file name", opts.ID)
+		}
 	}
 	id := opts.ID
 	if id == "" {
@@ -995,25 +998,19 @@ func (s *Store) TryLock() error {
 	}
 	target := filepath.Join(s.dir, s.header.ID+".jsonl")
 	if s.file == target {
-		l, err := acquireLock(s.file)
-		if err != nil {
-			return err
-		}
-		s.lock = l
-		return nil
+		return s.lockOnly()
 	}
 	// A session opened through a symbolic link keeps its current name:
 	// renaming the link target would move the session out of the session
-	// directory and leave the link stale.
+	// directory and leave the link stale. A reserved device name cannot
+	// become a file name either, so it keeps its current name as well.
 	if s.opened != "" {
 		if fi, err := os.Lstat(s.opened); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			l, err := acquireLock(s.file)
-			if err != nil {
-				return err
-			}
-			s.lock = l
-			return nil
+			return s.lockOnly()
 		}
+	}
+	if reservedSessionID(s.header.ID) {
+		return s.lockOnly()
 	}
 	source := s.file
 	srcLock, err := acquireLock(source)
@@ -1056,6 +1053,16 @@ func (s *Store) TryLock() error {
 	s.lock = dstLock
 	srcLock.Release()
 	succeeded = true
+	return nil
+}
+
+// lockOnly takes the writer lock on the current path without renaming.
+func (s *Store) lockOnly() error {
+	l, err := acquireLock(s.file)
+	if err != nil {
+		return err
+	}
+	s.lock = l
 	return nil
 }
 
