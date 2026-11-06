@@ -80,11 +80,17 @@ func FindExact(sessionDir, cwd, id string) (string, error) {
 		return "", err
 	}
 	candidate := filepath.Join(sessionDir, id+".jsonl")
-	if _, err := os.Stat(candidate); err != nil {
+	info, err := os.Lstat(candidate)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
 		}
 		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		// The canonical name is not a regular file, so it cannot hold the
+		// session. Leave it alone and let the caller use discovery.
+		return "", nil
 	}
 	header, err := readHeaderFast(candidate)
 	if err != nil {
@@ -93,7 +99,7 @@ func FindExact(sessionDir, cwd, id string) (string, error) {
 	if header.ID != id {
 		return "", fmt.Errorf("session file %s has ID %q, want %q", candidate, header.ID, id)
 	}
-	if !SameDir(header.Cwd, cwd) {
+	if cwd != "" && !SameDir(header.Cwd, cwd) {
 		return "", fmt.Errorf("session %q belongs to a different workspace", id)
 	}
 	return candidate, nil

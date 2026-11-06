@@ -277,6 +277,32 @@ func TestActiveCustomEntriesLoadsOnlyMatchingActiveBranch(t *testing.T) {
 	}
 }
 
+func TestFindExactSkipsNonRegularCandidate(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "linked-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(s.Dir(), "real.jsonl")
+	if err := os.Rename(s.File(), real); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(s.Dir(), "linked-id.jsonl")
+	if err := os.Symlink("real.jsonl", candidate); err != nil {
+		t.Fatal(err)
+	}
+	got, err := FindExact(dir, "/tmp/work", "linked-id")
+	if err != nil {
+		t.Fatalf("FindExact error = %v, want no error", err)
+	}
+	if got != "" {
+		t.Fatalf("FindExact returned %s, want no canonical hit for a symbolic link", got)
+	}
+}
+
 func TestFindExactRejectsMismatchedIdentity(t *testing.T) {
 	t.Run("IDMismatch", func(t *testing.T) {
 		dir := t.TempDir()

@@ -18,8 +18,13 @@ name when a persisted session is activated. The move holds both the old and
 new writer locks, never replaces an existing file, and leaves the transcript
 bytes unchanged. A name collision or a platform without a no-overwrite move
 fails activation with an error instead of replacing the target. Read-only
-opens and `--no-session` never rename. The old path is retired: saved paths
-to it stop working, and a symbolic link that pointed at it becomes stale.
+opens and `--no-session` never rename.
+
+The canonical path must be a regular file. A session opened through a
+symbolic link keeps its current name: renaming the link target would move the
+session out of the session directory and leave the link stale. A canonical
+name that is already taken by another file is reported instead of a second
+session being written on top of it.
 
 Precedence for the session directory:
 

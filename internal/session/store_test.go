@@ -83,6 +83,27 @@ func TestHeaderVersionChecks(t *testing.T) {
 	}
 }
 
+func TestNewRefusesOccupiedCanonicalPath(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "taken-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "taken-id"}); err == nil {
+		t.Fatal("expected an error for an occupied canonical path")
+	}
+	link := filepath.Join(s.Dir(), "linked-id.jsonl")
+	if err := os.Symlink(filepath.Base(s.File()), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "linked-id"}); err == nil {
+		t.Fatal("expected an error for a canonical path taken by a symbolic link")
+	}
+}
+
 func TestStoreNewAndAppend(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true})

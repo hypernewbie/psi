@@ -22,6 +22,7 @@ type Store struct {
 	byID             map[string]*Entry
 	leafID           string
 	file             string
+	opened           string
 	dir              string
 	cwd              string
 	persist          bool
@@ -86,6 +87,11 @@ func New(opts OpenOptions) (*Store, error) {
 		s.dir = dir
 		s.file = filepath.Join(dir, id+".jsonl")
 		s.flushed = false
+		if _, err := os.Lstat(s.file); err == nil {
+			return nil, fmt.Errorf("session file already exists: %s", s.file)
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
 	s.rebuildIndex()
 	return s, nil
@@ -93,6 +99,10 @@ func New(opts OpenOptions) (*Store, error) {
 
 // OpenFile opens an explicit session path.
 func OpenFile(path, cwd string, persist bool) (*Store, error) {
+	opened := path
+	if abs, err := filepath.Abs(path); err == nil {
+		opened = abs
+	}
 	if persist {
 		resolved, err := canonicalSessionPath(path)
 		if err != nil {
@@ -140,7 +150,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	} else if incomplete {
 		return nil, fmt.Errorf("session file has truncated final record, refusing to append: %s (recover from a copy)", path)
 	}
-	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
+	s := &Store{header: header, entries: entries, byID: map[string]*Entry{}, file: path, opened: opened, dir: filepath.Dir(path), cwd: cwd, persist: persist, flushed: true, sessionInfoCount: sessionInfoCount}
 	s.rebuildIndex()
 	s.knownInfo, err = os.Stat(path)
 	if err != nil {
@@ -980,6 +990,9 @@ func (s *Store) TryLock() error {
 	if s.lock != nil {
 		return fmt.Errorf("session already locked")
 	}
+	if err := AssertValidSessionID(s.header.ID); err != nil {
+		return fmt.Errorf("cannot canonicalize session filename: %w", err)
+	}
 	target := filepath.Join(s.dir, s.header.ID+".jsonl")
 	if s.file == target {
 		l, err := acquireLock(s.file)
@@ -989,8 +1002,18 @@ func (s *Store) TryLock() error {
 		s.lock = l
 		return nil
 	}
-	if err := AssertValidSessionID(s.header.ID); err != nil {
-		return fmt.Errorf("cannot canonicalize session filename: %w", err)
+	// A session opened through a symbolic link keeps its current name:
+	// renaming the link target would move the session out of the session
+	// directory and leave the link stale.
+	if s.opened != "" {
+		if fi, err := os.Lstat(s.opened); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			l, err := acquireLock(s.file)
+			if err != nil {
+				return err
+			}
+			s.lock = l
+			return nil
+		}
 	}
 	source := s.file
 	srcLock, err := acquireLock(source)

@@ -134,6 +134,54 @@ func TestOpenSessionIDReusesExactMatchOtherwiseCreates(t *testing.T) {
 	})
 }
 
+func TestOpenSessionIDRenamesLegacySession(t *testing.T) {
+	cwd, agentDir, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	ov := config.StartupOverrides{SessionDir: sessionDir}
+	created, err := session.New(session.OpenOptions{Cwd: cwd, SessionDir: sessionDir, AgentDir: agentDir, Persist: true, ID: "legacy-app-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := created.AppendMessage(agentMessageUser("legacy seed")); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(created.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(created.Dir(), "legacy-name.jsonl")
+	if err := os.Rename(created.File(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openSession(Options{SessionID: "legacy-app-1"}, cwd, agentDir, config.Settings{}, ov, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.File() != legacy {
+		t.Fatalf("opened file = %s, want the legacy path %s", reopened.File(), legacy)
+	}
+	if err := reopened.TryLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Unlock()
+	canonical := filepath.Join(reopened.Dir(), "legacy-app-1.jsonl")
+	if reopened.File() != canonical {
+		t.Fatalf("activated file = %s, want %s", reopened.File(), canonical)
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy path still present, stat err = %v", err)
+	}
+	after, err := os.ReadFile(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("rename changed session bytes")
+	}
+	if _, err := reopened.AppendMessage(agentMessageUser("after rename")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindSessionIDDirectHitSkipsDiscovery(t *testing.T) {
 	cwd, dir := t.TempDir(), t.TempDir()
 	const id = "direct-hit-1"

@@ -760,6 +760,54 @@ func TestTryLockRejectsLegacySourceChanges(t *testing.T) {
 	})
 }
 
+func TestTryLockKeepsSymlinkedSessionName(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "linked-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(s.Dir(), "real-legacy.jsonl")
+	if err := os.Rename(s.File(), real); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(s.Dir(), "alias.jsonl")
+	if err := os.Symlink("real-legacy.jsonl", alias); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenFile(alias, "/tmp/work", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Unlock()
+	if err := reopened.TryLock(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(reopened.Dir(), "linked-1.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("symlinked session was renamed, stat err = %v", err)
+	}
+	after, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("symlinked session bytes changed")
+	}
+	viaAlias, err := os.ReadFile(alias)
+	if err != nil {
+		t.Fatalf("alias stopped resolving: %v", err)
+	}
+	if !bytes.Equal(before, viaAlias) {
+		t.Fatal("alias no longer points at the session")
+	}
+}
+
 func TestTryLockSyncFailureRetainsCanonicalRecovery(t *testing.T) {
 	injected := errors.New("injected sync failure")
 	setup := func(t *testing.T) *Store {
