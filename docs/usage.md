@@ -48,7 +48,8 @@ The editor stays active during a run:
 Steering is delivered at the next turn boundary, between model requests.
 Follow-ups wait until the whole run ends. Pending text is shown as dim
 `Steering: …` and `Follow-up: …` rows. Cancelling returns undelivered text to
-the draft. Queues deliver one entry at a time in their own mode.
+the draft. `steeringMode` and `followUpMode` pick `one-at-a-time` (default,
+one message per turn) or `all`.
 
 ## Change the model or thinking level
 

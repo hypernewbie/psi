@@ -753,6 +753,40 @@ func TestSteerRaceWithRunEnding(t *testing.T) {
 	}
 }
 
+// A storage failure during delivery must keep the undelivered message queued:
+// never dropped (lost input) and never duplicated into the session.
+func TestSteeringDeliveryFailureKeepsMessageQueued(t *testing.T) {
+	store, _, fake, loop, _ := testSetup(t)
+	fake.Responses = []*provider.Response{{Text: "ok", StopReason: "stop"}}
+	if err := loop.Submit(context.Background(), "start", Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
+		t.Fatal(err)
+	}
+	loop.Steer("undelivered steering")
+	// Corrupt the journal tail: HasIncompleteTail makes every later append fail
+	// before any in-memory mutation, deterministically on every platform.
+	f, err := os.OpenFile(store.File(), os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"broken":`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.ContinuePending(context.Background(), Config{Model: modelMeta(), Tools: toolDefs()}); err != nil {
+		t.Fatalf("ContinuePending must report the failed delivery, not crash: %v", err)
+	}
+	if pending := loop.PendingSteering(); len(pending) != 1 || pending[0] != "undelivered steering" {
+		t.Fatalf("failed delivery must restore the message to the queue, got %q", pending)
+	}
+	for _, entry := range store.Entries() {
+		if entry.Kind == "message" && entry.Message != nil && strings.Contains(storeUserText(entry), "undelivered steering") {
+			t.Fatal("failed delivery must not persist the message")
+		}
+	}
+}
+
 func reqHasUserText(req provider.Request, text string) bool {
 	for _, m := range req.Messages {
 		if m.Role == "user" && strings.Contains(fmt.Sprint(m.Content), text) {
