@@ -1,5 +1,9 @@
 # Repository instructions
 
+## Git history
+
+- Never merge the default branch into a feature branch. Rebase the feature branch onto `main` instead. History stays linear, and no merge commits reach `main`.
+
 ## Tests
 
 Each behavioral fix must include a focused regression test for the broken behavior.
