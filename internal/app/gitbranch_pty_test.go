@@ -18,7 +18,7 @@ import (
 	"psi/internal/testutil"
 )
 
-func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *testutil.VTModel, wait func(string), write func(string), quit func()) {
+func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *testutil.VTModel, wait func(string), waitScreen func(string), write func(string), quit func()) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/v1/messages" || req.Header.Get("x-api-key") != "file-test-key" {
@@ -91,6 +91,26 @@ func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *tes
 			t.Fatal(err)
 		}
 	}
+	waitScreen = func(want string) {
+		t.Helper()
+		timer := time.NewTimer(8 * time.Second)
+		defer timer.Stop()
+		for {
+			if strings.Contains(screen.Text(), want) {
+				return
+			}
+			select {
+			case chunk, ok := <-chunks:
+				pending += chunk
+				screen.Feed([]byte(chunk))
+				if !ok {
+					t.Fatalf("process exited waiting for screen %q: %q", want, screen.Text())
+				}
+			case <-timer.C:
+				t.Fatalf("timeout waiting for screen %q: %q", want, screen.Text())
+			}
+		}
+	}
 	quit = func() {
 		t.Helper()
 		write("/quit\r")
@@ -105,7 +125,7 @@ func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *tes
 			t.Fatal("quit did not exit")
 		}
 	}
-	return screen, wait, write, quit
+	return screen, wait, waitScreen, write, quit
 }
 
 func branchFooterHome(t *testing.T) string {
@@ -132,13 +152,11 @@ func TestActualAppFooterShowsGitBranch(t *testing.T) {
 	if err := os.WriteFile(head, []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	screen, wait, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
+	_, wait, waitScreen, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
 	wait("/ commands")
 	write("hello\r")
 	wait("APP_OK")
-	if text := screen.Text(); !strings.Contains(text, "~/repo (main)") {
-		t.Fatalf("footer branch missing from screen: %q", text)
-	}
+	waitScreen("~/repo (main)")
 	quit()
 }
 
@@ -159,10 +177,11 @@ func TestActualAppFooterOmitsBranchOutsideARepository(t *testing.T) {
 		dir = parent
 	}
 	agentDir := filepath.Join(home, ".pi", "agent")
-	screen, wait, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
+	screen, wait, waitScreen, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
 	wait("/ commands")
 	write("hello\r")
 	wait("APP_OK")
+	waitScreen("~/plain")
 	if text := screen.Text(); strings.Contains(text, "~/plain (") {
 		t.Fatalf("footer shows a branch outside a repository: %q", text)
 	}
