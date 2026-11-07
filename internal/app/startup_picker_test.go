@@ -380,6 +380,45 @@ func testPickerConsole(t *testing.T) (*terminal.Console, *os.File, *terminalLife
 	return console, inW, lifecycle, cleanup
 }
 
+// The startup picker shares one coalescing resize owner. A redundant
+// notification must not rebuild the picker or its retained rows, while a real
+// geometry change still draws. The searchable picker has a byte-silent frame
+// when nothing changed; choice pickers repaint a cursor mode every frame.
+func TestResizeRedrawWaitPreservesSameSizePicker(t *testing.T) {
+	t.Cleanup(func() {
+		leakcheck.Verify(t)
+	})
+	console, _, _, cleanup := testPickerConsole(t)
+	t.Cleanup(cleanup)
+
+	width, height := 80, 24
+	console.SizeFunc = func() (int, int) { return width, height }
+	console.SetPickerRows([]string{"choice one", "choice two"})
+	console.Draw()
+
+	resizeWait := newResizeRedrawWait(console)
+	t.Cleanup(resizeWait.Close)
+	beforeWrites, _, beforeBytes, _ := console.FrameStats()
+
+	resizeWait.Request()
+	resizeWait.Fallback()
+	console.Draw()
+	writes, _, written, _ := console.FrameStats()
+	if writes != beforeWrites || written != beforeBytes {
+		t.Fatalf("same-size notification repainted the picker: writes %d→%d bytes %d→%d",
+			beforeWrites, writes, beforeBytes, written)
+	}
+
+	width = 100
+	resizeWait.Request()
+	resizeWait.Fallback()
+	console.Draw()
+	writes, _, written, _ = console.FrameStats()
+	if written == beforeBytes {
+		t.Fatalf("real geometry change did not redraw the picker: bytes stayed %d", written)
+	}
+}
+
 func TestStartupPickerBootstrapSignal(t *testing.T) {
 	t.Cleanup(func() {
 		leakcheck.Verify(t)

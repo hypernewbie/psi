@@ -529,7 +529,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		return "", false, true, busy
 	}
 	if input.Resize {
-		c.RequestFullRedraw()
+		c.RequestResizeDraw()
 		return "", false, false, false
 	}
 	if len(input.Reply) > 0 {
@@ -793,8 +793,22 @@ func (c *Console) inputLimit() {
 	c.Draw()
 }
 
+// RequestFullRedraw rebuilds the retained document even when the geometry is
+// unchanged. Explicit UI repaints use this; resize notifications use
+// RequestResizeDraw.
 func (c *Console) RequestFullRedraw() {
 	c.fullDocumentRedraw = true
+	c.dirty = true
+}
+
+// RequestResizeDraw schedules a draw and requests a document rebuild only when
+// previously emitted geometry changed. It preserves any pending rebuild;
+// same-size notifications alone do not erase native scrollback.
+func (c *Console) RequestResizeDraw() {
+	width, height := c.size()
+	if c.lastW > 0 && (c.lastW != width || c.lastH != height) {
+		c.fullDocumentRedraw = true
+	}
 	c.dirty = true
 }
 
@@ -1158,7 +1172,11 @@ func (c *Console) emitComposed(appendText string) error {
 			}
 			return err
 		}
-		return c.emit(Frame{Append: appendText})
+		err := c.emit(Frame{Append: appendText})
+		if err == nil {
+			c.lastW, c.lastH = width, height
+		}
+		return err
 	}
 	if c.frameDepth > 0 {
 		if appendText != "" {

@@ -36,7 +36,7 @@ func newResizeRedrawWait(console *terminal.Console) *resizeRedrawWait {
 }
 
 func (r *resizeRedrawWait) Request() {
-	r.console.RequestFullRedraw()
+	r.console.RequestResizeDraw()
 	if !r.timer.Stop() {
 		select {
 		case <-r.timer.C:
