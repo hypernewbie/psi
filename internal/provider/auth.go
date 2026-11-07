@@ -17,7 +17,7 @@ import (
 // provider from one read, and the tests keep that guarantee.
 var authReads atomic.Int64
 
-// SelectAPIKey preserves the Anthropic-compatible caller and its no-fallback
+// SelectProviderAPIKey preserves the Anthropic-compatible caller and its no-fallback
 // behavior. New API-key providers use SelectProviderAPIKey.
 func SelectAPIKey(env map[string]string, authPath string) (key, source string, err error) {
 	return SelectProviderAPIKey(env, authPath, "anthropic", "")
@@ -25,11 +25,13 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 
 // SelectProviderAPIKey matches Pi's supported precedence: provider-specific
 // auth.json key, models.json key, then the provider's exact environment
-// variable. It never executes credential commands and never crosses billing
-// sources after an unsupported stored credential is found.
+// variable. A provider that models.json declares has no environment variable:
+// it uses its stored key or its configured key. The function never executes
+// credential commands and never crosses billing sources after an unsupported
+// stored credential is found.
 func SelectProviderAPIKey(env map[string]string, authPath, providerID, configuredKey string) (key, source string, err error) {
-	spec, ok := providerregistry.Lookup(providerID)
-	if !ok || spec.Auth != providerregistry.AuthAPIKey {
+	spec, builtin := providerregistry.Lookup(providerID)
+	if builtin && spec.Auth != providerregistry.AuthAPIKey {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
 	}
 	authPath = resolveAuthPath(env, authPath)
@@ -80,8 +82,8 @@ func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
 // snapshot. It keeps the precedence and the no-fallback rules of
 // SelectProviderAPIKey.
 func apiKeyFromEntries(env map[string]string, entries map[string]json.RawMessage, authPath, providerID, configuredKey string) (key, source string, err error) {
-	spec, ok := providerregistry.Lookup(providerID)
-	if !ok || spec.Auth != providerregistry.AuthAPIKey {
+	spec, builtin := providerregistry.Lookup(providerID)
+	if builtin && spec.Auth != providerregistry.AuthAPIKey {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
 	}
 	if raw, present := entries[providerID]; present {
@@ -134,11 +136,16 @@ func apiKeyFromEntries(env map[string]string, entries map[string]json.RawMessage
 		}
 		return key, "models.json:" + providerID, nil
 	}
-	if key := env[spec.Environment]; key != "" {
-		return key, spec.Environment, nil
+	if builtin {
+		if key := env[spec.Environment]; key != "" {
+			return key, spec.Environment, nil
+		}
 	}
 	if providerID == "anthropic" {
 		return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)
+	}
+	if !builtin {
+		return "", "", fmt.Errorf("no %s credential: add an API-key entry to auth.json or configure providers.%s.apiKey in models.json", providerID, providerID)
 	}
 	return "", "", fmt.Errorf("no %s credential: set %s, add an API-key entry to auth.json, or configure providers.%s.apiKey in models.json", spec.Name, spec.Environment, providerID)
 }
@@ -157,39 +164,51 @@ type CredentialState struct {
 // Credentials resolves every provider's credential from one consistent
 // auth.json read. Reading once keeps the model lists fast and gives every
 // provider the same view of the login file, so a busy lock cannot stall the
-// list once per provider.
-func Credentials(env map[string]string, authPath string, configured map[string]string) map[string]CredentialState {
+// list once per provider. The provider list is the effective set: the
+// built-in providers plus the providers models.json declares.
+func Credentials(env map[string]string, authPath string, configured map[string]string, providerIDs []string) map[string]CredentialState {
 	authPath = resolveAuthPath(env, authPath)
 	entries, readErr := AuthEntries(authPath)
 	out := map[string]CredentialState{}
-	for _, providerID := range providerregistry.IDs() {
-		spec, ok := providerregistry.Lookup(providerID)
-		if !ok {
+	for _, providerID := range providerIDs {
+		spec, builtin := providerregistry.Lookup(providerID)
+		if builtin {
+			switch spec.Auth {
+			case providerregistry.AuthCodexOAuth:
+				if readErr != nil {
+					out[providerID] = CredentialState{Err: readErr}
+					continue
+				}
+				if err := codexCredentialCheck(entries); err != nil {
+					out[providerID] = CredentialState{Err: err}
+					continue
+				}
+				out[providerID] = CredentialState{Usable: true, Source: "auth.json:" + providerID}
+			case providerregistry.AuthAPIKey:
+				if readErr != nil {
+					out[providerID] = CredentialState{Err: readErr}
+					continue
+				}
+				_, source, err := apiKeyFromEntries(env, entries, authPath, providerID, configured[providerID])
+				if err != nil {
+					out[providerID] = CredentialState{Err: err}
+					continue
+				}
+				out[providerID] = CredentialState{Usable: true, Source: source}
+			}
 			continue
 		}
-		switch spec.Auth {
-		case providerregistry.AuthCodexOAuth:
-			if readErr != nil {
-				out[providerID] = CredentialState{Err: readErr}
-				continue
-			}
-			if err := codexCredentialCheck(entries); err != nil {
-				out[providerID] = CredentialState{Err: err}
-				continue
-			}
-			out[providerID] = CredentialState{Usable: true, Source: "auth.json:" + providerID}
-		case providerregistry.AuthAPIKey:
-			if readErr != nil {
-				out[providerID] = CredentialState{Err: readErr}
-				continue
-			}
-			_, source, err := apiKeyFromEntries(env, entries, authPath, providerID, configured[providerID])
-			if err != nil {
-				out[providerID] = CredentialState{Err: err}
-				continue
-			}
-			out[providerID] = CredentialState{Usable: true, Source: source}
+		// A provider that models.json declares uses an API key only.
+		if readErr != nil {
+			out[providerID] = CredentialState{Err: readErr}
+			continue
 		}
+		_, source, err := apiKeyFromEntries(env, entries, authPath, providerID, configured[providerID])
+		if err != nil {
+			out[providerID] = CredentialState{Err: err}
+			continue
+		}
+		out[providerID] = CredentialState{Usable: true, Source: source}
 	}
 	return out
 }

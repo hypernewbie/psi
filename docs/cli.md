@@ -46,13 +46,14 @@ psi --list-models sonnet
 ```
 
 - `--provider <name>` selects a provider. Without `--model` the configured
-  default model for that provider is used.
+  default model for that provider is used. A provider that `models.json`
+  declares works here too.
 - `--model <id|provider/id>` selects a model ID or a qualified ID. An optional
   `:<thinking>` suffix sets the thinking level for this run.
 - `--thinking <level>` accepts `off`, `minimal`, `low`, `medium`, `high`,
   `xhigh`, or `max`.
-- `--list-models [search]` prints the bundled and cached models, optionally
-  filtered by fuzzy search, and exits. It never touches the network.
+- `--list-models [search]` prints the bundled, cached, and configured models,
+  optionally filtered by fuzzy search, and exits. It never touches the network.
 
 Provider credentials come from `auth.json`, `models.json`, or the provider's
 environment variable. See [Providers](providers.md).

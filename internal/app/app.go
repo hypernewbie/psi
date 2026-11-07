@@ -360,7 +360,7 @@ func listAvailableModels(output io.Writer, agentDir, filter string) error {
 		provider, model, context, maxOutput, thinking, images string
 	}
 	var rows []row
-	for _, providerID := range providerregistry.IDs() {
+	for _, providerID := range models.ProviderIDs() {
 		for _, option := range models.ModelOptions(providerID) {
 			if !option.Available || !fuzzyMatch(providerID+" "+option.Model.ID, filter) {
 				continue
@@ -446,7 +446,7 @@ Pi-compatible options:
   --mode text|rpc            Select interactive text or headless JSONL RPC mode
   --tui-mode regular         Select the inline terminal mode
   --offline                  No-op; psi does not refresh Pi's model cache
-  --list-models [search]     List cached and bundled models without network access
+  --list-models [search]     List cached, bundled, and models.json models without network access
   --docs [topic]             Print psi documentation (no topic prints the list)
   --help, -h                 Show this help
   --version, -v              Show version
@@ -558,6 +558,12 @@ func Run(args []string, version string) error {
 	if errors.Is(err, errStartupCancelled) {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	// The runtime keeps the resolved options, so a restored session and the
+	// model picker use the same provider as the startup selection.
+	o, err = resolveConfiguredModelOption(o, models)
 	if err != nil {
 		return err
 	}
@@ -756,7 +762,7 @@ func providerModel(providerID string, meta config.ModelMeta) provider.ModelMeta 
 	forceAdaptive, _, _ := meta.Compat.Bool("forceAdaptiveThinking")
 	midConvoEffort, _, _ := meta.Compat.Bool("supportsMidConvoEffort")
 	allowEmptySignature, _, _ := meta.Compat.Bool("allowEmptySignature")
-	return provider.ModelMeta{ID: meta.ID, API: meta.API, Provider: providerID, BaseURL: meta.BaseURL, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap, AdaptiveThinking: forceAdaptive, MidConvoEffort: midConvoEffort, AllowEmptySignature: allowEmptySignature, Compat: meta.Compat}
+	return provider.ModelMeta{ID: meta.ID, API: meta.API, Provider: providerID, BaseURL: meta.BaseURL, MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning, InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap, AdaptiveThinking: forceAdaptive, MidConvoEffort: midConvoEffort, AllowEmptySignature: allowEmptySignature, Compat: meta.Compat, Custom: meta.Custom}
 }
 
 func (r *runtime) configure(ov config.StartupOverrides) error {
@@ -786,6 +792,18 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	idle := time.Duration(max(r.settings.HTTPIdleTimeoutMs, 0)) * time.Millisecond
 	var client provider.Provider
 	var authErr error
+	// authHeader adds the resolved key as a bearer header, the way Pi composes
+	// a provider that declares authHeader.
+	applyAuthHeader := func(key string, credentialErr error) {
+		if !meta.AuthHeader || credentialErr != nil {
+			return
+		}
+		if strings.TrimSpace(key) == "" {
+			authErr = fmt.Errorf("provider %q requests authHeader but has no resolved API key", ov.Provider)
+			return
+		}
+		headers["Authorization"] = "Bearer " + key
+	}
 	switch meta.API {
 	case "openai-codex-responses":
 		if meta.APIKey != "" {
@@ -798,6 +816,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	case "anthropic-messages":
 		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
 		authErr = err
+		applyAuthHeader(key, err)
 		anthropic := provider.NewClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		anthropic.Headers = headers
 		anthropic.SessionID = r.store.Header().ID
@@ -805,6 +824,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	case "openai-completions":
 		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
 		authErr = err
+		applyAuthHeader(key, err)
 		completions := provider.NewCompletionsClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		completions.Headers = headers
 		completions.SessionID = r.store.Header().ID
@@ -812,6 +832,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	case "google-generative-ai":
 		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
 		authErr = err
+		applyAuthHeader(key, err)
 		google := provider.NewGoogleClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		google.Headers = headers
 		google.SessionID = r.store.Header().ID
@@ -819,6 +840,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	case "openai-responses":
 		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
 		authErr = err
+		applyAuthHeader(key, err)
 		responses := provider.NewResponsesClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		responses.Headers = headers
 		responses.SessionID = r.store.Header().ID
@@ -826,6 +848,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	case "mistral-conversations":
 		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
 		authErr = err
+		applyAuthHeader(key, err)
 		mistral := provider.NewMistralClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		mistral.Headers = headers
 		mistral.SessionID = r.store.Header().ID
@@ -1077,7 +1100,7 @@ func footerProviderCount(models *config.ModelsFile) int {
 		return 0
 	}
 	count := 0
-	for _, family := range providerregistry.IDs() {
+	for _, family := range models.ProviderIDs() {
 		available := false
 		for _, candidate := range config.BundledModels(family) {
 			if _, err := models.SelectModel(family, candidate.ID); err == nil {
@@ -2575,6 +2598,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if !busy && !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
+				r.refreshModelsForPicker(notice)
 				openSelector(modelSelector(r), console.Editor.Text(), console.Editor.Pos(), "", true)
 				continue
 			}
@@ -2753,6 +2777,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if cmd.Name == "model" {
 					query := strings.TrimSpace(cmd.Arg)
 					if query == "" || !r.modelArgumentKnown(query) {
+						r.refreshModelsForPicker(notice)
 						openSelector(modelSelector(r), submittedDraft, submittedCursor, query, false)
 						continue
 					}
@@ -2873,6 +2898,18 @@ func printStatusText(out io.Writer, text string) {
 	fmt.Fprintln(out, terminal.Sanitize(text))
 }
 
+// printWarningText renders one warning line, the way Pi reports a models.json
+// error after a reload.
+func printWarningText(out io.Writer, text string) {
+	if structured, ok := out.(interface {
+		AppendDocumentBlock(terminal.DocumentBlock) error
+	}); ok {
+		_ = structured.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentWarning, Text: text})
+		return
+	}
+	fmt.Fprintln(out, terminal.Sanitize(text))
+}
+
 func (r *runtime) handleQuitCommand(arg string, out io.Writer) (bool, error) {
 	return true, nil
 }
@@ -2919,11 +2956,17 @@ func (r *runtime) handleReloadCommand(arg string, out io.Writer) (bool, error) {
 	if err := r.reloadTheme(); err != nil {
 		return false, err
 	}
+	// Pi reloads the model configuration with the other resources and reports
+	// a models.json error next to the reload status.
+	modelsErr := r.reloadModels()
 	if err := r.reloadResources(); err != nil {
 		return false, err
 	}
 	if r.lifecycle != nil && r.lifecycle.console != nil {
 		r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
+	}
+	if modelsErr != nil {
+		printWarningText(out, "models.json error: "+modelsErr.Error())
 	}
 	printStatusText(out, "Reloaded keybindings, extensions, skills, prompts, themes, and context files")
 	return false, nil

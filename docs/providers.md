@@ -1,8 +1,9 @@
 # Providers
 
-psi supports fourteen providers. Each has a fixed protocol list and its own
-credential. There is no automatic provider discovery, routing, or virtual
-model layer.
+psi supports fifteen built-in providers. Each has a fixed protocol list and its
+own credential. There is no automatic provider discovery, routing, or virtual
+model layer. `models.json` can add providers of its own; see
+[Custom providers](#custom-providers).
 
 | Provider ID | Name | Protocol | Credential |
 |---|---|---|---|
@@ -14,6 +15,7 @@ model layer.
 | `zai` | Z.AI | `openai-completions` | `ZAI_API_KEY` |
 | `xiaomi` | Xiaomi MiMo | `openai-completions` | `XIAOMI_API_KEY` |
 | `moonshotai` | Moonshot AI | `openai-completions` | `MOONSHOT_API_KEY` |
+| `kimi-coding` | Kimi For Coding | `openai-completions` | `KIMI_API_KEY` |
 | `qwen-token-plan` | Qwen Token Plan | `openai-completions` | `QWEN_TOKEN_PLAN_API_KEY` |
 | `openrouter` | OpenRouter | `openai-completions` | `OPENROUTER_API_KEY` |
 | `xai` | xAI | `openai-responses` | `XAI_API_KEY` |
@@ -115,6 +117,65 @@ retention (`ttl`) is sent.
 Provider selection precedence matches Pi: command-line flags, then the session's
 recorded model, then `defaultProvider`/`defaultModel` from settings. See
 [Configuration](config.md).
+
+## Custom providers
+
+`models.json` can declare a provider ID that is not built in. Such a provider
+uses the protocol it names and the endpoint it declares, and it stays inside
+the loaded configuration: it never changes the built-in provider list.
+
+```json
+{
+  "providers": {
+    "local-openai": {
+      "name": "Local OpenAI-compatible endpoint",
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "$LOCAL_API_KEY",
+      "headers": { "X-Deployment": "$LOCAL_DEPLOYMENT" },
+      "models": [
+        { "id": "qwen2.5-coder:7b", "contextWindow": 32768, "maxTokens": 8192 }
+      ]
+    }
+  }
+}
+```
+
+Provider keys psi reads: `name`, `baseUrl`, `api`, `apiKey`, `authHeader`,
+`headers`, `compat`, `models`, and `modelOverrides`.
+
+- The provider supplies the API, the endpoint, and the compatibility defaults.
+  The model entry overrides them, and `modelOverrides` apply last.
+- `api` and `baseUrl` are required, at the provider level or at the model level.
+  A provider without them stays unavailable.
+- A missing `contextWindow`, `maxTokens`, `name`, or `input` takes Pi's
+  defaults: `128000`, `16384`, the model ID, and text input.
+- A `models` entry with a built-in model ID replaces that catalog entry. A
+  provider that sets only `baseUrl` keeps the whole built-in catalog.
+- `modelOverrides` for a model that does not exist are ignored, as in Pi.
+- Allowed protocols: `anthropic-messages`, `openai-completions`,
+  `openai-responses`, `google-generative-ai`, and `mistral-conversations`.
+  The Codex protocol is not available: it needs the ChatGPT OAuth session.
+- A configured provider has no environment variable of its own. Its key comes
+  from `auth.json` or from its `apiKey`, in that order. An unsupported stored
+  credential stops the selection instead of falling back.
+
+`authHeader: true` sends the resolved key as an `Authorization: Bearer` header
+in addition to the protocol's own key header. It needs a resolvable key.
+
+```sh
+psi --provider local-openai --model 'qwen2.5-coder:7b'
+psi --model local-openai/qwen2.5-coder:7b
+```
+
+`/model`, `Ctrl+P`, `--list-models`, the RPC model list, and the bridge model
+list use the same provider set, so a configured provider appears in all of
+them. `/reload` reads `models.json` again and reports a malformed file while
+keeping the last working configuration.
+
+Fields psi does not implement stay unimplemented: `cost`, `inputLimits`,
+`promptCache`, `samplingParams`, `samplingParamsByThinkingLevel`, image and
+classifier models, and OAuth providers.
 
 ## Excluded providers
 

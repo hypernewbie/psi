@@ -5,7 +5,7 @@ import "fmt"
 // Existing Anthropic behavior stays unchanged. Additional Anthropic-compatible
 // providers must not silently accept catalog features the adapter cannot replay.
 func resolveAdditionalAnthropicCompat(model ModelMeta) (ModelMeta, error) {
-	if model.ProviderID() != "minimax" && model.ProviderID() != "opencode-go" {
+	if model.ProviderID() != "minimax" && model.ProviderID() != "opencode-go" && !model.Custom {
 		return model, nil
 	}
 	for field := range model.Compat {

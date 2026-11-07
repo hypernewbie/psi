@@ -834,6 +834,10 @@ type ModelMeta struct {
 	UnavailableReason     string             `json:"-"`
 	CacheEndpointRejected bool               `json:"-"`
 	ThinkingLevelMap      map[string]*string `json:"thinkingLevelMap"`
+	// AuthHeader adds the resolved key as an Authorization bearer header.
+	AuthHeader bool `json:"-"`
+	// Custom marks a provider that models.json declares, not a built-in one.
+	Custom bool `json:"-"`
 }
 
 type ModelsFile struct {
@@ -845,10 +849,44 @@ type ProviderMeta struct {
 	API            string                     `json:"api"`
 	BaseURL        string                     `json:"baseUrl"`
 	APIKey         string                     `json:"apiKey"`
+	Name           string                     `json:"name,omitempty"`
+	AuthHeader     bool                       `json:"authHeader,omitempty"`
 	Headers        map[string]string          `json:"headers"`
 	Compat         modelmeta.Compat           `json:"compat"`
 	Models         []ModelMeta                `json:"models"`
 	ModelOverrides map[string]json.RawMessage `json:"modelOverrides"`
+}
+
+// ProviderIDs returns every provider this configuration can use: the built-in
+// providers plus the providers models.json declares. The set is sorted and
+// deduplicated, and it never changes the global registry.
+func (mf *ModelsFile) ProviderIDs() []string {
+	ids := make(map[string]bool, len(providerregistry.IDs())+len(mf.Providers))
+	for _, id := range providerregistry.IDs() {
+		ids[id] = true
+	}
+	for id := range mf.Providers {
+		if id == "" {
+			continue
+		}
+		ids[id] = true
+	}
+	out := make([]string, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ConfiguredProvider reports whether models.json declares the provider. Such a
+// provider can use the generic protocol adapters and nothing else.
+func (mf *ModelsFile) ConfiguredProvider(providerID string) bool {
+	if _, builtin := providerregistry.Lookup(providerID); builtin {
+		return false
+	}
+	_, ok := mf.Providers[providerID]
+	return ok
 }
 
 func LoadModels(path string) (*ModelsFile, error) {
@@ -858,7 +896,9 @@ func LoadModels(path string) (*ModelsFile, error) {
 	}
 	var mf ModelsFile
 	if err == nil {
-		if err := json.Unmarshal(stripBOM(b), &mf); err != nil {
+		// Pi accepts a byte order mark, // line comments, and trailing commas
+		// in models.json.
+		if err := json.Unmarshal(stripJSONComments(stripBOM(b)), &mf); err != nil {
 			return nil, fmt.Errorf("%s: malformed models.json", path)
 		}
 	}
@@ -869,9 +909,13 @@ func LoadModels(path string) (*ModelsFile, error) {
 // SelectModel resolves only the active provider. Unrelated Pi provider entries
 // can remain in the shared file without preventing supported providers' use.
 func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
-	spec, ok := providerregistry.Lookup(providerID)
-	if !ok {
-		return ModelMeta{}, fmt.Errorf("unsupported provider %q: available providers are %s", providerID, strings.Join(providerregistry.IDs(), ", "))
+	spec, builtin := providerregistry.Lookup(providerID)
+	p := mf.Providers[providerID]
+	if !builtin {
+		if _, declared := mf.Providers[providerID]; !declared {
+			return ModelMeta{}, fmt.Errorf("unsupported provider %q: available providers are %s", providerID, strings.Join(mf.ProviderIDs(), ", "))
+		}
+		return mf.selectConfiguredModel(providerID, id, p)
 	}
 	if id == "" {
 		switch providerID {
@@ -910,7 +954,6 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 		m, known = cached, true
 	}
 
-	p := mf.Providers[providerID]
 	configuredModelBase := ""
 	for _, configured := range p.Models {
 		if configured.ID != id {
@@ -1014,6 +1057,89 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 	}
 	m.Headers = headers
 	return m, nil
+}
+
+// selectConfiguredModel resolves a model of a provider that models.json
+// declares. Pi composes such a model from the provider entry: the provider
+// supplies the API, the endpoint, and the compatibility defaults, the model
+// entry overrides them, and modelOverrides apply last.
+func (mf *ModelsFile) selectConfiguredModel(providerID, id string, provider ProviderMeta) (ModelMeta, error) {
+	if id == "" {
+		return ModelMeta{}, fmt.Errorf("provider %q needs an explicit model selection", providerID)
+	}
+	model, found := ModelMeta{}, false
+	for _, configured := range provider.Models {
+		if configured.ID == id {
+			model, found = configured, true
+			break
+		}
+	}
+	if !found {
+		return ModelMeta{}, fmt.Errorf("model %q needs explicit metadata in models.json providers.%s.models", id, providerID)
+	}
+	model.InputImage = containsString(model.Input, "image")
+	modelCompat := model.Compat
+	if override, exists := provider.ModelOverrides[id]; exists {
+		var overrideObject map[string]json.RawMessage
+		if err := json.Unmarshal(override, &overrideObject); err != nil || overrideObject == nil {
+			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
+		}
+		var overrideCompat modelmeta.Compat
+		if raw, hasCompat := overrideObject["compat"]; hasCompat {
+			if err := json.Unmarshal(raw, &overrideCompat); err != nil {
+				return ModelMeta{}, fmt.Errorf("invalid compatibility override for model %q", id)
+			}
+		}
+		if err := json.Unmarshal(override, &model); err != nil {
+			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
+		}
+		model.Compat = mergeCompat(modelCompat, overrideCompat)
+		if model.Input != nil {
+			model.InputImage = containsString(model.Input, "image")
+		}
+	}
+	model.Compat = mergeCompat(provider.Compat, model.Compat)
+	if model.API == "" {
+		model.API = provider.API
+	}
+	if model.API == "" {
+		return ModelMeta{}, fmt.Errorf("provider %q, model %q: no %q specified. Set it at provider or model level", providerID, id, "api")
+	}
+	if !providerregistry.SupportsGenericAPI(model.API) {
+		return ModelMeta{}, fmt.Errorf("model %q unavailable: provider %q does not support API %q", id, providerID, model.API)
+	}
+	if model.BaseURL == "" {
+		model.BaseURL = provider.BaseURL
+	}
+	if model.BaseURL == "" {
+		return ModelMeta{}, fmt.Errorf("provider %q: %q is required when defining custom models", providerID, "baseUrl")
+	}
+	if model.ContextWindow <= 0 {
+		model.ContextWindow = 128000
+	}
+	if model.MaxTokens <= 0 {
+		model.MaxTokens = 16384
+	}
+	if model.Name == "" {
+		model.Name = id
+	}
+	if len(model.Input) == 0 {
+		model.Input = []string{"text"}
+		model.InputImage = false
+	}
+	model.ID = id
+	model.APIKey = provider.APIKey
+	model.AuthHeader = provider.AuthHeader
+	model.Custom = true
+	headers := make(map[string]string)
+	for k, v := range provider.Headers {
+		headers[k] = v
+	}
+	for k, v := range model.Headers {
+		headers[k] = v
+	}
+	model.Headers = headers
+	return model, nil
 }
 
 func mergeCompat(base, override modelmeta.Compat) modelmeta.Compat {

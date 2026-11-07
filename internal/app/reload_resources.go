@@ -45,3 +45,15 @@ func (r *runtime) reloadResources() error {
 	r.syncBridge()
 	return nil
 }
+
+// reloadModels re-reads models.json and installs the result. A malformed file
+// keeps the current model configuration, so the session stays usable and the
+// caller reports the error.
+func (r *runtime) reloadModels() error {
+	models, err := config.LoadModels(filepath.Join(r.agentDir, "models.json"))
+	if err != nil {
+		return err
+	}
+	r.models = models
+	return nil
+}

@@ -84,6 +84,17 @@ precede `models.json` credentials, then the selected provider's environment vari
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Z.AI | `ZAI_API_KEY` |
 | Google Generative AI | `GEMINI_API_KEY` |
+| Xiaomi MiMo | `XIAOMI_API_KEY` |
+| Moonshot AI | `MOONSHOT_API_KEY` |
+| Kimi For Coding | `KIMI_API_KEY` |
+| Qwen Token Plan | `QWEN_TOKEN_PLAN_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| xAI | `XAI_API_KEY` |
+| Groq | `GROQ_API_KEY` |
+| Mistral | `MISTRAL_API_KEY` |
+
+A provider that `models.json` declares has no environment variable: its key
+comes from `auth.json` or from its `apiKey` entry.
 
 An unsupported stored auth type stops key selection instead of silently changing
 the billing path. Codex uses its OAuth entry and never falls back to an API key.
@@ -132,6 +143,14 @@ Configure explicit model definitions in Pi's normal shape. The following is an A
   }
 }
 ```
+
+`models.json` can also declare a provider ID that is not built in. Such a
+provider uses the protocol and the endpoint it names, and it stays inside the
+loaded configuration. `api` and `baseUrl` are required, `authHeader` sends the
+resolved key as a bearer header, and the allowed protocols are
+`anthropic-messages`, `openai-completions`, `openai-responses`,
+`google-generative-ai`, and `mistral-conversations`. See
+[Providers](providers.md#custom-providers).
 
 An Anthropic thinking budget must fit below the model's output limit.
 Adaptive Anthropic models use effort levels instead of token budgets.

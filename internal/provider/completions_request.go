@@ -72,9 +72,13 @@ func resolveCompletionsCompat(model ModelMeta) (completionsCompat, error) {
 		defaultThinking, defaultMaxTokens = "deepseek", "max_tokens"
 	case "zai":
 		defaultThinking, defaultMaxTokens = "zai", "max_tokens"
-	case "opencode-go", "xiaomi", "moonshotai", "qwen-token-plan", "openrouter", "groq":
+	case "opencode-go", "xiaomi", "moonshotai", "kimi-coding", "qwen-token-plan", "openrouter", "groq":
 	default:
-		return completionsCompat{}, fmt.Errorf("openai-completions is not supported for provider %q", model.ProviderID())
+		// A provider declared in models.json uses the generic adapters and
+		// their default compatibility behavior.
+		if !model.Custom {
+			return completionsCompat{}, fmt.Errorf("openai-completions is not supported for provider %q", model.ProviderID())
+		}
 	}
 	compat := completionsCompat{}
 	var err error

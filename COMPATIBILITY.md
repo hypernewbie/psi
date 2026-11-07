@@ -51,7 +51,7 @@ Additional storage rules:
 
 | Area | Supported | Boundary |
 |---|---|---|
-| `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `moonshotai`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, and `mistral` | use the model's declared registered API; reject unsupported provider/API pairs |
+| `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `moonshotai`, `kimi-coding`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, `mistral`, and the providers `models.json` declares | use the model's declared registered API; reject unsupported provider/API pairs |
 | `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic budget/adaptive profiles and Codex effort maps; an unadvertised level is clamped, not refused |
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | `read,bash,edit,write` with replacement and `+`/`-` | four tools only |
@@ -60,8 +60,8 @@ Additional storage rules:
 | `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |
 | `network` | idle timeout + bounded retries | one HTTP transport |
 | instructions | `AGENTS.override.md`, `AGENTS.md`, fallbacks, `SYSTEM.md`, `APPEND_SYSTEM.md` | documented discovery + consent |
-| `models.json` | endpoints, model metadata and overrides for supported providers | public snapshot and Pi cache. No network refresh |
-| auth | Provider API keys for Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, and Google; existing Codex OAuth login and refresh | no login UI or credential-command execution |
+| `models.json` | endpoints, model metadata and overrides for supported providers; provider IDs that models.json declares | public snapshot and Pi cache. No network refresh |
+| auth | Provider API keys for Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Google, Xiaomi MiMo, Moonshot AI, Kimi For Coding, Qwen Token Plan, OpenRouter, xAI, Groq, Mistral, and for providers `models.json` declares; existing Codex OAuth login and refresh | no login UI or credential-command execution |
 | startup | `quietStartup` | no dynamic renderer |
 | themes | `theme`, `themes`, `terminal.trueColor`, `--use-theme`, repeatable `--theme`, `--no-themes` | Pi theme data and local resource paths; project resources require consent |
 | display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | normalized bounded inline settings |
@@ -84,8 +84,10 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 - **OpenCode Go** uses `OPENCODE_API_KEY`. Each model selects one registered API: Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses. Its catalog endpoint path is model-specific. Requests add `x-opencode-session` unless an explicit case-insensitive header overrides it.
 - **DeepSeek** uses `DEEPSEEK_API_KEY` with OpenAI Chat Completions. **Z.AI** uses `ZAI_API_KEY` with its coding Completions endpoint. Their reasoning and tool-stream behavior follows supported model metadata.
 - **Google Generative AI** uses `GEMINI_API_KEY`, `x-goog-api-key`, and the `:streamGenerateContent?alt=sse` route. Google Vertex and OAuth are not implemented.
+- **Kimi For Coding** uses `KIMI_API_KEY` with OpenAI Chat Completions at `https://api.kimi.com/coding/v1`. The bundled catalog carries Pi's effort map and always-thinking behavior. The Kimi OAuth login is not implemented.
 - **OpenAI Responses** for OpenCode Go uses `OPENCODE_API_KEY`, bearer authentication, `store:false`, and the generic `/responses` route. It is distinct from **ChatGPT Codex Responses**, which uses the `openai-codex` OAuth entry and `/backend-api/codex/responses`. Codex never falls back to `OPENAI_API_KEY`.
-- API-key precedence is provider `auth.json`, configured `models.json` key, then that provider's exact environment variable. Unsupported stored auth and `!command` credentials fail closed. No login UI is included.
+- API-key precedence is provider `auth.json`, configured `models.json` key, then that provider's exact environment variable. A provider that `models.json` declares has no environment variable: it uses its stored key or its configured key. Unsupported stored auth and `!command` credentials fail closed. No login UI is included.
+- A provider that `models.json` declares uses the protocol and endpoint it names, with `anthropic-messages`, `openai-completions`, `openai-responses`, `google-generative-ai`, and `mistral-conversations` allowed. The Codex protocol stays unavailable. `authHeader` sends the resolved key as a bearer header. The provider set stays inside the loaded configuration and never changes the built-in registry.
 - The model selects the protocol; psi does not infer API from provider name or forward a model through an unrelated adapter. Unknown compatibility fields are refused by the Completions, Responses, Google, and Mistral adapters, and MiniMax and OpenCode Go refuse an Anthropic feature their adapter cannot replay; unsupported API pairs remain unavailable. An `openai-completions` model with `compat.cacheControlFormat: anthropic`, and an `openrouter` model whose id starts with `anthropic/`, sends Anthropic-style prompt-cache markers on the instruction message, the last tool, and the last conversation text part; no cache `ttl` is sent. The public catalog is pinned to the provenance in `internal/config/data/catalog-source.json`; Pi's cache is an offline overlay, and psi does not refresh it from the network.
 - Adapters translate normalized Pi context and retain supported provider/model identity, usage, reasoning signatures, text IDs/phases, and linked tool IDs in JSONL v3. Bounded retries honor `retry-after` within the configured cap. A stream that has started is not retried, and incomplete calls are never dispatched.
 - Accounting separates reported usage, estimated context, and requested versus returned models. Prices remain unknown because psi does not calculate costs. No live provider request has run for PLAN6.

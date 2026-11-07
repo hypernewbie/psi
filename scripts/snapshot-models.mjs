@@ -29,6 +29,7 @@ const providerAPIs = {
 	google: ["google-generative-ai"],
 	xiaomi: ["openai-completions"],
 	moonshotai: ["openai-completions"],
+	"kimi-coding": ["openai-completions"],
 	"qwen-token-plan": ["openai-completions"],
 	openrouter: ["openai-completions"],
 	xai: ["openai-responses"],

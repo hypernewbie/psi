@@ -9,7 +9,7 @@ Print mode, HTML export, sharing, bug uploads, hosted services, telemetry, and a
 
 See [Providers](providers.md) for supported providers and protocols. Unsupported provider/API pairs and compatibility features remain unavailable.
 
-Cloud credential discovery, routing, virtual models, and automatic catalog refresh are excluded. Google Vertex and OAuth, OpenCode Zen, MiniMax China, and Z.AI China endpoints are not included. Live-provider acceptance has not run.
+Cloud credential discovery, routing, virtual models, and automatic catalog refresh are excluded. Google Vertex and OAuth, Kimi For Coding OAuth, OpenCode Zen, MiniMax China, and Z.AI China endpoints are not included. Live-provider acceptance has not run.
 Background provider jobs, cache warming, classifier models, and image/audio/video generation are excluded.
 Clipboard access, image paste, external editors, prompt templates, and browser automation are excluded.
 The `read` tool can read supported image files.
@@ -52,7 +52,9 @@ The six Linux/macOS/Windows amd64/arm64 cross-builds passed after this change; m
 
 ## Authentication
 
-Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Qwen Token Plan, OpenRouter, xAI, Groq, Mistral, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.
+Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Kimi For Coding, Qwen Token Plan, OpenRouter, xAI, Groq, Mistral, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.
+
+A provider that `models.json` declares uses an API key from `auth.json` or from its own `apiKey` entry. It has no environment variable, and an unsupported stored credential stops the selection.
 
 psi has no login interface, does not support Anthropic OAuth, and does not execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
 

@@ -70,6 +70,11 @@ var registry = map[string]Spec{
 		Environment: "MOONSHOT_API_KEY", DefaultAPI: "openai-completions",
 		Endpoints: map[string]string{"openai-completions": "https://api.moonshot.ai/v1"},
 	},
+	"kimi-coding": {
+		ID: "kimi-coding", Name: "Kimi For Coding", Auth: AuthAPIKey,
+		Environment: "KIMI_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://api.kimi.com/coding/v1"},
+	},
 	"qwen-token-plan": {
 		ID: "qwen-token-plan", Name: "Qwen Token Plan", Auth: AuthAPIKey,
 		Environment: "QWEN_TOKEN_PLAN_API_KEY", DefaultAPI: "openai-completions",
@@ -153,6 +158,23 @@ func SupportsAPI(provider, api string) bool {
 	}
 	_, ok = spec.Endpoints[api]
 	return ok
+}
+
+// genericAPIs lists the protocol adapters a provider declared in models.json
+// can use. The Codex adapter is not part of it: that protocol needs the ChatGPT
+// OAuth session instead of a generic API key.
+var genericAPIs = map[string]bool{
+	"anthropic-messages":    true,
+	"google-generative-ai":  true,
+	"mistral-conversations": true,
+	"openai-completions":    true,
+	"openai-responses":      true,
+}
+
+// SupportsGenericAPI reports whether a configured provider can use the given
+// protocol adapter.
+func SupportsGenericAPI(api string) bool {
+	return genericAPIs[api]
 }
 
 func DefaultAPI(provider string) string {

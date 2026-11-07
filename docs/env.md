@@ -17,6 +17,7 @@ Each provider has exactly one variable. A stored `auth.json` entry or a
 | `ZAI_API_KEY` | `zai` |
 | `XIAOMI_API_KEY` | `xiaomi` |
 | `MOONSHOT_API_KEY` | `moonshotai` |
+| `KIMI_API_KEY` | `kimi-coding` |
 | `QWEN_TOKEN_PLAN_API_KEY` | `qwen-token-plan` |
 | `OPENROUTER_API_KEY` | `openrouter` |
 | `XAI_API_KEY` | `xai` |
@@ -26,6 +27,10 @@ Each provider has exactly one variable. A stored `auth.json` entry or a
 
 `openai-codex` has no environment variable. It uses the ChatGPT OAuth entry in
 `auth.json`. See [Providers](providers.md).
+
+A provider that `models.json` declares has no environment variable. Its key
+comes from `auth.json` or from its `apiKey` entry in `models.json`, in that
+order.
 
 ## Directories
 

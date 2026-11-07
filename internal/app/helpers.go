@@ -11,6 +11,7 @@ import (
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
 	"psi/internal/session"
+	"psi/internal/terminal"
 )
 
 func modelSelector(r *runtime) *Selector {
@@ -39,7 +40,7 @@ type usableModel struct {
 func (r *runtime) usableModels() []usableModel {
 	states := r.credentialStates()
 	var models []usableModel
-	for _, family := range providerregistry.IDs() {
+	for _, family := range r.providerIDs() {
 		state := states[family]
 		if !state.usable {
 			continue
@@ -57,6 +58,27 @@ func (r *runtime) usableModels() []usableModel {
 	return models
 }
 
+// providerIDs returns the effective provider set: the built-in providers plus
+// the providers models.json declares.
+func (r *runtime) providerIDs() []string {
+	if r.models == nil {
+		return providerregistry.IDs()
+	}
+	return r.models.ProviderIDs()
+}
+
+// refreshModelsForPicker re-reads models.json before the model picker opens,
+// the way Pi reloads the model configuration when the picker appears. A
+// malformed file keeps the current models and reports the error.
+func (r *runtime) refreshModelsForPicker(notice func(terminal.NoticeKind, string)) {
+	if notice == nil {
+		return
+	}
+	if err := r.reloadModels(); err != nil {
+		notice(terminal.NoticeError, "models.json error: "+err.Error())
+	}
+}
+
 // credentialState is one provider's credential as the UI describes it.
 type credentialState struct {
 	detail string
@@ -70,10 +92,22 @@ func (r *runtime) credentialStates() map[string]credentialState {
 	for family, meta := range r.models.Providers {
 		configured[family] = meta.APIKey
 	}
-	states := provider.Credentials(envMap(), filepath.Join(r.agentDir, "auth.json"), configured)
+	states := provider.Credentials(envMap(), filepath.Join(r.agentDir, "auth.json"), configured, r.providerIDs())
 	out := make(map[string]credentialState, len(states))
 	for family, state := range states {
-		spec, _ := providerregistry.Lookup(family)
+		spec, builtin := providerregistry.Lookup(family)
+		if !builtin {
+			if state.Usable {
+				out[family] = credentialState{detail: "credential available (" + state.Source + ")", usable: true}
+				continue
+			}
+			reason := "credential unavailable"
+			if state.Err != nil {
+				reason += ": " + state.Err.Error()
+			}
+			out[family] = credentialState{detail: reason}
+			continue
+		}
 		switch spec.Auth {
 		case providerregistry.AuthCodexOAuth:
 			if state.Usable {

@@ -40,16 +40,19 @@ type ModelMeta struct {
 	AdaptiveThinking    bool
 	MidConvoEffort      bool
 	AllowEmptySignature bool
-	Compat              modelmeta.Compat
-	ID                  string
-	API                 string
-	Provider            string
-	BaseURL             string
-	ContextWindow       int
-	MaxTokens           int
-	Reasoning           bool
-	InputImage          bool
-	ThinkingLevelMap    map[string]*string
+	// Custom marks a provider declared in models.json. Such a provider uses
+	// the generic protocol adapters and the API it declares.
+	Custom           bool
+	Compat           modelmeta.Compat
+	ID               string
+	API              string
+	Provider         string
+	BaseURL          string
+	ContextWindow    int
+	MaxTokens        int
+	Reasoning        bool
+	InputImage       bool
+	ThinkingLevelMap map[string]*string
 }
 
 // Request is the normalized provider request (Pi context + active tools).
@@ -175,8 +178,8 @@ func BuildRequest(req Request) (map[string]any, error) {
 		}
 		req.Model.API = "anthropic-messages" // legacy psi model metadata
 	}
-	if !providerregistry.SupportsAPI(req.Model.ProviderID(), req.Model.API) {
-		return nil, fmt.Errorf("provider %q does not support API %q", req.Model.ProviderID(), req.Model.API)
+	if err := validateProviderAPI(req.Model, req.Model.API); err != nil {
+		return nil, err
 	}
 	switch req.Model.API {
 	case "anthropic-messages":
@@ -199,6 +202,13 @@ func BuildRequest(req Request) (map[string]any, error) {
 func validateProviderAPI(model ModelMeta, api string) error {
 	if model.API == "" && model.Provider != "" {
 		return fmt.Errorf("model %q must declare its provider API", model.ID)
+	}
+	if model.Custom {
+		// A provider declared in models.json names the protocol it uses.
+		if !providerregistry.SupportsGenericAPI(api) {
+			return fmt.Errorf("provider %q does not support API %q", model.ProviderID(), api)
+		}
+		return nil
 	}
 	if !providerregistry.SupportsAPI(model.ProviderID(), api) {
 		return fmt.Errorf("provider %q does not support API %q", model.ProviderID(), api)

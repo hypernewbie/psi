@@ -6,7 +6,7 @@ import (
 )
 
 func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
-	want := []string{"anthropic", "deepseek", "google", "groq", "minimax", "mistral", "moonshotai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "zai"}
+	want := []string{"anthropic", "deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "zai"}
 	if got := IDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("provider IDs = %v, want %v", got, want)
 	}
@@ -25,6 +25,7 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		{"google", "google-generative-ai", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"},
 		{"xiaomi", "openai-completions", "XIAOMI_API_KEY", "https://api.xiaomimimo.com/v1"},
 		{"moonshotai", "openai-completions", "MOONSHOT_API_KEY", "https://api.moonshot.ai/v1"},
+		{"kimi-coding", "openai-completions", "KIMI_API_KEY", "https://api.kimi.com/coding/v1"},
 		{"qwen-token-plan", "openai-completions", "QWEN_TOKEN_PLAN_API_KEY", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
 		{"openrouter", "openai-completions", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"},
 		{"xai", "openai-responses", "XAI_API_KEY", "https://api.x.ai/v1"},
@@ -46,6 +47,7 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		"google":          {"google-generative-ai"},
 		"xiaomi":          {"openai-completions"},
 		"moonshotai":      {"openai-completions"},
+		"kimi-coding":     {"openai-completions"},
 		"qwen-token-plan": {"openai-completions"},
 		"openrouter":      {"openai-completions"},
 		"xai":             {"openai-responses"},

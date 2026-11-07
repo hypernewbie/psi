@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"psi/internal/providerregistry"
 )
 
 func TestProviderAPIKeyPrecedenceAndProviderIsolation(t *testing.T) {
@@ -76,7 +78,7 @@ func TestCredentialsResolveEveryProviderFromOneSnapshot(t *testing.T) {
 
 	// No auth.json: the environment and models.json keys still apply.
 	ResetAuthReads()
-	states := Credentials(env, path, configured)
+	states := Credentials(env, path, configured, providerregistry.IDs())
 	if reads := AuthReads(); reads != 1 {
 		t.Fatalf("credential resolution read auth.json %d times, want one read for every provider", reads)
 	}
@@ -96,7 +98,7 @@ func TestCredentialsResolveEveryProviderFromOneSnapshot(t *testing.T) {
 	if err := os.WriteFile(path, []byte(stored), 0600); err != nil {
 		t.Fatal(err)
 	}
-	states = Credentials(env, path, configured)
+	states = Credentials(env, path, configured, providerregistry.IDs())
 	if reads := AuthReads(); reads != 2 {
 		t.Fatalf("credential resolution read auth.json %d times, want one read per call", reads)
 	}
@@ -114,7 +116,7 @@ func TestCredentialsResolveEveryProviderFromOneSnapshot(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	states = Credentials(env, path, configured)
+	states = Credentials(env, path, configured, providerregistry.IDs())
 	for _, providerID := range []string{"anthropic", "minimax", "zai", "openai-codex"} {
 		if state := states[providerID]; state.Usable || state.Err == nil || !strings.Contains(state.Err.Error(), "malformed") {
 			t.Fatalf("%s with a malformed auth.json = %+v", providerID, state)

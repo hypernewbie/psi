@@ -65,9 +65,8 @@ func (mf *ModelsFile) ModelOptions(provider string) []ModelOption {
 	for _, model := range p.Models {
 		ids[model.ID] = true
 	}
-	for id := range p.ModelOverrides {
-		ids[id] = true
-	}
+	// An override applies to a model that exists. Pi ignores an override for
+	// an unknown model ID, so such an ID must not become a phantom entry.
 	var out []ModelOption
 	for id := range ids {
 		model, err := mf.SelectModel(provider, id)

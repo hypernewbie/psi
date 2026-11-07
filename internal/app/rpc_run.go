@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"psi/internal/config"
-	"psi/internal/providerregistry"
 	"psi/internal/session"
 	"psi/internal/skills"
 	"psi/internal/terminal"
@@ -55,6 +54,11 @@ func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settin
 	if err != nil {
 		return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 	}
+	// A provider from models.json resolves after the file loads.
+	o, err = resolveConfiguredModelOption(o, models)
+	if err != nil {
+		return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
+	}
 	var instructions []config.InstructionFile
 	if !o.NoContextFiles {
 		instructions, err = config.DiscoverInstructions(cwd, agentDir, consent)
@@ -71,11 +75,6 @@ func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settin
 	}
 	sections = config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools, resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
 	prompt = config.RenderSections(sections)
-	if o.Provider != "" {
-		if _, ok := providerregistry.Lookup(o.Provider); !ok {
-			return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, fmt.Errorf("unsupported provider %q (available: %s)", o.Provider, strings.Join(providerregistry.IDs(), ", "))
-		}
-	}
 	ov = config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", *st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	if prepared != nil {
 		store = prepared
@@ -138,6 +137,12 @@ func runRPC(o Options, version string) error {
 	}
 	st := loaded.Settings
 	models, sk, _, prompt, sections, _, store, err := activateSessionWithStore(o, cwd, agentDir, &st, consent, nil, nil, preparedStore)
+	if err != nil {
+		return err
+	}
+	// The runtime keeps the resolved options, so a restored session uses the
+	// same provider as the startup selection.
+	o, err = resolveConfiguredModelOption(o, models)
 	if err != nil {
 		return err
 	}
