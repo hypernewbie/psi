@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func twoMessageFile(t *testing.T) (path string) {
@@ -71,6 +72,14 @@ func TestF04ExternalRewriteAfterLoad(t *testing.T) {
 			path := twoMessageFile(t)
 			s := openPersisted(t, path)
 			mutate.fn(path)
+			// The rewrite is same-length, so size and inode stay equal. Force
+			// an mtime distinct from the load-time stat so the change is
+			// observable on any filesystem, including coarse-clock kernels
+			// where the rewrite can land in one mtime tick.
+			changed := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+			if err := os.Chtimes(path, changed, changed); err != nil {
+				t.Fatal(err)
+			}
 
 			active, err := s.ActivePath()
 			if err != nil {

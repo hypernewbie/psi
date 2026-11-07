@@ -18,7 +18,7 @@ import (
 	"psi/internal/testutil"
 )
 
-func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *testutil.VTModel, wait func(string), waitScreen func(string), write func(string), quit func()) {
+func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *testutil.VTModel, wait func(string), waitIdle func(), waitScreen func(string), write func(string), quit func()) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/v1/messages" || req.Header.Get("x-api-key") != "file-test-key" {
@@ -111,9 +111,64 @@ func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *tes
 			}
 		}
 	}
+	// waitIdle returns once the run has fully settled. The "Working…"
+	// activity line is present for the whole run and cleared on settle, so
+	// its absence means the app accepts commands again; a 40 ms quiet gap
+	// absorbs the last in-flight settle frame. Submitting /quit before this
+	// lands on the busy path, where the command is refused and restored as
+	// a draft, so the process never exits.
+	waitIdle = func() {
+		t.Helper()
+		deadline := time.NewTimer(8 * time.Second)
+		defer deadline.Stop()
+		quiet := time.NewTimer(40 * time.Millisecond)
+		defer quiet.Stop()
+		for {
+			if strings.Contains(screen.Text(), "Working…") {
+				if !quiet.Stop() {
+					select {
+					case <-quiet.C:
+					default:
+					}
+				}
+				select {
+				case chunk, ok := <-chunks:
+					if !ok {
+						t.Fatalf("process exited before the run settled: %q", pending)
+					}
+					pending += chunk
+					screen.Feed([]byte(chunk))
+				case <-deadline.C:
+					t.Fatalf("timeout waiting for the run to settle: %q", screen.Text())
+				}
+				continue
+			}
+			if !quiet.Stop() {
+				select {
+				case <-quiet.C:
+				default:
+				}
+			}
+			quiet.Reset(40 * time.Millisecond)
+			select {
+			case chunk, ok := <-chunks:
+				if !ok {
+					t.Fatalf("process exited before the run settled: %q", pending)
+				}
+				pending += chunk
+				screen.Feed([]byte(chunk))
+			case <-quiet.C:
+				return
+			case <-deadline.C:
+				t.Fatalf("timeout waiting for the run to settle: %q", screen.Text())
+			}
+		}
+	}
 	quit = func() {
 		t.Helper()
 		write("/quit\r")
+		// Single owner of Wait: the timeout path kills and reaps through the
+		// same goroutine, so cleanup never starts a second concurrent Wait.
 		finished := make(chan error, 1)
 		go func() { finished <- cmd.Wait() }()
 		select {
@@ -121,11 +176,20 @@ func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("quit did not exit")
+		case <-time.After(8 * time.Second):
+			_ = cmd.Process.Kill()
+			err := <-finished
+			t.Fatalf("process did not exit after /quit: %v (output=%q)", err, tail(pending, 2000))
 		}
 	}
-	return screen, wait, waitScreen, write, quit
+	return screen, wait, waitIdle, waitScreen, write, quit
+}
+
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 func branchFooterHome(t *testing.T) string {
@@ -152,11 +216,12 @@ func TestActualAppFooterShowsGitBranch(t *testing.T) {
 	if err := os.WriteFile(head, []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, wait, waitScreen, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
+	_, wait, waitIdle, waitScreen, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
 	wait("/ commands")
 	write("hello\r")
 	wait("APP_OK")
 	waitScreen("~/repo (main)")
+	waitIdle()
 	quit()
 }
 
@@ -177,7 +242,7 @@ func TestActualAppFooterOmitsBranchOutsideARepository(t *testing.T) {
 		dir = parent
 	}
 	agentDir := filepath.Join(home, ".pi", "agent")
-	screen, wait, waitScreen, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
+	screen, wait, waitIdle, waitScreen, write, quit := startBranchFooterApp(t, fixture, home, agentDir)
 	wait("/ commands")
 	write("hello\r")
 	wait("APP_OK")
@@ -185,5 +250,6 @@ func TestActualAppFooterOmitsBranchOutsideARepository(t *testing.T) {
 	if text := screen.Text(); strings.Contains(text, "~/plain (") {
 		t.Fatalf("footer shows a branch outside a repository: %q", text)
 	}
+	waitIdle()
 	quit()
 }
