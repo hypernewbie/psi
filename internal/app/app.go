@@ -775,8 +775,14 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		ov.Thinking = "off"
 	}
 	pm := providerModel(ov.Provider, meta)
+	// Pi clamps the thinking level to the model capabilities whenever the
+	// model or the level changes, so a model that does not advertise the
+	// current level takes the nearest level it supports.
+	ov.Thinking = provider.ClampThinkingLevel(pm, ov.Thinking)
 	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt, Sections: r.sections,
-		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveForModel(ov.Provider, ov.Model), KeepRecentTokens: r.settings.Compaction.KeepRecentTokens}
+		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveForModel(ov.Provider, ov.Model), KeepRecentTokens: r.settings.Compaction.KeepRecentTokens,
+		RetryAttempts: r.settings.MaxRetries, RetryBaseDelayMs: r.settings.RetryBaseDelayMs,
+		RetryMaxAgentDelayMs: r.settings.RetryMaxAgentDelayMs}
 	if _, err := provider.BuildRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
 		return err
 	}
@@ -865,6 +871,17 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	r.reg.Bash.ShellPrefix = r.settings.ShellPrefix
 	r.reg.Read.BlockImages = !meta.InputImage
 	return nil
+}
+
+// thinkingForModelSwitch follows Pi's _getThinkingLevelForModelSwitch: with
+// no explicit level requested, the settings defaultThinkingLevel wins over
+// the current session level when one is configured; otherwise the current
+// level carries over. configure clamps the result to the target model.
+func (r *runtime) thinkingForModelSwitch() string {
+	if r.settings.DefaultThinkingSet {
+		return r.settings.DefaultThinking
+	}
+	return r.ov.Thinking
 }
 
 func (r *runtime) compactionProvider(reference string) (provider.Provider, provider.ModelMeta, func(), error) {
@@ -1781,6 +1798,19 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.state = StateWaiting
 				setActivity(formatRetryActivity(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond))
 			}
+		case event.SummarizationRetryScheduled:
+			notice(terminal.NoticeError, ev.Text)
+			if r.state != StateCancelling {
+				r.state = StateWaiting
+				setActivity(formatRetryActivity(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond))
+			}
+		case event.SummarizationRetryAttemptStart:
+			if r.state != StateCancelling {
+				r.state = StateCompacting
+				setActivity(compactionActivity(ev.State))
+			}
+		case event.SummarizationRetryFinished:
+			// CompactionEnd clears the active status after the summary settles.
 		case event.ToolStart:
 			console.SetThinking(false)
 			thinkingStream.Close()
@@ -1826,6 +1856,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.syncBridge()
 		case event.CompactionEnd:
 			r.compactActive = false
+			if ev.Err != nil && r.state != StateCancelling && ev.State != event.CompactionManual && ev.State != event.CompactionOverflow {
+				// Pi reports a failed auto-compaction and keeps the session alive;
+				// manual and overflow failures surface through the run error path.
+				notice(terminal.NoticeWarning, "Auto-compaction failed: "+ev.Err.Error())
+			}
 			if r.state != StateCancelling {
 				r.state = StateWaiting
 				setActivity("Working")
@@ -2319,7 +2354,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.state = StateStorageBlocked
 					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new. "+err.Error())
 				case runOutcome == event.OutcomeInterrupted && visibleRunText:
-					notice(terminal.NoticeWarning, "The run was interrupted. Any streamed partial response was saved with an interrupted outcome. Review it before continuing. "+err.Error())
+					notice(terminal.NoticeError, err.Error())
 				case visibleRunText && runOutcome == event.OutcomeDurable:
 					notice(terminal.NoticeWarning, "The visible response was saved, but the operation did not complete. "+err.Error())
 				default:
@@ -3065,6 +3100,7 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 		return false, nil
 	}
 	next := r.ov
+	next.Thinking = r.thinkingForModelSwitch()
 	parts := strings.Fields(arg)
 	if len(parts) == 1 {
 		if strings.Contains(parts[0], "/") {

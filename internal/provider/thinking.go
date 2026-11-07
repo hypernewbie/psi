@@ -142,6 +142,49 @@ func ThinkingDescription(model ModelMeta, level string) string {
 }
 func ThinkingChoices(model ModelMeta) string { return strings.Join(SupportedThinking(model), ", ") }
 
+// ClampThinkingLevel returns the thinking level a model can use. Pi keeps the
+// requested level when the model supports it and otherwise takes the nearest
+// supported level, preferring a higher one before searching lower levels.
+func ClampThinkingLevel(model ModelMeta, level string) string {
+	available := SupportedThinking(model)
+	for _, candidate := range available {
+		if candidate == level {
+			return level
+		}
+	}
+	requested := -1
+	for i, candidate := range ValidLevels {
+		if candidate == level {
+			requested = i
+			break
+		}
+	}
+	if requested < 0 {
+		if len(available) > 0 {
+			return available[0]
+		}
+		return "off"
+	}
+	for i := requested; i < len(ValidLevels); i++ {
+		for _, candidate := range available {
+			if candidate == ValidLevels[i] {
+				return candidate
+			}
+		}
+	}
+	for i := requested - 1; i >= 0; i-- {
+		for _, candidate := range available {
+			if candidate == ValidLevels[i] {
+				return candidate
+			}
+		}
+	}
+	if len(available) > 0 {
+		return available[0]
+	}
+	return "off"
+}
+
 // Pi clamps to the nearest supported level, preferring a higher level before
 // searching lower levels. A null mapping excludes a level; xhigh and max need
 // explicit mappings. This is shared by the three PLAN6 protocol adapters.

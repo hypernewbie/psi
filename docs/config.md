@@ -46,12 +46,14 @@ never change `--docs`; it reads embedded bytes only.
 | Display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | bounded inline spacing and code-block indent |
 | Reasoning display | `hideThinkingBlock` | `true` collapses reasoning blocks to one `Thinking...` label; `Ctrl+T` toggles and saves it |
 | Shell | `shellPath`, `shellCommandPrefix` | `shellPath` selects the shell; `shellCommandPrefix` prepends commands; project values require consent |
-| Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries` | default idle timeout 300000 ms; 0 disables it; at most 10 retries |
+| Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`, `retry.maxAgentDelayMs` | default idle timeout 300000 ms; 0 disables it; at most 10 retries; summary retries default to 2s exponential backoff capped at 60s |
 | Instructions | user/project files | see below |
 | Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | bundled catalog and Pi cache; no network refresh |
 | Auth | `auth.json` entries, env refs | no `!command` execution |
 | Startup | `quietStartup` | hides the Ψ banner, notes, and hint line; inline only |
 | Terminal | always inline | fullscreen and rich-display preferences are ignored |
+
+`retry.enabled` and `retry.maxRetries` control provider retries and transient summary retries. Summary backoff uses `retry.baseDelayMs` (default 2000) and `retry.maxAgentDelayMs` (default 60000). Quota, billing, and account-limit errors are not retried.
 
 Model-specific compaction reserves use the exact `provider/model` key. For example:
 

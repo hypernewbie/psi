@@ -7,20 +7,23 @@ package event
 type Type string
 
 const (
-	TextDelta         Type = "text_delta"
-	ThinkingDelta     Type = "thinking_delta"
-	AssistantStart    Type = "assistant_start"
-	RunStart          Type = "run_start"
-	RunEnd            Type = "run_end"
-	SteeringDelivered Type = "steering_delivered"
-	FollowUpDelivered Type = "follow_up_delivered"
-	ToolStart         Type = "tool_start"
-	ToolEnd           Type = "tool_end"
-	Retry             Type = "retry"
-	CompactionStart   Type = "compaction_start"
-	CompactionEnd     Type = "compaction_end"
-	Usage             Type = "usage"
-	Error             Type = "error"
+	TextDelta                      Type = "text_delta"
+	ThinkingDelta                  Type = "thinking_delta"
+	AssistantStart                 Type = "assistant_start"
+	RunStart                       Type = "run_start"
+	RunEnd                         Type = "run_end"
+	SteeringDelivered              Type = "steering_delivered"
+	FollowUpDelivered              Type = "follow_up_delivered"
+	ToolStart                      Type = "tool_start"
+	ToolEnd                        Type = "tool_end"
+	Retry                          Type = "retry"
+	SummarizationRetryScheduled    Type = "summarization_retry_scheduled"
+	SummarizationRetryAttemptStart Type = "summarization_retry_attempt_start"
+	SummarizationRetryFinished     Type = "summarization_retry_finished"
+	CompactionStart                Type = "compaction_start"
+	CompactionEnd                  Type = "compaction_end"
+	Usage                          Type = "usage"
+	Error                          Type = "error"
 )
 
 // Event is one bounded, observable unit with explicit ordering.

@@ -58,10 +58,14 @@ type ProviderError struct {
 	Kind       ErrorKind
 	Status     int
 	Message    string
+	Detail     string // bounded response body used for retry classification; not displayed
 	RetryAfter time.Duration
 }
 
 func (e *ProviderError) Error() string {
+	if e.Status != 0 && zhipuUsageLimitPattern.MatchString(e.Message) {
+		return fmt.Sprintf("%d: %s", e.Status, e.Message)
+	}
 	return fmt.Sprintf("%s (status %d): %s", e.Kind, e.Status, e.Message)
 }
 
@@ -117,7 +121,7 @@ func sendWithRetryObserved(ctx context.Context, maxRetry int, observer func(Retr
 			return resp, ctx.Err()
 		}
 		var pe *ProviderError
-		if !errors.As(err, &pe) || (pe.Kind != ErrRateLimit && pe.Kind != ErrTransport) || attempt >= maxRetry {
+		if !errors.As(err, &pe) || (pe.Kind != ErrRateLimit && pe.Kind != ErrTransport) || isNonRetryableProviderLimit(pe.Message+"\n"+pe.Detail) || attempt >= maxRetry {
 			return nil, err
 		}
 		delay := pe.RetryAfter
@@ -299,6 +303,13 @@ func classifyHTTPError(resp *http.Response) *ProviderError {
 		kind = ErrContextLimit
 	}
 	msg := http.StatusText(resp.StatusCode)
+	// Pi preserves Zhipu/Z.ai's structured 1308 limit error so the user sees
+	// when the provider quota resets, and its retry classifier treats the
+	// account limit as non-retryable. Keep other response bodies private: some
+	// gateways echo request data or credentials.
+	if resp.StatusCode == http.StatusTooManyRequests && zhipuUsageLimitPattern.MatchString(string(b)) {
+		msg = strings.TrimSpace(string(b))
+	}
 	if msg == "" {
 		if resp.StatusCode == 529 {
 			msg = "Overloaded"
@@ -306,7 +317,7 @@ func classifyHTTPError(resp *http.Response) *ProviderError {
 			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
 	}
-	return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: msg, RetryAfter: parseRetryAfter(resp.Header.Get("retry-after"))}
+	return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: msg, Detail: string(b), RetryAfter: parseRetryAfter(resp.Header.Get("retry-after"))}
 }
 
 func parseRetryAfter(s string) time.Duration {

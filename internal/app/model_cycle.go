@@ -2,8 +2,6 @@ package app
 
 import (
 	"fmt"
-
-	"psi/internal/provider"
 )
 
 // cycleModel follows Pi's Ctrl+P model cycle over the currently usable model
@@ -32,9 +30,7 @@ func (r *runtime) cycleModel(direction int) (string, error) {
 	nextModel := models[current]
 	next := r.ov
 	next.Provider, next.Model = nextModel.provider, nextModel.option.Model.ID
-	if !provider.SupportsThinking(providerModel(next.Provider, nextModel.option.Model), next.Thinking) {
-		next.Thinking = "off"
-	}
+	next.Thinking = r.thinkingForModelSwitch()
 
 	candidate := *r
 	candidate.prov = nil

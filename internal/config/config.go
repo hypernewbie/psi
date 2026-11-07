@@ -87,21 +87,26 @@ type Settings struct {
 	DefaultProvider         string
 	DefaultModel            string
 	DefaultThinking         string
-	SteeringMode            string // "one-at-a-time" (Pi default) or "all"
-	FollowUpMode            string // "one-at-a-time" (Pi default) or "all"
-	SessionDir              string
-	SessionDirSource        string // "cli"|"env"|"settings"|"default"
-	DefaultTools            []string
-	Skills                  []string
-	EnableSkills            bool
+	// DefaultThinkingSet reports that a settings file provided
+	// defaultThinkingLevel. Pi uses that value when the model changes.
+	DefaultThinkingSet bool
+	SteeringMode       string // "one-at-a-time" (Pi default) or "all"
+	FollowUpMode       string // "one-at-a-time" (Pi default) or "all"
+	SessionDir         string
+	SessionDirSource   string // "cli"|"env"|"settings"|"default"
+	DefaultTools       []string
+	Skills             []string
+	EnableSkills       bool
 	// HideThinkingBlock hides reasoning blocks behind Pi's collapsed label.
-	HideThinkingBlock bool
-	Compaction        CompactionConfig
-	ShellPath         string
-	ShellPrefix       string
-	HTTPIdleTimeoutMs int64 // milliseconds; 0 or -1 disables the idle timer
-	MaxRetries        int
-	QuietStartup      bool
+	HideThinkingBlock    bool
+	Compaction           CompactionConfig
+	ShellPath            string
+	ShellPrefix          string
+	HTTPIdleTimeoutMs    int64 // milliseconds; 0 or -1 disables the idle timer
+	MaxRetries           int
+	RetryBaseDelayMs     int
+	RetryMaxAgentDelayMs int
+	QuietStartup         bool
 	// DefaultProjectTrust is the global trust default: "ask", "always", or
 	// "never". It matches pi's defaultProjectTrust setting.
 	DefaultProjectTrust string
@@ -123,6 +128,8 @@ func defaultSettings() Settings {
 		EnableSkills:            true,
 		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
 		MaxRetries:              3,
+		RetryBaseDelayMs:        2000,
+		RetryMaxAgentDelayMs:    60000,
 		HTTPIdleTimeoutMs:       300000,
 		DefaultProjectTrust:     "ask",
 	}
@@ -166,8 +173,10 @@ type rawSettings struct {
 	DefaultProjectTrust *string `json:"defaultProjectTrust"`
 	MaxRetries          *int    `json:"maxRetries"`
 	Retry               *struct {
-		Enabled    *bool `json:"enabled"`
-		MaxRetries *int  `json:"maxRetries"`
+		Enabled         *bool `json:"enabled"`
+		MaxRetries      *int  `json:"maxRetries"`
+		BaseDelayMs     *int  `json:"baseDelayMs"`
+		MaxAgentDelayMs *int  `json:"maxAgentDelayMs"`
 	} `json:"retry"`
 }
 
@@ -396,6 +405,7 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 	}
 	if raw.DefaultThinking != nil {
 		out.DefaultThinking = *raw.DefaultThinking
+		out.DefaultThinkingSet = true
 		set("defaultThinkingLevel", *raw.DefaultThinking)
 	}
 	if raw.SteeringMode != nil {
@@ -549,6 +559,12 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 	if raw.Retry != nil {
 		if raw.Retry.MaxRetries != nil {
 			out.MaxRetries = *raw.Retry.MaxRetries
+		}
+		if raw.Retry.BaseDelayMs != nil {
+			out.RetryBaseDelayMs = *raw.Retry.BaseDelayMs
+		}
+		if raw.Retry.MaxAgentDelayMs != nil {
+			out.RetryMaxAgentDelayMs = *raw.Retry.MaxAgentDelayMs
 		}
 		if raw.Retry.Enabled != nil && !*raw.Retry.Enabled {
 			out.MaxRetries = 0

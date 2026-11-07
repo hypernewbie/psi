@@ -15,7 +15,9 @@ estimate exceeds `contextWindow - reserveTokens`. It is controlled by
 `compaction.enabled`, which defaults to on.
 
 If a provider reports a context-limit error and the run has not streamed any
-text yet, psi compacts once and retries. A second limit error ends the run.
+text yet, psi compacts once and retries. A second limit error ends the run. A
+failed automatic threshold or adaptive summary is reported, and the session
+continues without changing context.
 
 **Adaptive compaction** (`/ac`) watches growth. By default it targets the lower
 of 50% of the context window or 230,000 tokens, and checks completed runs at
@@ -32,7 +34,10 @@ settle, compacts, then resumes the task.
 ```
 
 `/compact` calls the provider for a real summary and reports start and outcome.
-It is cancellable. Cancelling leaves the original context untouched.
+It is cancellable. Cancelling leaves the original context untouched. Transient
+provider or stream failures retry according to `retry` settings; quota and
+billing errors do not retry. If summary generation still fails, psi reports the
+error and leaves the original context unchanged.
 
 ## Settings
 

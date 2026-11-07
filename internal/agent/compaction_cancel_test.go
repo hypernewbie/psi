@@ -52,7 +52,9 @@ func TestSplitCompactionCancellationRetainsKnownUsageWithoutCheckpoint(t *testin
 		t.Fatalf("split compaction cancellation=%v", err)
 	}
 	entries := store.Entries()
-	if provider.calls != 2 || len(fake.Calls) != 2 || len(entries) != before+1 || entries[before].Kind != "usage" || entries[before].Usage.Usage.TotalTokens != 25 {
+	// Cancellation is terminal: the turn-prefix request is never sent, but
+	// the first summary's known usage is still persisted.
+	if provider.calls != 1 || len(fake.Calls) != 1 || len(entries) != before+1 || entries[before].Kind != "usage" || entries[before].Usage.Usage.TotalTokens != 25 {
 		t.Fatalf("known usage or cancellation outcome lost: calls=%d fake=%d entries=%+v", provider.calls, len(fake.Calls), entries[before:])
 	}
 	for _, entry := range entries {

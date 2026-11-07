@@ -223,8 +223,13 @@ func TestAdaptiveThinkingDescriptionsAreExplicit(t *testing.T) {
 	if description := provider.ThinkingDescription(r.cfg.Model, "xhigh"); !strings.Contains(description, "effective effort high") {
 		t.Fatal(description)
 	}
-	if err := r.configure(config.StartupOverrides{Provider: "anthropic", Model: "claude-opus-5-5", Thinking: "minimal"}); err == nil {
-		t.Fatal("explicitly unsupported reasoning level accepted")
+	if err := r.configure(config.StartupOverrides{Provider: "anthropic", Model: "claude-opus-5-5", Thinking: "minimal"}); err != nil {
+		t.Fatal(err)
+	}
+	// Pi clamps an unsupported level to the nearest supported one instead of
+	// rejecting it; opus-5-5 maps minimal to null, so low is the nearest.
+	if r.cfg.Thinking != "low" {
+		t.Fatalf("explicitly unsupported level not clamped: %q", r.cfg.Thinking)
 	}
 	if err := r.configure(config.StartupOverrides{Provider: "openai-codex", Model: "gpt-6-astra", Thinking: "off"}); err != nil {
 		t.Fatal(err)

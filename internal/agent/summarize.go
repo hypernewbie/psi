@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"psi/internal/event"
 	"psi/internal/provider"
@@ -229,6 +230,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 		}
 	}
 	defer cleanup()
+	cfg.SummaryRetryReason = reason
 	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel)
 	if cfg.ACPolicy != nil {
 		cfg.ACPolicy.RecordCompaction(err == nil, compactionSourceName(reason), prepared.TokensBefore)
@@ -266,7 +268,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	if len(prepared.Messages) > 0 {
 		transcript := summaryTranscript(session.ConvertToLLM(prepared.Messages))
 		if strings.TrimSpace(transcript) == "" {
-			return fmt.Errorf("no conversation text to summarize; original context is unchanged")
+			return &SummaryFailure{Err: fmt.Errorf("no conversation text to summarize; original context is unchanged")}
 		}
 		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, prepared.PreviousSummary, false)
 		if err != nil {
@@ -278,7 +280,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	}
 	if prepared.SplitTurn {
 		if len(prepared.TurnPrefix) == 0 {
-			return fmt.Errorf("split-turn preparation has no prefix messages; original context is unchanged")
+			return &SummaryFailure{Err: fmt.Errorf("split-turn preparation has no prefix messages; original context is unchanged")}
 		}
 		if historyText == "" {
 			historyText = "No prior history."
@@ -290,7 +292,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 					return persistErr
 				}
 			}
-			return fmt.Errorf("no turn-prefix conversation to summarize; original context is unchanged")
+			return &SummaryFailure{Err: fmt.Errorf("no turn-prefix conversation to summarize; original context is unchanged")}
 		}
 		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, "", true)
 		if err != nil {
@@ -310,7 +312,7 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 		}
 	}
 	if strings.TrimSpace(historyText) == "" {
-		return fmt.Errorf("summary is incomplete; original context is unchanged")
+		return &SummaryFailure{Err: fmt.Errorf("summary is incomplete; original context is unchanged")}
 	}
 	if err := ctx.Err(); err != nil {
 		if hasHistoryUsage {
@@ -323,6 +325,92 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	usage := sessionUsage(historyUsage)
 	_, err := Compact(ctx, l.store, historyText, prepared.FirstKeptEntryID, float64(prepared.TokensBefore), &usage)
 	return err
+}
+
+// SummaryFailure marks a compaction failure caused by summary generation:
+// provider errors, interrupted streams, or an unusable summary response.
+// Storage failures and cancellation are never wrapped. Manual compaction
+// surfaces the error; automatic compaction reports it and keeps the run
+// alive, like Pi's auto-compaction catch-all.
+type SummaryFailure struct{ Err error }
+
+func (e *SummaryFailure) Error() string { return e.Err.Error() }
+func (e *SummaryFailure) Unwrap() error { return e.Err }
+
+// IsSummaryFailure reports whether err came from summary generation.
+func IsSummaryFailure(err error) bool {
+	var sf *SummaryFailure
+	return errors.As(err, &sf)
+}
+
+// sendSummaryRequest runs one summary request under Pi's agent-level retry
+// policy: transient provider or stream failures are retried with exponential
+// backoff, while deterministic errors and cancellation return immediately.
+// Each scheduled retry is reported through the event sink so the UI can show
+// Pi's retry indicator.
+func (l *Loop) sendSummaryRequest(ctx context.Context, prov provider.Provider, req provider.Request, cfg Config) (*provider.Response, error) {
+	retried := false
+	defer func() {
+		if retried {
+			l.sink(event.Event{Type: event.SummarizationRetryFinished})
+		}
+	}()
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		resp, err := prov.Send(ctx, req, nil)
+		if err == nil || ctx.Err() != nil {
+			return resp, err
+		}
+		if attempt >= cfg.RetryAttempts || !provider.IsRetryableError(err) {
+			return resp, err
+		}
+		delayMs := cfg.RetryBaseDelayMs
+		for i := 0; i < attempt && delayMs > 0; i++ {
+			if delayMs > int(^uint(0)>>1)/2 {
+				delayMs = int(^uint(0) >> 1)
+				break
+			}
+			delayMs *= 2
+		}
+		if delayMs > cfg.RetryMaxAgentDelayMs {
+			delayMs = cfg.RetryMaxAgentDelayMs
+		}
+		if delayMs < 0 {
+			delayMs = 0
+		}
+		maxTimerDelayMs := int64(^uint64(0)>>1) / int64(time.Millisecond)
+		if int64(delayMs) > maxTimerDelayMs {
+			delayMs = int(maxTimerDelayMs)
+		}
+		retried = true
+		l.sink(event.Event{Type: event.SummarizationRetryScheduled, RetryAttempt: attempt + 1,
+			RetryMaximum: cfg.RetryAttempts, RetryDelayMs: int64(delayMs), Text: err.Error()})
+		if delayMs == 0 {
+			l.sink(event.Event{Type: event.SummarizationRetryAttemptStart, State: summaryRetryReason(cfg.SummaryRetryReason)})
+			continue
+		}
+		timer := time.NewTimer(time.Duration(delayMs) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return resp, ctx.Err()
+		case <-timer.C:
+			l.sink(event.Event{Type: event.SummarizationRetryAttemptStart, State: summaryRetryReason(cfg.SummaryRetryReason)})
+		}
+	}
+}
+
+func summaryRetryReason(reason string) string {
+	switch reason {
+	case event.CompactionOverflow:
+		return event.CompactionOverflow
+	case event.CompactionThreshold, event.CompactionAdaptive, event.CompactionEndTurn:
+		return event.CompactionThreshold
+	default:
+		return event.CompactionManual
+	}
 }
 
 func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Provider, cfg Config, focus, transcript, previous string, turnPrefix bool) (*provider.Response, error) {
@@ -347,31 +435,31 @@ func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Prov
 		prompt += base
 	}
 	maxOutput := summaryOutputTokenLimit(cfg.Model, prompt)
-	resp, err := summaryProvider.Send(ctx, provider.Request{
+	resp, err := l.sendSummaryRequest(ctx, summaryProvider, provider.Request{
 		Model: cfg.Model, Thinking: "off", MaxTokens: maxOutput, System: summarizationSystemPrompt,
 		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: prompt}}}},
-	}, nil)
+	}, cfg)
 	if err != nil {
 		// Compaction calls persist known partial usage but never mutate context on failure.
 		if perr := l.persistStreamUsage(cfg, err); perr != nil {
 			return nil, perr
 		}
-		return nil, fmt.Errorf("summary failed; original context is unchanged: %w", err)
+		return nil, &SummaryFailure{Err: fmt.Errorf("summary failed; original context is unchanged: %w", err)}
 	}
 	if resp == nil {
-		return nil, fmt.Errorf("summary provider returned no response; original context is unchanged")
+		return nil, &SummaryFailure{Err: fmt.Errorf("summary provider returned no response; original context is unchanged")}
 	}
 	if resp.StopReason == "length" {
 		if err := l.persistCompactionUsage(cfg, resp.Usage, "incomplete compaction summary; original context unchanged"); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("summary hit the output token limit and is incomplete; original context is unchanged")
+		return nil, &SummaryFailure{Err: fmt.Errorf("summary hit the output token limit and is incomplete; original context is unchanged")}
 	}
 	if resp.StopReason == "error" {
 		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary stopped with an error"); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("summary provider reported an error; original context is unchanged")
+		return nil, &SummaryFailure{Err: fmt.Errorf("summary provider reported an error; original context is unchanged")}
 	}
 
 	text := resp.Text
@@ -392,19 +480,19 @@ func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Prov
 		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary attempted a tool call"); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("summary attempted to call a tool; original context is unchanged")
+		return nil, &SummaryFailure{Err: fmt.Errorf("summary attempted to call a tool; original context is unchanged")}
 	}
 	if strings.TrimSpace(text) == "" {
 		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary returned no text"); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("summary returned no text; original context is unchanged")
+		return nil, &SummaryFailure{Err: fmt.Errorf("summary returned no text; original context is unchanged")}
 	}
 	if resp.StopReason != "stop" && resp.StopReason != "" {
 		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary stopped before completion"); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("summary stopped before completion (%s); original context is unchanged", resp.StopReason)
+		return nil, &SummaryFailure{Err: fmt.Errorf("summary stopped before completion (%s); original context is unchanged", resp.StopReason)}
 	}
 	if text != resp.Text {
 		copy := *resp

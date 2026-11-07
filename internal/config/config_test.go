@@ -91,8 +91,8 @@ func TestPiDisplaySettingsUseSourcePrecedenceAndClamp(t *testing.T) {
 	if untrusted.Settings.EditorPaddingX != 2 || untrusted.Settings.OutputPad != 0 || untrusted.Settings.AutocompleteMaxVisible != 7 || untrusted.Settings.MarkdownCodeBlockIndent != "··" {
 		t.Fatalf("untrusted project display settings leaked: %+v", untrusted.Settings)
 	}
-	if defaults := defaultSettings(); defaults.AutocompleteMaxVisible != 5 || defaults.MarkdownCodeBlockIndent != "  " {
-		t.Fatalf("Pi display defaults=%+v", defaults)
+	if defaults := defaultSettings(); defaults.AutocompleteMaxVisible != 5 || defaults.MarkdownCodeBlockIndent != "  " || defaults.RetryBaseDelayMs != 2000 || defaults.RetryMaxAgentDelayMs != 60000 {
+		t.Fatalf("Pi display/retry defaults=%+v", defaults)
 	}
 }
 

@@ -74,6 +74,22 @@ func TestRPCAutomaticCompactionPublishesCompletion(t *testing.T) {
 	}
 }
 
+func TestRPCSummarizationRetryUsesPiEvents(t *testing.T) {
+	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
+	s.sink(event.Event{Type: event.SummarizationRetryScheduled, RetryAttempt: 1, RetryMaximum: 3, RetryDelayMs: 2000, Text: "stream was interrupted"})
+	s.sink(event.Event{Type: event.SummarizationRetryAttemptStart, State: event.CompactionThreshold})
+	s.sink(event.Event{Type: event.SummarizationRetryFinished})
+	objs := log.objects(t)
+	if !hasEvent(objs, "summarization_retry_scheduled", map[string]any{"attempt": float64(1), "maxAttempts": float64(3), "delayMs": float64(2000), "errorMessage": "stream was interrupted"}) ||
+		!hasEvent(objs, "summarization_retry_attempt_start", map[string]any{"source": "compaction", "reason": "threshold"}) ||
+		!hasEvent(objs, "summarization_retry_finished", nil) {
+		t.Fatalf("missing Pi summarization retry events: %v", objs)
+	}
+	if hasEvent(objs, "auto_retry_start", nil) {
+		t.Fatalf("summary retry was reported as an assistant-turn retry: %v", objs)
+	}
+}
+
 func TestRPCEmptyCompactionDoesNotResetTranscript(t *testing.T) {
 	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
 	resp := s.handle(rpcCommand{Type: "compact"})

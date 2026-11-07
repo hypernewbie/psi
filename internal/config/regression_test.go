@@ -14,7 +14,7 @@ func TestInheritedToolSelectionAndResourceBases(t *testing.T) {
 	}
 	root := t.TempDir()
 	user, project := filepath.Join(root, "user", "settings.json"), filepath.Join(root, "workspace", ".pi", "settings.json")
-	writeJSON(t, user, `{"defaultTools":["read"],"skills":["user-skills"],"httpIdleTimeoutMs":0,"retry":{"maxRetries":2}}`)
+	writeJSON(t, user, `{"defaultTools":["read"],"skills":["user-skills"],"httpIdleTimeoutMs":0,"retry":{"maxRetries":2,"baseDelayMs":17,"maxAgentDelayMs":231}}`)
 	writeJSON(t, project, `{"defaultTools":["+bash"],"skills":["project-skills"]}`)
 	loaded, err := LoadSettings(user, project, true)
 	if err != nil {
@@ -27,8 +27,8 @@ func TestInheritedToolSelectionAndResourceBases(t *testing.T) {
 	if !reflect.DeepEqual(loaded.Settings.Skills, want) {
 		t.Fatalf("skill paths/merge: %v", loaded.Settings.Skills)
 	}
-	if loaded.Settings.HTTPIdleTimeoutMs != 0 || loaded.Settings.MaxRetries != 2 {
-		t.Fatal("network settings ignored")
+	if loaded.Settings.HTTPIdleTimeoutMs != 0 || loaded.Settings.MaxRetries != 2 || loaded.Settings.RetryBaseDelayMs != 17 || loaded.Settings.RetryMaxAgentDelayMs != 231 {
+		t.Fatalf("network or retry settings ignored: %+v", loaded.Settings)
 	}
 	writeJSON(t, project, `{"defaultTools":[]}`)
 	loaded, err = LoadSettings(user, project, true)

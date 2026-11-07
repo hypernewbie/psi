@@ -199,6 +199,16 @@ func (s *rpcRunner) sink(ev event.Event) {
 			"maxAttempts": ev.RetryMaximum, "delayMs": ev.RetryDelayMs,
 			"errorMessage": ev.RetryClass,
 		})
+	case event.SummarizationRetryScheduled:
+		s.emit(map[string]any{
+			"type": "summarization_retry_scheduled", "attempt": ev.RetryAttempt,
+			"maxAttempts": ev.RetryMaximum, "delayMs": ev.RetryDelayMs,
+			"errorMessage": ev.Text,
+		})
+	case event.SummarizationRetryAttemptStart:
+		s.emit(map[string]any{"type": "summarization_retry_attempt_start", "source": "compaction", "reason": rpcCompactionReason(ev.State)})
+	case event.SummarizationRetryFinished:
+		s.emit(map[string]any{"type": "summarization_retry_finished"})
 	case event.CompactionStart:
 		s.sweepDurable()
 		reason := rpcCompactionReason(ev.State)

@@ -25,7 +25,9 @@ model layer. `models.json` can add providers of its own; see
 
 OpenCode Go models choose Anthropic Messages, OpenAI Chat Completions, OpenAI
 Responses, or Google Generative AI per model. An unsupported provider/protocol
-pair is rejected at startup, not retried against another endpoint.
+pair is rejected at startup, not retried against another endpoint. Z.AI's
+code-1308 plan-limit response keeps its provider message visible, including the
+reset time, and is not retried.
 
 ## Credentials
 

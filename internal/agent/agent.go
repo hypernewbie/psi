@@ -44,6 +44,14 @@ type Config struct {
 	// CompactionProvider optionally supplies a separate model/provider for the
 	// summary call. The normal provider remains active for resumed user work.
 	CompactionProvider func() (provider.Provider, provider.ModelMeta, func(), error)
+	// RetryAttempts bounds agent-level retries of transient summarization
+	// errors, mirroring Pi's settings.retry.maxRetries. The provider layer
+	// retries pre-stream HTTP failures separately; this policy covers summary
+	// requests that die mid-stream.
+	RetryAttempts        int
+	RetryBaseDelayMs     int
+	RetryMaxAgentDelayMs int
+	SummaryRetryReason   string
 }
 
 // Queue modes match Pi's steeringMode and followUpMode settings: one message
@@ -514,7 +522,11 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		estimated := EstimatedContext(proj, cfg)
 		if ShouldCompact(estimated, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact) {
 			if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil && !IsCompactionNoWork(err) {
-				return fmt.Errorf("automatic compaction: %w", err)
+				if ctx.Err() != nil || !IsSummaryFailure(err) {
+					return fmt.Errorf("automatic compaction: %w", err)
+				}
+				// Pi reports the failed auto-compaction through compaction_end and
+				// keeps the run alive; the next turn retries with the same context.
 			}
 			// Compaction can take long enough for the user to queue steering.
 			// Pi polls again after next-turn preparation, before the next model
@@ -557,7 +569,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				recovery.NoteAttempt()
 				if cerr := l.compactWithReason(ctx, cfg, "", event.CompactionOverflow); cerr != nil {
 					if IsCompactionNoWork(cerr) {
-						return fmt.Errorf("provider: %w", err)
+						return err
 					}
 					return fmt.Errorf("context-limit recovery: %w", cerr)
 				}
@@ -578,7 +590,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return fmt.Errorf("provider: %w", err)
+			return err
 		}
 		if resp == nil {
 			outcome = event.OutcomeInterrupted
@@ -704,7 +716,13 @@ func (l *Loop) maybeAdaptiveCompact(ctx context.Context, cfg Config, canContinue
 	if !cfg.ACPolicy.ObserveTurn(tokens, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact, canContinue, hasPendingMessages) {
 		return nil
 	}
-	return l.compactWithReason(ctx, cfg, "", event.CompactionAdaptive)
+	err = l.compactWithReason(ctx, cfg, "", event.CompactionAdaptive)
+	if err != nil && IsSummaryFailure(err) && ctx.Err() == nil {
+		// Reported through CompactionEnd; the run continues like Pi's
+		// auto-compaction instead of failing the turn.
+		return nil
+	}
+	return err
 }
 
 // unstreamedThinking returns the tail of the final reasoning that was never
