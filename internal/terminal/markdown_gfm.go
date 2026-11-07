@@ -54,7 +54,7 @@ func markdownTableCells(table *east.Table) ([]*east.TableCell, [][]*east.TableCe
 
 // markdownTableCell renders one cell into styled spans.
 func markdownTableCell(cell *east.TableCell, source []byte, style mdStyle) mdTableCell {
-	spans := renderInlineChildren(cell, source, style)
+	spans := renderInlineChildren(cell, source, style, false)
 	text := ""
 	for _, span := range spans {
 		text += span.Text

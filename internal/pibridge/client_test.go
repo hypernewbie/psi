@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -410,13 +411,42 @@ func TestTerminalCodeStopsAfterOneAttempt(t *testing.T) {
 	f := startFakePhi(t)
 	f.reject = codes.Unauthenticated
 	c := newTestClient(t, f, Snapshot{Generation: 1, SessionID: "s"})
-	f.waitFor(t, "the single attempt", func(connects int, _, _ []*pibridgepb.PiToPhi) bool { return connects == 1 })
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-c.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client did not stop after terminal rejection")
+	}
 	connects, _, _, _ := f.snapshot()
 	if connects != 1 {
 		t.Fatalf("connects = %d, want 1", connects)
 	}
 	c.Close()
+}
+
+type helloEOFStream struct {
+	pibridgepb.Integration_ConnectClient
+	rejection error
+}
+
+func (s *helloEOFStream) Send(*pibridgepb.PiToPhi) error { return io.EOF }
+func (s *helloEOFStream) Recv() (*pibridgepb.PhiToPi, error) {
+	return nil, s.rejection
+}
+
+func TestHelloWriteEOFPreservesRejectionStatus(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unauthenticated, codes.Unavailable} {
+		t.Run(code.String(), func(t *testing.T) {
+			c := &Client{runtimeID: "runtime", snap: Snapshot{Generation: 1, SessionID: "s"}}
+			hello, _, _, _ := c.hello()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stream := &helloEOFStream{rejection: status.Error(code, "rejected")}
+			served, err := c.serveStream(ctx, cancel, stream, hello)
+			if served || status.Code(err) != code {
+				t.Fatalf("served = %v, err = %v; want false and %s", served, err, code)
+			}
+		})
+	}
 }
 
 func TestUnavailableRetriesThenAccepts(t *testing.T) {

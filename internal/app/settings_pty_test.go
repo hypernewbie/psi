@@ -292,7 +292,7 @@ func TestActualAppSettingsShortTerminal(t *testing.T) {
 	session.waitEditor()
 	session.write("/settings\r")
 	session.wait("Auto-compact")
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 9; i++ {
 		session.write("\x1b[B")
 	}
 	session.waitScreen("→ Color mode")

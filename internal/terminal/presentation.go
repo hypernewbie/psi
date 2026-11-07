@@ -212,23 +212,48 @@ func FormatStyledRow(row StyledRow, width int, noColor bool, palette ...*pitheme
 		selected = palette[0]
 	}
 	limit := max(0, width-1)
-	disabled := colorDisabled(PresentationSnapshot{NoColor: noColor})
-	if row.Surface != "" && !disabled {
-		for i := range row.Spans {
-			if row.Spans[i].Background == "" {
-				row.Spans[i].Background = row.Surface
-			}
-		}
+	return serializeSoftRow(ClipStyledRow(row, limit), width, noColor, selected)
+}
+
+// surfaceErase fills the rest of a row with the surface background. The
+// terminal's background-color erase paints blank cells without writing
+// padding spaces. Selection of blank cells is controlled by the terminal.
+// Writer erases must precede row bytes, or they wipe this fill.
+func surfaceErase(palette *pitheme.Theme, surface ThemeToken, noColor bool) string {
+	if palette == nil || surface == "" || colorDisabled(PresentationSnapshot{NoColor: noColor}) {
+		return ""
 	}
-	clipped := ClipStyledRow(row, limit)
-	if row.Surface != "" && !disabled {
-		fill := max(0, limit-clipped.Width())
-		if fill > 0 {
-			clipped.Spans = append(clipped.Spans, StyledSpan{Text: strings.Repeat(" ", fill), Token: TokenText, Background: row.Surface})
-		}
-		clipped.Surface = row.Surface
+	background, err := palette.BackgroundANSI(string(surface))
+	if err != nil || background == "" {
+		return ""
 	}
-	return clipped.SerializeWithTheme(selected, colorDisabled(PresentationSnapshot{NoColor: noColor}))
+	return background + "\x1b[K\x1b[49m"
+}
+
+// serializeSoftRow serializes a committed row without the plain-cell clip.
+// Soft rows are complete logical lines; the terminal wraps them. Surface
+// tokens are applied by SerializeWithTheme, which also sanitizes each span.
+func serializeSoftRow(row StyledRow, width int, noColor bool, palette *pitheme.Theme) string {
+	text := row.SerializeWithTheme(palette, colorDisabled(PresentationSnapshot{NoColor: noColor}))
+	fill := surfaceErase(palette, row.Surface, noColor)
+	if fill == "" {
+		return text
+	}
+	width = max(1, width)
+	column := 0
+	graphemes := uniseg.NewGraphemes(row.Plain())
+	for graphemes.Next() {
+		cells := GraphemeWidth(graphemes.Str())
+		if column+cells > width {
+			column = 0
+		}
+		column += cells
+	}
+	// EL at a pending autowrap erases the last printed cell, not an empty suffix.
+	if column >= width {
+		return text
+	}
+	return text + fill
 }
 
 func ClipStyledRow(row StyledRow, maxCells int) StyledRow {
@@ -257,6 +282,9 @@ type DisplaySettings struct {
 	EditorPaddingX         int
 	AutocompleteMaxVisible int
 	CodeBlockIndent        string
+	// SoftWrap emits committed prose as complete logical lines so the
+	// terminal wraps them. Chrome and the live tail stay hard-wrapped.
+	SoftWrap bool
 	// HideThinking collapses reasoning blocks to Pi's "Thinking..." label.
 	HideThinking bool
 }

@@ -1116,7 +1116,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	}
 	projection := r.store.ProjectionIfCached()
 	branch := r.gitBranchFor(r.store.Cwd())
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t/%q", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil, r.settings.HideThinkingBlock, branch)
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t/%q/%t", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil, r.settings.HideThinkingBlock, branch, r.settings.SoftWrap)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
