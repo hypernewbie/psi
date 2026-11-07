@@ -494,19 +494,14 @@ func TestBridgeThinkingListMatchesLiveModel(t *testing.T) {
 	}
 }
 
-// A level the model can apply is applied even when it is not advertised: the
-// provider clamps it, so a valid level is not a rejection.
+// Bridge thinking changes persist the level that Pi clamps to for the live
+// model, even when the requested valid level is not advertised.
 func TestBridgeThinkingClampsUnadvertisedLevel(t *testing.T) {
 	r := testRuntime(t)
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
 	t.Setenv("ZAI_API_KEY", "synthetic-zai-key")
 	if err := r.configure(config.StartupOverrides{Provider: "zai", Model: "glm-5.3", Thinking: "high"}); err != nil {
 		t.Fatal(err)
-	}
-	for _, advertised := range provider.SupportedThinking(r.cfg.Model) {
-		if advertised == "minimal" {
-			t.Skip("fixture model advertises minimal")
-		}
 	}
 	f, h := startBridgeRuntime(t, r)
 	before := countEntries(t, r)
@@ -525,8 +520,9 @@ func TestBridgeThinkingClampsUnadvertisedLevel(t *testing.T) {
 	if !ack.GetOk() {
 		t.Fatalf("unadvertised level was refused: %+v", ack)
 	}
-	if r.ov.Thinking != "minimal" {
-		t.Fatalf("requested level not applied: %q", r.ov.Thinking)
+	want := provider.ClampThinkingLevel(r.cfg.Model, "minimal")
+	if r.ov.Thinking != want {
+		t.Fatalf("thinking level = %q, want Pi-clamped level %q", r.ov.Thinking, want)
 	}
 	if countEntries(t, r) != before+1 {
 		t.Fatal("accepted level did not record a thinking change")
