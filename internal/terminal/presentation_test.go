@@ -53,15 +53,15 @@ func TestActivityBorderUsesPiSpinnerAndMessageColors(t *testing.T) {
 	}
 }
 
-func TestNarrowActivityBorderKeepsPiCancellationHint(t *testing.T) {
-	view := ComposeConsoleView(20, 6, nil, 0, PresentationSnapshot{NoColor: true}, "⠋ Working… (Esc/Ctrl+C cancel, input paused)", "")
-	if !strings.Contains(view.Rows[1], "Esc/Ctrl+C") {
-		t.Fatalf("narrow status discarded cancellation binding: %q", view.Rows[1])
-	}
+func TestNarrowActivityBorderTruncatesToWidth(t *testing.T) {
+	view := ComposeConsoleView(20, 6, nil, 0, PresentationSnapshot{NoColor: true}, "⠋ Compacting context... (escape to cancel)", "")
 	for _, row := range view.Rows {
 		if CellWidth(Sanitize(row)) > 20 {
 			t.Fatalf("status row exceeded width: %q", row)
 		}
+	}
+	if !strings.Contains(view.Rows[1], "Compacting") {
+		t.Fatalf("narrow status lost the activity label: %q", view.Rows[1])
 	}
 }
 

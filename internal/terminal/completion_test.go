@@ -11,7 +11,7 @@ func completionConsole() (*Console, *testutil.VTModel) {
 	vt := testutil.NewVTModel(80, 24)
 	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 80, 24 }}
 	c.Commands = CommandNames()
-	c.CompletionDescriptions = map[string]string{"/help": "show commands, keys, limits, examples", "/new": "new session"}
+	c.CompletionDescriptions = CommandDescriptions()
 	c.SetPresentation(PresentationSnapshot{WorkingDirectory: "/work", Model: "model", NoColor: true})
 	return c, vt
 }
@@ -27,14 +27,14 @@ func TestSlashCompletionLivesInFiveRowEditorTail(t *testing.T) {
 	if len(vt.Scrollback) != 0 || strings.Contains(vt.Text(), "Candidates:") {
 		t.Fatalf("completion polluted native scrollback: scroll=%q screen=%q", vt.Scrollback, vt.Text())
 	}
-	if !strings.Contains(vt.Text(), "/help") || !strings.Contains(vt.Text(), "model") {
+	if !strings.Contains(vt.Text(), "/model") || !strings.Contains(vt.Text(), "model") {
 		t.Fatalf("completion or footer absent from tail: %q", vt.Text())
 	}
 	if _, _, _, _ = c.Handle(Input{Key: []byte("\x1b[B")}, false); c.completionSelected != 1 {
 		t.Fatalf("Down did not select second completion: %d", c.completionSelected)
 	}
 	c.Handle(Input{Key: []byte{9}}, false)
-	if c.Editor.Text() != "/new" || len(c.completionRows) != 0 {
+	if c.Editor.Text() != "/thinking" || len(c.completionRows) != 0 {
 		t.Fatalf("Tab completion text=%q rows=%q", c.Editor.Text(), c.completionRows)
 	}
 }

@@ -122,14 +122,6 @@ func TestLiveAndReplaySpacingAcrossToolOnlyResponses(t *testing.T) {
 	q.wait("NEXT_REPLY")
 	q.prompt()
 	checkNextTurn(q)
-	for _, command := range []string{"/history all\r", "/history 2\r"} {
-		q.write(command)
-		q.wait("DONE_CHAIN")
-		q.prompt()
-		if history := capture(q); !reflect.DeepEqual(live, history) {
-			t.Errorf("live/history transcript differs for %q\nlive: %#v\nhistory: %#v", command, live, history)
-		}
-	}
 	q.write("/quit\r")
 	q.finish()
 	q = startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", store.File())
@@ -142,6 +134,6 @@ func TestLiveAndReplaySpacingAcrossToolOnlyResponses(t *testing.T) {
 	q.write("/quit\r")
 	q.finish()
 	if requests.Load() != 5 {
-		t.Fatalf("history sent provider requests: %d", requests.Load())
+		t.Fatalf("replay sent provider requests: %d", requests.Load())
 	}
 }

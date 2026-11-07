@@ -890,19 +890,6 @@ func compactActivity(status string, maxWidth int) string {
 	if CellWidth(status) <= maxWidth {
 		return status
 	}
-	if keyStart := strings.Index(status, "Esc/Ctrl+C"); keyStart >= 0 {
-		keyEnd := keyStart + len("Esc/Ctrl+C")
-		if CellWidth(status[:keyEnd]) <= maxWidth {
-			return TruncateToWidth(status, maxWidth)
-		}
-		if clusters := Graphemes(status); len(clusters) > 0 {
-			compact := clusters[0] + " Esc/Ctrl+C"
-			if CellWidth(compact) <= maxWidth {
-				return compact
-			}
-			return TruncateToWidth(clusters[0], maxWidth)
-		}
-	}
 	return TruncateToWidth(status, maxWidth)
 }
 

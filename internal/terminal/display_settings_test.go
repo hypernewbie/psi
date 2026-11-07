@@ -41,7 +41,7 @@ func TestEditorPaddingAndCompletionVisibilityUseDisplaySnapshot(t *testing.T) {
 	if view.CursorCol != 2 || !strings.HasPrefix(view.Rows[view.CursorRow], " x") {
 		t.Fatalf("editor padding mismatch: cursor=%d row=%q", view.CursorCol, view.Rows[view.CursorRow])
 	}
-	c.Commands = []string{"/help", "/history", "/model", "/new", "/quit", "/resume", "/session"}
+	c.Commands = []string{"/hotkeys", "/model", "/new", "/quit", "/resume", "/session", "/thinking"}
 	c.Editor.RestoreDraft("/", 1)
 	c.refreshCompletion()
 	if len(c.completionRows) != 3 {

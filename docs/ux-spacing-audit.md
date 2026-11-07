@@ -2,7 +2,7 @@
 
 ## Scope
 
-Baseline: `99ac018`. This audit covers live submissions, assistant streams, tool chains, history commands, restart replay, and configuration feedback.
+Baseline: `99ac018`. This audit covers live submissions, assistant streams, tool chains, restart replay, and configuration feedback.
 
 Pi source reference: `d5b3de22d0e24a3e9c38a9410d3329b099717283` in `temp/pi-mono`.
 
@@ -22,7 +22,7 @@ Psi retains compact tool summaries and native scrollback. This audit does not co
 | Tool-only provider responses | Each response start ended the tool group with a blank row. | Only visible prose or run settlement ends the group. |
 | Blank assistant chunks | Whitespace-only output created gaps during stream settlement and replay. | Empty visible blocks do not separate adjacent tools. |
 | User submissions | A submission directly followed command output without a gap. | One blank row separates the submission from previous output. Existing message padding is not duplicated. |
-| Consecutive turns | Separate spacing paths risked different live and history layouts. | The PTY regression compares live output, both history commands, and restart replay. |
+| Consecutive turns | Separate spacing paths risked different live and replay layouts. | The PTY regression compares live output and restart replay. |
 | Initial stream format | The first Markdown stream ignored display geometry until another presentation update. | The first frame uses the same output padding and code indentation as replay. |
 | User color policy | Live submission passed a different no-color argument from replay. | Both paths use the active no-color policy. |
 | Transcript headings | Session and history headings touched the first message. | A blank row follows the heading and any offline notice. |
@@ -33,11 +33,11 @@ Psi retains compact tool summaries and native scrollback. This audit does not co
 
 The committed-row tracker retains only boundary state. It does not retain transcript bodies or count editor, picker, tool, or thinking rows as committed output.
 
-The gap correction does not collapse blank lines inside Markdown or code. Explicit commands such as `/help`, `/session`, and `/history` still produce their requested output.
+The gap correction does not collapse blank lines inside Markdown or code. Existing commands such as `/session` still produce their requested output.
 
 ## Regression coverage
 
-- `internal/app/ux_spacing_review_pty_test.go` compares the same transcript across live output, `/history all`, `/history 2`, and restart. It includes separate tool-only responses, a blank chunk, a code block, custom indentation, and a second turn.
+- `internal/app/ux_spacing_review_pty_test.go` compares the same transcript across live output and restart. It includes separate tool-only responses, a blank chunk, a code block, custom indentation, and a second turn.
 
 - `internal/terminal/spacing_review_test.go` covers idempotent gaps, pending frames, styled blank rows, repeated stream close, blank chunks, color modes, first-frame display geometry, and the constant border spacer across startup, committed rows, streaming, thinking, completion, and both picker modes.
 

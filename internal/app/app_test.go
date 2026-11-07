@@ -653,7 +653,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 		t.Fatalf("skill was not submitted: %s", encoded)
 	}
 	write("/new\r")
-	wait("new session")
+	wait("New session started")
 	waitEditor()
 	write("fresh-session\r")
 	wait("APP_OK")

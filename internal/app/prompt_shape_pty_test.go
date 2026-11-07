@@ -174,7 +174,7 @@ func TestActualAppPromptSections(t *testing.T) {
 	systemFile := filepath.Join(agentDir, "SYSTEM.md")
 	writeAppFile(t, systemFile, "RELOADED_CUSTOM_BASE")
 	second.write("/reload\r")
-	second.wait("resources and theme reloaded:")
+	second.wait("Reloaded keybindings, extensions, skills, prompts, themes, and context files")
 	second.prompt()
 	second.write("custom prompt\r")
 	second.wait("PROMPT_SHAPE_DONE")
@@ -183,7 +183,7 @@ func TestActualAppPromptSections(t *testing.T) {
 		t.Fatal(err)
 	}
 	second.write("/reload\r")
-	second.wait("resources and theme reloaded:")
+	second.wait("Reloaded keybindings, extensions, skills, prompts, themes, and context files")
 	second.prompt()
 	second.write("restored prompt\r")
 	second.wait("PROMPT_SHAPE_DONE")

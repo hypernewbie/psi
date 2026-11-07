@@ -279,6 +279,8 @@ type projectTrustOption struct {
 	label   string
 	trusted bool
 	updates []projectTrustUpdate
+	// savedPath names the trust-store entry the option writes.
+	savedPath string
 }
 
 // projectTrustOptions returns pi's trust options for cwd: trust, trust the
@@ -288,18 +290,19 @@ func projectTrustOptions(cwd string) []projectTrustOption {
 	trusted := true
 	untrusted := false
 	options := []projectTrustOption{
-		{label: "Trust", trusted: true, updates: []projectTrustUpdate{{path: trustPath, decision: &trusted}}},
+		{label: "Trust", trusted: true, savedPath: trustPath, updates: []projectTrustUpdate{{path: trustPath, decision: &trusted}}},
 	}
 	if parent := filepath.Dir(trustPath); parent != trustPath {
 		options = append(options, projectTrustOption{
-			label:   "Trust parent folder (" + parent + ")",
-			trusted: true,
-			updates: []projectTrustUpdate{{path: parent, decision: &trusted}, {path: trustPath, decision: nil}},
+			label:     "Trust parent folder (" + parent + ")",
+			trusted:   true,
+			savedPath: parent,
+			updates:   []projectTrustUpdate{{path: parent, decision: &trusted}, {path: trustPath, decision: nil}},
 		})
 	}
 	options = append(options,
 		projectTrustOption{label: "Trust (this session only)", trusted: true},
-		projectTrustOption{label: "Do not trust", trusted: false, updates: []projectTrustUpdate{{path: trustPath, decision: &untrusted}}},
+		projectTrustOption{label: "Do not trust", trusted: false, savedPath: trustPath, updates: []projectTrustUpdate{{path: trustPath, decision: &untrusted}}},
 		projectTrustOption{label: "Do not trust (this session only)", trusted: false},
 	)
 	return options

@@ -98,7 +98,7 @@ func TestUserThemeAtomicSaveReloadsOpenCompletionWithoutLosingQuery(t *testing.T
 	q.prompt()
 	thirdAccent := writeAccentTheme(t, themePath, "#ffcc00", true)
 	q.write("/reload\r")
-	q.wait("theme reloaded: selected")
+	q.wait("Reloaded keybindings, extensions, skills, prompts, themes, and context files")
 	q.prompt()
 	q.write("/")
 	q.wait(thirdAccent)

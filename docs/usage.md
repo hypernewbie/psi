@@ -72,7 +72,7 @@ When the model streams reasoning, psi shows it as an italic block before the
 answer. `Ctrl+T` hides the block behind one `Thinking...` label and shows it
 again on the next press. The toggle also works during a run and is saved as
 `hideThinkingBlock` in the agent `settings.json`, so the choice survives a
-restart. `/settings` lists the same switch under `Hide thinking`.
+restart.
 
 Reasoning stays in the session file, so a resumed or replayed session shows the
 same blocks in the same order. A run that ends early keeps the reasoning that

@@ -20,6 +20,15 @@ const (
 	DocumentBoundary  DocumentKind = "boundary"
 	DocumentNotice    DocumentKind = "notice"
 	DocumentGap       DocumentKind = "gap"
+	// DocumentStatus is Pi's showStatus: a blank spacer row and one dim line.
+	// A new status replaces the previous one when nothing else followed it.
+	DocumentStatus DocumentKind = "status"
+	// DocumentWarning is Pi's plain warning-colored chat text without the
+	// showWarning prefix, such as the untrusted-project notice.
+	DocumentWarning DocumentKind = "warning"
+	// DocumentAccent is Pi's accent-colored chat text, such as the /new
+	// confirmation.
+	DocumentAccent DocumentKind = "accent"
 )
 
 // DocumentBlock stores display source, not provider context. Each value is one
@@ -77,6 +86,12 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 		return FormatNotice(block.NoticeKind, block.Text, width, noColor, theme)
 	case DocumentGap:
 		return []string{""}
+	case DocumentStatus:
+		return formatStatusMessage(block.Text, width, noColor, theme)
+	case DocumentWarning:
+		return formatColoredMessage(block.Text, TokenWarning, width, noColor, theme)
+	case DocumentAccent:
+		return formatColoredMessage(block.Text, TokenAccent, width, noColor, theme)
 	case DocumentRaw:
 		return formatRawDocument(block.Text, width)
 	default:

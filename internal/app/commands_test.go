@@ -15,16 +15,21 @@ import (
 	"psi/internal/testutil/leakcheck"
 )
 
-// P2-045: command table drives help + parser. Unknown commands never become prompts.
+// The command table mirrors Pi's BUILTIN_SLASH_COMMANDS. Unknown commands
+// remain ordinary prompt text.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"help", "new", "resume", "model", "thinking", "compact", "loop", "loop-stop", "session", "version", "history", "name", "clone", "hotkeys", "quit"}
-	help := terminal.HelpText()
+	cmds := []string{"model", "thinking", "name", "session", "hotkeys", "clone", "new", "compact", "resume", "reload", "quit", "ac", "autocompact", "loop", "loop-stop"}
 	for _, c := range cmds {
-		if !strings.Contains(help, "/"+c) {
-			t.Errorf("help missing /%s", c)
-		}
 		if _, ok := terminal.ParseCommand("/" + c); !ok {
 			t.Errorf("parser rejects /%s", c)
+		}
+	}
+	// Pi has no /help, /version, or /history command.
+	// Pi commands psi does not implement stay absent; psi keeps its minimal
+	// command set.
+	for _, c := range []string{"help", "version", "history", "trust", "settings", "export", "tree", "fork"} {
+		if _, ok := terminal.ParseCommand("/" + c); ok {
+			t.Errorf("/%s is not part of psi's command set", c)
 		}
 	}
 	if !strings.Contains(terminal.HotkeysText(), "\n") || strings.Contains(terminal.HotkeysText(), `\n`) {
@@ -34,8 +39,8 @@ func TestCommandTable(t *testing.T) {
 	if cmd, ok := terminal.ParseCommand("/skill:review fix"); !ok || cmd.Name != "skill:review" {
 		t.Errorf("skill parse: %v %v", cmd, ok)
 	}
-	if cmd, ok := terminal.ParseCommand("/nope"); !ok || !strings.HasPrefix(cmd.Name, "unknown:") {
-		t.Errorf("unknown should be explicit, got %v %v", cmd, ok)
+	if cmd, ok := terminal.ParseCommand("/nope"); ok || cmd != nil {
+		t.Errorf("unknown must be ordinary text, got %v %v", cmd, ok)
 	}
 	// Plain text is not a command.
 	if _, ok := terminal.ParseCommand("hello"); ok {
@@ -53,24 +58,16 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	r := testRuntime(t)
 	var out bytes.Buffer
 
-	// /help
-	quit, err := r.command(&terminal.Command{Name: "help"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "Commands") {
-		t.Errorf("/help failed: quit=%v, err=%v, out=%q", quit, err, out.String())
-	}
-	out.Reset()
-
 	// /hotkeys
-	quit, err = r.command(&terminal.Command{Name: "hotkeys"}, &out)
+	quit, err := r.command(&terminal.Command{Name: "hotkeys"}, &out)
 	if err != nil || quit || !strings.Contains(out.String(), "Keys") {
 		t.Errorf("/hotkeys failed: quit=%v, err=%v, out=%q", quit, err, out.String())
 	}
 	out.Reset()
 
-	// /hotkeys with arg should fail
-	_, err = r.command(&terminal.Command{Name: "hotkeys", Arg: "invalid"}, &out)
-	if err == nil {
-		t.Errorf("/hotkeys with arg should return error")
+	// /hotkeys takes no argument; "/hotkeys x" is ordinary text, like Pi.
+	if _, ok := terminal.ParseCommand("/hotkeys x"); ok {
+		t.Errorf("/hotkeys with arg must be ordinary text")
 	}
 	out.Reset()
 
@@ -78,24 +75,6 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	quit, err = r.command(&terminal.Command{Name: "session"}, &out)
 	if err != nil || quit || !strings.Contains(out.String(), "session ") {
 		t.Errorf("/session failed: quit=%v, err=%v, out=%q", quit, err, out.String())
-	}
-	out.Reset()
-
-	// /version prints release, commit, and toolchain lines.
-	r.version = "0.0.0-test"
-	quit, err = r.command(&terminal.Command{Name: "version"}, &out)
-	if err != nil || quit {
-		t.Errorf("/version failed: quit=%v, err=%v", quit, err)
-	}
-	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 3 || lines[0] != "psi 0.0.0-test" || !strings.HasPrefix(lines[1], "commit ") || !strings.HasPrefix(lines[2], "build ") {
-		t.Errorf("/version must print release, commit, build: %q", out.String())
-	}
-	out.Reset()
-
-	// /version takes no argument.
-	if _, err = r.command(&terminal.Command{Name: "version", Arg: "x"}, &out); err == nil {
-		t.Errorf("/version with arg should return error")
 	}
 	out.Reset()
 
@@ -127,10 +106,10 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	}
 	out.Reset()
 
-	// /new session
+	// /new prints Pi's message and swaps the session.
 	oldID := r.store.Header().ID
 	quit, err = r.command(&terminal.Command{Name: "new"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "new session ") {
+	if err != nil || quit || !strings.Contains(out.String(), "✓ New session started") {
 		t.Errorf("/new failed: quit=%v, err=%v, out=%q", quit, err, out.String())
 	}
 	newID := r.store.Header().ID
@@ -199,7 +178,7 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	}
 	out.Reset()
 
-	// /history: populate transcript with more user/assistant turns
+	// Populate a multi-turn session for subsequent state checks.
 	if _, err := r.store.AppendMessage(session.AgentMessage{
 		Role:      "assistant",
 		Assistant: &session.AssistantMessage{Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "assistant reply 1"}}}},
@@ -218,48 +197,6 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	// /history: valid N
-	quit, err = r.command(&terminal.Command{Name: "history", Arg: "1"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "clonable content 2") {
-		t.Errorf("/history 1 failed: quit=%v, err=%v, out=%q", quit, err, out.String())
-	}
-	out.Reset()
-
-	// /history: all
-	quit, err = r.command(&terminal.Command{Name: "history", Arg: "all"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "clonable content 1") || !strings.Contains(out.String(), "clonable content 2") {
-		t.Errorf("/history all failed: quit=%v, err=%v, out=%q", quit, err, out.String())
-	}
-	out.Reset()
-
-	// /history: empty (defaults to 20)
-	quit, err = r.command(&terminal.Command{Name: "history"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "clonable content") {
-		t.Errorf("/history empty failed: quit=%v, err=%v, out=%q", quit, err, out.String())
-	}
-	out.Reset()
-
-	// /history: negative should return error
-	_, err = r.command(&terminal.Command{Name: "history", Arg: "-2"}, &out)
-	if err == nil || !strings.Contains(err.Error(), "use /history") {
-		t.Errorf("/history -2 should fail: err=%v", err)
-	}
-	out.Reset()
-
-	// /history: out of bounds (larger than count) should render all gracefully
-	quit, err = r.command(&terminal.Command{Name: "history", Arg: "999"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "clonable content 1") {
-		t.Errorf("/history 999 failed: quit=%v, err=%v, out=%q", quit, err, out.String())
-	}
-	out.Reset()
-
-	// /history: invalid non-numeric string
-	_, err = r.command(&terminal.Command{Name: "history", Arg: "invalid"}, &out)
-	if err == nil || !strings.Contains(err.Error(), "use /history") {
-		t.Errorf("/history invalid should fail: err=%v", err)
-	}
-	out.Reset()
 
 	// Add openai-codex provider to models file for provider switching test
 	if r.models.Providers == nil {
@@ -372,9 +309,9 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 		}
 	}
 
-	// /thinking: invalid level error
+	// /thinking: invalid level error carries Pi's message.
 	_, err = r.command(&terminal.Command{Name: "thinking", Arg: "invalid-level"}, &out)
-	if err == nil || !strings.Contains(err.Error(), "unsupported thinking level") {
+	if err == nil || !strings.Contains(err.Error(), `Unknown thinking level "invalid-level"`) {
 		t.Errorf("/thinking invalid-level should fail: %v", err)
 	}
 
@@ -400,7 +337,7 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	quit, err = r.command(&terminal.Command{Name: "reload"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "theme reloaded:") {
+	if err != nil || quit || !strings.Contains(out.String(), "Reloaded keybindings, extensions, skills, prompts, themes, and context files") {
 		t.Errorf("/reload valid settings failed: quit=%v, err=%v, out=%q", quit, err, out.String())
 	}
 	out.Reset()
@@ -497,10 +434,9 @@ func TestCLISplitArgs(t *testing.T) {
 			wantMessages: []string{"@fixture.txt"},
 		},
 		{
-			name:         "stdin single dash message",
-			args:         []string{"-", "--provider", "anthropic"},
-			wantFlags:    []string{"--provider", "anthropic"},
-			wantMessages: []string{"-"},
+			name:    "single dash is unknown",
+			args:    []string{"-", "--provider", "anthropic"},
+			wantErr: true,
 		},
 		{
 			name:         "double dash separator breaks option parsing",

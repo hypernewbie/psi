@@ -54,6 +54,20 @@ func (s *Store) pathLocked() ([]*Entry, error) {
 }
 func (s *Store) EntryCount() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.entries) }
 
+// CompactionCount reports how many compaction entries the session holds.
+// Pi uses the count for its "Session compacted N times" status.
+func (s *Store) CompactionCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, entry := range s.entries {
+		if entry != nil && entry.Kind == "compaction" {
+			count++
+		}
+	}
+	return count
+}
+
 // Timeline visits one visible record at a time. Hidden tool bodies and reasoning
 // never enter the display working set. n==0 means the entire selected view.
 func (s *Store) Timeline(all bool, n int, emit func(TranscriptItem) bool) (bool, error) {

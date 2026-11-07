@@ -20,22 +20,23 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
 - Draft budget 256 KiB UTF-8, never splits grapheme; recalled draft editable, returning past newest restores unfinished draft
 
-Commands (bounded inline, searchable editor pickers, no fullscreen):
+Commands (bounded inline completion and searchable editor pickers; no fullscreen):
 
-- `/help` — commands, keys, limits, examples
-- `/new` — new session (keeps scrollback, resets recall)
-- `/resume [filter]` — search workspace sessions, use arrows/PageUp/PageDown and Enter; same-session no-op
-- `/model` — searchable model picker with Pi's `→` selection pointer, `✓` current marker, provider badges, and selected-model credential details; only providers with a credential in `auth.json`, `models.json`, or the environment are listed; `/model [provider/]model` applies a direct session-local choice
-- `/thinking` — searchable supported-level picker with Pi's `→` pointer; `/thinking [level]` applies a direct session-local choice
-- `/compact [focus]` — real cancellable summary, start/settled outcome
-- `/session` — identity, workspace, provider/API/model, thinking, continuation, usage, and theme diagnostics (no secrets, no invented $0.00)
-- `/settings` — inline list of supported live settings; `Up/Down` wrap, `PageUp/PageDown` move by the visible window, `Enter`/`Space` change the value, `Esc`/`Ctrl+C` close. Changes apply immediately; persisted values merge into the agent `settings.json`. Refused while a run is active.
-- `/version` — psi release, git commit and commit time, and Go toolchain/platform as stamped at build time; `(dirty)` marks a tree with uncommitted or untracked changes at build time. Pi has no such command: it shows its version in the startup header and through `pi --version`
-- `/reload` — reload supported display/theme settings, queue modes, and resources without replaying committed scrollback
-- `/history [N|all]` — last N user spans (default 20) or full history, display-only, no mutation
-- `/skill:name [args]` — resolve, persist reproducible input (`psi.input`), show invocation once
-- `/quit` — settle work, restore terminal
+- `/model [provider/model]` — open the model picker or set a model directly
+- `/thinking [level]` — open the supported-level picker or set a level directly
+- `/name [name]` — show or set the session display name
+- `/session` — show session information and statistics
+- `/hotkeys` — show keyboard shortcuts
+- `/clone` — duplicate the session at the current position
+- `/new` — start a session (keeps scrollback, resets recall)
+- `/compact [focus]` — create a cancellable compact summary
+- `/resume` — search workspace sessions; same-session selection is a no-op
+- `/reload` — reload keybindings, extensions, skills, prompts, themes, and context files
+- `/quit` — settle work and restore the terminal
+- `/ac`, `/autocompact`, `/loop`, and `/loop-stop` — embedded adaptive-compaction and loop extensions
+- `/skill:name [args]` — invoke a skill with reproducible input (`psi.input`)
 
-Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. Dim `Steering: …` and `Follow-up: …` rows show pending text. `steeringMode` and `followUpMode` select `one-at-a-time` (the default, one message per turn) or `all` (every queued message in one turn). `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft; `/settings` reports that the run must finish first.
-Unknown `/commands` error locally, never become prompts.
+`/help`, `/version`, and `/history` are not slash commands. Use `./psi --help` and `./psi --version` for CLI information. An unknown slash command is ordinary prompt text and is sent to the model, as in Pi.
+
+Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
 Every command works after resume and after cancellation; draft preserved on errors.

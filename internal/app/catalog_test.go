@@ -295,9 +295,9 @@ func TestFailedModelPersistenceKeepsPriorRuntimeAndDraft(t *testing.T) {
 // Pi's compaction indicator names the phase and the cancellation binding.
 func TestCompactionActivityFollowsPiPhases(t *testing.T) {
 	cases := map[string]string{
-		event.CompactionManual:    "Compacting context… (Esc/Ctrl+C cancel)",
-		event.CompactionThreshold: "Auto-compacting… (Esc/Ctrl+C cancel)",
-		event.CompactionOverflow:  "Context overflow detected, Auto-compacting… (Esc/Ctrl+C cancel)",
+		event.CompactionManual:    "Compacting context... (escape to cancel)",
+		event.CompactionThreshold: "Auto-compacting... (escape to cancel)",
+		event.CompactionOverflow:  "Context overflow detected, Auto-compacting... (escape to cancel)",
 	}
 	for state, want := range cases {
 		if got := compactionActivity(state); got != want {

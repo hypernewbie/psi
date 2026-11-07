@@ -223,7 +223,14 @@ func (c *Console) emitDocumentBlock(block DocumentBlock, text string) error {
 
 // AppendTranscriptBlock adds one semantic display occurrence and emits its
 // current layout. Resize rebuilds use the retained source and latest geometry.
+// A status block replaces the previous status when it is still the last
+// block, like Pi's showStatus reusing the trailing status component.
 func (c *Console) AppendTranscriptBlock(block DocumentBlock) error {
+	if block.Kind == DocumentStatus && len(c.documentBlocks) > 0 && c.documentBlocks[len(c.documentBlocks)-1].Kind == DocumentStatus {
+		c.documentBlocks[len(c.documentBlocks)-1] = block
+		c.fullDocumentRedraw = true
+		return c.emitComposed("")
+	}
 	rows := FormatDocumentBlock(block, c.currentWidth(), c.presentation)
 	return c.emitDocumentBlock(block, rowsAppend(rows))
 }

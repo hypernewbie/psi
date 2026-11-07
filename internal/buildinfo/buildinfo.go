@@ -1,8 +1,8 @@
 // Package buildinfo reports the identity of the running psi binary.
 //
 // Go stamps a binary built inside a Git checkout with vcs.revision, vcs.time,
-// and vcs.modified, and records the toolchain and target platform. /version
-// therefore needs no ldflags and runs no git subprocess at runtime.
+// and vcs.modified, and records the toolchain and target platform. Version
+// output therefore needs no ldflags and runs no git subprocess at runtime.
 package buildinfo
 
 import (
@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Info is the build identity behind /version. An empty Commit means the build
+// Info is the build identity used by version output. An empty Commit means the build
 // carries no VCS stamp, for example `-buildvcs=false` or a module fetch.
 type Info struct {
 	Version    string

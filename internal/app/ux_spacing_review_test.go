@@ -17,8 +17,9 @@ func TestConfigurationChangesDoNotAppendChatLogs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if out.Len() != 0 {
-		t.Fatalf("configuration updates flooded transcript: %q", out.String())
+	// Pi reports configuration changes as status lines, never as chat logs.
+	if got, want := out.String(), "Thinking level: high\nThinking level: minimal\nModel: m\n"; got != want {
+		t.Fatalf("configuration updates: got %q want %q", got, want)
 	}
 	before := r.store.EntryCount()
 	if _, err := r.command(&terminal.Command{Name: "thinking", Arg: r.ov.Thinking}, &out); err != nil {

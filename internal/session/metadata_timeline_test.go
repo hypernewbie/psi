@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestCompactionReplayDoesNotLoadSummaryUnlessHistoryIsExplicit(t *testing.T) {
+func TestCompactionReplayNeverExposesTheStoredSummary(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "work")
 	if err := os.MkdirAll(cwd, 0700); err != nil {
@@ -40,33 +40,27 @@ func TestCompactionReplayDoesNotLoadSummaryUnlessHistoryIsExplicit(t *testing.T)
 			t.Fatal("default replay exposed the full summary")
 		}
 	}
-	var history []TranscriptItem
-	complete, err = reopened.Timeline(true, 0, func(item TranscriptItem) bool { history = append(history, item); return true })
-	if err != nil || !complete {
-		t.Fatalf("history timeline complete=%v err=%v", complete, err)
-	}
-	found := false
-	for _, item := range history {
-		if item.Kind == KindCompaction && strings.Contains(item.Text, hidden) {
-			found = true
+	// Pi renders every compaction entry collapsed; the summary only appears
+	// through the interactive expand, which psi does not implement.
+	for _, item := range current {
+		if item.Kind == KindCompaction && item.Text != CompactionCollapsedText(28_000) {
+			t.Fatalf("compaction marker=%q", item.Text)
 		}
-	}
-	if !found {
-		t.Fatal("explicit history omitted the stored compaction summary")
 	}
 }
 
-func TestCompactionTimelineKeepsDefaultMarkerCompactAndHistoryExplicit(t *testing.T) {
+func TestCompactionTimelineKeepsEveryMarkerCollapsed(t *testing.T) {
 	entry := &Entry{Kind: "compaction", Compaction: &CompactionEntry{Summary: "private synthetic summary details", TokensBefore: 28_000}}
 	current := timelineEntry(entry, nil, nil, false)
 	history := timelineEntry(entry, nil, nil, true)
-	if len(current) != 1 || current[0].Text != "Context compacted · ~28000 tokens before" {
+	want := "Compacted from 28,000 tokens (Ctrl+O to expand)"
+	if len(current) != 1 || current[0].Text != want {
 		t.Fatalf("default transcript marker=%+v", current)
 	}
 	if strings.Contains(current[0].Text, "private synthetic summary") {
 		t.Fatal("default transcript exposed the full compaction summary")
 	}
-	if len(history) != 1 || history[0].Text != entry.Compaction.Summary || !history[0].Historical {
-		t.Fatalf("explicit history lost compaction summary: %+v", history)
+	if len(history) != 1 || history[0].Text != want {
+		t.Fatalf("historical transcript marker=%+v", history)
 	}
 }

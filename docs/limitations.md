@@ -98,7 +98,7 @@ It does not implement Pi's LaTeX, Mermaid, terminal-image, or OSC 8 hyperlink re
 psi keeps its own left message margin, so code blocks, quotes, and tables sit one cell right of Pi's default `outputPad` margin.
 Two known differences remain. Pi keeps the source indentation of a lazy list continuation line, while psi renders the line without that space, and psi never lets a table exceed the terminal width, while Pi can overflow a table by one cell when a column is empty and the table exactly fills the line.
 
-Regression tests cover startup history, `/history all`, Backspace, nonduplicated submission, and `/new` recall reset.
+Regression tests cover startup history, Backspace, nonduplicated submission, and `/new` recall reset.
 Actual-app PTY tests cover Ctrl+Z/SIGCONT and terminal-attribute restoration.
 These tests do not establish every terminal profile, scheduled frame-rate bound, or human flicker check.
 See [the UI acceptance ledger](ui-acceptance.md) for measured coverage and blocked platform/human checks.
@@ -115,9 +115,8 @@ A storage failure blocks further writes until the operator opens another checked
 
 During a run, the editor stays active and `Enter` queues a steering message, as in Pi.
 `Alt+Enter` queues follow-up messages until the run ends. `steeringMode` and `followUpMode`
-select `one-at-a-time` (Pi's default, one message per turn) or `all`; psi has no
-interactive command to change them and `/settings` does not list them, so edit
-`settings.json` instead. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
+select `one-at-a-time` (Pi's default, one message per turn) or `all`; edit
+`settings.json` to change them. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
 
 Context-limit recovery permits at most one compaction and retry before visible partial output.
 Synthetic loop/provider tests cover that path.

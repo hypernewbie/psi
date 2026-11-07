@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"strings"
 
 	"psi/internal/session"
@@ -68,11 +67,7 @@ func renderTimelineItems(emit func(string) bool, items []session.TranscriptItem,
 			}
 			lines = []string{terminal.FormatToolRowWithDisplay(summary, name, state, width, noColor, display, palette...)}
 		case session.KindCompaction:
-			label := "[compaction] "
-			if it.Historical {
-				label = "[historical compaction] "
-			}
-			lines = terminal.FormatMetadataMessage(label, it.Text, width, noColor, display, palette...)
+			lines = terminal.FormatMetadataMessage("[compaction] ", it.Text, width, noColor, display, palette...)
 		case session.KindBranchSummary:
 			lines = terminal.FormatMetadataMessage("[branch] ", it.Text, width, noColor, display, palette...)
 		case session.KindSystemMarker:
@@ -129,10 +124,8 @@ func replayActivationAtWidthWithDisplayAndColor(emit func(string) bool, act *Act
 			return false
 		}
 	}
-	visible := map[string]bool{}
 	var spacing toolBatchSpacing
 	complete, err := act.Store.Timeline(false, 0, func(it session.TranscriptItem) bool {
-		visible[it.SourceID] = true
 		return renderTimelineItems(emit, []session.TranscriptItem{it}, width, display, noColor, &spacing, palette...)
 	})
 	if err != nil {
@@ -142,15 +135,6 @@ func replayActivationAtWidthWithDisplayAndColor(emit func(string) bool, act *Act
 	}
 	if !complete || !spacing.finish(emit) {
 		return false
-	}
-	omitted := 0
-	for _, e := range act.Path {
-		if e.Kind == "message" && !visible[e.ID()] && (e.Message.Message.User != nil || e.Message.Message.Assistant != nil) {
-			omitted++
-		}
-	}
-	if omitted > 0 {
-		return emit(fmt.Sprintf("(%d earlier messages summarized. Use /history all to view.)", omitted))
 	}
 	return true
 }

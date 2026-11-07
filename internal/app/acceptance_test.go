@@ -15,7 +15,7 @@ import (
 // A09: A→B→A shows dividers, generation filter, provider/draft/recall correct.
 // A10: reselect current or cancel leaves no duplicate, no loss.
 // A11: beyond 100 candidates reachable via 20/page.
-// A14: /history all is display-only (no file change, no request).
+// A14: the internal full-history projection is display-only (no file change).
 func TestAcceptanceResumeForms(t *testing.T) {
 	_, work, agent, _ := testutil.IsolatedEnv(t)
 	sdir := t.TempDir()
@@ -99,18 +99,16 @@ func TestAcceptanceResumeForms(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatal("A11: page 5 empty")
 	}
-	// A14: /history all display-only (no file change).
+	// A14: building the internal full-history projection does not mutate the file.
 	before, _ := os.ReadFile(pb)
-	_ = before
 	path, _ := sb.ActivePath()
 	all := session.AllHistoryView(path)
 	if len(all) == 0 {
-		t.Fatal("A14: empty all-history")
+		t.Fatal("A14: empty all-history projection")
 	}
 	after, _ := os.ReadFile(pb)
-	// OpenFile does not mutate; AllHistoryView is pure.
 	if string(before) != string(after) {
-		t.Fatal("A14: file mutated by display")
+		t.Fatal("A14: projection mutated the file")
 	}
 }
 

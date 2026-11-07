@@ -438,7 +438,7 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	if !strings.Contains(screen, "Compacting context") {
 		t.Fatalf("compaction indicator is missing from the editor border: %q", screen)
 	}
-	if !strings.Contains(screen, "Esc/Ctrl+C cancel") {
+	if !strings.Contains(screen, "(escape to cancel)") {
 		t.Fatalf("compaction indicator lost the cancellation hint: %q", screen)
 	}
 	select {
@@ -457,9 +457,9 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 	}
 	close(release)
 	released = true
-	q.wait("Context compacted")
+	q.wait("Compacted from")
 	q.prompt()
-	if !strings.Contains(q.screen.Text(), "[compaction]") || !strings.Contains(q.screen.Text(), "Context compacted") {
+	if !strings.Contains(q.screen.Text(), "[compaction]") || !strings.Contains(q.screen.Text(), "Compacted from") {
 		t.Fatalf("compaction did not settle: %q", q.screen.Text())
 	}
 	after, err := os.ReadFile(store.File())
@@ -486,13 +486,12 @@ func TestActualCompactionShowsPiIndicatorAndSettles(t *testing.T) {
 
 	restarted := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
 	restarted.prompt()
-	restartedScreen := restarted.screen.Text()
-	if !strings.Contains(restartedScreen, "earlier messages summarized") || strings.Contains(restartedScreen, "SUMMARY_COMMITTED") {
-		t.Fatalf("restart replay exposed the full summary or lost its compact marker: %q", restartedScreen)
+	restartedOutput := restarted.raw.String()
+	// The compaction marker is rendered before the long kept transcript scrolls
+	// it out of the viewport. The stored summary never reaches terminal output.
+	if !strings.Contains(restartedOutput, "Compacted from") || strings.Contains(restartedOutput, "SUMMARY_COMMITTED") {
+		t.Fatalf("restart replay exposed the full summary or lost its compact marker")
 	}
-	restarted.write("/history all\r")
-	restarted.wait("SUMMARY_COMMITTED")
-	restarted.prompt()
 	restarted.write("/quit\r")
 	restarted.finish()
 }

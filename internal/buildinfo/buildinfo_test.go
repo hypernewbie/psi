@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// /version prints three lines: release, commit (with build-time tree state),
+// CLI version output prints three lines: release, commit (with build-time tree state),
 // and toolchain. Missing stamps must stay readable instead of empty.
 func TestInfoLines(t *testing.T) {
 	cases := []struct {

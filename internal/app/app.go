@@ -26,7 +26,6 @@ import (
 	"psi/docs"
 	"psi/internal/ac"
 	"psi/internal/agent"
-	"psi/internal/buildinfo"
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/loop"
@@ -110,7 +109,10 @@ func splitCLIArgs(args []string) (flags, messages []string, err error) {
 			flags = append(flags, arg)
 			continue
 		}
-		if arg == "-" || !strings.HasPrefix(arg, "-") {
+		if arg == "-" {
+			return nil, nil, fmt.Errorf("Unknown option: -")
+		}
+		if !strings.HasPrefix(arg, "-") {
 			messages = append(messages, arg)
 			continue
 		}
@@ -632,7 +634,6 @@ type runtime struct {
 	bridge                   *pibridge.Client
 	bridgeTried              bool
 	selector                 *Selector
-	settingsPicker           *terminal.SettingsPicker
 	selectorDraft            string
 	selectorCursor           int
 	selectorRestoreOnSuccess bool
@@ -1335,10 +1336,7 @@ func (r *runtime) draw(console *terminal.Console) {
 	if row, ok := r.liveToolRow(console); ok {
 		console.SetToolRowNoDraw(row)
 	}
-	if r.settingsPicker != nil {
-		width, rows := console.PickerSize()
-		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
-	} else if r.selector != nil {
+	if r.selector != nil {
 		width, rows := console.PickerSize()
 		console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else {
@@ -1462,7 +1460,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		r.state = StateCancelling
 		console.SetThinking(false)
-		setActivity("Cancelling… (settling)")
 		cancel()
 	}
 	refreshRecall := func() {
@@ -1496,20 +1493,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.selectorDraft, r.selectorCursor = "", 0
 		r.draw(console)
 	}
-	openSettings := func() {
-		r.settingsPicker = r.newSettingsPicker()
-		r.state = StateSelecting
-		r.draw(console)
-	}
-	closeSettings := func() {
-		r.settingsPicker = nil
-		console.ClearPickerRows()
-		r.state = StateIdle
-		if r.authErr != nil {
-			r.state = StateOffline
-		}
-		r.draw(console)
-	}
 	cycleThinking := func() {
 		levels := provider.SupportedThinking(r.cfg.Model)
 		if len(levels) <= 1 {
@@ -1530,10 +1513,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.draw(console)
 	}
 	console.Commands = terminal.CommandNames()
-	console.CompletionDescriptions = make(map[string]string)
-	for _, spec := range terminal.CommandMetadata() {
-		console.CompletionDescriptions["/"+spec.Name] = spec.Description
-	}
+	console.CompletionDescriptions = terminal.CommandDescriptions()
 	for command, description := range map[string]string{
 		"help": "show AC help and session status", "status": "show context and compaction settings",
 		"compact": "compact now", "threshold": "set the adaptive target",
@@ -1597,21 +1577,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		return console.AppendTranscriptBlock(block) == nil
 	}
-	stoppedReplay := func() {
-		if !exiting {
-			print("History display stopped. Use /history all to display stored messages.")
-		}
-	}
 	r.generation++
 	r.syncBridge()
 	r.state = StateReplaying
 	// Startup activation: display current view before the next editable prompt (P2-035).
 	// Same projector + replay engine as /resume (P2-036).
 	if act, err := PrepareActivation(r.store); err == nil {
-		if !replayActivationDocument(emitReplayBlock, act, true, "") {
-			stoppedReplay()
-		}
+		replayActivationDocument(emitReplayBlock, act, true, "")
 		console.Editor.SetHistory(act.Recall)
+		r.renderProjectTrustWarningIfNeeded(console)
+		if count := r.store.CompactionCount(); count > 0 {
+			times := "1 time"
+			if count != 1 {
+				times = fmt.Sprintf("%d times", count)
+			}
+			printStatusText(out, "Session compacted "+times)
+		}
 		if act.Offline {
 			r.state = StateOffline
 		} else {
@@ -1701,7 +1682,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.activeTools = append(r.activeTools, activeTool{name: ev.ToolName, callID: ev.ToolCallID, summary: ev.Summary})
 			display := presentationDisplay(r.settings)
 			console.SetToolRow(terminal.FormatToolRowWithDisplay(ev.Summary, ev.ToolName, "running", console.StatusWidth(), noColorEnvironment(), display, r.theme))
-			setActivity("Working… (Esc/Ctrl+C cancel)")
+			setActivity("Working")
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, "running", display, r.theme, noColorEnvironment())
 		case event.ToolEnd:
 			for i, active := range r.activeTools {
@@ -1726,7 +1707,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			toolSpacing.pending = true
 			if r.state != StateCancelling {
 				r.state = StateWaiting
-				setActivity("Working… (Esc/Ctrl+C cancel)")
+				setActivity("Working")
 			}
 		case event.CompactionStart:
 			console.SetThinking(false)
@@ -1740,7 +1721,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.compactActive = false
 			if r.state != StateCancelling {
 				r.state = StateWaiting
-				setActivity("Working… (Esc/Ctrl+C cancel)")
+				setActivity("Working")
 			}
 			r.syncBridge()
 		}
@@ -1798,7 +1779,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cancel, busy, compacting = stop, true, compact
 		compactionCountAtStart = r.ac.Snapshot().CompactionCount
 		r.state = StateWaiting
-		setActivity("Working… (Esc/Ctrl+C cancel)")
+		setActivity("Working")
 		if compact {
 			r.state = StateCompacting
 		}
@@ -2238,7 +2219,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 					notice(terminal.NoticeError, err.Error())
 				}
 			} else if compacting || compactionCommitted {
-				for _, line := range terminal.FormatMetadataMessage("[compaction] ", "Context compacted", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
+				// Pi renders the committed compaction entry as a collapsed
+				// summary box with the token count; the summary stays hidden.
+				tokens := 0.0
+				if path, pathErr := r.store.ActivePath(); pathErr == nil {
+					for i := len(path) - 1; i >= 0; i-- {
+						if path[i].Compaction != nil {
+							tokens = path[i].Compaction.TokensBefore
+							break
+						}
+					}
+				}
+				for _, line := range terminal.FormatMetadataMessage("[compaction] ", session.CompactionCollapsedText(tokens), console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme) {
 					fmt.Fprintln(out, line)
 				}
 			}
@@ -2281,7 +2273,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				busy = true
 				compacting = false
 				r.state = StateWaiting
-				setActivity("Working… (Esc/Ctrl+C cancel)")
+				setActivity("Working")
 				activeLoop = lateQueueLoop
 				compactionCountAtStart = r.ac.Snapshot().CompactionCount
 				lateLoop, cfg := lateQueueLoop, activeConfig
@@ -2341,60 +2333,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 					cancelActive()
 				} else if err := suspend(); err != nil {
 					return err
-				}
-				continue
-			}
-			if !busy && r.settingsPicker != nil {
-				if input.Paste {
-					continue
-				}
-				switch string(input.Key) {
-				case "\x1b", "\x03":
-					closeSettings()
-				case "\x1b[A", "\x1bOA":
-					r.settingsPicker.Move(-1)
-					r.draw(console)
-				case "\x1b[B", "\x1bOB":
-					r.settingsPicker.Move(1)
-					r.draw(console)
-				case "\x1b[5~":
-					r.settingsPicker.Page(-1)
-					r.draw(console)
-				case "\x1b[6~":
-					r.settingsPicker.Page(1)
-					r.draw(console)
-				case "\r", " ":
-					item, value, ok := r.settingsPicker.Cycle()
-					if !ok {
-						r.draw(console)
-						continue
-					}
-					path, err := r.applySetting(item.ID, value, console)
-					if err != nil {
-						notice(terminal.NoticeError, err.Error())
-						// The row advanced before the failed apply; rebuild from the
-						// settings that are still active.
-						index := r.settingsPicker.Index
-						r.settingsPicker = r.newSettingsPicker()
-						r.settingsPicker.Index = index
-					} else if path != nil {
-						if err := r.persistSettingsValue(path, value.Value); err != nil {
-							notice(terminal.NoticeError, "Saved for this session only: "+err.Error())
-						}
-					}
-					if err == nil {
-						if item.ID == "theme" || item.ID == "color-mode" {
-							if watch != nil {
-								watch.SetSelected(r.selectedUserThemePath())
-							}
-						}
-						if item.ID == "theme" && r.options.UseTheme != "" {
-							notice(terminal.NoticeInfo, "Stored the default theme; --use-theme keeps the current display.")
-						}
-					}
-					console.RequestFullRedraw()
-					r.footerKey = ""
-					r.draw(console)
 				}
 				continue
 			}
@@ -2469,9 +2407,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						print("resumed " + r.store.Header().ID)
 						r.generation++
-						if !replayActivationDocument(emitReplayBlock, act, false, oldID) {
-							stoppedReplay()
-						}
+						replayActivationDocument(emitReplayBlock, act, false, oldID)
 						console.Editor.SetHistory(act.Recall)
 						refreshRecall()
 						closeSelector(false)
@@ -2546,16 +2482,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if busy {
 				// Pi's editor stays live while a run is active. AC policy commands
-				// can update session-local settings; /ac compact waits for this run
+				// can update session-local policy; /ac compact waits for this run
 				// to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
-					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
-						notice(terminal.NoticeInfo, "Finish or cancel the run before changing settings.")
-						console.Editor.RestoreDraft(text, len([]rune(text)))
-						console.RefreshCompletion()
-						r.draw(console)
-						continue
-					}
 					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "ac" || cmd.Name == "autocompact") {
 						parts := strings.Fields(cmd.Arg)
 						if len(parts) > 0 && strings.EqualFold(parts[0], "compact") {
@@ -2662,16 +2591,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.draw(console)
 					continue
 				}
-				if cmd.Name == "history" {
-					complete, err := renderHistoryDocument(r.store, cmd.Arg, emitReplayBlock)
-					if err != nil {
-						print("error: " + err.Error())
-					} else if !complete {
-						stoppedReplay()
-					}
-					r.draw(console)
-					continue
-				}
 				if cmd.Name == "compact" {
 					if writeErr := r.store.WriteError(); writeErr != nil {
 						notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
@@ -2708,15 +2627,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 						openSelector(NewSelector(infos, r.store.Header().ID), submittedDraft, submittedCursor, cmd.Arg, false)
 					}
 					r.draw(console)
-					continue
-				}
-				if cmd.Name == "settings" {
-					if strings.TrimSpace(cmd.Arg) != "" {
-						notice(terminal.NoticeError, "use /settings")
-						r.draw(console)
-						continue
-					}
-					openSettings()
 					continue
 				}
 				quit, err := r.command(cmd, out)
@@ -2768,16 +2678,11 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 	switch cmd.Name {
 	case "quit":
 		return r.handleQuitCommand(cmd.Arg, out)
-	case "help":
-		return r.handleHelpCommand(cmd.Arg, out)
 	case "hotkeys":
 		return r.handleHotkeysCommand(cmd.Arg, out)
 	case "session":
 		return r.handleSessionCommand(cmd.Arg, out)
-	case "settings":
-		return r.handleSettingsCommand(cmd.Arg, out)
-	case "version":
-		return r.handleVersionCommand(cmd.Arg, out)
+
 	case "reload":
 		return r.handleReloadCommand(cmd.Arg, out)
 	case "new":
@@ -2786,41 +2691,33 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return r.handleNameCommand(cmd.Arg, out)
 	case "clone":
 		return r.handleCloneCommand(cmd.Arg, out)
-	case "history":
-		return r.handleHistoryCommand(cmd.Arg, out)
 	case "model":
 		return r.handleModelCommand(cmd.Arg, out)
 	case "thinking":
 		return r.handleThinkingCommand(cmd.Arg, out)
 	default:
-		return false, fmt.Errorf("unknown command (see /help)")
+		return false, fmt.Errorf("unknown command")
 	}
+}
+
+// printStatusText renders Pi's showStatus line: a dim status message that a
+// following status replaces. Plain writers keep one plain line.
+func printStatusText(out io.Writer, text string) {
+	if structured, ok := out.(interface {
+		AppendDocumentBlock(terminal.DocumentBlock) error
+	}); ok {
+		_ = structured.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentStatus, Text: text})
+		return
+	}
+	fmt.Fprintln(out, terminal.Sanitize(text))
 }
 
 func (r *runtime) handleQuitCommand(arg string, out io.Writer) (bool, error) {
 	return true, nil
 }
 
-func (r *runtime) handleHelpCommand(arg string, out io.Writer) (bool, error) {
-	fmt.Fprintln(out, terminal.Sanitize(terminal.HelpText()))
-	return false, nil
-}
-
 func (r *runtime) handleHotkeysCommand(arg string, out io.Writer) (bool, error) {
-	if strings.TrimSpace(arg) != "" {
-		return false, fmt.Errorf("use /hotkeys")
-	}
 	fmt.Fprintln(out, terminal.Sanitize(terminal.HotkeysText()))
-	return false, nil
-}
-
-func (r *runtime) handleVersionCommand(arg string, out io.Writer) (bool, error) {
-	if strings.TrimSpace(arg) != "" {
-		return false, fmt.Errorf("use /version")
-	}
-	for _, line := range buildinfo.Read(r.version).Lines() {
-		fmt.Fprintln(out, terminal.Sanitize(line))
-	}
 	return false, nil
 }
 
@@ -2867,7 +2764,7 @@ func (r *runtime) handleReloadCommand(arg string, out io.Writer) (bool, error) {
 	if r.lifecycle != nil && r.lifecycle.console != nil {
 		r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
 	}
-	fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("resources and theme reloaded: %s (%s, %s)", r.themeName, r.themeAppearance, r.themeMode)))
+	printStatusText(out, "Reloaded keybindings, extensions, skills, prompts, themes, and context files")
 	return false, nil
 }
 
@@ -2882,18 +2779,23 @@ func (r *runtime) handleNewCommand(arg string, out io.Writer) (bool, error) {
 	r.generation++
 	// Reset recall and session-local state; keep prior scrollback (P2-048).
 	// New sessions start with empty recall.
-	fmt.Fprintln(out, terminal.Sanitize("new session "+next.Header().ID))
+	if structured, ok := out.(interface {
+		AppendDocumentBlock(terminal.DocumentBlock) error
+	}); ok {
+		_ = structured.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentAccent, Text: "✓ New session started"})
+	} else {
+		fmt.Fprintln(out, terminal.Sanitize("✓ New session started"))
+	}
 	return false, nil
 }
 
 func (r *runtime) handleNameCommand(arg string, out io.Writer) (bool, error) {
-	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
 	// Pi's /name: no argument shows the current name, an argument appends a
 	// session_info entry. Newlines collapse to spaces; the latest entry wins.
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
 		if current := r.store.SessionName(); current != "" {
-			print("Session name: " + current)
+			printStatusText(out, "Session name: "+current)
 		} else {
 			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, "Usage: /name <name>", 80, noColorEnvironment(), r.theme) {
 				fmt.Fprintln(out, line)
@@ -2910,7 +2812,7 @@ func (r *runtime) handleNameCommand(arg string, out io.Writer) (bool, error) {
 			fmt.Fprintln(out, line)
 		}
 	}
-	print("Session name set: " + r.store.SessionName())
+	printStatusText(out, "Session name set: "+r.store.SessionName())
 	return false, nil
 }
 
@@ -2918,43 +2820,36 @@ func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
 	if strings.TrimSpace(arg) != "" {
 		return false, fmt.Errorf("use /clone")
 	}
-	print := func(s string) { fmt.Fprintln(out, terminal.Sanitize(s)) }
-	// Pi's /clone forks at the current leaf into a new session file.
+	// Pi's /clone forks at the current leaf into a new session file and
+	// reports the outcome as a status message.
 	if r.store.File() == "" || (len(r.store.Entries()) == 0 && r.store.EntryCount() == 0) {
-		print("Nothing to clone yet")
+		printStatusText(out, "Nothing to clone yet")
 		return false, nil
 	}
 	if _, err := os.Stat(r.store.File()); os.IsNotExist(err) {
-		print("Nothing to clone yet")
+		printStatusText(out, "Nothing to clone yet")
 		return false, nil
 	} else if err != nil {
 		return false, err
 	}
-	if err := r.cloneSession(print); err != nil {
+	if err := r.cloneSession(func(string) {}); err != nil {
 		return false, err
 	}
+	printStatusText(out, "Cloned to new session")
 	return false, nil
 }
 
-func (r *runtime) handleHistoryCommand(arg string, out io.Writer) (bool, error) {
-	// /history [N|all]: append last N user spans or full active-branch history (P2-041).
-	// Display-only: no model request, no file change.
-	if structured, ok := out.(interface {
-		AppendDocumentBlock(terminal.DocumentBlock) error
-	}); ok {
-		_, err := renderHistoryDocument(r.store, arg, func(block terminal.DocumentBlock) bool {
-			return structured.AppendDocumentBlock(block) == nil
-		})
-		if err != nil {
-			return false, err
-		}
-		return false, nil
+// renderProjectTrustWarningIfNeeded shows Pi's warning when the project is
+// not trusted and holds trust-requiring resources.
+func (r *runtime) renderProjectTrustWarningIfNeeded(console *terminal.Console) {
+	if r.projectTrusted || !hasTrustRequiringProjectResources(r.store.Cwd()) {
+		return
 	}
-	_, err := renderStoreHistory(r.store, arg, func(s string) bool { fmt.Fprintln(out, s); return true }, r.theme)
-	if err != nil {
-		return false, err
-	}
-	return false, nil
+	// Pi renders warning-colored chat text without the showWarning prefix.
+	_ = console.AppendTranscriptBlock(terminal.DocumentBlock{
+		Kind: terminal.DocumentWarning,
+		Text: "This project is not trusted. Project .pi resources and packages are ignored. Use /trust to save a trust decision, then restart " + terminal.AppName + ".",
+	})
 }
 
 func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
@@ -2997,6 +2892,8 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 	if r.ac != nil {
 		r.ac.ResetGrowth()
 	}
+	// Pi names the selected model as a status message.
+	printStatusText(out, "Model: "+candidate.ov.Model)
 	return false, nil
 }
 
@@ -3006,26 +2903,38 @@ func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error)
 		print(fmt.Sprintf("thinking %s (supported: %s)", provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), provider.ThinkingChoices(r.cfg.Model)))
 		return false, nil
 	}
-	lvl := strings.TrimSpace(arg)
-	if !provider.SupportsThinking(r.cfg.Model, lvl) {
-		return false, fmt.Errorf("unsupported thinking level %q", lvl)
+	// Pi matches the level case-insensitively against the levels the current
+	// model supports and reports the exact list in the error.
+	levels := provider.SupportedThinking(r.cfg.Model)
+	normalized := strings.ToLower(strings.TrimSpace(arg))
+	level := ""
+	for _, candidate := range levels {
+		if strings.ToLower(candidate) == normalized {
+			level = candidate
+			break
+		}
 	}
-	if lvl == r.ov.Thinking {
+	if level == "" {
+		return false, fmt.Errorf("Unknown thinking level %q. Available levels: %s.", strings.TrimSpace(arg), strings.Join(levels, ", "))
+	}
+	if level == r.ov.Thinking {
+		print("Thinking level: " + level)
 		return false, nil
 	}
 	next := r.ov
-	next.Thinking = lvl
+	next.Thinking = level
 	candidate := *r
 	candidate.prov = nil
 	if err := candidate.configure(next); err != nil {
 		return false, err
 	}
-	if _, err := r.store.AppendThinkingLevelChange(lvl); err != nil {
+	if _, err := r.store.AppendThinkingLevelChange(level); err != nil {
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
 	}
 	r.installConfiguration(&candidate)
+	printStatusText(out, "Thinking level: "+level)
 	return false, nil
 }

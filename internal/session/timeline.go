@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"psi/internal/event"
@@ -283,14 +284,9 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 			out = append(out, TranscriptItem{Kind: KindTool, Text: "bash: " + bashOutcome(b), ToolName: "bash", ToolState: state, ToolSummary: summary, SourceID: e.ID(), Historical: historical})
 		}
 	case "compaction":
-		text := e.Compaction.Summary
-		if !historical {
-			text = "Context compacted"
-			if e.Compaction.TokensBefore > 0 {
-				text += fmt.Sprintf(" · ~%.0f tokens before", e.Compaction.TokensBefore)
-			}
-		}
-		add(e, KindCompaction, text)
+		// Pi renders every compaction entry as a collapsed summary box with the
+		// token count; the summary itself only appears when expanded.
+		add(e, KindCompaction, CompactionCollapsedText(e.Compaction.TokensBefore))
 	case "branch_summary":
 		add(e, KindBranchSummary, "Branch: "+e.BranchSummary.Summary)
 	case "custom_message":
@@ -303,6 +299,41 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 		add(e, KindSystemMarker, "Context edited (model context updated, transcript preserved).")
 	}
 	return out
+}
+
+// CompactionCollapsedText is Pi's collapsed compaction line. The token count
+// uses the grouping of JavaScript's toLocaleString.
+func CompactionCollapsedText(tokensBefore float64) string {
+	return fmt.Sprintf("Compacted from %s tokens (Ctrl+O to expand)", LocaleNumber(tokensBefore))
+}
+
+// LocaleNumber renders a number with thousands separators and up to three
+// fraction digits, like JavaScript's default toLocaleString.
+func LocaleNumber(v float64) string {
+	negative := ""
+	if v < 0 {
+		negative = "-"
+		v = -v
+	}
+	integer := int64(v)
+	fraction := v - float64(integer)
+	digits := ""
+	if fraction > 0 {
+		digits = strconv.FormatFloat(fraction, 'f', 3, 64)
+		digits = strings.TrimRight(strings.TrimPrefix(digits, "0."), "0")
+	}
+	grouped := strconv.FormatInt(integer, 10)
+	var out []byte
+	for i, digit := range []byte(grouped) {
+		if i > 0 && (len(grouped)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, digit)
+	}
+	if digits != "" {
+		return negative + string(out) + "." + digits
+	}
+	return negative + string(out)
 }
 
 func PromptRecall(path []*Entry) []string {

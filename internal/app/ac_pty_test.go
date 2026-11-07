@@ -98,8 +98,8 @@ func TestActualAppACEndOfTurnCompaction(t *testing.T) {
 	q.wait("delay set to 0 minutes")
 	q.write("ASK_EOT_COMPACT\r")
 	q.wait("EOT_ANSWER")
-	q.wait("Compacting context")
-	q.wait("Context compacted")
+	q.wait("Compacting context...")
+	q.wait("Compacted from")
 	mu.Lock()
 	if len(requestBodies) != 2 {
 		t.Fatalf("provider requests = %d, want user turn and end-of-turn summary", len(requestBodies))

@@ -73,9 +73,9 @@ func TestActivationReplayKeepsThinkingBeforeText(t *testing.T) {
 	}
 }
 
-// TestHistoryKeepsHidingReasoning guards the documented history behavior: the
-// conversation history shows the answer, not the reasoning.
-func TestHistoryKeepsHidingReasoning(t *testing.T) {
+// TestReplayTimelineKeepsHidingReasoning guards the startup/replay behavior:
+// the conversation timeline shows the answer, not the reasoning.
+func TestReplayTimelineKeepsHidingReasoning(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.New(session.OpenOptions{Cwd: dir, SessionDir: dir, Persist: false})
 	if err != nil {
@@ -94,18 +94,20 @@ func TestHistoryKeepsHidingReasoning(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	complete, err := renderStoreHistory(store, "all", func(s string) bool {
-		out.WriteString(s)
-		out.WriteString("\n")
+	complete, err := store.Timeline(false, 0, func(item session.TranscriptItem) bool {
+		if item.Kind == session.KindAssistant {
+			out.WriteString(item.Text)
+			out.WriteString("\n")
+		}
 		return true
 	})
 	if err != nil || !complete {
-		t.Fatalf("history failed: complete=%v err=%v", complete, err)
+		t.Fatalf("replay timeline failed: complete=%v err=%v", complete, err)
 	}
 	if strings.Contains(out.String(), "weigh options") {
-		t.Fatalf("history leaked the reasoning:\n%s", out.String())
+		t.Fatalf("replay timeline leaked the reasoning:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "the answer") {
-		t.Fatalf("history lost the answer:\n%s", out.String())
+		t.Fatalf("replay timeline lost the answer:\n%s", out.String())
 	}
 }

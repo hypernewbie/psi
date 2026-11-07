@@ -1,8 +1,6 @@
 package app
 
 import (
-	"fmt"
-
 	"psi/internal/session"
 	"psi/internal/terminal"
 )
@@ -23,11 +21,9 @@ func transcriptDocumentBlock(it session.TranscriptItem) terminal.DocumentBlock {
 			block.Summary.Note = it.Note
 		}
 	case session.KindCompaction:
+		// Pi labels every compaction entry the same way, collapsed by default.
 		block.Kind = terminal.DocumentMetadata
 		block.Label = "[compaction] "
-		if it.Historical {
-			block.Label = "[historical compaction] "
-		}
 	case session.KindBranchSummary:
 		block.Kind, block.Label = terminal.DocumentMetadata, "[branch] "
 	case session.KindSystemMarker:
@@ -80,42 +76,5 @@ func replayActivationDocument(add func(terminal.DocumentBlock) bool, act *Activa
 	if toolPending && !add(terminal.DocumentBlock{Kind: terminal.DocumentGap}) {
 		return false
 	}
-	omitted := 0
-	for _, entry := range act.Path {
-		if entry.Kind == "message" && !visible[entry.ID()] && (entry.Message.Message.User != nil || entry.Message.Message.Assistant != nil) {
-			omitted++
-		}
-	}
-	if omitted > 0 {
-		return add(terminal.DocumentBlock{Kind: terminal.DocumentRaw,
-			Text: fmt.Sprintf("(%d earlier messages summarized. Use /history all to view.)\r\n", omitted)})
-	}
 	return true
-}
-
-func renderHistoryDocument(store *session.Store, arg string, add func(terminal.DocumentBlock) bool) (bool, error) {
-	all, n, err := historySelection(arg)
-	if err != nil {
-		return false, err
-	}
-	if !all && !add(terminal.DocumentBlock{Kind: terminal.DocumentBoundary, Text: "Conversation history (display only, not model input)"}) {
-		return false, nil
-	}
-	toolPending := false
-	complete, err := store.Timeline(all, n, func(it session.TranscriptItem) bool {
-		if it.Kind != session.KindTool && toolPending {
-			toolPending = false
-		}
-		if it.Kind == session.KindTool {
-			toolPending = true
-		}
-		return add(transcriptDocumentBlock(it))
-	})
-	if err != nil || !complete {
-		return complete, err
-	}
-	if toolPending && !add(terminal.DocumentBlock{Kind: terminal.DocumentGap}) {
-		return false, nil
-	}
-	return true, nil
 }

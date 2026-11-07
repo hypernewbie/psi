@@ -112,20 +112,31 @@ func TestEditor(t *testing.T) {
 }
 
 func TestCommands(t *testing.T) {
-	for _, c := range []string{"/help", "/new", "/resume", "/model a b", "/thinking high", "/compact focus", "/ac status", "/autocompact help", "/session", "/quit", "/skill:do arg"} {
+	for _, c := range []string{"/new", "/resume", "/model", "/thinking", "/compact", "/session", "/clone", "/hotkeys", "/reload", "/quit", "/ac status", "/autocompact help", "/loop goal fix tests", "/loop-stop", "/name foo", "/skill:do arg"} {
 		if _, ok := ParseCommand(c); !ok {
 			t.Errorf("command %q not parsed", c)
+		}
+	}
+	// Pi has no /help, /version, or /history command: they are ordinary
+	// user text and get sent to the model as a prompt.
+	for _, c := range []string{"/help", "/version", "/history", "/history all", "/trust"} {
+		if _, ok := ParseCommand(c); ok {
+			t.Errorf("command %q must be ordinary text, like Pi", c)
+		}
+	}
+	// Commands without an argument hint reject an argument, like Pi's
+	// exact-match dispatch.
+	for _, c := range []string{"/session all", "/clone extra", "/hotkeys now"} {
+		if _, ok := ParseCommand(c); ok {
+			t.Errorf("command %q takes no argument", c)
 		}
 	}
 	if _, ok := ParseCommand("hello"); ok {
 		t.Errorf("plain text is not a command")
 	}
-	cmd, _ := ParseCommand("/bogus")
-	if !strings.HasPrefix(cmd.Name, "unknown:") {
-		t.Errorf("unknown must be distinct: %+v", cmd)
-	}
-	if !strings.Contains(HelpText(), "/compact") || !strings.Contains(HelpText(), "/ac") {
-		t.Errorf("help")
+	// An unknown /command is ordinary user text, like Pi.
+	if cmd, ok := ParseCommand("/bogus"); ok || cmd != nil {
+		t.Errorf("unknown must be ordinary text, got %v %v", cmd, ok)
 	}
 }
 

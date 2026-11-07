@@ -1,48 +1,55 @@
 package terminal
 
 import (
-	"fmt"
 	"strings"
 )
 
-// Commands (P2-045, Section 7.3): bounded inline flows, no fullscreen dialogs.
-// The shared metadata drives parsing, help, and slash completion.
+// AppName is the product name psi shows in place of Pi's APP_NAME.
+const AppName = "psi"
 
+// Command is one parsed slash command.
 type Command struct {
 	Name string
 	Arg  string
 }
 
+// CommandSpec mirrors one of Pi's builtin slash commands. The name, the
+// description, and the argument hint come from Pi's BUILTIN_SLASH_COMMANDS.
 type CommandSpec struct {
 	Name        string
-	Syntax      string
 	Description string
+	// ArgumentHint is Pi's argumentHint. It stays empty for the commands Pi
+	// lists without one.
+	ArgumentHint string
 }
 
+// commandSpecs mirrors Pi's BUILTIN_SLASH_COMMANDS for the commands psi
+// implements, in Pi's order, plus the requested embedded extensions
+// (adaptive compaction and the loop). Pi's commands that psi does not
+// implement yet stay absent.
 var commandSpecs = []CommandSpec{
-	{Name: "help", Syntax: "/help", Description: "show commands, keys, limits, examples"},
-	{Name: "new", Syntax: "/new", Description: "new session (keeps scrollback, resets recall)"},
-	{Name: "resume", Syntax: "/resume [filter]", Description: "select session (search, arrows, Enter, Esc)"},
-	{Name: "model", Syntax: "/model [provider/]model", Description: "select or set a session-local model"},
-	{Name: "thinking", Syntax: "/thinking [level]", Description: "select or set thinking level"},
-	{Name: "compact", Syntax: "/compact [focus]", Description: "real cancellable summary with settled outcome"},
-	{Name: "ac", Syntax: "/ac [help|status|command]", Description: "adaptive automatic compaction controls"},
-	{Name: "autocompact", Syntax: "/autocompact [help|status|command]", Description: "alias for /ac"},
-	{Name: "loop", Syntax: "/loop goal|forever|<N> <task>", Description: "repeat work until goal, count, or user stop"},
-	{Name: "loop-stop", Syntax: "/loop-stop", Description: "stop the active loop"},
-	{Name: "session", Syntax: "/session", Description: "identity, workspace, provider/model, thinking, usage"},
-	{Name: "settings", Syntax: "/settings", Description: "change supported settings and save them"},
-	{Name: "version", Syntax: "/version", Description: "release, git commit, toolchain"},
-	{Name: "reload", Syntax: "/reload", Description: "reload theme and terminal display data"},
-	{Name: "history", Syntax: "/history [N|all]", Description: "last N user spans or display full history"},
-	{Name: "name", Syntax: "/name [name]", Description: "set or show the session display name"},
-	{Name: "clone", Syntax: "/clone", Description: "duplicate this session into a new one"},
-	{Name: "hotkeys", Syntax: "/hotkeys", Description: "show keyboard shortcuts"},
-	{Name: "quit", Syntax: "/quit", Description: "settle work, restore terminal"},
+	{Name: "model", Description: "Select model (opens selector UI)", ArgumentHint: "<provider/model>"},
+	{Name: "thinking", Description: "Set thinking level", ArgumentHint: "<level>"},
+	{Name: "name", Description: "Set session display name"},
+	{Name: "session", Description: "Show session info and stats"},
+	{Name: "hotkeys", Description: "Show all keyboard shortcuts"},
+	{Name: "clone", Description: "Duplicate the current session at the current position"},
+	{Name: "new", Description: "Start a new session"},
+	{Name: "compact", Description: "Manually compact the session context"},
+	{Name: "resume", Description: "Resume another session"},
+	{Name: "reload", Description: "Reload keybindings, extensions, skills, prompts, themes, and context files"},
+	{Name: "quit", Description: "Quit " + AppName},
+	// Embedded extensions requested for psi: adaptive compaction and the loop.
+	{Name: "ac", Description: "adaptive automatic compaction controls"},
+	{Name: "autocompact", Description: "alias for /ac"},
+	{Name: "loop", Description: "repeat work until goal, count, or user stop"},
+	{Name: "loop-stop", Description: "stop the active loop"},
 }
 
+// CommandMetadata returns a copy of the command table.
 func CommandMetadata() []CommandSpec { return append([]CommandSpec(nil), commandSpecs...) }
 
+// CommandNames returns the command names in Pi's order.
 func CommandNames() []string {
 	names := make([]string, 0, len(commandSpecs))
 	for _, spec := range commandSpecs {
@@ -51,8 +58,30 @@ func CommandNames() []string {
 	return names
 }
 
-// ParseCommand splits "/name arg". Unknown /commands are distinct from user
-// text per the documented rule: they error instead of sending as a prompt.
+// CommandDescription renders the description Pi's autocomplete shows for a
+// command: the argument hint and the description joined by an em dash.
+func CommandDescription(spec CommandSpec) string {
+	if spec.ArgumentHint == "" {
+		return spec.Description
+	}
+	if spec.Description == "" {
+		return spec.ArgumentHint
+	}
+	return spec.ArgumentHint + " — " + spec.Description
+}
+
+// CommandDescriptions maps every command name to the completion description
+// Pi's autocomplete shows.
+func CommandDescriptions() map[string]string {
+	descriptions := make(map[string]string, len(commandSpecs))
+	for _, spec := range commandSpecs {
+		descriptions["/"+spec.Name] = CommandDescription(spec)
+	}
+	return descriptions
+}
+
+// ParseCommand splits "/name arg". An unknown /command is ordinary user
+// text, like Pi: it is sent to the model as a prompt.
 func ParseCommand(line string) (*Command, bool) {
 	t := strings.TrimSpace(line)
 	if !strings.HasPrefix(t, "/") {
@@ -76,12 +105,27 @@ func ParseCommand(line string) (*Command, bool) {
 	}
 	for _, spec := range commandSpecs {
 		if name == spec.Name {
+			if arg != "" && !CommandTakesArgument(name) {
+				return nil, false
+			}
 			return &Command{Name: name, Arg: arg}, true
 		}
 	}
-	return &Command{Name: "unknown:" + name, Arg: arg}, true
+	return nil, false
 }
 
+// CommandTakesArgument reports whether Pi accepts an argument for the
+// command. Pi matches "/name" and "/name <arg>" only for the commands whose
+// handler reads an argument; every other spelling is ordinary user text.
+func CommandTakesArgument(name string) bool {
+	switch name {
+	case "model", "thinking", "name", "compact", "ac", "autocompact", "loop":
+		return true
+	}
+	return false
+}
+
+// HotkeysText renders the keyboard shortcuts, like Pi's /hotkeys command.
 func HotkeysText() string {
 	return strings.Join([]string{
 		"Keys (fixed, no Kitty required):",
@@ -91,22 +135,4 @@ func HotkeysText() string {
 		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+L select model · Ctrl+T hide/show reasoning · Ctrl+C cancels run (idle: clear draft, empty exits)",
 		"  Ctrl+D delete/exit · paste literal, no submit",
 	}, "\n")
-}
-
-func HelpText() string {
-	lines := []string{"Commands (inline, no fullscreen):"}
-	for _, spec := range commandSpecs {
-		lines = append(lines, fmt.Sprintf("  %-22s %s", spec.Syntax, spec.Description))
-	}
-	lines = append(lines,
-		"  /skill:name [args]   resolve skill, persist reproducible input, show invocation",
-		"",
-		HotkeysText(),
-		"",
-		"Busy input: Enter queues steering; Alt+Enter queues a follow-up; Esc/Ctrl+C cancels and restores queued text.",
-		"Unknown /commands never become prompts; command errors preserve the draft.",
-		"",
-		"Examples:",
-		"  /model anthropic claude-x · /thinking high · /resume api · /history all · /ac status · /loop goal improve tests · /name Refactor auth · /skill:review fix login")
-	return strings.Join(lines, "\n")
 }

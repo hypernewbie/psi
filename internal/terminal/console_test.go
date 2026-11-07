@@ -49,7 +49,7 @@ func TestConsolePresentationAndDeferDraw(t *testing.T) {
 
 	// SetPresentation updates markdown stream and completion items if present
 	c.markdownStream = NewMarkdownStream(80, false)
-	c.completionItems = []string{"/help", "/model"}
+	c.completionItems = []string{"/hotkeys", "/model"}
 	c.completionSelected = 0
 	c.SetPresentation(snap)
 	if !c.markdownStream.noColor {
@@ -204,7 +204,7 @@ func TestConsoleApplicationKeypadSequences(t *testing.T) {
 
 	t.Run("completion navigation with SS3 sequences", func(t *testing.T) {
 		c, _, _ := newTestConsole(80, 24)
-		c.completionItems = []string{"/help", "/model", "/new"}
+		c.completionItems = []string{"/hotkeys", "/model", "/new"}
 		c.completionSelected = 0
 
 		// Down with \x1bOB

@@ -31,10 +31,10 @@ func TestActualAppShowsProviderBackoffBeforeRetry(t *testing.T) {
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--no-session")
 	q.prompt()
 	q.write("retry status\r")
-	q.wait("Retrying 1/3")
+	q.wait("Retrying (1/3)")
 	q.wait("RETRY_SETTLED")
 	q.prompt()
-	if calls.Load() != 2 || !strings.Contains(q.raw.String(), "Retrying 1/3") {
+	if calls.Load() != 2 || !strings.Contains(q.raw.String(), "Retrying (1/3)") {
 		t.Fatalf("retry status was not routed through the app event loop: calls=%d", calls.Load())
 	}
 	q.write("/quit\r")

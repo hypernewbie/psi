@@ -128,7 +128,7 @@ func TestPlan4PiCompletionFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fixture.Reference, "d5b3de22d0e24a3e9c38a9410d3329b099717283") {
+	if !strings.Contains(fixture.Reference, "BUILTIN_SLASH_COMMANDS") {
 		t.Fatal("completion fixture must identify the pinned Pi reference")
 	}
 	if len(fixture.SourceComponent) == 0 || len(fixture.Omissions) == 0 {
@@ -136,13 +136,7 @@ func TestPlan4PiCompletionFixture(t *testing.T) {
 	}
 	c := &Console{Editor: NewEditor(), Out: &strings.Builder{}, writer: NewWriter(&strings.Builder{}), SizeFunc: func() (int, int) { return fixture.Width, 24 }}
 	c.SetPresentation(PresentationSnapshot{NoColor: true})
-	c.CompletionDescriptions = map[string]string{
-		"/help":     "show commands, keys, limits, examples",
-		"/new":      "new session (keeps scrollback, resets recall)",
-		"/resume":   "select session (search, arrows, Enter, Esc)",
-		"/model":    "select or set a session-local model",
-		"/thinking": "select or set thinking level",
-	}
+	c.CompletionDescriptions = CommandDescriptions()
 	if !c.Editor.Insert(fixture.Draft) {
 		t.Fatal("draft insertion failed")
 	}
