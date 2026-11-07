@@ -22,5 +22,7 @@ the last durable state. Session replacement (`/new`, `/resume`) is rejected
 during an unsettled run.
 
 Concurrent writers: two psi processes cannot mutate one session (advisory
-lock + file identity, size, and modification-time checks). Pi does not honor the psi lock; never let Pi and psi write
-one file simultaneously.
+lock + file identity, size, and modification-time checks). A same-size
+external rewrite inside one timestamp tick is caught by a byte-level
+comparison on coarse-grained filesystems. Pi does not honor the psi lock;
+never let Pi and psi write one file simultaneously.

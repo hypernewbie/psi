@@ -16,25 +16,29 @@ import (
 // Store owns mutation of one active session. One goroutine owns mutation;
 // provider/process goroutines report results to that owner (enforced by mutex + settled checks).
 type Store struct {
-	mu               sync.Mutex
-	header           *SessionHeader
-	entries          []*Entry
-	byID             map[string]*Entry
-	leafID           string
-	file             string
-	opened           string
-	dir              string
-	cwd              string
-	persist          bool
-	flushed          bool
-	lock             *sessionLock
-	knownSize        int64
-	knownInfo        os.FileInfo
-	writeErr         error
-	sessionInfoCount int
-	projection       *Projection // last completed context; written incrementally
-	projectionLeaf   string      // leaf that projection represents
-	storage          *storageOps
+	mu                sync.Mutex
+	header            *SessionHeader
+	entries           []*Entry
+	byID              map[string]*Entry
+	leafID            string
+	file              string
+	opened            string
+	dir               string
+	cwd               string
+	persist           bool
+	flushed           bool
+	lock              *sessionLock
+	knownSize         int64
+	knownInfo         os.FileInfo
+	writeErr          error
+	sessionInfoCount  int
+	projection        *Projection // last completed context; written incrementally
+	projectionLeaf    string      // leaf that projection represents
+	storage           *storageOps
+	clockCoarse       bool   // fs timestamps cannot distinguish consecutive writes
+	contentGuard      bool   // verify exact file bytes before each append
+	contentBaseline   []byte // exact file bytes as last written
+	contentGuardLimit int64  // guard stops when the file outgrows this size
 }
 
 // OpenOptions controls Store creation.
@@ -98,6 +102,8 @@ func New(opts OpenOptions) (*Store, error) {
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
+		s.contentGuardLimit = contentGuardLimit
+		s.clockCoarse = probeClockGranularity(dir)
 	}
 	s.rebuildIndex()
 	return s, nil
@@ -172,6 +178,16 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 		return nil, fmt.Errorf("session file changed while reading: %s", path)
 	}
 	s.knownSize = s.knownInfo.Size()
+	if persist {
+		s.contentGuardLimit = contentGuardLimit
+		s.clockCoarse = probeClockGranularity(filepath.Dir(path))
+		if s.clockCoarse && s.knownSize > 0 && s.knownSize <= s.contentGuardLimit {
+			if raw, err := os.ReadFile(path); err == nil && int64(len(raw)) == s.knownSize {
+				s.contentGuard = true
+				s.contentBaseline = raw
+			}
+		}
+	}
 	if err := validateGraph(entries); err != nil {
 		return nil, err
 	}
@@ -735,6 +751,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	e.contentIssue = thin.contentIssue
 	e.deferred = thin.deferred
 	expectedSize := int64(-1)
+	var writtenRecord []byte
 	if s.persist && s.file != "" {
 		if !s.flushed {
 			// First durable message boundary: write header + all entries atomically via O_EXCL.
@@ -779,6 +796,12 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 				f.Close()
 				return fmt.Errorf("session file changed before append: %s", s.file)
 			}
+			if s.contentGuard {
+				if err := s.guardVerify(f); err != nil {
+					f.Close()
+					return err
+				}
+			}
 			record := append(append([]byte(nil), data...), '\n')
 			if s.knownSize > 0 {
 				var last [1]byte
@@ -790,6 +813,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 					record = append([]byte{'\n'}, record...)
 				}
 			}
+			writtenRecord = record
 			expectedSize = s.knownSize + int64(len(record))
 			if err := writeDurable(f, record); err != nil {
 				return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
@@ -815,6 +839,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	if st != nil {
 		s.knownSize, s.knownInfo = st.Size(), st
 	}
+	s.guardExtend(writtenRecord)
 	s.cacheProjectionAppendLocked(e, oldLeaf)
 	return nil
 }
@@ -849,6 +874,7 @@ func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
 	if err := writeDurable(f, buf); err != nil {
 		return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
 	}
+	s.guardBegin(buf)
 	// A synced new file also needs a durable directory entry.
 	return syncSessionDir(filepath.Dir(s.file))
 }
