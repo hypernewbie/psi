@@ -2,9 +2,12 @@ package session
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,29 +19,26 @@ import (
 // Store owns mutation of one active session. One goroutine owns mutation;
 // provider/process goroutines report results to that owner (enforced by mutex + settled checks).
 type Store struct {
-	mu                sync.Mutex
-	header            *SessionHeader
-	entries           []*Entry
-	byID              map[string]*Entry
-	leafID            string
-	file              string
-	opened            string
-	dir               string
-	cwd               string
-	persist           bool
-	flushed           bool
-	lock              *sessionLock
-	knownSize         int64
-	knownInfo         os.FileInfo
-	writeErr          error
-	sessionInfoCount  int
-	projection        *Projection // last completed context; written incrementally
-	projectionLeaf    string      // leaf that projection represents
-	storage           *storageOps
-	clockCoarse       bool   // fs timestamps cannot distinguish consecutive writes
-	contentGuard      bool   // verify exact file bytes before each append
-	contentBaseline   []byte // exact file bytes as last written
-	contentGuardLimit int64  // guard stops when the file outgrows this size
+	mu               sync.Mutex
+	header           *SessionHeader
+	entries          []*Entry
+	byID             map[string]*Entry
+	leafID           string
+	file             string
+	opened           string
+	dir              string
+	cwd              string
+	persist          bool
+	flushed          bool
+	lock             *sessionLock
+	knownSize        int64
+	knownInfo        os.FileInfo
+	writeErr         error
+	sessionInfoCount int
+	projection       *Projection // last completed context; written incrementally
+	projectionLeaf   string      // leaf that projection represents
+	storage          *storageOps
+	contentHash      hash.Hash // hash of the loaded and successfully appended bytes
 }
 
 // OpenOptions controls Store creation.
@@ -102,8 +102,6 @@ func New(opts OpenOptions) (*Store, error) {
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
-		s.contentGuardLimit = contentGuardLimit
-		s.clockCoarse = probeClockGranularity(dir)
 	}
 	s.rebuildIndex()
 	return s, nil
@@ -136,7 +134,25 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	}
 	// Pi loads the whole session once at open (loadEntriesFromFile) and serves
 	// every later read from memory. Do the same: full payloads, single pass.
-	header, entries, err := loadFileEntries(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	openedInfo, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(before, openedInfo) {
+		f.Close()
+		return nil, fmt.Errorf("session file changed while opening: %s", path)
+	}
+	contentHash := sha256.New()
+	header, entries, err := loadFileEntriesFrom(io.TeeReader(f, contentHash), path)
+	closeErr := f.Close()
+	if err == nil && closeErr != nil {
+		err = closeErr
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -179,14 +195,7 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	}
 	s.knownSize = s.knownInfo.Size()
 	if persist {
-		s.contentGuardLimit = contentGuardLimit
-		s.clockCoarse = probeClockGranularity(filepath.Dir(path))
-		if s.clockCoarse && s.knownSize > 0 && s.knownSize <= s.contentGuardLimit {
-			if raw, err := os.ReadFile(path); err == nil && int64(len(raw)) == s.knownSize {
-				s.contentGuard = true
-				s.contentBaseline = raw
-			}
-		}
+		s.contentHash = contentHash
 	}
 	if err := validateGraph(entries); err != nil {
 		return nil, err
@@ -796,11 +805,9 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 				f.Close()
 				return fmt.Errorf("session file changed before append: %s", s.file)
 			}
-			if s.contentGuard {
-				if err := s.guardVerify(f); err != nil {
-					f.Close()
-					return err
-				}
+			if err := s.guardVerify(f); err != nil {
+				f.Close()
+				return err
 			}
 			record := append(append([]byte(nil), data...), '\n')
 			if s.knownSize > 0 {
@@ -839,7 +846,9 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	if st != nil {
 		s.knownSize, s.knownInfo = st.Size(), st
 	}
-	s.guardExtend(writtenRecord)
+	if s.contentHash != nil && len(writtenRecord) > 0 {
+		_, _ = s.contentHash.Write(writtenRecord)
+	}
 	s.cacheProjectionAppendLocked(e, oldLeaf)
 	return nil
 }
@@ -874,7 +883,8 @@ func (s *Store) rewriteFileWith(extra *Entry, extraData []byte) error {
 	if err := writeDurable(f, buf); err != nil {
 		return fmt.Errorf("append failed (stopping further model/tool actions): %w", err)
 	}
-	s.guardBegin(buf)
+	s.contentHash = sha256.New()
+	_, _ = s.contentHash.Write(buf)
 	// A synced new file also needs a durable directory entry.
 	return syncSessionDir(filepath.Dir(s.file))
 }

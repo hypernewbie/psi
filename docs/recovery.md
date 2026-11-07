@@ -23,6 +23,8 @@ during an unsettled run.
 
 Concurrent writers: two psi processes cannot mutate one session (advisory
 lock + file identity, size, and modification-time checks). A same-size
-external rewrite inside one timestamp tick is caught by a byte-level
-comparison on coarse-grained filesystems. Pi does not honor the psi lock;
+external rewrite before verification is detected by a content hash, even if
+the modification time is unchanged. This requires reading the whole session
+before each append and cannot prevent a concurrent rewrite after verification.
+Pi does not honor the psi lock;
 never let Pi and psi write one file simultaneously.
