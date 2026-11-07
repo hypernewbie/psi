@@ -45,6 +45,36 @@ func EstimatedContext(proj *session.Projection, cfg Config) int {
 	return n
 }
 
+// FooterContext mirrors Pi's estimateContextTokens: the newest provider-reported
+// usage plus an estimate of the messages appended after that response. Without
+// usage it falls back to EstimatedContext. usageEntryID names the assistant
+// entry that reported usageTokens; an id missing from the projection keeps the
+// provider value alone.
+func FooterContext(proj *session.Projection, cfg Config, usageTokens int, usageEntryID string, hasUsage bool) int {
+	if !hasUsage {
+		return EstimatedContext(proj, cfg)
+	}
+	if proj == nil || usageEntryID == "" {
+		return usageTokens
+	}
+	for i := len(proj.Entries) - 1; i >= 0; i-- {
+		if proj.Entries[i].ID() != usageEntryID {
+			continue
+		}
+		var trailing []session.AgentMessage
+		for _, msgs := range proj.Messages[i+1:] {
+			trailing = append(trailing, msgs...)
+		}
+		for _, m := range session.ConvertToLLM(trailing) {
+			if m.Role != "system" {
+				usageTokens += messageTokens(m)
+			}
+		}
+		break
+	}
+	return usageTokens
+}
+
 func messageTokens(m session.AgentMessage) int {
 	n := 0
 	switch m.Role {
@@ -521,6 +551,9 @@ func Compact(ctx context.Context, store *session.Store, summary string, firstKep
 	if err != nil {
 		return "", err
 	}
+	// Warm the post-compaction projection so the footer redraw immediately
+	// reflects the compacted context before the next assistant response.
+	_, _ = store.Projection()
 	return id, nil
 }
 

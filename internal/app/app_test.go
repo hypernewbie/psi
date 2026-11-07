@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,11 +15,13 @@ import (
 	"reflect"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
 
+	"psi/internal/agent"
 	"psi/internal/config"
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
@@ -875,5 +878,210 @@ func TestFooterThinkingLabelFollowsPi(t *testing.T) {
 	}
 	if got := footerThinkingLabel(provider.ModelMeta{ID: "m", Reasoning: true}, ""); got != "thinking off" {
 		t.Fatalf("unset thinking level is not spelled out: %q", got)
+	}
+}
+
+func TestFooterContextTracksProviderUsageAcrossProjectionCacheAndCompaction(t *testing.T) {
+	r := testRuntime(t)
+	r.cfg.Model.ContextWindow = 100000
+	r.cfg.AutoCompact = false
+	r.cfg.KeepRecentTokens = 20
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+
+	fake := &provider.Fake{Responses: []*provider.Response{
+		{Text: strings.Repeat("first answer ", 20), Usage: provider.Usage{Input: 16000, Output: 600, TotalTokens: 16600}},
+		{Text: strings.Repeat("second answer ", 20), Usage: provider.Usage{Input: 41000, Output: 1000, TotalTokens: 42000}},
+		{Text: "third answer", Usage: provider.Usage{Input: 64000, Output: 1000, TotalTokens: 65000}},
+		{Text: "compacted conversation summary", Usage: provider.Usage{Input: 5000, Output: 500, TotalTokens: 5500}},
+		{Text: "post-compaction answer", Usage: provider.Usage{Input: 12000, Output: 500, TotalTokens: 12500}},
+	}}
+	r.prov = fake
+	loop := agent.New(r.store, r.reg, fake, nil)
+
+	if err := loop.Submit(context.Background(), "first question with enough text", r.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if r.store.ProjectionIfCached() == nil {
+		t.Fatal("expected Submit to cache the session projection")
+	}
+	r.refreshPresentation(console)
+	if got := r.footerSnapshot.ContextPercentLabel; got != "16.6%" {
+		t.Fatalf("turn 1 percent label = %q; want 16.6%% (provider usage must not be replaced by character estimate when projection is cached)", got)
+	}
+
+	if err := loop.Submit(context.Background(), "second question with enough text", r.cfg); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if got := r.footerSnapshot.ContextPercentLabel; got != "42.0%" {
+		t.Fatalf("turn 2 percent label = %q; want 42.0%%", got)
+	}
+
+	// Reopening the session starts with an uncached projection; both states
+	// must agree on the provider-reported context usage.
+	r.store.Unlock()
+	reopened, err := session.OpenFile(r.store.File(), r.store.Cwd(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.TryLock(); err != nil {
+		t.Fatal(err)
+	}
+	r.store = reopened
+	r.footerKey = ""
+	r.refreshPresentation(console)
+	if got := r.footerSnapshot.ContextPercentLabel; got != "42.0%" {
+		t.Fatalf("reopened percent label = %q; want 42.0%%", got)
+	}
+
+	loop = agent.New(r.store, r.reg, fake, nil)
+	if err := loop.Submit(context.Background(), strings.Repeat("third question ", 10), r.cfg); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if got := r.footerSnapshot.ContextPercentLabel; got != "65.0%" {
+		t.Fatalf("turn 3 after reopen percent label = %q; want 65.0%%", got)
+	}
+
+	// Compaction invalidates pre-compaction usage and warms the post-compaction
+	// projection so the footer immediately shows the compacted estimate.
+	if err := loop.Compact(context.Background(), r.cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if r.footerSnapshot.ContextPercentLabel == "" || r.footerSnapshot.ContextPercent >= 65.0 {
+		t.Fatalf("after compaction: label=%q percent=%v; want non-empty compacted estimate below 65%%", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextPercent)
+	}
+
+	if err := loop.Submit(context.Background(), "post-compaction question", r.cfg); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshPresentation(console)
+	if got := r.footerSnapshot.ContextPercentLabel; got != "12.5%" {
+		t.Fatalf("post-compaction turn percent label = %q; want 12.5%%", got)
+	}
+}
+
+type gatedToolProvider struct {
+	mu            sync.Mutex
+	calls         int
+	toolStarted   chan struct{}
+	releaseSecond chan struct{}
+}
+
+func (p *gatedToolProvider) Send(ctx context.Context, _ provider.Request, _ func(provider.Delta)) (*provider.Response, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call == 1 {
+		return &provider.Response{
+			StopReason: "toolUse",
+			Usage:      provider.Usage{Input: 41000, Output: 1000, TotalTokens: 42000},
+			ToolCalls: []provider.Block{{
+				Type:      "toolCall",
+				ID:        "call-1",
+				Name:      "read",
+				Arguments: map[string]any{"path": "note.txt"},
+			}},
+		}, nil
+	}
+	close(p.toolStarted)
+	select {
+	case <-p.releaseSecond:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &provider.Response{
+		Text:       "done",
+		StopReason: "stop",
+		Usage:      provider.Usage{Input: 50000, Output: 1000, TotalTokens: 51000},
+	}, nil
+}
+
+func (*gatedToolProvider) CloseIdle() {}
+
+type notifyingBuffer struct {
+	mu     sync.Mutex
+	b      strings.Builder
+	notify chan struct{}
+}
+
+func (b *notifyingBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	n, err := b.b.Write(p)
+	b.mu.Unlock()
+	select {
+	case b.notify <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+func (b *notifyingBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+func TestReplUpdatesFooterContextDuringToolLoop(t *testing.T) {
+	r := testRuntime(t)
+	r.authErr = nil
+	r.cfg.Model.ContextWindow = 100000
+	if err := os.WriteFile(filepath.Join(r.store.Cwd(), "note.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prov := &gatedToolProvider{
+		toolStarted:   make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+	r.prov = prov
+	input, inputWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &notifyingBuffer{notify: make(chan struct{}, 1)}
+	console := terminal.NewConsole(input, out)
+	console.SizeFunc = func() (int, int) { return 80, 24 }
+	if !console.Editor.Insert("run tool") {
+		t.Fatal("could not install draft")
+	}
+	defer func() {
+		_ = inputWrite.Close()
+		console.Close()
+		_ = input.Close()
+	}()
+
+	result := make(chan error, 1)
+	go func() { result <- r.repl(console) }()
+	for !strings.Contains(out.String(), "(anthropic) m") {
+		<-out.notify
+	}
+	if _, err := inputWrite.Write([]byte("\r")); err != nil {
+		t.Fatal(err)
+	}
+	<-prov.toolStarted
+	for !strings.Contains(out.String(), "~42.0% / 100k") {
+		<-out.notify
+	}
+	if got := console.GetPresentation().ContextPercentLabel; got != "42.0%" {
+		t.Fatalf("mid-run footer percent label = %q; want 42.0%% after first tool-call turn", got)
+	}
+	close(prov.releaseSecond)
+	for !strings.Contains(out.String(), "~51.0% / 100k") {
+		<-out.notify
+	}
+	if err := inputWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("repl failed: %v", err)
 	}
 }

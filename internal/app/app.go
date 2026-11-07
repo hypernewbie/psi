@@ -1135,10 +1135,13 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		r.contextTokens, r.contextWindow = 0, 0
 		if r.cfg.Model.ContextWindow > 0 {
 			estimated, hasEstimate := 0, false
-			if projection != nil {
-				estimated, hasEstimate = agent.EstimatedContext(projection, r.cfg), true
-			} else if tokens, ok := r.store.LastContextTokens(); ok {
-				estimated, hasEstimate = tokens, true
+			// Pi's footer anchors on the newest provider-reported usage and
+			// estimates only the messages after it. A cached projection alone
+			// must not switch the source to a character estimate, or the value
+			// jumps between the two whenever the cache is built or dropped.
+			usage, usageID, hasUsage := r.store.LastContextUsage()
+			if hasUsage || projection != nil {
+				estimated, hasEstimate = agent.FooterContext(projection, r.cfg, usage, usageID, hasUsage), true
 			} else if r.store.EntryCount() == 0 {
 				// Fresh session: retain the system/tool baseline without decoding.
 				estimated, hasEstimate = agent.EstimatedContext(&session.Projection{}, r.cfg), true
@@ -1627,6 +1630,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 	applyEvent := func(ev event.Event) {
 		if ev.Generation != 0 && ev.Generation != r.generation {
 			return
+		}
+		// A run can span many tool calls and a mid-run compaction. Each of
+		// these events follows a session append, so rebuild the footer before
+		// the event's own redraw; otherwise the context estimate stays frozen
+		// at its value from the last idle redraw. Deltas append nothing.
+		if ev.Type != event.TextDelta && ev.Type != event.ThinkingDelta {
+			r.refreshPresentation(console)
 		}
 		switch ev.Type {
 		case event.AssistantStart:

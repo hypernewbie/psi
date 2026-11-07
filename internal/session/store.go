@@ -360,11 +360,18 @@ func (s *Store) ModelState() (ModelState, error) {
 // A latest-wins null context edit removes its target from the projected context,
 // so dropped assistant usage must not leak into the footer estimate.
 func (s *Store) LastContextTokens() (int, bool) {
+	tokens, _, ok := s.LastContextUsage()
+	return tokens, ok
+}
+
+// LastContextUsage is LastContextTokens plus the id of the assistant entry
+// that reported the usage, so callers can estimate the messages after it.
+func (s *Store) LastContextUsage() (int, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path, err := s.pathLocked()
 	if err != nil {
-		return 0, false
+		return 0, "", false
 	}
 	dropped := map[string]bool{}
 	latestCompaction := -1
@@ -390,10 +397,10 @@ func (s *Store) LastContextTokens() (int, bool) {
 			continue
 		}
 		if tokens := ContextTokens(a.Usage); tokens > 0 {
-			return tokens, true
+			return tokens, e.ID(), true
 		}
 	}
-	return 0, false
+	return 0, "", false
 }
 
 // AppendMessage appends a message as a child of the leaf.

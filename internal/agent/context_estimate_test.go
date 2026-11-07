@@ -201,3 +201,48 @@ func TestShouldCompactBoundariesAndOverflow(t *testing.T) {
 		t.Fatal("large numbers ShouldCompact failed")
 	}
 }
+
+func TestFooterContextAnchorsOnProviderUsageAndAddsTrailingMessages(t *testing.T) {
+	store, err := session.New(session.OpenOptions{Cwd: "/tmp/ws", Persist: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "first"}}); err != nil {
+		t.Fatal(err)
+	}
+	assistantID, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", StopReason: "stop", Usage: session.Usage{TotalTokens: 16600},
+		Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "answer"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{System: strings.Repeat("s", 3000)}
+	if got := FooterContext(proj, cfg, 16600, assistantID, true); got != 16600 {
+		t.Fatalf("FooterContext at assistant message = %d; want 16600", got)
+	}
+	if got := FooterContext(nil, cfg, 16600, assistantID, true); got != 16600 {
+		t.Fatalf("FooterContext with nil projection = %d; want 16600", got)
+	}
+
+	trailingText := strings.Repeat("u", 400)
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: trailingText}}); err != nil {
+		t.Fatal(err)
+	}
+	proj, err = store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTrailing := 16600 + len(trailingText)/4 + 10
+	if got := FooterContext(proj, cfg, 16600, assistantID, true); got != wantTrailing {
+		t.Fatalf("FooterContext with trailing user message = %d; want %d", got, wantTrailing)
+	}
+
+	if got, want := FooterContext(proj, cfg, 0, "", false), EstimatedContext(proj, cfg); got != want {
+		t.Fatalf("FooterContext without usage = %d; want EstimatedContext %d", got, want)
+	}
+}
