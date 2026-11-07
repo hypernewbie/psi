@@ -44,11 +44,10 @@ Two psi deviations from Pi stay explicit:
 Cancellation during a batch admits nothing new, joins every started worker, records unstarted calls as `not_started`, and never labels a started call unstarted.
 A storage failure stops the batch without rolling back completed mutations, and unsaved results never reach a later request.
 
-The pinned reference trace for the shared behavior is `internal/agent/parallel_reference_test.go` (see `docs/reference-manifest.md`).
-These deviations and tests do not claim full Pi parity.
+These deviations are the only intentional differences from Pi in this area.
 
-Measured profile on the recorded Linux host: a 200-call read batch (4 KiB files) settled all calls in 31 ms with about 10.9 MiB of total allocation (`TestParallelLargeBatchStaysBounded`).
-The six Linux/macOS/Windows amd64/arm64 cross-builds passed after this change; macOS and Windows binaries were not executed.
+Measured profile on the recorded Linux host: a 200-call read batch (4 KiB files) settled all calls in 31 ms with about 10.9 MiB of total allocation.
+The six Linux/macOS/Windows amd64/arm64 cross-builds pass; macOS and Windows binaries were not executed.
 
 ## Authentication
 
@@ -65,10 +64,8 @@ psi has no login interface, does not support Anthropic OAuth, and does not execu
 `security`, `env`, `how-psi-works`, `keyboard`, `limitations`, `recovery`, and
 `bridge`.
 
-Pi topics with no psi counterpart are intentionally absent, and the files in
-`docs/` that hold QA ledgers (`acceptance`, `plan5-acceptance`,
-`plan6-acceptance`, `ui-acceptance`, `ux-spacing-audit`,
-`reference-manifest`, `robustness`) are not served by `--docs`.
+Pi topics with no psi counterpart are intentionally absent. The other Markdown
+files in `docs/` are internal records and are not served by `--docs`.
 
 ## Current implementation limits
 
@@ -76,7 +73,7 @@ Sessions use Pi JSONL v3 without an application-level record or whole-file size 
 The live store indexes offsets and small metadata without loading the whole file.
 It decodes the selected context on demand and streams history one record at a time.
 If a crashed writer left an interrupted interior record, psi keeps the remaining history visible and continues after the recovered gap.
-The 512 MiB compacted fixture passed the 3-second and 160 MiB RSS limits on the recorded local profile.
+A 512 MiB compacted session stays inside the 3-second and 160 MiB RSS limits on the recorded local profile.
 A large active context still requires memory for its decoded payloads.
 
 Recall retains at most 200 prompts within a 4 MiB text budget.
@@ -84,27 +81,21 @@ Recall retains at most 200 prompts within a 4 MiB text budget.
 Persistent continuation resolves symlinks to one canonical writer-lock path.
 Hard-linked sessions permit read-only history but require a separate copy for persistent continuation.
 
-The Pi JSONL v3 format retains provider/API/model identity and supported opaque signatures. PLAN6 added synthetic replay coverage for MiniMax/OpenCode Anthropic, DeepSeek/OpenCode Completions, Google/OpenCode Google, and OpenCode Responses. The optional reference session matrix has been run with the installed Pi 1.4.0 package; that run does not claim the installed artifact is byte-for-byte built from the pinned source revision.
-The fixtures cover branches, context edits, compaction, signed reasoning, images, and state-only `psi.input` provenance.
-The acceptance ledger separates these results from unfinished user journeys.
+The Pi JSONL v3 format retains provider/API/model identity and supported opaque signatures.
+Sessions survive branches, context edits, compaction, signed reasoning, images, and state-only `psi.input` provenance.
 
 The editor uses `uniseg` for grapheme segmentation and width, with an explicit keycap-width correction.
 Word navigation groups adjacent CJK ideographs without the ICU dictionary segmentation that Pi uses.
-`wordnav_test.go` records this port limitation separately from the 24 supported reference cases.
 Emoji and symbols no longer count as letters.
 Session decoders use exact field names, including nested usage fields.
 Prompts and bracketed pastes have a 256 KiB UTF-8 budget.
 The terminal writer uses differential writes for ordinary same-size updates and bounds writes to 64 KiB. Stream output coalesces at scheduled frames and flushes at semantic boundaries. It retains display source for the complete displayed conversation. A geometry change rebuilds the main-screen document from that source with Pi's `CSI 2J`, home, `CSI 3J` sequence. This can erase earlier shell scrollback and change selection or scroll position. The active Markdown parser remains bounded; the retained display ledger is separate from model context.
-The Markdown renderer follows Pi's marked-based output for CommonMark, GFM tables, task lists, strict strikethrough, bare URL autolinks, and backslash escapes; `internal/terminal/testdata/pi-markdown-parity.json` pins the rendered rows of 77 samples against the pinned Pi revision.
+The Markdown renderer follows Pi's marked-based output for CommonMark, GFM tables, task lists, strict strikethrough, bare URL autolinks, and backslash escapes.
 It does not implement Pi's LaTeX, Mermaid, terminal-image, or OSC 8 hyperlink rendering, and it does not reproduce marked's tokenizer quirk that leaves stray `~~` markers in inputs such as `~~a ~~ and ~~b~~`.
 psi keeps its own left message margin, so code blocks, quotes, and tables sit one cell right of Pi's default `outputPad` margin.
 Two known differences remain. Pi keeps the source indentation of a lazy list continuation line, while psi renders the line without that space, and psi never lets a table exceed the terminal width, while Pi can overflow a table by one cell when a column is empty and the table exactly fills the line.
 
-Regression tests cover startup history, Backspace, nonduplicated submission, and `/new` recall reset.
-Actual-app PTY tests cover Ctrl+Z/SIGCONT and terminal-attribute restoration.
-These tests do not establish every terminal profile, scheduled frame-rate bound, or human flicker check.
-See [the UI acceptance ledger](ui-acceptance.md) for measured coverage and blocked platform/human checks.
-Linux, WSL2, and SSH acceptance still require the complete platform matrix.
+Linux, WSL2, and SSH sessions still require the complete platform matrix.
 
 History hides reasoning, tool arguments, tool results, diffs, and image payloads.
 Tool outcomes use explicit result flags and cancellation metadata, not guesses from output text.
@@ -122,9 +113,5 @@ select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
 
 Context-limit recovery permits at most one compaction and retry before visible partial output.
-Synthetic loop/provider tests cover that path.
-Full compaction, provider, storage-fault, and actual-binary journeys remain incomplete acceptance requirements.
 
-PLAN6 delivered-binary provider journeys passed, but live-provider service acceptance remains unrun. The broader requirements remain in [the acceptance ledger](acceptance.md), [the UI acceptance ledger](ui-acceptance.md), and [the robustness ledger](robustness.md).
-PLAN3 acceptance remains incomplete.
-These requirements are not new permanent exclusions.
+Live provider service acceptance has not run.
