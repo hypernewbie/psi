@@ -148,6 +148,12 @@ func OpenFile(path, cwd string, persist bool) (*Store, error) {
 	if header == nil {
 		return nil, fmt.Errorf("session file has no valid header; refusing to initialize an explicit existing file: %s", path)
 	}
+	if cwd == "" {
+		cwd = header.Cwd
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+	}
 	if err := checkVersion(header, path); err != nil {
 		return nil, err
 	}

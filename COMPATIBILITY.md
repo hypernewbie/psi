@@ -70,7 +70,7 @@ Additional storage rules:
 Unsupported package/extension declarations never trigger install or code loading.
 Unknown harmless UI prefs need no per-key warning.
 
-`Ctrl+T` toggles thinking-block visibility and persists `hideThinkingBlock` in the user `settings.json`. Other values in the table are configured in JSON. Project `.pi/settings.json` is never written and can still override a user value. Auto-compact is session-only.
+`/settings` changes the supported subset above in place. Persisted values merge into the user `settings.json`; unknown keys, `$schema`, nested siblings, and top-level key order stay. Malformed JSON is refused without writing. Project `.pi/settings.json` is never written and can still override a user value. Auto-compact is session-only. `quietStartup: "header"` loads as on and is written as a boolean only when that row changes. `Ctrl+T` also toggles and persists `hideThinkingBlock`.
 
 ## Native loop and adaptive compaction controls
 

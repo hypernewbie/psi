@@ -804,15 +804,13 @@ func TestEditorHandleKeyAllBindings(t *testing.T) {
 		t.Fatalf("Backspace 8: text=%q", e.Text())
 	}
 
-	// Ctrl+P / Ctrl+N for history
+	// Model cycling belongs to the app; prompt history is not bound to Ctrl+P/N.
 	e.SetHistory([]string{"h1", "h2"})
-	e.HandleKey([]byte{16}, false) // PrevHistory
-	if e.Text() != "h2" {
-		t.Fatalf("Ctrl+P: text=%q want 'h2'", e.Text())
-	}
-	e.HandleKey([]byte{14}, false) // NextHistory -> restores draft
-	if e.Text() != "a\nword" {
-		t.Fatalf("Ctrl+N: text=%q want draft", e.Text())
+	beforeHistoryKeys := e.Text()
+	e.HandleKey([]byte{16}, false)
+	e.HandleKey([]byte{14}, false)
+	if e.Text() != beforeHistoryKeys {
+		t.Fatalf("unbound history keys changed the draft: %q", e.Text())
 	}
 
 	// Ignored keys: Ctrl+C (3), Ctrl+D (4), Tab (9), Esc (27)

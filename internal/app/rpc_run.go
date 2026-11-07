@@ -22,6 +22,10 @@ import (
 // the opened session. Pickers stay with the caller: console and lifecycle are
 // only touched by the interactive resume selector.
 func activateSession(o Options, cwd, agentDir string, st *config.Settings, consent bool, console *terminal.Console, lifecycle *terminalLifecycle) (models *config.ModelsFile, sk []skills.Skill, diagnostics []skills.Diagnostic, prompt string, sections []config.PromptSection, ov config.StartupOverrides, store *session.Store, err error) {
+	return activateSessionWithStore(o, cwd, agentDir, st, consent, console, lifecycle, nil)
+}
+
+func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settings, consent bool, console *terminal.Console, lifecycle *terminalLifecycle, prepared *session.Store) (models *config.ModelsFile, sk []skills.Skill, diagnostics []skills.Diagnostic, prompt string, sections []config.PromptSection, ov config.StartupOverrides, store *session.Store, err error) {
 	if o.NoTools {
 		st.DefaultTools = []string{}
 	} else {
@@ -73,7 +77,11 @@ func activateSession(o Options, cwd, agentDir string, st *config.Settings, conse
 		}
 	}
 	ov = config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", *st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
-	store, err = openSession(o, cwd, agentDir, *st, ov, console, lifecycle)
+	if prepared != nil {
+		store = prepared
+	} else {
+		store, err = openSession(o, cwd, agentDir, *st, ov, console, lifecycle)
+	}
 	if err != nil {
 		return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 	}
@@ -96,11 +104,25 @@ func runRPC(o Options, version string) error {
 	}
 	agentDir := session.AgentDir()
 	userPath := filepath.Join(agentDir, "settings.json")
-	projectPath := filepath.Join(cwd, ".pi", "settings.json")
 	userSettings, err := config.LoadSettings(userPath, "", false)
 	if err != nil {
 		return err
 	}
+	var preparedStore *session.Store
+	if o.SessionPath != "" {
+		if info, statErr := os.Stat(o.SessionPath); statErr == nil && info.Mode().IsRegular() {
+			preparedStore, err = session.OpenFile(o.SessionPath, "", !o.NoSession)
+			if err != nil {
+				return err
+			}
+			info, statErr = os.Stat(preparedStore.Cwd())
+			if statErr != nil || !info.IsDir() {
+				return fmt.Errorf("Stored session working directory does not exist: %s\nSession file: %s\nCurrent working directory: %s", preparedStore.Cwd(), preparedStore.File(), cwd)
+			}
+			cwd = preparedStore.Cwd()
+		}
+	}
+	projectPath := filepath.Join(cwd, ".pi", "settings.json")
 	// Headless trust follows pi: an explicit override wins, then the stored
 	// decision, then the global defaultProjectTrust setting. There is no UI,
 	// so an undecided folder stays untrusted.
@@ -115,7 +137,7 @@ func runRPC(o Options, version string) error {
 		}
 	}
 	st := loaded.Settings
-	models, sk, _, prompt, sections, _, store, err := activateSession(o, cwd, agentDir, &st, consent, nil, nil)
+	models, sk, _, prompt, sections, _, store, err := activateSessionWithStore(o, cwd, agentDir, &st, consent, nil, nil, preparedStore)
 	if err != nil {
 		return err
 	}

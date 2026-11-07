@@ -232,7 +232,7 @@ func TestConsoleApplicationKeypadSequences(t *testing.T) {
 		}
 	})
 
-	t.Run("editor visual row and history movement with SS3 sequences", func(t *testing.T) {
+	t.Run("editor visual row movement with SS3 sequences", func(t *testing.T) {
 		c, _, _ := newTestConsole(80, 24)
 
 		// Multi-line editor visual movement
@@ -249,24 +249,13 @@ func TestConsoleApplicationKeypadSequences(t *testing.T) {
 			t.Fatalf("expected cursor in line 2, pos=%d", c.Editor.Pos())
 		}
 
-		// History movement
+		// At an outer row, Up/Down do not recall old prompts.
 		c.Editor.Clear()
 		c.Editor.SetHistory([]string{"hist1", "hist2"})
 		c.Handle(Input{Key: []byte("\x1bOA")}, false)
-		if c.Editor.Text() != "hist2" {
-			t.Fatalf("expected hist2, got %q", c.Editor.Text())
-		}
-		c.Handle(Input{Key: []byte("\x1bOA")}, false)
-		if c.Editor.Text() != "hist1" {
-			t.Fatalf("expected hist1, got %q", c.Editor.Text())
-		}
-		c.Handle(Input{Key: []byte("\x1bOB")}, false)
-		if c.Editor.Text() != "hist2" {
-			t.Fatalf("expected hist2, got %q", c.Editor.Text())
-		}
 		c.Handle(Input{Key: []byte("\x1bOB")}, false)
 		if c.Editor.Text() != "" {
-			t.Fatalf("expected empty draft, got %q", c.Editor.Text())
+			t.Fatalf("outer-row navigation recalled prompt history: %q", c.Editor.Text())
 		}
 	})
 }

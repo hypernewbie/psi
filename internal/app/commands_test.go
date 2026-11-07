@@ -18,7 +18,7 @@ import (
 // The command table mirrors Pi's BUILTIN_SLASH_COMMANDS. Unknown commands
 // remain ordinary prompt text.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"model", "thinking", "name", "session", "hotkeys", "clone", "new", "compact", "resume", "reload", "quit", "ac", "autocompact", "loop", "loop-stop"}
+	cmds := []string{"settings", "model", "thinking", "name", "session", "hotkeys", "clone", "trust", "new", "compact", "resume", "reload", "quit", "ac", "autocompact", "loop", "loop-stop"}
 	for _, c := range cmds {
 		if _, ok := terminal.ParseCommand("/" + c); !ok {
 			t.Errorf("parser rejects /%s", c)
@@ -27,7 +27,7 @@ func TestCommandTable(t *testing.T) {
 	// Pi has no /help, /version, or /history command.
 	// Pi commands psi does not implement stay absent; psi keeps its minimal
 	// command set.
-	for _, c := range []string{"help", "version", "history", "trust", "settings", "export", "tree", "fork"} {
+	for _, c := range []string{"help", "version", "history", "export", "tree", "fork"} {
 		if _, ok := terminal.ParseCommand("/" + c); ok {
 			t.Errorf("/%s is not part of psi's command set", c)
 		}
@@ -41,6 +41,9 @@ func TestCommandTable(t *testing.T) {
 	}
 	if cmd, ok := terminal.ParseCommand("/nope"); ok || cmd != nil {
 		t.Errorf("unknown must be ordinary text, got %v %v", cmd, ok)
+	}
+	if _, ok := terminal.ParseCommand("/trust yes"); ok {
+		t.Error("/trust with an argument must be ordinary text")
 	}
 	// Plain text is not a command.
 	if _, ok := terminal.ParseCommand("hello"); ok {

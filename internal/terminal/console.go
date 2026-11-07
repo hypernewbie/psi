@@ -632,7 +632,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		c.complete()
 		return "", false, false, false
 	}
-	// Completion navigation precedes editor visual/history navigation.
+	// Completion navigation precedes editor visual-row navigation.
 	s := string(input.Key)
 	if len(c.completionItems) > 0 && (s == "\x1b[A" || s == "\x1bOA" || s == "\x1b[B" || s == "\x1bOB") {
 		delta := -1
@@ -643,34 +643,15 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 		c.Draw()
 		return "", false, false, false
 	}
-	// Up/Down with real width: visual rows first, history at outer rows (3.4).
+	// Up/Down move through visual rows. Pi does not bind prompt history to
+	// these keys; Ctrl+P is handled by the app as model cycling.
 	w, _ := c.size()
 	if s == "\x1b[A" || s == "\x1bOA" {
-		if c.Editor.MoveUp(w) {
-			c.drawIfChanged(false)
-		} else {
-			c.Editor.PrevHistory()
-			c.recallLimit()
-			c.drawIfChanged(false)
-		}
-		return "", false, false, false
-	} else if s == "\x1b[B" || s == "\x1bOB" {
-		if c.Editor.MoveDown(w) {
-			c.drawIfChanged(false)
-		} else {
-			c.Editor.NextHistory()
-			c.recallLimit()
-			c.drawIfChanged(false)
-		}
-		return "", false, false, false
-	} else if len(input.Key) == 1 && input.Key[0] == 16 { // Ctrl+P
-		c.Editor.PrevHistory()
-		c.recallLimit()
+		c.Editor.MoveUp(w)
 		c.drawIfChanged(false)
 		return "", false, false, false
-	} else if len(input.Key) == 1 && input.Key[0] == 14 { // Ctrl+N
-		c.Editor.NextHistory()
-		c.recallLimit()
+	} else if s == "\x1b[B" || s == "\x1bOB" {
+		c.Editor.MoveDown(w)
 		c.drawIfChanged(false)
 		return "", false, false, false
 	}

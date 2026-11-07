@@ -5,8 +5,8 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Enter` submit outside bracketed paste; pasted newlines are literal, never submit
 - `Ctrl+J` newline (reliable legacy binding)
 - `Left/Right` move by grapheme cluster (uniseg)
-- `Up/Down` first control an active completion or picker; otherwise they move through visual draft rows and browse session prompt history at an outer row
-- `Ctrl+P` / `Ctrl+N` browse history directly
+- `Up/Down` first control an active completion or picker; otherwise they move through visual draft rows
+- `Ctrl+P` cycles to the next available model
 - `Home/End`, `Ctrl+A`/`Ctrl+E` logical line; `Ctrl+Home`/`Ctrl+End` document
 - `Backspace/Delete` one grapheme; `Ctrl+W` previous word; `Ctrl+U`/`Ctrl+K` line
 - `/command` and `/skill:name` completion stays in the editor tail (at most five rows) with Pi's `→` selection pointer; `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
@@ -18,10 +18,12 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
 - On Unix, `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
-- Draft budget 256 KiB UTF-8, never splits grapheme; recalled draft editable, returning past newest restores unfinished draft
+- Draft budget 256 KiB UTF-8, never splits grapheme
 
 Commands (bounded inline completion and searchable editor pickers; no fullscreen):
 
+- `/settings` — change supported live settings; changes apply immediately, persisted values merge into the user `settings.json`, and the picker is unavailable during a run
+- `/trust` — save a project trust decision for future sessions; restart psi for the decision to take effect
 - `/model [provider/model]` — open the model picker or set a model directly
 - `/thinking [level]` — open the supported-level picker or set a level directly
 - `/name [name]` — show or set the session display name

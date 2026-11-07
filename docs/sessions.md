@@ -10,8 +10,7 @@ Default location: `<agentDir>/sessions/--<workspace path>--/<session_id>.jsonl`,
 with `/`, `\`, and `:` replaced by `-`. The agent directory is
 `$HOME/.pi/agent` unless `PI_CODING_AGENT_DIR` or `PSI_CODING_AGENT_DIR` changes
 it. New sessions, `/new`, and `/clone` use the canonical name immediately. The
-file itself is created on the first user or assistant message; setup entries
-alone do not create it.
+file itself is created when the first session entry is written.
 
 A session saved under an older timestamp-based name moves to its canonical
 name when a persisted session is activated. The move holds both the old and
@@ -57,10 +56,11 @@ psi --session <path> --name "release prep"
 moves by page, `Enter` opens, `Esc` cancels. Opening the session you are already
 in is a no-op.
 
-`--session` accepts a full path or a unique ID prefix. If the session belongs to
-a different workspace, psi asks before continuing there. `--session-id` uses
-that exact ID in the current workspace: the canonical `<id>.jsonl` file is
-tried first without scanning the directory. A legacy filename is found by one
+`--session` accepts a full path or a unique ID prefix. A file path uses the
+working directory stored in the session. If that directory no longer exists,
+psi asks whether to continue in the current directory. `--session-id` uses that
+exact ID in the current workspace: the canonical `<id>.jsonl` file is tried
+first without scanning the directory. A legacy filename is found by one
 discovery pass only when the canonical file is absent; an existing canonical
 file with a malformed header, a different ID, or a different workspace is an
 error. Otherwise a new session is created with the ID.
@@ -74,7 +74,8 @@ error. Otherwise a new session is created with the ID.
 | `/name [name]` | Set or show the display name |
 | `/session` | Print identity, workspace, model, usage |
 | `/clone` | Copy the current branch into a new file |
-| `/history [N\|all]` | Reprint user prompts; display only |
+| `/settings` | Change supported live settings |
+| `/trust` | Save project trust for future sessions |
 | `/quit` | Settle work and restore the terminal |
 
 `/clone` writes a new file and switches to it, so the original stays untouched.

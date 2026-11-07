@@ -501,11 +501,37 @@ func Run(args []string, version string) error {
 	}
 	agentDir := session.AgentDir()
 	userPath := filepath.Join(agentDir, "settings.json")
-	projectPath := filepath.Join(cwd, ".pi", "settings.json")
 	userSettings, err := config.LoadSettings(userPath, "", false)
 	if err != nil {
 		return err
 	}
+	var preparedStore *session.Store
+	if o.SessionPath != "" {
+		if info, statErr := os.Stat(o.SessionPath); statErr == nil && info.Mode().IsRegular() {
+			preparedStore, err = session.OpenFile(o.SessionPath, "", !o.NoSession)
+			if err != nil {
+				return err
+			}
+			storedCwd := preparedStore.Cwd()
+			info, statErr := os.Stat(storedCwd)
+			if statErr != nil || !info.IsDir() {
+				confirmed, confirmErr := confirmMissingSessionCwd(console, lifecycle, storedCwd, cwd)
+				if confirmErr != nil {
+					return confirmErr
+				}
+				if !confirmed {
+					return nil
+				}
+				preparedStore, err = session.OpenFile(preparedStore.File(), cwd, !o.NoSession)
+				if err != nil {
+					return err
+				}
+			} else {
+				cwd = storedCwd
+			}
+		}
+	}
+	projectPath := filepath.Join(cwd, ".pi", "settings.json")
 	themeMode := pitheme.DetectColorMode(userSettings.Settings.TerminalTrueColor, envMap(), goruntime.GOOS)
 	colorAppearance := pitheme.DetectTerminalAppearance(pitheme.TerminalColors{}, "", os.Getenv("COLORFGBG"))
 	userCatalog := pitheme.LoadCatalog(themeCatalogOptions(userSettings.Settings, o, agentDir, cwd, false, themeMode))
@@ -528,21 +554,12 @@ func Run(args []string, version string) error {
 	themeSetting := selectedThemeSetting(st, o)
 	activeTheme, activeThemeName, themeFallback := resolveThemeSnapshot(themeCatalog, themeSetting, colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: activeTheme, NoColor: noColor, Display: presentationDisplay(st)})
-	models, sk, diagnostics, prompt, sections, _, store, err := activateSession(o, cwd, agentDir, &st, consent, console, lifecycle)
+	models, sk, diagnostics, prompt, sections, _, store, err := activateSessionWithStore(o, cwd, agentDir, &st, consent, console, lifecycle, preparedStore)
 	if errors.Is(err, errStartupCancelled) {
 		return nil
 	}
 	if err != nil {
 		return err
-	}
-	if o.SessionPath != "" && !session.SameDir(store.Header().Cwd, cwd) {
-		confirmed, err := confirmWorkspaceMismatch(console, lifecycle, store.Header().Cwd, cwd)
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			return nil
-		}
 	}
 	if err := store.TryLock(); err != nil {
 		return err
@@ -634,6 +651,7 @@ type runtime struct {
 	bridge                   *pibridge.Client
 	bridgeTried              bool
 	selector                 *Selector
+	settingsPicker           *terminal.SettingsPicker
 	selectorDraft            string
 	selectorCursor           int
 	selectorRestoreOnSuccess bool
@@ -871,13 +889,13 @@ func envMap() map[string]string {
 	return m
 }
 
-func confirmWorkspaceMismatch(console *terminal.Console, lifecycle *terminalLifecycle, sessionCwd, toolCwd string) (bool, error) {
+func confirmMissingSessionCwd(console *terminal.Console, lifecycle *terminalLifecycle, sessionCwd, fallbackCwd string) (bool, error) {
 	picker := &terminal.ChoicePicker{
-		Title:   "Workspace confirmation",
-		Context: "Session workspace: " + sessionCwd + " · tools will use: " + toolCwd,
+		Title:   "Session cwd not found",
+		Context: fmt.Sprintf("cwd from session file does not exist\n%s\n\ncontinue in current cwd\n%s", sessionCwd, fallbackCwd),
 		Options: []terminal.ChoiceOption{
-			{Label: "Run tools in current workspace", Description: "the session's original workspace is not used"},
-			{Label: "Cancel", Description: "do not start this session", Current: true},
+			{Label: "Yes"},
+			{Label: "No", Current: true},
 		},
 		Selected: 1,
 	}
@@ -1336,7 +1354,10 @@ func (r *runtime) draw(console *terminal.Console) {
 	if row, ok := r.liveToolRow(console); ok {
 		console.SetToolRowNoDraw(row)
 	}
-	if r.selector != nil {
+	if r.settingsPicker != nil {
+		width, rows := console.PickerSize()
+		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
+	} else if r.selector != nil {
 		width, rows := console.PickerSize()
 		console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else {
@@ -1462,11 +1483,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.SetThinking(false)
 		cancel()
 	}
-	refreshRecall := func() {
-		if recall, err := r.store.Recall(); err == nil {
-			console.Editor.SetHistory(recall)
-		}
-	}
 	openSelector := func(selector *Selector, draft string, cursor int, query string, restoreOnSuccess bool) {
 		r.selector = selector
 		r.selectorDraft, r.selectorCursor = draft, cursor
@@ -1493,6 +1509,76 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.selectorDraft, r.selectorCursor = "", 0
 		r.draw(console)
 	}
+	openSettings := func() {
+		r.settingsPicker = r.newSettingsPicker()
+		r.state = StateSelecting
+		r.draw(console)
+	}
+	closeSettings := func() {
+		r.settingsPicker = nil
+		console.ClearPickerRows()
+		r.state = StateIdle
+		if r.authErr != nil {
+			r.state = StateOffline
+		}
+		r.draw(console)
+	}
+	openTrust := func() {
+		cwd := r.store.Cwd()
+		trustStore := newProjectTrustStore(r.agentDir)
+		savedDecision, savedPath, hasSavedDecision := trustStore.getEntry(cwd)
+		trustPath := canonicalTrustPath(cwd)
+		savedText := "none"
+		if hasSavedDecision {
+			label := "untrusted"
+			if savedDecision {
+				label = "trusted"
+			}
+			if trustPathsEqual(savedPath, trustPath) {
+				savedText = label + " (" + savedPath + ")"
+			} else {
+				savedText = label + " (inherited from " + savedPath + ")"
+			}
+		}
+		currentText := "untrusted"
+		if r.projectTrusted {
+			currentText = "trusted"
+		}
+		trustOptions := projectTrustOptions(cwd)
+		choices := make([]terminal.ChoiceOption, len(trustOptions))
+		selected := 0
+		for i, option := range trustOptions {
+			current := hasSavedDecision && option.savedPath == savedPath && option.trusted == savedDecision
+			if current {
+				selected = i
+			}
+			choices[i] = terminal.ChoiceOption{Label: option.label, Current: current}
+		}
+		picker := &terminal.ChoicePicker{
+			Title:   "Project trust",
+			Context: fmt.Sprintf("%s\nSaved decision: %s\nCurrent session: %s", cwd, savedText, currentText),
+			Options: choices, Selected: selected,
+		}
+		index, cancelled, err := runChoicePicker(console, r.lifecycle, picker)
+		if err != nil {
+			notice(terminal.NoticeError, err.Error())
+			r.draw(console)
+			return
+		}
+		if !cancelled && index >= 0 && index < len(trustOptions) {
+			option := trustOptions[index]
+			if err := trustStore.setMany(option.updates); err != nil {
+				notice(terminal.NoticeError, err.Error())
+			} else {
+				decision := "untrusted"
+				if option.trusted {
+					decision = "trusted"
+				}
+				printStatusText(out, "Saved trust decision: "+decision+". Restart psi for this to take effect.")
+			}
+		}
+		r.draw(console)
+	}
 	cycleThinking := func() {
 		levels := provider.SupportedThinking(r.cfg.Model)
 		if len(levels) <= 1 {
@@ -1509,7 +1595,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if _, err := r.command(&terminal.Command{Name: "thinking", Arg: next}, out); err != nil {
 			notice(terminal.NoticeError, err.Error())
 		}
-		refreshRecall()
 		r.draw(console)
 	}
 	console.Commands = terminal.CommandNames()
@@ -1584,7 +1669,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// Same projector + replay engine as /resume (P2-036).
 	if act, err := PrepareActivation(r.store); err == nil {
 		replayActivationDocument(emitReplayBlock, act, true, "")
-		console.Editor.SetHistory(act.Recall)
 		r.renderProjectTrustWarningIfNeeded(console)
 		if count := r.store.CompactionCount(); count > 0 {
 			times := "1 time"
@@ -2245,7 +2329,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 				return outputErr
 			}
-			refreshRecall()
 			r.state = StateIdle
 			if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
 				r.state = StateStorageBlocked
@@ -2336,6 +2419,58 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
+			if !busy && r.settingsPicker != nil {
+				if input.Paste {
+					continue
+				}
+				switch string(input.Key) {
+				case "\x1b", "\x03":
+					closeSettings()
+				case "\x1b[A", "\x1bOA":
+					r.settingsPicker.Move(-1)
+					r.draw(console)
+				case "\x1b[B", "\x1bOB":
+					r.settingsPicker.Move(1)
+					r.draw(console)
+				case "\x1b[5~":
+					r.settingsPicker.Page(-1)
+					r.draw(console)
+				case "\x1b[6~":
+					r.settingsPicker.Page(1)
+					r.draw(console)
+				case "\r", " ":
+					item, value, ok := r.settingsPicker.Cycle()
+					if !ok {
+						r.draw(console)
+						continue
+					}
+					path, err := r.applySetting(item.ID, value, console)
+					if err != nil {
+						notice(terminal.NoticeError, err.Error())
+						index := r.settingsPicker.Index
+						r.settingsPicker = r.newSettingsPicker()
+						r.settingsPicker.Index = index
+					} else if path != nil {
+						if err := r.persistSettingsValue(path, value.Value); err != nil {
+							notice(terminal.NoticeError, "Saved for this session only: "+err.Error())
+						}
+					}
+					if err == nil {
+						if item.ID == "theme" || item.ID == "color-mode" {
+							if watch != nil {
+								watch.SetSelected(r.selectedUserThemePath())
+							}
+						}
+						if item.ID == "theme" && r.options.UseTheme != "" {
+							notice(terminal.NoticeInfo, "Stored the default theme; --use-theme keeps the current display.")
+						}
+					}
+					console.RequestFullRedraw()
+					r.footerKey = ""
+					r.draw(console)
+				}
+				continue
+			}
 			if !busy && r.selector != nil {
 				key := string(input.Key)
 				if !input.Paste {
@@ -2408,8 +2543,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 						print("resumed " + r.store.Header().ID)
 						r.generation++
 						replayActivationDocument(emitReplayBlock, act, false, oldID)
-						console.Editor.SetHistory(act.Recall)
-						refreshRecall()
 						closeSelector(false)
 						continue
 					}
@@ -2429,6 +2562,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.selector.SetFilter(query)
 					r.draw(console)
 				}
+				continue
+			}
+			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 16 {
+				status, err := r.cycleModel(1)
+				if err != nil {
+					notice(terminal.NoticeError, err.Error())
+				} else {
+					console.Status(status)
+				}
+				r.draw(console)
 				continue
 			}
 			if !busy && !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
@@ -2474,8 +2617,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !submitted {
 				continue
 			}
-			// Only durable user submissions belong to recall, never commands or selector answers.
-			refreshRecall()
 			if strings.TrimSpace(text) == "" {
 				r.draw(console)
 				continue
@@ -2485,6 +2626,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// can update session-local policy; /ac compact waits for this run
 				// to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
+						notice(terminal.NoticeInfo, "Finish or cancel the run before changing settings.")
+						console.Editor.RestoreDraft(text, len([]rune(text)))
+						console.RefreshCompletion()
+						r.draw(console)
+						continue
+					}
 					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "ac" || cmd.Name == "autocompact") {
 						parts := strings.Fields(cmd.Arg)
 						if len(parts) > 0 && strings.EqualFold(parts[0], "compact") {
@@ -2629,11 +2777,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.draw(console)
 					continue
 				}
+				if cmd.Name == "trust" {
+					openTrust()
+					continue
+				}
+				if cmd.Name == "settings" {
+					if strings.TrimSpace(cmd.Arg) != "" {
+						notice(terminal.NoticeError, "use /settings")
+						r.draw(console)
+						continue
+					}
+					openSettings()
+					continue
+				}
 				quit, err := r.command(cmd, out)
 				if cmd.Name == "reload" && err == nil && watch != nil {
 					watch.SetSelected(r.selectedUserThemePath())
 				}
-				refreshRecall()
 				if err != nil {
 					print("error: " + err.Error())
 				}
@@ -2682,7 +2842,8 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return r.handleHotkeysCommand(cmd.Arg, out)
 	case "session":
 		return r.handleSessionCommand(cmd.Arg, out)
-
+	case "settings":
+		return r.handleSettingsCommand(cmd.Arg, out)
 	case "reload":
 		return r.handleReloadCommand(cmd.Arg, out)
 	case "new":

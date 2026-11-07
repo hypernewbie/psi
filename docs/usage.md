@@ -30,8 +30,6 @@ Tool calls appear as they run, followed by their result. Commands and file
 changes are not approved one by one; review the transcript and the diff.
 
 - `Esc` cancels the current run.
-- `/history [N|all]` reprints the last N user prompts (default 20) or the whole
-  prompt history. It is display-only and never mutates the session.
 - `/session` prints the session file, workspace, provider, model, thinking
   level, and usage counters.
 

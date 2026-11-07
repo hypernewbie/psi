@@ -472,7 +472,7 @@ func reviewSettings(t *testing.T, agentDir, url string) {
 	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-review-key"}}`)
 }
 
-func TestActualResumeScreenBackspaceAndNewSessionRecall(t *testing.T) {
+func TestActualResumeScreenBackspaceAndNewSessionIsEmpty(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	requests := make(chan map[string]any, 4)
@@ -518,7 +518,7 @@ func TestActualResumeScreenBackspaceAndNewSessionRecall(t *testing.T) {
 	q.write("/new\r")
 	q.wait("New session started")
 	q.prompt()
-	q.write("\x10\r/session\r")
+	q.write("/session\r")
 	q.wait("context messages 0")
 	q.prompt()
 	select {

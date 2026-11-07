@@ -114,15 +114,16 @@ func newProjectTrustStore(agentDir string) *projectTrustStore {
 
 // get returns the stored decision for cwd or its nearest ancestor.
 func (s *projectTrustStore) get(cwd string) (bool, bool) {
+	decision, _, ok := s.getEntry(cwd)
+	return decision, ok
+}
+
+func (s *projectTrustStore) getEntry(cwd string) (decision bool, path string, ok bool) {
 	data, err := s.read()
 	if err != nil {
-		return false, false
+		return false, "", false
 	}
-	decision, ok := findNearestTrustEntry(data, cwd)
-	if !ok {
-		return false, false
-	}
-	return decision, true
+	return findNearestTrustEntryWithPath(data, cwd)
 }
 
 // setMany applies the updates and rewrites the trust store.
@@ -251,6 +252,11 @@ func acquireTrustLock(lockPath string) (func(), error) {
 // findNearestTrustEntry returns the decision of the nearest ancestor of cwd
 // that has one. Entries without a decision are skipped.
 func findNearestTrustEntry(data map[string]*bool, cwd string) (bool, bool) {
+	decision, _, ok := findNearestTrustEntryWithPath(data, cwd)
+	return decision, ok
+}
+
+func findNearestTrustEntryWithPath(data map[string]*bool, cwd string) (bool, string, bool) {
 	keys := make([]string, 0, len(data))
 	for key := range data {
 		keys = append(keys, key)
@@ -263,12 +269,12 @@ func findNearestTrustEntry(data map[string]*bool, cwd string) (bool, bool) {
 				continue
 			}
 			if decision := data[key]; decision != nil {
-				return *decision, true
+				return *decision, key, true
 			}
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			return false, false
+			return false, "", false
 		}
 		current = parent
 	}

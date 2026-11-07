@@ -34,7 +34,7 @@ func TestSlashCompletionLivesInFiveRowEditorTail(t *testing.T) {
 		t.Fatalf("Down did not select second completion: %d", c.completionSelected)
 	}
 	c.Handle(Input{Key: []byte{9}}, false)
-	if c.Editor.Text() != "/thinking" || len(c.completionRows) != 0 {
+	if c.Editor.Text() != "/model" || len(c.completionRows) != 0 {
 		t.Fatalf("Tab completion text=%q rows=%q", c.Editor.Text(), c.completionRows)
 	}
 }

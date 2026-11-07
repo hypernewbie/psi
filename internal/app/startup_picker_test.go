@@ -164,7 +164,7 @@ func TestStartupResumeUsesSearchableInlinePicker(t *testing.T) {
 	q.finish()
 }
 
-func TestWorkspaceMismatchConfirmationDefaultsToCancelAndRestoresTerminal(t *testing.T) {
+func TestExplicitSessionUsesStoredWorkspaceCwd(t *testing.T) {
 	home, work, other := t.TempDir(), t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	reviewSettings(t, agentDir, "http://127.0.0.1:1")
@@ -172,15 +172,52 @@ func TestWorkspaceMismatchConfirmationDefaultsToCancelAndRestoresTerminal(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "workspace mismatch fixture"}}); err != nil {
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "workspace fixture"}}); err != nil {
 		t.Fatal(err)
 	}
 	q := startReviewPTY(t, home, work, agentDir, "--session", store.File(), "--deny-project")
-	q.wait("Workspace confirmation")
-	q.write("\r") // the default is Cancel
+	q.prompt()
+	q.write("/session\r")
+	q.wait("cwd " + other)
+	if strings.Contains(q.screen.Text(), "Workspace confirmation") {
+		t.Fatalf("explicit session did not use its stored cwd: %q", q.screen.Text())
+	}
+	q.write("/quit\r")
 	q.finish()
 	if err := store.TryLock(); err != nil {
-		t.Fatalf("startup cancellation leaked the session lock: %v", err)
+		t.Fatalf("session lock leaked after exit: %v", err)
+	}
+	store.Unlock()
+}
+
+func TestMissingSessionCwdOffersCurrentDirectoryFallback(t *testing.T) {
+	home, work, other := t.TempDir(), t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	store, err := session.New(session.OpenOptions{Cwd: other, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("missing cwd fixture")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(other); err != nil {
+		t.Fatal(err)
+	}
+	q := startReviewPTY(t, home, work, agentDir, "--session", store.File(), "--deny-project")
+	q.wait("Session cwd not found")
+	q.write("\x1b[A\r") // Select Yes; No is the default.
+	q.prompt()
+	q.write("/session\r")
+	currentCwd, err := filepath.EvalSymlinks(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.wait("cwd " + currentCwd)
+	q.write("/quit\r")
+	q.finish()
+	if err := store.TryLock(); err != nil {
+		t.Fatalf("session lock leaked after exit: %v", err)
 	}
 	store.Unlock()
 }

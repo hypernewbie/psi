@@ -119,7 +119,7 @@ func TestCommands(t *testing.T) {
 	}
 	// Pi has no /help, /version, or /history command: they are ordinary
 	// user text and get sent to the model as a prompt.
-	for _, c := range []string{"/help", "/version", "/history", "/history all", "/trust"} {
+	for _, c := range []string{"/help", "/version", "/history", "/history all"} {
 		if _, ok := ParseCommand(c); ok {
 			t.Errorf("command %q must be ordinary text, like Pi", c)
 		}

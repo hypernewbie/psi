@@ -18,6 +18,23 @@ import (
 	"psi/internal/session"
 )
 
+func TestActualCtrlPCyclesAvailableModel(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
+	q.prompt()
+	q.write("\x10")
+	q.wait("Switched to")
+	q.write("/session\r")
+	q.wait("requested model")
+	if strings.Contains(q.screen.Text(), "requested model m") {
+		t.Fatalf("Ctrl+P did not change the current model: %q", q.screen.Text())
+	}
+	q.write("/quit\r")
+	q.finish()
+}
+
 func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
@@ -107,10 +124,7 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	q.prompt()
 	q.write("\x03")
 	q.prompt()
-	// Selector answers and slash commands must not replace durable prompt recall.
-	q.write("\x10")
-	q.wait("synthetic recalled prompt")
-	q.write("\x03/quit\r")
+	q.write("/quit\r")
 	q.finish()
 	after, err := os.ReadFile(store.File())
 	if err != nil {

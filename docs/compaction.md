@@ -76,8 +76,8 @@ for the model only; it is not written to the session. See
 ## After compaction
 
 Later requests use the summary, the retained tail, and every entry after the
-compaction record. The transcript still shows the original messages, so
-`/history` and the visible scrollback do not change.
+compaction record. The transcript still shows the original messages, so the
+visible scrollback does not change.
 
 Compaction never rewrites the session format. Pi can read a compacted psi
 session, and psi can read a compacted Pi session, as long as both are session

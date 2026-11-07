@@ -4,11 +4,11 @@
   "width": 80,
   "draft": "/",
   "plainRows": [
-    "→ /model  <provider/model> — Select model (opens selector UI)",
+    "→ /settings  Open settings menu",
+    "  /model  <provider/model> — Select model (opens selector UI)",
     "  /thinking  <level> — Set thinking level",
     "  /name  Set session display name",
-    "  /session  Show session info and stats",
-    "  /hotkeys  Show all keyboard shortcuts"
+    "  /session  Show session info and stats"
   ],
   "sourceComponents": [
     "Pi autocomplete description = argumentHint — description (em dash join)",

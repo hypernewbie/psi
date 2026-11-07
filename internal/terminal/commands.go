@@ -28,12 +28,14 @@ type CommandSpec struct {
 // (adaptive compaction and the loop). Pi's commands that psi does not
 // implement yet stay absent.
 var commandSpecs = []CommandSpec{
+	{Name: "settings", Description: "Open settings menu"},
 	{Name: "model", Description: "Select model (opens selector UI)", ArgumentHint: "<provider/model>"},
 	{Name: "thinking", Description: "Set thinking level", ArgumentHint: "<level>"},
 	{Name: "name", Description: "Set session display name"},
 	{Name: "session", Description: "Show session info and stats"},
 	{Name: "hotkeys", Description: "Show all keyboard shortcuts"},
 	{Name: "clone", Description: "Duplicate the current session at the current position"},
+	{Name: "trust", Description: "Save project trust decision for future sessions"},
 	{Name: "new", Description: "Start a new session"},
 	{Name: "compact", Description: "Manually compact the session context"},
 	{Name: "resume", Description: "Resume another session"},
@@ -129,10 +131,10 @@ func CommandTakesArgument(name string) bool {
 func HotkeysText() string {
 	return strings.Join([]string{
 		"Keys (fixed, no Kitty required):",
-		"  Enter submit · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows (edges browse history)",
-		"  Ctrl+P/N history · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
+		"  Enter submit · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows",
+		"  Ctrl+P cycle model · Ctrl+L select model · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
 		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
-		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+L select model · Ctrl+T hide/show reasoning · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+C cancels run (idle: clear draft, empty exits)",
 		"  Ctrl+D delete/exit · paste literal, no submit",
 	}, "\n")
 }

@@ -709,12 +709,6 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 		case 127, 8:
 			e.Backspace()
 			return "", false
-		case 16:
-			e.PrevHistory()
-			return "", false
-		case 14:
-			e.NextHistory()
-			return "", false
 		case 3, 4:
 			// Clear/exit are handled by Console.
 			return "", false
@@ -738,13 +732,9 @@ func (e *Editor) HandleKey(key []byte, pasteActive bool) (string, bool) {
 	case "\x1b[C", "\x1bOC":
 		e.MoveRight()
 	case "\x1b[A", "\x1bOA":
-		if !e.MoveUp(80) {
-			e.PrevHistory()
-		}
+		e.MoveUp(80)
 	case "\x1b[B", "\x1bOB":
-		if !e.MoveDown(80) {
-			e.NextHistory()
-		}
+		e.MoveDown(80)
 	case "\x1b[H", "\x1b[1~", "\x1bOH", "\x1b[7~":
 		e.Home()
 	case "\x1b[F", "\x1b[4~", "\x1bOF", "\x1b[8~":

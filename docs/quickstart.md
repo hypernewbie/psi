@@ -55,7 +55,7 @@ Psi does not support these Pi options:
 - Extensions, MCP, or prompt templates.
 
 Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/picker selection),
-`Ctrl+P/N` history, five-row slash completion, `Ctrl+L` model picker, `Shift+Tab` thinking cycle,
+`Ctrl+P` model cycling, five-row slash completion, `Ctrl+L` model picker, `Shift+Tab` thinking cycle,
 `Ctrl+T` hide/show reasoning, `Ctrl+C` cancels a picker/run (idle clears, empty exits),
 `Ctrl+D` delete/exit, paste literal, `Escape` dismisses completion or cancels a picker.
 
