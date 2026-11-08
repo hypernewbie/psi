@@ -17,7 +17,7 @@ func TestAdvertisedModelsHaveRequestPathsOrStayOutOfThePicker(t *testing.T) {
 	r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
 	// Give every provider below a credential, so the picker checks the new
 	// filtering rule instead of an empty catalog.
-	families := []string{"minimax", "opencode-go", "deepseek", "zai", "google", "xiaomi", "moonshotai", "qwen-token-plan", "openrouter", "xai", "groq", "mistral"}
+	families := []string{"minimax", "opencode-go", "deepseek", "zai", "google", "xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp", "moonshotai", "qwen-token-plan", "openrouter", "xai", "groq", "mistral"}
 	for _, family := range families {
 		if spec, ok := providerregistry.Lookup(family); ok && spec.Environment != "" {
 			t.Setenv(spec.Environment, "synthetic-"+family+"-key")

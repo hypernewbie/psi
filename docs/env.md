@@ -16,6 +16,9 @@ Each provider has exactly one variable. A stored `auth.json` entry or a
 | `DEEPSEEK_API_KEY` | `deepseek` |
 | `ZAI_API_KEY` | `zai` |
 | `XIAOMI_API_KEY` | `xiaomi` |
+| `XIAOMI_TOKEN_PLAN_CN_API_KEY` | `xiaomi-token-plan-cn` |
+| `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | `xiaomi-token-plan-ams` |
+| `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | `xiaomi-token-plan-sgp` |
 | `MOONSHOT_API_KEY` | `moonshotai` |
 | `KIMI_API_KEY` | `kimi-coding` |
 | `QWEN_TOKEN_PLAN_API_KEY` | `qwen-token-plan` |

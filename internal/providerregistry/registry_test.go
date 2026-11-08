@@ -6,7 +6,7 @@ import (
 )
 
 func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
-	want := []string{"anthropic", "deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "zai"}
+	want := []string{"anthropic", "deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
 	if got := IDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("provider IDs = %v, want %v", got, want)
 	}
@@ -24,6 +24,9 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		{"zai", "openai-completions", "ZAI_API_KEY", "https://api.z.ai/api/coding/paas/v4"},
 		{"google", "google-generative-ai", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"},
 		{"xiaomi", "openai-completions", "XIAOMI_API_KEY", "https://api.xiaomimimo.com/v1"},
+		{"xiaomi-token-plan-cn", "openai-completions", "XIAOMI_TOKEN_PLAN_CN_API_KEY", "https://token-plan-cn.xiaomimimo.com/v1"},
+		{"xiaomi-token-plan-ams", "openai-completions", "XIAOMI_TOKEN_PLAN_AMS_API_KEY", "https://token-plan-ams.xiaomimimo.com/v1"},
+		{"xiaomi-token-plan-sgp", "openai-completions", "XIAOMI_TOKEN_PLAN_SGP_API_KEY", "https://token-plan-sgp.xiaomimimo.com/v1"},
 		{"moonshotai", "openai-completions", "MOONSHOT_API_KEY", "https://api.moonshot.ai/v1"},
 		{"kimi-coding", "openai-completions", "KIMI_API_KEY", "https://api.kimi.com/coding/v1"},
 		{"qwen-token-plan", "openai-completions", "QWEN_TOKEN_PLAN_API_KEY", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
@@ -38,21 +41,24 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		}
 	}
 	wantAPIs := map[string][]string{
-		"anthropic":       {"anthropic-messages"},
-		"openai-codex":    {"openai-codex-responses"},
-		"minimax":         {"anthropic-messages"},
-		"opencode-go":     {"anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"},
-		"deepseek":        {"openai-completions"},
-		"zai":             {"openai-completions"},
-		"google":          {"google-generative-ai"},
-		"xiaomi":          {"openai-completions"},
-		"moonshotai":      {"openai-completions"},
-		"kimi-coding":     {"openai-completions"},
-		"qwen-token-plan": {"openai-completions"},
-		"openrouter":      {"openai-completions"},
-		"xai":             {"openai-responses"},
-		"groq":            {"openai-completions"},
-		"mistral":         {"mistral-conversations"},
+		"anthropic":             {"anthropic-messages"},
+		"openai-codex":          {"openai-codex-responses"},
+		"minimax":               {"anthropic-messages"},
+		"opencode-go":           {"anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"},
+		"deepseek":              {"openai-completions"},
+		"zai":                   {"openai-completions"},
+		"google":                {"google-generative-ai"},
+		"xiaomi":                {"openai-completions"},
+		"xiaomi-token-plan-cn":  {"openai-completions"},
+		"xiaomi-token-plan-ams": {"openai-completions"},
+		"xiaomi-token-plan-sgp": {"openai-completions"},
+		"moonshotai":            {"openai-completions"},
+		"kimi-coding":           {"openai-completions"},
+		"qwen-token-plan":       {"openai-completions"},
+		"openrouter":            {"openai-completions"},
+		"xai":                   {"openai-responses"},
+		"groq":                  {"openai-completions"},
+		"mistral":               {"mistral-conversations"},
 	}
 	for _, providerID := range want {
 		spec, _ := Lookup(providerID)

@@ -103,7 +103,7 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 			})
 		}
 	}
-	if count != 24 {
+	if count != 25 {
 		t.Fatalf("public snapshot model count changed: %d", count)
 	}
 	// The picker lists only providers with a credential, so the catalog paging

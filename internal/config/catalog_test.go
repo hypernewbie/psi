@@ -75,6 +75,34 @@ func TestP6BundledCatalogUsesPiProviderAPIsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestXiaomiTokenPlanRegionalProvidersResolveLikePi(t *testing.T) {
+	mf := &ModelsFile{Providers: map[string]ProviderMeta{}}
+	for providerID, endpoint := range map[string]string{
+		"xiaomi-token-plan-cn":  "https://token-plan-cn.xiaomimimo.com/v1",
+		"xiaomi-token-plan-ams": "https://token-plan-ams.xiaomimimo.com/v1",
+		"xiaomi-token-plan-sgp": "https://token-plan-sgp.xiaomimimo.com/v1",
+	} {
+		m, err := mf.SelectModel(providerID, "")
+		if err != nil {
+			t.Fatalf("%s default model: %v", providerID, err)
+		}
+		if m.ID != "mimo-v2.6-pro" || m.API != "openai-completions" || m.BaseURL != endpoint {
+			t.Fatalf("%s resolved unexpected model: %+v", providerID, m)
+		}
+		format, hasValue, present := m.Compat.String("thinkingFormat")
+		if !present || !hasValue || format != "deepseek" {
+			t.Fatalf("%s lost the Xiaomi thinking format: %q,%t,%t", providerID, format, hasValue, present)
+		}
+	}
+	ids := map[string]bool{}
+	for _, id := range mf.ProviderIDs() {
+		ids[id] = true
+	}
+	if !ids["xiaomi-token-plan-sgp"] {
+		t.Fatalf("token-plan providers missing from the provider set: %v", mf.ProviderIDs())
+	}
+}
+
 func TestModelAPIEndpointAndCompatPrecedence(t *testing.T) {
 	models := &ModelsFile{Providers: map[string]ProviderMeta{
 		"opencode-go": {

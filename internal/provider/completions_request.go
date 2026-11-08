@@ -72,7 +72,7 @@ func resolveCompletionsCompat(model ModelMeta) (completionsCompat, error) {
 		defaultThinking, defaultMaxTokens = "deepseek", "max_tokens"
 	case "zai":
 		defaultThinking, defaultMaxTokens = "zai", "max_tokens"
-	case "opencode-go", "xiaomi", "moonshotai", "kimi-coding", "qwen-token-plan", "openrouter", "groq":
+	case "opencode-go", "xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp", "moonshotai", "kimi-coding", "qwen-token-plan", "openrouter", "groq":
 	default:
 		// A provider declared in models.json uses the generic adapters and
 		// their default compatibility behavior.

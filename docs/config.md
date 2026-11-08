@@ -35,7 +35,7 @@ never change `--docs`; it reads embedded bytes only.
 
 | Area | Keys | Notes |
 |---|---|---|
-| Provider/model | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `moonshotai`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, or `mistral` |
+| Provider/model | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-sgp`, `moonshotai`, `kimi-coding`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, or `mistral` |
 | Reasoning | `defaultThinkingLevel` | off/minimal/low/medium/high/xhigh/max |
 | Sessions | `sessionDir` | CLI > env (`PI_CODING_AGENT_SESSION_DIR`) > settings > default |
 | Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |

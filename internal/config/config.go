@@ -939,7 +939,7 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 			id = "claude-sonnet-4-5"
 		case "openai-codex":
 			id = "gpt-5.6-luna"
-		case "xiaomi":
+		case "xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp":
 			id = "mimo-v2.6-pro"
 		case "moonshotai":
 			id = "kimi-k2.7-code"

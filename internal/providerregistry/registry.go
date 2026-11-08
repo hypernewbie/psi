@@ -65,6 +65,21 @@ var registry = map[string]Spec{
 		Environment: "XIAOMI_API_KEY", DefaultAPI: "openai-completions",
 		Endpoints: map[string]string{"openai-completions": "https://api.xiaomimimo.com/v1"},
 	},
+	"xiaomi-token-plan-cn": {
+		ID: "xiaomi-token-plan-cn", Name: "Xiaomi Token Plan CN", Auth: AuthAPIKey,
+		Environment: "XIAOMI_TOKEN_PLAN_CN_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://token-plan-cn.xiaomimimo.com/v1"},
+	},
+	"xiaomi-token-plan-ams": {
+		ID: "xiaomi-token-plan-ams", Name: "Xiaomi Token Plan AMS", Auth: AuthAPIKey,
+		Environment: "XIAOMI_TOKEN_PLAN_AMS_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://token-plan-ams.xiaomimimo.com/v1"},
+	},
+	"xiaomi-token-plan-sgp": {
+		ID: "xiaomi-token-plan-sgp", Name: "Xiaomi Token Plan SGP", Auth: AuthAPIKey,
+		Environment: "XIAOMI_TOKEN_PLAN_SGP_API_KEY", DefaultAPI: "openai-completions",
+		Endpoints: map[string]string{"openai-completions": "https://token-plan-sgp.xiaomimimo.com/v1"},
+	},
 	"moonshotai": {
 		ID: "moonshotai", Name: "Moonshot AI", Auth: AuthAPIKey,
 		Environment: "MOONSHOT_API_KEY", DefaultAPI: "openai-completions",

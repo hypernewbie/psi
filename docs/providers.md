@@ -1,6 +1,6 @@
 # Providers
 
-psi supports fifteen built-in providers. Each has a fixed protocol list and its
+psi supports eighteen built-in providers. Each has a fixed protocol list and its
 own credential. There is no automatic provider discovery, routing, or virtual
 model layer. `models.json` can add providers of its own; see
 [Custom providers](#custom-providers).
@@ -14,6 +14,9 @@ model layer. `models.json` can add providers of its own; see
 | `deepseek` | DeepSeek | `openai-completions` | `DEEPSEEK_API_KEY` |
 | `zai` | Z.AI | `openai-completions` | `ZAI_API_KEY` |
 | `xiaomi` | Xiaomi MiMo | `openai-completions` | `XIAOMI_API_KEY` |
+| `xiaomi-token-plan-cn` | Xiaomi Token Plan CN | `openai-completions` | `XIAOMI_TOKEN_PLAN_CN_API_KEY` |
+| `xiaomi-token-plan-ams` | Xiaomi Token Plan AMS | `openai-completions` | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` |
+| `xiaomi-token-plan-sgp` | Xiaomi Token Plan SGP | `openai-completions` | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` |
 | `moonshotai` | Moonshot AI | `openai-completions` | `MOONSHOT_API_KEY` |
 | `kimi-coding` | Kimi For Coding | `openai-completions` | `KIMI_API_KEY` |
 | `qwen-token-plan` | Qwen Token Plan | `openai-completions` | `QWEN_TOKEN_PLAN_API_KEY` |
