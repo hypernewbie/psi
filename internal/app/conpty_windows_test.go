@@ -241,7 +241,15 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	waitFor("tool completion", func(text string) bool { return strings.Contains(text, "TOOL_FINISHED") })
 	waitFor("editor after tool", func(_ string) bool { return conptyEditorReady(screen) })
 	write("/model\r")
-	waitFor("model picker", func(_ string) bool { return conptyPickerVisible(screen) })
+	waitFor("model picker", func(text string) bool {
+		return conptyModelPickerReady(text, "local-model") && conptyEditorReady(screen)
+	})
+	// Both local model names remain distinguishable at 20 columns. Other
+	// adjacent catalog names can have identical visible prefixes when clipped.
+	write("local-model")
+	waitFor("filtered model picker", func(text string) bool {
+		return strings.Contains(text, "2 matches") && conptyModelPickerReady(text, "local-model")
+	})
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
 		beforeSelection := conptyPickerSelection(screen)
 		if beforeSelection == "" {
@@ -357,15 +365,7 @@ func conptyPickerVisible(screen *vt.Emulator) bool {
 }
 
 func conptyPickerSelection(screen *vt.Emulator) string {
-	for _, row := range strings.Split(conptyVisibleText(screen), "\n") {
-		if at := strings.Index(row, "→"); at >= 0 {
-			label := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(row[at+len("→"):]), "✓"))
-			if fields := strings.Fields(label); len(fields) > 0 {
-				return fields[0] // Ignore provider metadata and resize clipping.
-			}
-		}
-	}
-	return ""
+	return conptyPickerSelectionText(conptyVisibleText(screen))
 }
 
 // pickerSelectionMatches compares the selected label across a resize. Narrow
@@ -375,7 +375,7 @@ func pickerSelectionMatches(screen *vt.Emulator, want string) bool {
 		return false
 	}
 	sel := conptyPickerSelection(screen)
-	return sel == want || strings.HasPrefix(want, sel) || strings.HasPrefix(sel, want)
+	return sel != "" && (sel == want || strings.HasPrefix(want, sel) || strings.HasPrefix(sel, want))
 }
 
 func pseudoConsoleValue(handle windows.Handle) unsafe.Pointer {
