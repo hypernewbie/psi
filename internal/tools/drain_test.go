@@ -19,6 +19,22 @@ import (
 	"time"
 )
 
+func TestBashTimeoutReportsExitedShellWithInheritedPipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix process-group cleanup")
+	}
+	reg := NewRegistry(t.TempDir())
+	// Hold the idle clock still so the inherited pipe remains open until the
+	// timeout, independent of the host's scheduling of the drain ticker.
+	reg.Bash.now = func() time.Time { return time.Unix(1, 0) }
+	res := reg.Bash.ExecuteCtx(context.Background(), Invocation{Name: Bash, Arguments: map[string]any{
+		"command": "sleep 30 & exit 7", "timeout": 1,
+	}})
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "The shell exited with code 7 after ") || !strings.Contains(res.Content[0].Text, "background processes it started kept writing output until the timeout") {
+		t.Fatalf("missing shell exit in timeout: %+v", res)
+	}
+}
+
 func TestF07ActiveDescendantOutputCompletes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("shell drain timing")

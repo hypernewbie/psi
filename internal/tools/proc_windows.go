@@ -3,6 +3,7 @@
 package tools
 
 import (
+	"os"
 	"os/exec"
 )
 
@@ -10,6 +11,13 @@ import (
 // leader only; descendants outlive the command. Tests that require
 // group cleanup skip on Windows.
 func setNewProcessGroup(cmd *exec.Cmd) {
+}
+
+func shellExitCode(state *os.ProcessState) int {
+	if state == nil {
+		return 1
+	}
+	return state.ExitCode()
 }
 
 func killProcessGroup(cmd *exec.Cmd) {

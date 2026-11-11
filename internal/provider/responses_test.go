@@ -301,6 +301,34 @@ func TestResponsesProviderErrorsAndMalformedStreamsDoNotLeakSecrets(t *testing.T
 	}
 }
 
+func TestResponsesSessionAffinityHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		format, session, client, router string
+	}{
+		{"openai", "session-default", "session-default", ""},
+		{"openai-nosession", "", "session-default", ""},
+		{"openrouter", "", "", "session-default"},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("session-id") != tc.session || r.Header.Get("session_id") != "" || r.Header.Get("x-client-request-id") != tc.client || r.Header.Get("x-session-id") != tc.router {
+					t.Errorf("affinity headers = %#v", r.Header)
+				}
+				_, _ = io.WriteString(w, responsesEvent("response.completed", map[string]any{"response": map[string]any{"id": "r", "status": "completed", "output": []any{}}}))
+			}))
+			defer server.Close()
+			client := NewResponsesClient(server.URL, "key", 0, time.Second)
+			defer client.CloseIdle()
+			client.SessionID = "session-default"
+			model := responsesTestModel("model")
+			model.Compat["sessionAffinityFormat"] = json.RawMessage(fmt.Sprintf("%q", tc.format))
+			if _, err := client.Send(context.Background(), Request{Model: model, Thinking: "off"}, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestResponsesExplicitOpenCodeHeaderWinsCaseInsensitively(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-OpenCode-Session") != "explicit-session" {

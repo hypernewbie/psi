@@ -6,7 +6,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+J` newline (reliable legacy binding)
 - `Left/Right` move by grapheme cluster (uniseg)
 - `Up/Down` first control an active completion or picker; otherwise they move through visual draft rows
-- `Ctrl+P` cycles to the next available model
+- `Ctrl+P` cycles to the next available model; if the current model is no longer available, it selects the first available model
 - `Home/End`, `Ctrl+A`/`Ctrl+E` logical line; `Ctrl+Home`/`Ctrl+End` document
 - `Backspace/Delete` one grapheme; `Ctrl+W` previous word; `Ctrl+U`/`Ctrl+K` line
 - `/command` and `/skill:name` completion stays in the editor tail (at most five rows) with Pi's `→` selection pointer; `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses

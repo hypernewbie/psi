@@ -96,7 +96,7 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 	if c.SessionID != "" {
 		switch compat.sessionAffinityFormat {
 		case "openai":
-			httpReq.Header.Set("session_id", c.SessionID)
+			httpReq.Header.Set("session-id", c.SessionID)
 			httpReq.Header.Set("x-client-request-id", c.SessionID)
 		case "openai-nosession":
 			httpReq.Header.Set("x-client-request-id", c.SessionID)

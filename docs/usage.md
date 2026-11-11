@@ -93,7 +93,9 @@ recent session. See [Sessions](sessions.md).
 
 There is no `!command` prefix. Ask psi to run the command, or use your own
 terminal. The `bash` tool runs in the workspace with the psi process
-environment and returns the last 2000 lines or 50 KiB.
+environment and returns the last 2000 lines or 50 KiB. If a timeout occurs
+after the shell has exited while a background process keeps writing output,
+the timeout message includes the shell's exit code and elapsed time.
 
 ## Adjust the terminal
 

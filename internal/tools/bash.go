@@ -88,6 +88,7 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	cmd.Dir = t.Cwd
 	setNewProcessGroup(cmd)
 	cmd.Stdout, cmd.Stderr = pw, pw
+	startedAt := time.Now()
 	if err := cmd.Start(); err != nil {
 		pr.Close()
 		pw.Close()
@@ -114,9 +115,16 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	}()
 	// Leader exit never implies pipe completion: descendants may still hold
 	// the inherited write ends. Wait for the leader, then drain.
-	waitDone := make(chan error, 1)
-	go func() { waitDone <- cmd.Wait() }()
-	var runErr error
+	type shellExit struct {
+		err error
+		at  time.Time
+	}
+	waitDone := make(chan shellExit, 1)
+	go func() {
+		err := cmd.Wait()
+		waitDone <- shellExit{err: err, at: time.Now()}
+	}()
+	var exited shellExit
 	var timedOut bool
 	killGroup := func() { killProcessGroup(cmd) }
 	drain := func() {
@@ -147,13 +155,13 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 		}
 	}
 	select {
-	case runErr = <-waitDone:
+	case exited = <-waitDone:
 		// Idle grace starts at exit, not at the last pre-exit chunk.
 		capture.touch()
 		drain()
 	case <-runCtx.Done():
 		killGroup()
-		runErr = <-waitDone
+		exited = <-waitDone
 		drain()
 	}
 	timedOut = runCtx.Err() == context.DeadlineExceeded
@@ -191,17 +199,33 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 		return Result{Content: []Block{{Type: "text", Text: "Command cancelled\n" + output}}, IsError: true, Details: details}
 	}
 	if timedOut {
-		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("Command timed out after %v\n%s", timeout, output)}}, IsError: true, Details: details}
+		deadline, _ := runCtx.Deadline()
+		status := bashTimeoutStatus(timeout, startedAt, deadline, exited.at, shellExitCode(cmd.ProcessState))
+		if output != "" {
+			status = output + "\n\n" + status
+		}
+		return Result{Content: []Block{{Type: "text", Text: status}}, IsError: true, Details: details}
 	}
-	if runErr != nil {
-		code := exitCode(runErr)
+	if exited.err != nil {
+		code := exitCode(exited.err)
 		details["exitCode"] = code
-		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("%s\nCommand failed (exit %d): %v", output, code, runErr)}}, IsError: true, Details: details}
+		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("%s\nCommand failed (exit %d): %v", output, code, exited.err)}}, IsError: true, Details: details}
 	}
 	if output == "" {
 		output = "(no output)"
 	}
 	return Result{Content: []Block{{Type: "text", Text: output}}, Details: details}
+}
+
+// bashTimeoutStatus follows Pi's ShellTimeoutError reporting when the shell
+// exited before its deadline but descendants kept the output pipe open.
+func bashTimeoutStatus(timeout time.Duration, started, deadline, exited time.Time, code int) string {
+	status := fmt.Sprintf("Command timed out after %g seconds", timeout.Seconds())
+	if !exited.IsZero() && exited.Before(deadline) {
+		seconds := float64((exited.Sub(started)+50*time.Millisecond)/(100*time.Millisecond)) / 10
+		status += fmt.Sprintf(". The shell exited with code %d after %g seconds, but background processes it started kept writing output until the timeout.", code, seconds)
+	}
+	return status
 }
 
 // Keep only the last 50 KiB in memory. Spool at most 256 MiB to disk, then

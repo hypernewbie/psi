@@ -8,10 +8,6 @@ import (
 // list. Model changes are session-local and remain in the session timeline.
 func (r *runtime) cycleModel(direction int) (string, error) {
 	models := r.usableModels()
-	if len(models) <= 1 {
-		return "Only one model available", nil
-	}
-
 	current := -1
 	for i, model := range models {
 		if model.provider == r.ov.Provider && model.option.Model.ID == r.ov.Model {
@@ -19,10 +15,16 @@ func (r *runtime) cycleModel(direction int) (string, error) {
 			break
 		}
 	}
-	if current < 0 {
-		current = 0
+	if len(models) == 0 || (len(models) == 1 && current != -1) {
+		return "Only one model available", nil
 	}
-	if direction < 0 {
+	if current == -1 {
+		if direction < 0 {
+			current = len(models) - 1
+		} else {
+			current = 0
+		}
+	} else if direction < 0 {
 		current = (current - 1 + len(models)) % len(models)
 	} else {
 		current = (current + 1) % len(models)

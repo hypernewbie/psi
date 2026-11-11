@@ -15,6 +15,26 @@ import (
 	"psi/internal/testutil/leakcheck"
 )
 
+func TestBashTimeoutReportsShellExitBeforeDeadline(t *testing.T) {
+	started := time.Unix(100, 0)
+	deadline := started.Add(2 * time.Second)
+	for _, tc := range []struct {
+		name   string
+		exited time.Time
+		want   string
+	}{
+		{"shell exited", started.Add(149 * time.Millisecond), "Command timed out after 2 seconds. The shell exited with code 7 after 0.1 seconds, but background processes it started kept writing output until the timeout."},
+		{"shell killed at timeout", deadline, "Command timed out after 2 seconds"},
+		{"exit not observed", time.Time{}, "Command timed out after 2 seconds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bashTimeoutStatus(2*time.Second, started, deadline, tc.exited, 7); got != tc.want {
+				t.Fatalf("timeout status = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBashOutputTruncationExactCutMultiByteRune: when command output exceeds
 // 50 KiB and the cut lands inside a multi-byte UTF-8 rune, the leading orphan
 // continuation bytes are trimmed and the resulting output is valid UTF-8.
