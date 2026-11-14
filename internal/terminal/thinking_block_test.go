@@ -293,3 +293,101 @@ func TestThinkingLedgerRepaintKeepsTheDocumentOrder(t *testing.T) {
 		t.Fatalf("reasoning missing from the document:\n%s", joined)
 	}
 }
+
+// Invisible reasoning must not finalize the live answer, even when a
+// multi-byte whitespace rune or an escape sequence arrives in fragments.
+func TestInvisibleThinkingBetweenTextDoesNotSplit(t *testing.T) {
+	for _, hide := range []bool{false, true} {
+		name := "visible"
+		if hide {
+			name = "hidden"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				chunks []string
+			}{
+				{name: "whitespace", chunks: []string{"\n\n"}},
+				{name: "fragmented_unicode_whitespace", chunks: []string{"\xe2", "\x80", "\x83"}},
+				{name: "fragmented_controls", chunks: []string{"\x1b]52;c;", "hidden-payload", "\a"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					c, vt, _ := newTestConsole(80, 12)
+					c.SetPresentation(PresentationSnapshot{NoColor: true, Display: DisplaySettings{HideThinking: hide}})
+					if _, err := c.MarkdownWrite([]byte("The answer ends here")); err != nil {
+						t.Fatal(err)
+					}
+					for _, chunk := range tc.chunks {
+						if _, err := c.ThinkingWrite([]byte(chunk)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, err := c.MarkdownWrite([]byte(".")); err != nil {
+						t.Fatal(err)
+					}
+					if err := c.CloseMarkdown(); err != nil {
+						t.Fatal(err)
+					}
+					visible := thinkingVisible(vt)
+					if !strings.Contains(visible, "The answer ends here.") {
+						t.Fatalf("answer was split by invisible reasoning:\n%s", visible)
+					}
+					if len(c.documentBlocks) != 1 || c.documentBlocks[0].Kind != DocumentAssistant || c.documentBlocks[0].Text != "The answer ends here." {
+						t.Fatalf("answer must stay joined after replay: %+v", c.documentBlocks)
+					}
+				})
+			}
+		})
+	}
+}
+
+// Closing the app's reasoning Streamer can write a trailing newline after the
+// answer has started. That synthetic newline must not detach pending text.
+func TestThinkingStreamerCloseDoesNotSplitAnswer(t *testing.T) {
+	c, vt, _ := newTestConsole(80, 16)
+	c.SetPresentation(PresentationSnapshot{NoColor: true})
+	text := NewStreamer(StreamOutput{Console: c}, true)
+	thinking := NewStreamer(ThinkingOutput{Console: c}, true)
+	text.Delta("Before reasoning")
+	text.Flush()
+	c.RequestFullRedraw()
+	thinking.Delta("weigh options")
+	thinking.Flush()
+	text.Delta("The answer ends here")
+	text.Flush()
+	text.Delta(".")
+	thinking.Close()
+	text.Close()
+	if err := c.Err(); err != nil {
+		t.Fatal(err)
+	}
+	visible := thinkingVisible(vt)
+	if !strings.Contains(visible, "The answer ends here.") || strings.Count(visible, "weigh options") != 1 {
+		t.Fatalf("stream finalization split the answer or lost reasoning:\n%s", visible)
+	}
+	want := []DocumentBlock{
+		{Kind: DocumentAssistant, Text: "Before reasoning"},
+		{Kind: DocumentThinking, Text: "weigh options"},
+		{Kind: DocumentAssistant, Text: "The answer ends here.\n"},
+	}
+	if len(c.documentBlocks) != len(want) {
+		t.Fatalf("visible reasoning must separate text blocks: %+v", c.documentBlocks)
+	}
+	for i, block := range c.documentBlocks {
+		if block.Kind != want[i].Kind || block.Text != want[i].Text {
+			t.Fatalf("block %d = %+v, want %+v", i, block, want[i])
+		}
+	}
+}
+
+func TestInvisibleThinkingPreservesOutputError(t *testing.T) {
+	c, _, _ := newTestConsole(80, 12)
+	c.writer = NewWriter(&recoverableWriter{fail: true})
+	_, wantErr := c.MarkdownWrite([]byte("The answer ends here"))
+	if wantErr == nil {
+		t.Fatal("expected a frame output failure")
+	}
+	if n, err := c.ThinkingWrite([]byte("\n\n")); n != 0 || err != wantErr {
+		t.Fatalf("ThinkingWrite = (%d, %v), want (0, %v)", n, err, wantErr)
+	}
+}

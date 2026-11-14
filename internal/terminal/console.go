@@ -994,9 +994,8 @@ func (c *Console) ThinkingWrite(p []byte) (int, error) {
 	if len(p) == 0 {
 		return len(p), nil
 	}
-	// One live stream at a time: a reasoning run ends the text run.
-	if err := c.CloseMarkdown(); err != nil {
-		return 0, err
+	if c.err != nil {
+		return 0, c.err
 	}
 	if c.thinkingStream == nil {
 		c.thinkingWidth = c.currentWidth()
@@ -1013,6 +1012,11 @@ func (c *Console) ThinkingWrite(p []byte) (int, error) {
 		// in the stream so the words around it keep their spacing.
 		if strings.TrimSpace(c.thinkingStream.Source()) == "" {
 			return len(p), nil
+		}
+		// Only visible, sanitized reasoning ends the text run. Invisible
+		// deltas must not insert a message gap into an unfinished answer.
+		if err := c.CloseMarkdown(); err != nil {
+			return 0, err
 		}
 		streamPrefix := c.recordDocumentBlock(DocumentBlock{Kind: DocumentThinking, Streaming: true})
 		c.thinkingBlockIndex = len(c.documentBlocks) - 1
