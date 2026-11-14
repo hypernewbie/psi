@@ -37,6 +37,10 @@ func FormatMetadataMessage(label, text string, width int, noColor bool, display 
 	label = SanitizeStatusRow(label)
 	text = Sanitize(text)
 	indent := display.transcriptIndent()
+	var selected *pitheme.Theme
+	if len(palette) > 0 {
+		selected = palette[0]
+	}
 	var out []string
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
@@ -45,10 +49,19 @@ func FormatMetadataMessage(label, text string, width int, noColor bool, display 
 			prefix = []StyledSpan{{Text: indent, Token: TokenDim}, {Text: label, Token: TokenCustomMessageLabel}}
 		}
 		spans := []StyledSpan{{Text: line, Token: TokenCustomMessageText}}
-		rows := wrapMarkdown(spans, max(1, width-1), prefix, mdIndent(indent, TokenCustomMessageText))
+		var rows []StyledRow
+		if display.SoftWrap {
+			rows = softWrapMarkdown(spans, prefix, mdIndent(indent, TokenCustomMessageText))
+		} else {
+			rows = wrapMarkdown(spans, max(1, width-1), prefix, mdIndent(indent, TokenCustomMessageText))
+		}
 		for _, row := range rows {
 			row.Surface = TokenCustomMessageBg
-			out = append(out, FormatStyledRow(row, width, noColor, palette...))
+			if display.SoftWrap {
+				out = append(out, serializeSoftRow(row, width, noColor, selected))
+			} else {
+				out = append(out, FormatStyledRow(row, width, noColor, selected))
+			}
 		}
 	}
 	if len(out) > 0 {

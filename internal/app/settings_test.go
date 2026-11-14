@@ -20,6 +20,7 @@ func testSettingsRuntime(t *testing.T) *runtime {
 	r.settings.OutputPad = 0
 	r.settings.AutocompleteMaxVisible = 5
 	r.settings.MarkdownCodeBlockIndent = "  "
+	r.settings.SoftWrap = true
 	r.settings.Compaction.Enabled = true
 	return r
 }
@@ -38,6 +39,7 @@ func TestSettingsCommandListsCurrentValues(t *testing.T) {
 		"Output padding: 0",
 		"Autocomplete max items: 5",
 		"Code block indent: 2",
+		"Soft wrap: on",
 		"Quiet startup: off",
 		"Theme: system",
 		"Color mode: auto",
@@ -55,14 +57,14 @@ func TestSettingsCommandRejectsArguments(t *testing.T) {
 	}
 }
 
-func TestSettingsPickerHasNineRows(t *testing.T) {
+func TestSettingsPickerHasTenRows(t *testing.T) {
 	r := testSettingsRuntime(t)
 	picker := r.newSettingsPicker()
 	labels := make([]string, len(picker.Items))
 	for i, item := range picker.Items {
 		labels[i] = item.Label
 	}
-	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode"}
+	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Soft wrap", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode"}
 	if strings.Join(labels, "|") != strings.Join(want, "|") {
 		t.Fatalf("labels = %v", labels)
 	}
@@ -84,6 +86,7 @@ func TestApplySettingRows(t *testing.T) {
 		{id: "output-padding", value: terminal.SettingsValue{Label: "1", Value: 1}, path: []string{"outputPad"}, want: "1"},
 		{id: "autocomplete-max", value: terminal.SettingsValue{Label: "7", Value: 7}, path: []string{"autocompleteMaxVisible"}, want: "7"},
 		{id: "code-indent", value: terminal.SettingsValue{Label: "4", Value: "    "}, path: []string{"markdown", "codeBlockIndent"}, want: `"    "`},
+		{id: "soft-wrap", value: terminal.SettingsValue{Label: "off", Value: false}, path: []string{"softWrap"}, want: "false"},
 		{id: "quiet-startup", value: terminal.SettingsValue{Label: "on", Value: true}, path: []string{"quietStartup"}, want: "true"},
 		{id: "theme", value: terminal.SettingsValue{Label: "light", Value: "light"}, path: []string{"theme"}, want: `"light"`},
 		{id: "color-mode", value: terminal.SettingsValue{Label: "false", Value: false}, path: []string{"terminal", "trueColor"}, want: "false"},
@@ -103,7 +106,7 @@ func TestApplySettingRows(t *testing.T) {
 
 	if r.settings.EditorPaddingX != 2 || r.settings.OutputPad != 1 || r.settings.AutocompleteMaxVisible != 7 ||
 		r.settings.MarkdownCodeBlockIndent != "    " || !r.settings.QuietStartup || r.settings.Theme != "light" ||
-		r.settings.TerminalTrueColor != "false" {
+		r.settings.TerminalTrueColor != "false" || r.settings.SoftWrap {
 		t.Fatalf("settings = %+v", r.settings)
 	}
 	if r.themeMode != pitheme.ColorMode256 {

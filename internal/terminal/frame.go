@@ -103,30 +103,27 @@ func (w *Writer) Emit(f Frame) error {
 	if f.Append != "" {
 		if len(old) > 0 {
 			// Remove only the old viewport, never rows preceding its anchor.
-			// Replace row zero before erasing its stale suffix to avoid a blank frame.
+			// Erase before row bytes so the new row's surface fill survives.
 			for i := len(old) - 1; i > 0; i-- {
 				move(i, 0)
 				b.WriteString("\x1b[K")
 			}
 			move(0, 0)
+			b.WriteString("\x1b[K")
 			if i := strings.IndexByte(f.Append, '\n'); i >= 0 {
 				b.WriteString(strings.TrimSuffix(f.Append[:i], "\r"))
-				b.WriteString("\x1b[K\r\n")
+				b.WriteString("\r\n")
 				b.WriteString(f.Append[i+1:])
 			} else {
 				b.WriteString(f.Append)
-				b.WriteString("\x1b[K")
 			}
 		} else if w.invalidTail {
 			// Native reflow may have left old chrome on the rows receiving
 			// committed text. Clear each suffix without walking the stale
 			// old row count (which can exceed the new viewport height).
 			text := strings.ReplaceAll(f.Append, "\r\n", "\n")
-			text = strings.ReplaceAll(text, "\n", "\x1b[K\r\n")
-			b.WriteString(text)
-			if !strings.HasSuffix(f.Append, "\n") {
-				b.WriteString("\x1b[K")
-			}
+			b.WriteString("\x1b[K")
+			b.WriteString(strings.ReplaceAll(text, "\n", "\r\n\x1b[K"))
 		} else {
 			b.WriteString(f.Append)
 		}
@@ -154,12 +151,12 @@ func (w *Writer) Emit(f Frame) error {
 		} else {
 			move(i, 0)
 		}
+		if i < oldLen || w.invalidTail {
+			b.WriteString("\x1b[K")
+		}
 		if i < len(f.Tail) {
 			b.WriteString(f.Tail[i])
 			col = frameTailWidth(f, i)
-		}
-		if i < oldLen || w.invalidTail {
-			b.WriteString("\x1b[K")
 		}
 	}
 	if len(f.Tail) > 0 {
@@ -340,10 +337,10 @@ func (w *Writer) emitResizedFrame(f Frame) error {
 			continue
 		}
 		cup(screenRow, 0)
+		b.WriteString("\x1b[K")
 		if logicalRow < len(f.Tail) {
 			b.WriteString(f.Tail[logicalRow])
 		}
-		b.WriteString("\x1b[K")
 	}
 
 	cursorRow := max(0, min(height-1, anchor+f.CursorRow))
@@ -371,7 +368,7 @@ func (w *Writer) emitResizedFrame(f Frame) error {
 func visualRowsAfterResize(rows []string, widths []int, width int) int {
 	total := 0
 	for i, row := range rows {
-		cells := CellWidth(row)
+		cells := CellWidth(Sanitize(row))
 		if i < len(widths) {
 			cells = widths[i]
 		}
@@ -383,7 +380,7 @@ func visualRowsAfterResize(rows []string, widths []int, width int) int {
 func visualCursorOffset(rows []string, widths []int, cursorRow, cursorCol, width int) int {
 	offset := 0
 	for i := 0; i < min(cursorRow, len(rows)); i++ {
-		cells := CellWidth(rows[i])
+		cells := CellWidth(Sanitize(rows[i]))
 		if i < len(widths) && widths[i] > 0 {
 			cells = widths[i]
 		}
@@ -397,7 +394,7 @@ func appendVisualRows(text string, width int) int {
 	parts := strings.Split(normalized, "\n")
 	rows := strings.Count(normalized, "\n")
 	for _, part := range parts {
-		cells := CellWidth(part)
+		cells := CellWidth(Sanitize(part))
 		if cells > 0 {
 			rows += (cells - 1) / width
 		}
@@ -409,7 +406,7 @@ func frameTailWidth(f Frame, row int) int {
 	if row < len(f.TailCellWidth) {
 		return f.TailCellWidth[row]
 	}
-	return CellWidth(f.Tail[row])
+	return CellWidth(Sanitize(f.Tail[row]))
 }
 
 func equalRows(a, b []string) bool {
