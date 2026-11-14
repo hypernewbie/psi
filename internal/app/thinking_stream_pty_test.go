@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestActualAppShowsLiveThinkingAndCollapsesItWithCtrlT is the end-to-end
@@ -108,6 +109,86 @@ data: {}
 			t.Fatalf("restored reasoning %q appears %d times, want 1:\n%s", needle, got, restored)
 		}
 	}
+	q.write("/quit\r")
+	q.finish()
+}
+
+// TestWhitespaceOnlyThinkingDoesNotSplitAnswer drives the app event loop with a
+// reasoning block between two text blocks. The invisible reasoning must not
+// leave the final punctuation on its own line.
+func TestWhitespaceOnlyThinkingDoesNotSplitAnswer(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `event: message_start
+data: {"message":{"id":"split","model":"split-model","usage":{"input_tokens":1}}}
+
+event: content_block_start
+data: {"index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"text_delta","text":"The answer ends here"}}
+
+event: content_block_stop
+data: {"index":0}
+
+event: content_block_start
+data: {"index":1,"content_block":{"type":"thinking","thinking":"\n\n"}}
+
+event: content_block_stop
+data: {"index":1}
+
+event: content_block_start
+data: {"index":2,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"index":2,"delta":{"type":"text_delta","text":"."}}
+
+event: content_block_stop
+data: {"index":2}
+
+event: message_delta
+data: {"delta":{"stop_reason":"end_turn"}}
+
+event: message_stop
+data: {}
+
+`)
+	}))
+	defer server.Close()
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"split-model","defaultThinkingLevel":"off","defaultTools":[],"compaction":{"enabled":false},"outputPad":0}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), fmt.Sprintf(`{"providers":{"anthropic":{"models":[{"id":"split-model","api":"anthropic-messages","baseUrl":%q,"contextWindow":65536,"maxTokens":4096,"reasoning":true,"input":["text"]}]}}}`, strings.TrimRight(server.URL, "/")))
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-split-key"}}`)
+
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools")
+	q.waitScreen("split-model")
+	q.write("hello\r")
+	q.wait("The answer ends here")
+	// The activity row hides the cursor until the run settles. Wait for the
+	// editor-ready event, not a quiet interval that can end between deltas.
+	timer := time.NewTimer(8 * time.Second)
+	defer timer.Stop()
+	for !semanticEditorReady(q.screen) {
+		select {
+		case chunk, ok := <-q.chunks:
+			if !ok {
+				t.Fatalf("process exited before the answer settled: %q", q.raw.String())
+			}
+			q.pending += string(chunk)
+			q.raw.Write(chunk)
+			q.screen.Feed(chunk)
+		case <-timer.C:
+			t.Fatalf("timeout waiting for the answer to settle: %q", q.raw.String())
+		}
+	}
+
+	visible := strings.Join(q.screen.Scrollback, "\n") + "\n" + q.screen.Text()
+	if !strings.Contains(visible, "The answer ends here.") {
+		t.Fatalf("answer was split by whitespace reasoning:\n%s", visible)
+	}
+
 	q.write("/quit\r")
 	q.finish()
 }
