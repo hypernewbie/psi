@@ -905,10 +905,11 @@ func toFailureAssistant(resp *provider.Response, cfg Config, reason string) sess
 	if message.Assistant == nil {
 		return message
 	}
-	if len(message.Assistant.Content) == 0 {
-		message.Assistant.Content = []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: ""}}}
-	}
 	if !hasVisibleAssistantContent(message.Assistant) {
+		// Outputless failures use Pi's one-empty-text marker shape. Whitespace
+		// and empty thinking blocks are not visible and must not create another
+		// marker shape or carry usage.
+		message.Assistant.Content = []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: ""}}}
 		message.Assistant.Usage = session.Usage{}
 	}
 	message.Assistant.ErrorMessage = &reason

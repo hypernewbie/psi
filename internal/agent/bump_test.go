@@ -512,6 +512,13 @@ func TestBumpFailureMarkerUsage(t *testing.T) {
 			if marker.ErrorMessage == nil || marker.StopReason != "error" {
 				t.Fatalf("failure marker shape=%+v", marker)
 			}
+			if !tc.wantUse {
+				if len(marker.Content) != 1 || marker.Content[0].Text == nil || marker.Content[0].Text.Text != "" {
+					t.Fatalf("outputless marker content=%+v; want one empty text block", marker.Content)
+				}
+			} else if len(marker.Content) != 1 || marker.Content[0].Text == nil || marker.Content[0].Text.Text != tc.text {
+				t.Fatalf("visible marker content=%+v; want %q", marker.Content, tc.text)
+			}
 			if tc.wantUse {
 				if marker.Usage.TotalTokens != 7 {
 					t.Fatalf("visible partial usage=%+v; want retained", marker.Usage)
