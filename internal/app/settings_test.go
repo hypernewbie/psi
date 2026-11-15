@@ -381,6 +381,21 @@ func TestApplyModelThinkingLevelClearsOverride(t *testing.T) {
 			t.Fatalf("session thinking = %q, want off", r.ov.Thinking)
 		}
 	})
+
+	t.Run("empty configured global default", func(t *testing.T) {
+		r := testRuntime(t)
+		r.settings.DefaultThinking = ""
+		r.settings.DefaultThinkingSet = true
+		if err := r.applyModelThinkingLevel("anthropic/m", "high", &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.applyModelThinkingLevel("anthropic/m", modelThinkingClearChoice, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		if r.ov.Thinking != "off" {
+			t.Fatalf("session thinking = %q, want off", r.ov.Thinking)
+		}
+	})
 }
 
 func TestApplyModelThinkingLevelAppliesToCurrentModelOnly(t *testing.T) {
