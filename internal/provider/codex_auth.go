@@ -33,6 +33,9 @@ type CodexAuth struct {
 	Rename func(string, string) error
 	// StaleAfter bounds lease waits; non-positive means the Pi async policy (30s).
 	StaleAfter time.Duration
+	// WaitAfter bounds the wait for the shared lease; non-positive means the
+	// Pi lock deadline (30s).
+	WaitAfter time.Duration
 	// HeartbeatInterval paces lease mtime updates; non-positive means 2s.
 	HeartbeatInterval time.Duration
 }
@@ -91,7 +94,7 @@ func codexAccount(entry codexCredential) (string, error) {
 // a partial writer document. Startup stays local-only with a bounded wait.
 // A missing file still falls back to environment-based credentials upstream.
 func (a *CodexAuth) loadShared(ctx context.Context) (map[string]json.RawMessage, codexCredential, error) {
-	unlock, _, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval)
+	unlock, _, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval, a.WaitAfter)
 	if err != nil {
 		return nil, codexCredential{}, err
 	}
@@ -148,7 +151,7 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if st, err := os.Lstat(a.Path); err != nil || st.Mode()&os.ModeSymlink != 0 {
 		return "", "", fmt.Errorf("cannot safely refresh a symlinked auth.json; refresh the login in Pi")
 	}
-	unlock, valid, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval)
+	unlock, valid, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval, a.WaitAfter)
 	if err != nil {
 		return "", "", err
 	}
@@ -282,18 +285,28 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	return updated.Access, account, nil
 }
 
+// authLockWaitLimit is the wait for the shared credential lock. The default
+// matches Pi's lock deadline, so a holder that is slow to finish is waited
+// for instead of reported as busy.
+func authLockWaitLimit(waitAfter time.Duration) time.Duration {
+	if waitAfter <= 0 {
+		return 30 * time.Second
+	}
+	return waitAfter
+}
+
 // acquireAuthLock implements the shared Pi-compatible lease: atomic mkdir,
 // heartbeat ownership, and bounded stale recovery. staleAfter <= 0 selects the
 // Pi async policy (30 seconds). A fresh lease is never stolen and a replaced
 // lease is never deleted by a former owner.
-func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat time.Duration) (func(), func() bool, error) {
+func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat, waitAfter time.Duration) (func(), func() bool, error) {
 	if staleAfter <= 0 {
 		staleAfter = 30 * time.Second
 	}
 	if heartbeat <= 0 {
 		heartbeat = 2 * time.Second
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	waitCtx, cancel := context.WithTimeout(ctx, authLockWaitLimit(waitAfter))
 	defer cancel()
 	for {
 		if err := waitCtx.Err(); err != nil {

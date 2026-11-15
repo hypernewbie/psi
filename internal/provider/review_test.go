@@ -18,7 +18,7 @@ func TestReviewAuthLeaseChild(t *testing.T) {
 	if lock == "" {
 		return
 	}
-	unlock, _, err := acquireAuthLock(context.Background(), lock, 0, time.Hour)
+	unlock, _, err := acquireAuthLock(context.Background(), lock, 0, time.Hour, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestReviewAuthLeaseSurvivesKilledHolder(t *testing.T) {
 	if err := os.Chtimes(lock, old, old); err != nil {
 		t.Fatal(err)
 	}
-	unlock, valid, err := acquireAuthLock(ctx, lock, 0, 0)
+	unlock, valid, err := acquireAuthLock(ctx, lock, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("killed holder stranded its lease: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestReviewAbandonedPsiLeaseIsRecoverable(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
-	unlock, valid, err := acquireAuthLock(ctx, lock, 0, 0)
+	unlock, valid, err := acquireAuthLock(ctx, lock, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("abandoned psi lease cannot recover: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestReviewAbandonedPsiLeaseIsRecoverable(t *testing.T) {
 
 func TestReviewAuthLeaseUsesEmptyPiDirectory(t *testing.T) {
 	lock := filepath.Join(t.TempDir(), "auth.json.lock")
-	unlock, _, err := acquireAuthLock(context.Background(), lock, 0, 0)
+	unlock, _, err := acquireAuthLock(context.Background(), lock, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

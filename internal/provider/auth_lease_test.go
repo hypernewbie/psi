@@ -48,7 +48,7 @@ func TestF01ReaderWaitsForWriterLease(t *testing.T) {
 	final := codexDoc("final-access", "final-refresh", time.Now().Add(time.Hour).UnixMilli())
 	writeAuthDoc(t, authPath, codexDoc("old-access", "old-refresh", time.Now().Add(time.Hour).UnixMilli()))
 
-	unlockW, _, err := acquireAuthLock(context.Background(), authPath+".lock", 0, 0)
+	unlockW, _, err := acquireAuthLock(context.Background(), authPath+".lock", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestF01ReaderWaitsForWriterLease(t *testing.T) {
 		// Anthropic reader path shares the same lease protocol.
 		apath := filepath.Join(dir, "a-auth.json")
 		writeAuthDoc(t, apath, `{"anthropic":{"type":"api_key","key":"sk-test-key"}}`)
-		wunlock, _, err := acquireAuthLock(context.Background(), apath+".lock", 0, 0)
+		wunlock, _, err := acquireAuthLock(context.Background(), apath+".lock", 0, 0, 0)
 		if err != nil {
 			out <- result{kind: "select", err: err}
 			return
@@ -156,7 +156,7 @@ func TestF01CancelledWaitReleasesPromptly(t *testing.T) {
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "auth.json")
 	writeAuthDoc(t, authPath, codexDoc("a", "r", time.Now().Add(time.Hour).UnixMilli()))
-	unlockW, validW, err := acquireAuthLock(context.Background(), authPath+".lock", 0, 0)
+	unlockW, validW, err := acquireAuthLock(context.Background(), authPath+".lock", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestF02StaleLeaseRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	unlock, valid, err := acquireAuthLock(context.Background(), lock, 0, 0)
+	unlock, valid, err := acquireAuthLock(context.Background(), lock, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("stale lease not reclaimed: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestF02StaleLeaseRecovered(t *testing.T) {
 func TestF02FreshLeaseNeverStolen(t *testing.T) {
 	dir := t.TempDir()
 	lock := filepath.Join(dir, "auth.json.lock")
-	unlock, valid, err := acquireAuthLock(context.Background(), lock, 0, 0)
+	unlock, valid, err := acquireAuthLock(context.Background(), lock, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestF02FreshLeaseNeverStolen(t *testing.T) {
 	before, _ := os.Stat(lock)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, _, err = acquireAuthLock(ctx, lock, 0, 0)
+	_, _, err = acquireAuthLock(ctx, lock, 0, 0, 0)
 	if err == nil {
 		t.Fatal("contender stole a fresh lease")
 	}
@@ -243,7 +243,7 @@ func TestF02ReplacedLeaseNotDeleted(t *testing.T) {
 	}
 	dir := t.TempDir()
 	lock := filepath.Join(dir, "auth.json.lock")
-	unlock, valid, err := acquireAuthLock(context.Background(), lock, 0, 0)
+	unlock, valid, err := acquireAuthLock(context.Background(), lock, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestF02ReplacedLeaseNotDeleted(t *testing.T) {
 func TestF02HeartbeatKeepsLeaseFresh(t *testing.T) {
 	dir := t.TempDir()
 	lock := filepath.Join(dir, "auth.json.lock")
-	unlock, valid, err := acquireAuthLock(context.Background(), lock, time.Hour, 50*time.Millisecond)
+	unlock, valid, err := acquireAuthLock(context.Background(), lock, time.Hour, 50*time.Millisecond, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,4 +392,37 @@ func TestF03CommitFailures(t *testing.T) {
 			t.Fatalf("temp files remain: %v", leftovers)
 		}
 	})
+}
+
+// The shared credential lock waits as long as Pi waits for it, so a holder
+// that is slow to finish is waited for instead of reported as busy.
+func TestCodexAuthLockWaitUsesPiDeadline(t *testing.T) {
+	if got := authLockWaitLimit(0); got != 30*time.Second {
+		t.Fatalf("default wait limit = %s, want Pi's 30s lock deadline", got)
+	}
+	if got := authLockWaitLimit(250 * time.Millisecond); got != 250*time.Millisecond {
+		t.Fatalf("wait limit = %s, want the configured 250ms", got)
+	}
+}
+
+// A waiter gives up after the wait limit and reports a busy lock.
+func TestCodexAuthLockWaitReportsABusyLock(t *testing.T) {
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "auth.json.lock")
+	unlock, _, err := acquireAuthLock(context.Background(), lock, 0, 0, 250*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	start := time.Now()
+	_, _, err = acquireAuthLock(context.Background(), lock, 0, 0, 250*time.Millisecond)
+	if err == nil {
+		t.Fatal("contender did not report a busy lock")
+	}
+	if !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("error = %v, want a busy lock", err)
+	}
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatalf("waited %s, want the bounded wait", waited)
+	}
 }

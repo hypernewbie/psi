@@ -125,7 +125,7 @@ func TestMixedPiReclaimsAbandonedPsiLease(t *testing.T) {
 	properLockfileReference(t)
 	authPath := filepath.Join(t.TempDir(), "auth.json")
 	writeAuthDoc(t, authPath, codexDoc("test-access", "test-refresh", time.Now().Add(time.Hour).UnixMilli()))
-	unlock, valid, err := acquireAuthLock(context.Background(), authPath+".lock", 0, time.Hour)
+	unlock, valid, err := acquireAuthLock(context.Background(), authPath+".lock", 0, time.Hour, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

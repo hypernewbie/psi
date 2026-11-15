@@ -271,7 +271,7 @@ func TestCodexMultipleGoroutinesConcurrentRefreshDistinctInstances(t *testing.T)
 						Path:              path,
 						HTTP:              server.Client(),
 						TokenURL:          server.URL,
-						StaleAfter:        5 * time.Second,
+						StaleAfter:        30 * time.Second,
 						HeartbeatInterval: 50 * time.Millisecond,
 					}
 					access, account, err := auth.Get(context.Background())
