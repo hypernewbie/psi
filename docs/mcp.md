@@ -161,7 +161,8 @@ requests, and tool declarations. `--no-tools` disables only the built-in
 the previous accepted config. An invalid entry is withdrawn, not silently run
 with its old definition. A failed re-list keeps the last good catalog and
 reports a refresh warning. A lost connection withdraws its tools and may use at
-most two reconnect cycles. `/reload` can retry after network recovery.
+most two reconnect cycles. A successful `/reload` accepts the config and starts
+a fresh reconnect allowance.
 
 ## Security
 

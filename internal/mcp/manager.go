@@ -46,7 +46,6 @@ type Input struct {
 	AllowProjectCommands bool
 	Cwd                  string
 	ReadAvailable        bool
-	Disabled             bool
 }
 
 // Options configures one manager.
@@ -404,8 +403,12 @@ func (m *Manager) acceptConfigLocked(cfg *Config, input Input, resolutions map[s
 		if !server.Enabled {
 			m.withdrawLocked(old, "")
 			old.cfg = server
+			old.resolved = Server{}
+			old.resolvedValid = false
+			old.reconnects = 0
 			old.status = serverStateDisabled
 			old.errClass = ""
+			old.refreshWarning = ""
 			old.listenerUnavailable = false
 			newServers[server.Name] = old
 			continue
@@ -458,8 +461,9 @@ func (m *Manager) acceptConfigLocked(cfg *Config, input Input, resolutions map[s
 			old.resolved = resolution.resolved
 		}
 		// Unchanged connection: keep its epoch and notification callbacks,
-		// but apply the newest exposure policy immediately.
+		// apply the newest exposure policy, and start a fresh reload allowance.
 		old.cfg = server
+		old.reconnects = 0
 		old.catalog = recomputeExposure(old.catalog, server)
 		if old.status == serverStateDisabled {
 			old.status = serverStateConnecting
@@ -586,6 +590,10 @@ func (m *Manager) runSetup(state *serverState, epoch uint64, parent context.Cont
 	server := state.cfg
 	resolved, resolvedValid := state.resolved, state.resolvedValid
 	m.mu.Unlock()
+	if !policyAllowsInput(input, server) {
+		m.setupFailed(state, epoch, configErr("permission", "MCP server is no longer permitted"))
+		return
+	}
 	ctx, cancel := context.WithTimeout(parent, server.Timeout)
 	defer cancel()
 	if !resolvedValid {
@@ -606,7 +614,7 @@ func (m *Manager) runSetup(state *serverState, epoch uint64, parent context.Cont
 	var conn *connection
 	var err error
 	for attempt := 0; attempt < maxDiscoveryTries; attempt++ {
-		session, conn, err = m.connect(ctx, state, epoch, resolved)
+		session, conn, err = m.connect(ctx, state, epoch, resolved, input)
 		if err == nil {
 			break
 		}
@@ -659,7 +667,7 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64, server Server) (*sdk.ClientSession, *connection, error) {
+func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64, server Server, input Input) (*sdk.ClientSession, *connection, error) {
 	connCtx, connCancel := context.WithCancel(context.Background())
 	conn := &connection{
 		manager:         m,
@@ -673,6 +681,10 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 		listenerStarted: make(chan struct{}),
 	}
 	conn.errClass.Store("")
+	if !policyAllowsInput(input, server) {
+		connCancel()
+		return nil, conn, configErr("permission", "MCP server is no longer permitted")
+	}
 	client := sdk.NewClient(&sdk.Implementation{Name: "psi", Version: m.opts.Version}, &sdk.ClientOptions{
 		Capabilities:   &sdk.ClientCapabilities{},
 		MultiRoundTrip: &sdk.MultiRoundTripOptions{Disabled: true},
@@ -697,10 +709,7 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 	if server.Transport == TransportHTTP {
 		transport = m.newHTTPTransport(server, conn)
 	} else {
-		m.mu.Lock()
-		cwd := m.input.Cwd
-		m.mu.Unlock()
-		transport = newStdioTransport(server, cwd)
+		transport = newStdioTransport(server, input.Cwd)
 	}
 	conn.clearRetryAdvice()
 	var disarm func() bool
@@ -834,11 +843,18 @@ func listAllTools(ctx context.Context, session *sdk.ClientSession) ([]*sdk.Tool,
 	return nil, errLimit("tool catalog pages")
 }
 
+func policyAllowsInput(input Input, server Server) bool {
+	return (input.ProjectTrusted || server.Source != "project") &&
+		(input.AllowProjectCommands || !server.ProjectCommand)
+}
+
+func (m *Manager) policyAllows(server Server) bool {
+	return policyAllowsInput(m.input, server)
+}
+
 func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *connection) {
 	m.mu.Lock()
-	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || state.cfg.Enabled == false ||
-		(!m.input.ProjectTrusted && state.cfg.Source == "project") ||
-		(!m.input.AllowProjectCommands && state.cfg.ProjectCommand) {
+	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || state.cfg.Enabled == false || !m.policyAllows(state.cfg) {
 		m.mu.Unlock()
 		conn.closeAsync()
 		return
@@ -879,6 +895,7 @@ func (m *Manager) setupFailed(state *serverState, epoch uint64, err error) {
 	}
 	state.conn = nil
 	state.catalog = nil
+	state.refreshWarning = ""
 	state.listenerUnavailable = false
 	state.status = serverStateFailed
 	state.errClass = ErrorClass(err)
@@ -908,6 +925,7 @@ func (m *Manager) withdrawLocked(state *serverState, reason string) {
 		conn.closeAsyncLocked()
 	}
 	state.catalog = nil
+	state.refreshWarning = ""
 	state.listenerUnavailable = false
 	if state.cfg.Enabled {
 		if reason == "permission" {
@@ -915,8 +933,6 @@ func (m *Manager) withdrawLocked(state *serverState, reason string) {
 			state.errClass = "permission"
 			state.resolved = Server{}
 			state.resolvedValid = false
-		} else if reason == "lost" {
-			state.status = serverStateReconnecting
 		}
 	}
 }
@@ -931,6 +947,7 @@ func (m *Manager) connectionLost(conn *connection, err error) {
 	conn.retired.Store(true)
 	state.conn = nil
 	state.catalog = nil
+	state.refreshWarning = ""
 	state.listenerUnavailable = false
 	class := ErrorClass(err)
 	if class == "" {
@@ -1165,6 +1182,10 @@ func (m *Manager) Call(ctx context.Context, tool Tool, inv tools.Invocation) too
 		m.mu.Unlock()
 		return callError("stale", tool)
 	}
+	if !m.policyAllows(state.cfg) {
+		m.mu.Unlock()
+		return callError("permission", tool)
+	}
 	conn := state.conn
 	live, ok := findCatalogTool(conn.catalog, tool.Name)
 	if !ok || !declared(live) || live.RawName != tool.RawName {
@@ -1242,7 +1263,7 @@ func (m *Manager) routeLive(tool Tool, conn *connection) bool {
 	defer m.mu.Unlock()
 	state := m.servers[tool.Server]
 	if m.stopped || state == nil || state.conn != conn || state.epoch != tool.Epoch ||
-		state.status != serverStateReady || conn.retired.Load() || conn.closing.Load() {
+		state.status != serverStateReady || conn.retired.Load() || conn.closing.Load() || !m.policyAllows(state.cfg) {
 		return false
 	}
 	live, ok := findCatalogTool(conn.catalog, tool.Name)

@@ -527,3 +527,29 @@ func TestManagerPublishesConfigWarnings(t *testing.T) {
 		t.Fatalf("config warning did not identify the entry: %v", snapshot.Warnings)
 	}
 }
+
+func TestManagerAcceptedReloadRefillsReconnectAllowance(t *testing.T) {
+	manager := NewManager(Options{})
+	server := Server{Name: "fixture", Transport: TransportStdio, Enabled: true}
+	state := &serverState{cfg: server, status: serverStateReady, epoch: 1, reconnects: maxReconnects}
+	manager.servers["fixture"] = state
+	manager.acceptConfigLocked(&Config{Servers: []Server{server}}, Input{}, nil)
+	if state.reconnects != 0 {
+		t.Fatalf("reconnect allowance after reload = %d", state.reconnects)
+	}
+}
+
+func TestManagerBoundsConfigWarnings(t *testing.T) {
+	manager := NewManager(Options{})
+	for i := 0; i < maxConfigWarnings+5; i++ {
+		manager.warnings = append(manager.warnings, fmt.Sprintf("warning %d", i))
+	}
+	manager.publishLocked()
+	warnings := manager.Snapshot().Warnings
+	if len(warnings) != maxConfigWarnings+1 {
+		t.Fatalf("bounded warnings = %d", len(warnings))
+	}
+	if warnings[len(warnings)-1] != "5 more config warnings" {
+		t.Fatalf("warning trailer = %q", warnings[len(warnings)-1])
+	}
+}

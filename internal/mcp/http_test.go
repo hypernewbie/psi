@@ -42,13 +42,18 @@ func httpFixture(t *testing.T) *sdk.Server {
 }
 
 func writeHTTPConfig(t *testing.T, dir, url string, headers map[string]string) string {
+	return writeHTTPConfigEnabled(t, dir, url, headers, true)
+}
+
+func writeHTTPConfigEnabled(t *testing.T, dir, url string, headers map[string]string, enabled bool) string {
 	t.Helper()
 	if headers == nil {
 		headers = map[string]string{}
 	}
 	config := map[string]any{"mcpServers": map[string]any{"http-fixture": map[string]any{
-		"url": url, "headers": headers, "exposure": "direct", "timeout": 5,
+		"url": url, "headers": headers, "exposure": "direct", "timeout": 5, "enabled": enabled,
 	}}}
+
 	data, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
@@ -616,6 +621,7 @@ func TestManagerHTTPRelistTimeoutRetainsCatalog(t *testing.T) {
 				if err := conn.refreshCatalog(); err != nil {
 					t.Fatalf("recovery refresh = %v", err)
 				}
+				deadline = time.Now().Add(5 * time.Second)
 				for time.Now().Before(deadline) {
 					if manager.Snapshot().Servers[0].RefreshWarning == "" {
 						return
@@ -1807,6 +1813,45 @@ func TestManagerHTTPReloadResolvesEnvironmentValues(t *testing.T) {
 	if got, _ := lastHeader.Load().(string); got != "two" {
 		t.Fatalf("reloaded header = %q, want two", got)
 	}
+	writeHTTPConfigEnabled(t, dir, httpServer.URL, map[string]string{"X-Token": "${MCP_TEST_TOKEN}"}, false)
+	manager.Reload(input)
+	disabled := false
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		statuses := manager.Snapshot().Servers
+		if len(statuses) == 1 && statuses[0].State == serverStateDisabled {
+			disabled = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !disabled {
+		t.Fatalf("disable reload did not publish: %+v", manager.Snapshot().Servers)
+	}
+	t.Setenv("MCP_TEST_TOKEN", "three")
+	writeHTTPConfigEnabled(t, dir, httpServer.URL, map[string]string{"X-Token": "${MCP_TEST_TOKEN}"}, true)
+	manager.Reload(input)
+	reloaded = false
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot = manager.Snapshot()
+		replacement, ok := snapshot.Find("mcp__http_fixture__echo")
+		if ok && replacement.Epoch > echo.Epoch && snapshot.Servers[0].State == serverStateReady {
+			echo = replacement
+			reloaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !reloaded {
+		t.Fatalf("re-enable did not replace the connection: %+v", manager.Snapshot().Servers)
+	}
+	if result := manager.Call(context.Background(), echo, tools.Invocation{Name: echo.Name, Arguments: map[string]any{"text": "three"}}); result.IsError {
+		t.Fatalf("re-enabled call = %+v", result)
+	}
+	if got, _ := lastHeader.Load().(string); got != "three" {
+		t.Fatalf("re-enabled header = %q, want three", got)
+	}
 }
 
 func TestManagerHTTPRejectsInvalidListenerStatus(t *testing.T) {
@@ -1971,4 +2016,27 @@ func TestManagerHTTPUnchangedReloadKeepsConnection(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("reload did not publish: %+v", manager.Snapshot())
+}
+
+type closeTrackingBody struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (b *closeTrackingBody) Read([]byte) (int, error) { return 0, io.EOF }
+func (b *closeTrackingBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestCancelBodyClosesOnRequestCancellation(t *testing.T) {
+	body := &closeTrackingBody{closed: make(chan struct{})}
+	requestCtx, cancel := context.WithCancel(context.Background())
+	_ = newCancelBody(body, context.Background(), requestCtx, nil, nil)
+	cancel()
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("request cancellation did not close the response body")
+	}
 }

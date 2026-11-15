@@ -190,18 +190,13 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	if req.URL == nil {
 		return nil, errors.New("MCP request has no URL")
 	}
+	if t.conn == nil {
+		return nil, errors.New("MCP transport has no connection")
+	}
 	clone := req.Clone(req.Context())
 	clone.Header = req.Header.Clone()
 	baseObs := requestObservationFrom(req.Context())
 	claimObs := outboundObservationFrom(req.Context())
-	var stopConn func() bool
-	var cancel context.CancelFunc
-	if t.conn != nil {
-		ctx, cancelFunc := context.WithCancel(clone.Context())
-		cancel = cancelFunc
-		stopConn = context.AfterFunc(t.conn.ctx, cancel)
-		clone = clone.WithContext(ctx)
-	}
 	for name, value := range t.headers {
 		if _, reserved := reservedHeaders[strings.ToLower(name)]; reserved {
 			return nil, fmt.Errorf("MCP header %q is reserved", name)
@@ -210,6 +205,14 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 			return nil, fmt.Errorf("MCP header %q contains an invalid value", name)
 		}
 		clone.Header.Set(name, value)
+	}
+	var stopConn func() bool
+	var cancel context.CancelFunc
+	if t.conn != nil {
+		ctx, cancelFunc := context.WithCancel(clone.Context())
+		cancel = cancelFunc
+		stopConn = context.AfterFunc(t.conn.ctx, cancel)
+		clone = clone.WithContext(ctx)
 	}
 	if req.Method == http.MethodPost {
 		clone.GetBody = nil
@@ -229,7 +232,7 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		return nil, err
 	}
 	if resp.Body != nil && cancel != nil {
-		resp.Body = newCancelBody(resp.Body, t.conn.ctx, stopConn, cancel)
+		resp.Body = newCancelBody(resp.Body, t.conn.ctx, clone.Context(), stopConn, cancel)
 	} else if cancel != nil {
 		if stopConn != nil {
 			stopConn()
@@ -332,6 +335,9 @@ func (t *headerRoundTripper) recordTransportError(baseObs, claimObs *requestObse
 	if class != "" {
 		t.conn.latchClass(class)
 	}
+	if req.Method == http.MethodGet && class == "" {
+		t.conn.listenerUnavailable.Store(true)
+	}
 }
 
 func classifyTransportError(err error) string {
@@ -366,11 +372,13 @@ type cancelBody struct {
 	once   sync.Once
 }
 
-func newCancelBody(body io.ReadCloser, connCtx context.Context, stop func() bool, cancel context.CancelFunc) *cancelBody {
+func newCancelBody(body io.ReadCloser, connCtx, requestCtx context.Context, stop func() bool, cancel context.CancelFunc) *cancelBody {
 	b := &cancelBody{ReadCloser: body, stop: stop, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		select {
 		case <-connCtx.Done():
+			_ = b.Close()
+		case <-requestCtx.Done():
 			_ = b.Close()
 		case <-b.done:
 		}
