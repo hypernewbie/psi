@@ -14,7 +14,7 @@ footer shows the folder, session, model, and context usage.
 
 ## Enter a prompt
 
-Type a request and press `Enter`. An empty `Enter` is ignored unless the last turn failed or was interrupted; in that case it retries the turn. `/b` does the same when you want an explicit trigger.
+Type a request and press `Enter`. An empty `Enter` is ignored unless the last turn is unfinished (failed, interrupted, or recovered from a crash); in that case it retries the turn. `/b` does the same when you want an explicit trigger.
 
 - `Ctrl+J` inserts a newline. psi has no Shift+Enter detection.
 - Bracketed paste inserts up to 256 KiB as one literal edit; pasted newlines
@@ -55,7 +55,7 @@ clamped percentage.
 
 If a model request fails or is interrupted before the turn finishes, psi can
 retry it without adding another prompt. Press `Enter` on an empty editor or use
-`/b`. A successful bump sends the same user content again with the current
+`/b`. A successful bump retries the same unfinished turn with the current
 model, thinking level, tools, system prompt, and compaction policy.
 
 Bump is available only while psi is idle, with no run, picker, or compaction

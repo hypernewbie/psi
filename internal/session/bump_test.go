@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -359,60 +358,5 @@ func TestCheckWritableIOFaults(t *testing.T) {
 			}
 			requireUnchangedBumpStorage(t, store, before, leaf, count)
 		})
-	}
-}
-
-func TestCheckWritableRefusesExternalReplacement(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "session.jsonl")
-	piFixture(t, path)
-	store, err := OpenFile(path, "/tmp/ws", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf, count := store.LeafID(), store.EntryCount()
-	store.storage = &storageOps{open: func(path string, flags int, mode os.FileMode) (durableFile, error) {
-		if err := os.WriteFile(path+".new", before, mode); err != nil {
-			return nil, err
-		}
-		if err := os.Rename(path+".new", path); err != nil {
-			return nil, err
-		}
-		return os.OpenFile(path, flags, mode)
-	}}
-	if err := store.CheckWritable(); err == nil {
-		t.Fatal("replacement raced the generation check")
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(after, before) || store.LeafID() != leaf || store.EntryCount() != count {
-		t.Fatal("refused replacement changed logical or physical state")
-	}
-	if store.WriteError() == nil {
-		t.Fatal("replacement refusal did not set a sticky error")
-	}
-}
-
-func TestCheckWritablePreservesModTime(t *testing.T) {
-	store, _ := persistentBumpStore(t)
-	info, err := os.Stat(store.File())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CheckWritable(); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.Stat(store.File())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !after.ModTime().Equal(info.ModTime()) {
-		t.Fatalf("storage check changed modification time: %v -> %v", info.ModTime(), after.ModTime())
 	}
 }

@@ -445,6 +445,184 @@ func TestBumpRepeatedFailureKeepsSingleMarker(t *testing.T) {
 	}
 }
 
+func TestBumpProviderFailureWithoutOutputKeepsSingleMarker(t *testing.T) {
+	for _, stop := range []string{"error", "aborted"} {
+		t.Run(stop, func(t *testing.T) {
+			store, _, fake, loop, events := bumpSetup(t)
+			cfg := bumpConfig()
+			fake.Errors = []error{errors.New("transport down")}
+			if err := loop.Submit(context.Background(), "hello", cfg); err == nil {
+				t.Fatal("Submit succeeded")
+			}
+			initial := assistantEntries(store)
+			if len(initial) != 1 || initial[0].ErrorMessage == nil {
+				t.Fatalf("initial marker=%+v", initial)
+			}
+			reason := *initial[0].ErrorMessage
+
+			*events = nil
+			fake.Errors = nil
+			fake.Responses = []*provider.Response{nil, {StopReason: stop}}
+			err := loop.Bump(context.Background(), cfg)
+			if err == nil || !strings.Contains(err.Error(), "provider stopped: "+stop) {
+				t.Fatalf("Bump error=%v; want provider stop %q", err, stop)
+			}
+			final := assistantEntries(store)
+			if len(final) != 1 {
+				t.Fatalf("outputless retry stacked failure markers: %+v", final)
+			}
+			if final[0].StopReason != "error" || final[0].ErrorMessage == nil || *final[0].ErrorMessage != reason {
+				t.Fatalf("existing marker changed: %+v", final[0])
+			}
+			if got := countMessageRole(store, "user"); got != 1 {
+				t.Fatalf("outputless retry added a user: %d", got)
+			}
+			if end := singleRunEnd(t, *events); end.Outcome != event.OutcomeInterrupted {
+				t.Fatalf("outcome=%q; want interrupted", end.Outcome)
+			}
+		})
+	}
+}
+
+func TestBumpWhitespaceOnlyPartialKeepsSingleMarker(t *testing.T) {
+	store, _, fake, loop, events := bumpSetup(t)
+	cfg := bumpConfig()
+	fake.Errors = []error{errors.New("transport down"), errors.New("still down")}
+	fake.TextDeltas = [][]string{nil, {" \n"}}
+	if err := loop.Submit(context.Background(), "hello", cfg); err == nil {
+		t.Fatal("Submit succeeded")
+	}
+	initial := assistantEntries(store)
+	if len(initial) != 1 || initial[0].ErrorMessage == nil {
+		t.Fatalf("initial marker=%+v", initial)
+	}
+	reason := *initial[0].ErrorMessage
+
+	*events = nil
+	if err := loop.Bump(context.Background(), cfg); err == nil {
+		t.Fatal("Bump succeeded")
+	}
+	final := assistantEntries(store)
+	if len(final) != 1 {
+		t.Fatalf("whitespace-only retry stacked failure markers: %+v", final)
+	}
+	if final[0].ErrorMessage == nil || *final[0].ErrorMessage != reason {
+		t.Fatalf("existing marker changed: %+v", final[0])
+	}
+	if got := countMessageRole(store, "user"); got != 1 {
+		t.Fatalf("whitespace-only retry added a user: %d", got)
+	}
+	if end := singleRunEnd(t, *events); end.Outcome != event.OutcomeInterrupted {
+		t.Fatalf("outcome=%q; want interrupted", end.Outcome)
+	}
+}
+
+func TestBumpCancellationDuringProviderErrorPersistsAborted(t *testing.T) {
+	store, reg, _, _, _ := bumpSetup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	prov := &scriptedProvider{send: func(context.Context, provider.Request, func(provider.Delta)) (*provider.Response, error) {
+		cancel()
+		return &provider.Response{Text: "partial", StopReason: "error"}, nil
+	}}
+	loop := New(store, reg, prov, nil)
+	err := loop.Submit(ctx, "hello", bumpConfig())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Submit error=%v; want cancellation", err)
+	}
+	assistants := assistantEntries(store)
+	if len(assistants) != 1 {
+		t.Fatalf("assistant records=%d; want one aborted partial", len(assistants))
+	}
+	assistant := assistants[0]
+	if assistant.StopReason != "aborted" || assistant.ErrorMessage == nil || *assistant.ErrorMessage != context.Canceled.Error() {
+		t.Fatalf("aborted partial=%+v", assistant)
+	}
+	if len(assistant.Content) != 1 || assistant.Content[0].Text == nil || assistant.Content[0].Text.Text != "partial" {
+		t.Fatalf("partial content lost: %+v", assistant.Content)
+	}
+}
+
+func TestBumpProviderFailureAppendFailurePreservesCause(t *testing.T) {
+	store, reg, _, _, events := bumpSetup(t)
+	storageErr := errors.New("storage unavailable")
+	prov := &scriptedProvider{send: func(context.Context, provider.Request, func(provider.Delta)) (*provider.Response, error) {
+		store.FailWritesForTest(storageErr)
+		return &provider.Response{Text: "partial", StopReason: "error"}, nil
+	}}
+	loop := New(store, reg, prov, func(e event.Event) { *events = append(*events, e) })
+	err := loop.Submit(context.Background(), "hello", bumpConfig())
+	if !errors.Is(err, storageErr) || !strings.Contains(err.Error(), "provider stopped: error") {
+		t.Fatalf("error=%v; want provider and storage causes", err)
+	}
+	if end := singleRunEnd(t, *events); end.Outcome != event.OutcomeUnsaved {
+		t.Fatalf("outcome=%q; want unsaved", end.Outcome)
+	}
+	if got := countMessageRole(store, "assistant"); got != 0 {
+		t.Fatalf("failed authoritative append produced %d assistants", got)
+	}
+}
+
+func TestFailureFinalizationMarksStickyStorageErrorUnsaved(t *testing.T) {
+	store, _, _, loop, _ := bumpSetup(t)
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "hello", Timestamp: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	reason := "transport down"
+	marker := session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", StopReason: "error", ErrorMessage: &reason,
+		Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: ""}}},
+	}}
+	if _, err := store.AppendMessage(marker); err != nil {
+		t.Fatal(err)
+	}
+	before := countMessageRole(store, "assistant")
+	storageErr := errors.New("storage unavailable")
+	store.FailWritesForTest(storageErr)
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "blocked", Timestamp: 2}}); err == nil {
+		t.Fatal("blocked append succeeded")
+	}
+	outcome := event.OutcomeDurable
+	runErr := errors.New("run failed")
+	cfg := bumpConfig()
+	loop.finalizeFailure(context.Background(), &cfg, &outcome, &runErr)
+	if outcome != event.OutcomeUnsaved {
+		t.Fatalf("outcome=%q; want unsaved", outcome)
+	}
+	if got := countMessageRole(store, "assistant"); got != before {
+		t.Fatalf("finalization changed marker count: %d -> %d", before, got)
+	}
+	if !strings.Contains(runErr.Error(), "run failed") {
+		t.Fatalf("original error lost: %v", runErr)
+	}
+}
+
+func TestFailureFinalizationDoesNotMutateUnsafeContinuation(t *testing.T) {
+	store, _, _, loop, _ := bumpSetup(t)
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "old", Timestamp: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role: "assistant", StopReason: "deferred",
+		Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "later"}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "now", Timestamp: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	before := store.EntryCount()
+	outcome := event.OutcomeDurable
+	runErr := errors.New("deferred message blocks continuation")
+	cfg := bumpConfig()
+	loop.finalizeFailure(context.Background(), &cfg, &outcome, &runErr)
+	if store.EntryCount() != before {
+		t.Fatalf("finalization mutated unsafe continuation: %d -> %d", before, store.EntryCount())
+	}
+	if outcome != event.OutcomeDurable {
+		t.Fatalf("outcome=%q; want durable", outcome)
+	}
+}
+
 // bumpGateProvider blocks until the context is cancelled, optionally streaming a
 // prefix and running a hook first.
 type bumpGateProvider struct {
@@ -1155,6 +1333,35 @@ func TestBumpRefusesUnsafeContinuation(t *testing.T) {
 		}
 		if fake.CallCount() != 0 || store.EntryCount() != before {
 			t.Fatal("unsafe continuation reached provider or mutated the session")
+		}
+	})
+
+	t.Run("completed tip with unsafe history", func(t *testing.T) {
+		store, _, fake, loop, _ := bumpSetup(t)
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "old", Timestamp: 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+			Role: "assistant", StopReason: "deferred",
+			Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "later"}}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "now", Timestamp: 2}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+			Role: "assistant", StopReason: "stop",
+			Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: "done"}}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		before := store.EntryCount()
+		if err := loop.Bump(context.Background(), bumpConfig()); !errors.Is(err, ErrNotBumpable) {
+			t.Fatalf("Bump error=%v; want ErrNotBumpable", err)
+		}
+		if fake.CallCount() != 0 || store.EntryCount() != before {
+			t.Fatal("completed tip reached provider or mutated the session")
 		}
 	})
 

@@ -55,6 +55,16 @@ func TestBumpAdmission(t *testing.T) {
 			want: agent.ErrNotBumpable,
 		},
 		{
+			name: "completed tip with unsafe history",
+			prepare: func(t *testing.T, r *runtime) {
+				appendBumpUser(t, r.store, "old")
+				appendBumpAssistant(t, r.store, "deferred", "later")
+				appendBumpUser(t, r.store, "now")
+				appendBumpAssistant(t, r.store, "stop", "done")
+			},
+			want: agent.ErrNotBumpable,
+		},
+		{
 			name: "busy run",
 			prepare: func(t *testing.T, r *runtime) {
 				appendBumpUser(t, r.store, "hello")

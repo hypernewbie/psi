@@ -9,12 +9,13 @@ still apply. A completed answer or an output-limited response (`length`) is not
 retried. Empty `Enter` stays silent when bump is unavailable; `/b` reports the
 reason. A retry can bill the provider again.
 
-The failed assistant stays in the session as a hidden record and is omitted
-from ordinary continuation requests. Visible partial text remains in the
-transcript. Existing compaction can summarize that visible progress. A crash
-can hide whether a tool already ran; the retry sends synthetic missing-tool
-results in request context, does not write them to the session, and never
-re-executes the old batch. The model can request a new call.
+When a failed turn produced no visible output, its assistant stays in the
+session as a hidden record and is omitted from ordinary continuation requests.
+Visible partial text remains in the transcript. Existing compaction can
+summarize that visible progress. A crash can hide whether a tool already ran;
+the retry sends synthetic missing-tool results in request context, does not
+write them to the session, and never re-executes the old batch. The model can
+request a new call.
 
 Interrupted sessions: psi follows Pi's replay behavior. It adds a synthetic
 error result for each tool call with no saved result, then continues without

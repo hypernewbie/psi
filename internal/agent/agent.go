@@ -429,11 +429,11 @@ func (l *Loop) Bump(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
-		return err
-	}
 	if !session.CanBump(proj.Flat) {
 		return ErrNotBumpable
+	}
+	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+		return err
 	}
 	if err := l.store.CheckWritable(); err != nil {
 		return fmt.Errorf("storage failure, stopping: %w", err)
@@ -722,19 +722,39 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			return cause
 		}
 		providerFailure := ""
+		var providerErr error
 		if resp.StopReason == "error" || resp.StopReason == "aborted" {
 			providerFailure = fmt.Sprintf("provider stopped: %s", resp.StopReason)
+			providerErr = errors.New(providerFailure)
 			if ctx.Err() != nil {
+				// The streamed-response path records cancellation as aborted. Keep
+				// the same durable stop reason when a final response arrives after
+				// cancellation.
+				resp.StopReason = "aborted"
 				providerFailure = ctx.Err().Error()
+				providerErr = ctx.Err()
 			}
 		}
 		assistantMessage := toSessionAssistant(resp, cfg)
 		if providerFailure != "" {
 			assistantMessage = toFailureAssistant(resp, cfg, providerFailure)
 		}
-		if _, err := l.store.AppendMessage(assistantMessage); err != nil {
-			outcome = event.OutcomeUnsaved
-			return fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
+		keepExistingFailure := false
+		if providerFailure != "" && !hasVisibleAssistantContent(assistantMessage.Assistant) {
+			if last := session.LastConversationalMessage(proj.Flat); last != nil && session.IsFailureAssistant(*last) {
+				// A failed retry with no output must not stack another empty marker.
+				keepExistingFailure = true
+			}
+		}
+		if !keepExistingFailure {
+			if _, err := l.store.AppendMessage(assistantMessage); err != nil {
+				outcome = event.OutcomeUnsaved
+				storageFailure := fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
+				if providerErr != nil {
+					return errors.Join(providerErr, storageFailure)
+				}
+				return storageFailure
+			}
 		}
 		// A provider may return reasoning only in the final response. Show the
 		// part that never arrived as a delta, before the text tail, so the
@@ -746,12 +766,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			l.emitChunked(suffix, event.TextDelta, event.OutcomeDurable)
 		}
 		// Settlement barrier: persistence precedes RunEnd and the next prompt.
-		if resp.StopReason == "error" || resp.StopReason == "aborted" {
+		if providerErr != nil {
 			outcome = event.OutcomeInterrupted
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return errors.New(providerFailure)
+			return providerErr
 		}
 		// A length-limited response can contain unfinished tool requests. Never
 		// execute them as if the provider completed a tool-use turn.
@@ -870,7 +887,7 @@ func (l *Loop) emitChunked(text string, typ event.Type, outcome string) {
 // surfaced failure reason is stored on the same assistant record so a resumed
 // session keeps the cause without a visible duplicate marker.
 func (l *Loop) savePartial(text, thinking, stop, reason string, cfg Config) error {
-	if text == "" && thinking == "" {
+	if strings.TrimSpace(text) == "" && strings.TrimSpace(thinking) == "" {
 		return nil
 	}
 	partial := &provider.Response{Text: text, Thinking: thinking, StopReason: stop}
@@ -894,9 +911,30 @@ func toFailureAssistant(resp *provider.Response, cfg Config, reason string) sess
 	return message
 }
 
+// hasVisibleAssistantContent reports whether the assistant has content a user
+// can see in the transcript. Empty or whitespace-only text and thinking do not
+// count; a tool call does.
+func hasVisibleAssistantContent(message *session.AssistantMessage) bool {
+	if message == nil {
+		return false
+	}
+	for _, block := range message.Content {
+		switch {
+		case block.Text != nil && strings.TrimSpace(block.Text.Text) != "":
+			return true
+		case block.Thinking != nil && strings.TrimSpace(block.Thinking.Thinking) != "":
+			return true
+		case block.Call != nil:
+			return true
+		}
+	}
+	return false
+}
+
 // finalizeFailure records an unfinished turn before RunEnd. It never runs for
-// pre-admission errors. A recorded failure or a completed/length response is
-// left unchanged; a missing marker or a failed write makes the outcome unsaved.
+// pre-admission errors. It uses the same eligibility rule as Bump so marker
+// creation and retry admission cannot disagree. A recorded failure is left in
+// place; a sticky write error makes the outcome unsaved.
 func (l *Loop) finalizeFailure(ctx context.Context, cfg *Config, outcome *string, runErr *error) {
 	proj, err := l.store.Projection()
 	if err != nil {
@@ -905,46 +943,25 @@ func (l *Loop) finalizeFailure(ctx context.Context, cfg *Config, outcome *string
 		return
 	}
 	last := session.LastConversationalMessage(proj.Flat)
-	if last == nil {
+	if last == nil || !session.CanBump(proj.Flat) {
 		return
-	}
-	if last.Role == "assistant" && last.Assistant != nil {
-		switch last.Assistant.StopReason {
-		case "error", "aborted":
-			if *outcome != event.OutcomeUnsaved {
-				*outcome = event.OutcomeInterrupted
-			}
-			return
-		case "toolUse":
-			if !session.CanBump([]session.AgentMessage{*last}) {
-				return
-			}
-		default:
-			return
-		}
-	} else {
-		switch last.Role {
-		case "user":
-			if last.User == nil {
-				return
-			}
-		case "toolResult":
-			if last.ToolResult == nil {
-				return
-			}
-		case "custom":
-			if last.Custom == nil {
-				return
-			}
-		default:
-			return
-		}
 	}
 	if *outcome == event.OutcomeUnsaved {
 		return
 	}
-	if werr := l.store.WriteError(); werr != nil {
+	if l.store.WriteError() != nil {
+		// A sticky error can already block the session even when no marker append
+		// is attempted. An unfinished tip is not durably settled in that state.
 		*outcome = event.OutcomeUnsaved
+		return
+	}
+	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+		// The projection cannot safely continue. Adding a marker would mutate a
+		// session that Bump must refuse, so leave the existing failure untouched.
+		return
+	}
+	if session.IsFailureAssistant(*last) {
+		*outcome = event.OutcomeInterrupted
 		return
 	}
 	stop := "error"

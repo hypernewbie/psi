@@ -18,6 +18,14 @@ func LastConversationalMessage(flat []AgentMessage) *AgentMessage {
 	return nil
 }
 
+// IsFailureAssistant reports whether the message is a persisted failed or
+// interrupted assistant response. It does not require an error message or
+// empty content; visible partial responses are failure assistants too.
+func IsFailureAssistant(message AgentMessage) bool {
+	return message.Role == "assistant" && message.Assistant != nil &&
+		(message.Assistant.StopReason == "error" || message.Assistant.StopReason == "aborted")
+}
+
 // CanBump reports whether the last conversational message represents an
 // unfinished turn. It does not replace CheckContinuable or request validation:
 // earlier malformed content and deferred runtime state still block continuation.
@@ -25,6 +33,9 @@ func CanBump(flat []AgentMessage) bool {
 	last := LastConversationalMessage(flat)
 	if last == nil {
 		return false
+	}
+	if IsFailureAssistant(*last) {
+		return true
 	}
 	switch last.Role {
 	case "user":
@@ -37,10 +48,7 @@ func CanBump(flat []AgentMessage) bool {
 		if last.Assistant == nil {
 			return false
 		}
-		switch last.Assistant.StopReason {
-		case "error", "aborted":
-			return true
-		case "toolUse":
+		if last.Assistant.StopReason == "toolUse" {
 			for _, block := range last.Assistant.Content {
 				if block.Type == "toolCall" && block.Call != nil {
 					return true

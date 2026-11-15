@@ -452,7 +452,7 @@ Pi-compatible options:
   --version, -v              Show version
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
-Interactive Enter submits; an empty Enter or /b retries the last failed request when idle.
+Interactive Enter submits; an empty Enter or /b retries the last unfinished turn when idle.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect read,bash,edit,write only.
 loop_control and syncboard remain available when their separate availability checks pass.
@@ -776,11 +776,11 @@ func (r *runtime) checkBump(unavailable bool) error {
 	if err != nil {
 		return err
 	}
-	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
-		return err
-	}
 	if !session.CanBump(proj.Flat) {
 		return agent.ErrNotBumpable
+	}
+	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+		return err
 	}
 	if err := r.store.CheckWritable(); err != nil {
 		r.state = StateStorageBlocked
