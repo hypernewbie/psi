@@ -28,7 +28,8 @@ import (
 //	PSI_WEB_CONFIG_PATH=~/.pi/web-search.json \
 //	go test -tags acceptance ./internal/app -run TestWebAccessLive -v
 //
-// They are manual acceptance tests, not part of CI.
+// The keyless Exa case creates its own config and needs no PSI_WEB_CONFIG_PATH.
+// These are manual acceptance tests, not part of CI.
 
 type acceptanceTurn struct {
 	tools   []string
@@ -449,4 +450,81 @@ func TestWebAccessLiveBatchBinary(t *testing.T) {
 		t.Fatalf("retrieved page lacks expected text: %.500q", content)
 	}
 	t.Logf("live batch retrieval excerpt: %s", excerpt(content, 300))
+}
+
+func TestWebAccessLiveKeylessExaBinary(t *testing.T) {
+	if os.Getenv("PSI_LIVE_WEB") != "1" {
+		t.Skip("set PSI_LIVE_WEB=1 to run live acceptance")
+	}
+	configPath := filepath.Join(t.TempDir(), "web-search.json")
+	writeAppFile(t, configPath, `{"provider":"exa"}`)
+	t.Setenv("PSI_WEB_CONFIG_PATH", configPath)
+	env := prepareAcceptance(t, func(turn int, results []string) (string, string) {
+		if turn == 0 {
+			return "web_search", `{"query":"Go net/http Client Timeout documentation","provider":"exa","numResults":2}`
+		}
+		if turn > 2 {
+			return "", ""
+		}
+		if len(results) != turn {
+			t.Errorf("turn %d: tool results = %d", turn, len(results))
+			return "", ""
+		}
+		id := responseIDValue(results[0])
+		if id == "" {
+			t.Errorf("keyless Exa search returned no responseId: %.400q", results[0])
+			return "", ""
+		}
+		if turn == 1 {
+			return "get_search_content", fmt.Sprintf(`{"responseId":%q}`, id)
+		}
+		return "get_search_content", fmt.Sprintf(`{"responseId":%q,"offset":17,"limit":73}`, id)
+	})
+	env.run(t, "--mode", "rpc", "--tools", "web_search,get_search_content",
+		"--provider", "anthropic", "--model", "web-fixture",
+		"--deny-project", "--no-session", "--no-context-files", "--no-skills")
+
+	turns := env.snapshotTurns()
+	if len(turns) != 4 {
+		t.Fatalf("expected search and two retrieval turns, got %d", len(turns))
+	}
+	for _, name := range []string{"web_search", "get_search_content"} {
+		if !contains(turns[0].tools, name) {
+			t.Fatalf("%s was not advertised: %v", name, turns[0].tools)
+		}
+	}
+	for i := 1; i < len(turns); i++ {
+		if len(turns[i].results) != i {
+			t.Fatalf("turn %d: tool results = %d", i, len(turns[i].results))
+		}
+	}
+	search := turns[1].results[0]
+	urls := resultURLs(search)
+	if strings.Contains(search, "web_search failed") || !strings.Contains(search, "provider: exa\n") || len(urls) < 1 || len(urls) > 2 {
+		t.Fatalf("expected live Exa results: %.600q", search)
+	}
+	id := responseIDValue(search)
+	overview := turns[2].results[1]
+	page := turns[3].results[2]
+	for _, result := range []string{overview, page} {
+		if responseIDValue(result) != id || !strings.Contains(result, "kind: search\n") {
+			t.Fatalf("retrieval lost search identity: %.400q", result)
+		}
+	}
+	_, wantOverview, ok := strings.Cut(search, "\ncontent:\n")
+	_, gotOverview, gotBoundary := strings.Cut(overview, "\ncontent:\n")
+	if !ok || !gotBoundary || gotOverview != wantOverview || !strings.Contains(overview, "offset: 0\n") {
+		t.Fatalf("stored overview differs from the live search: %.600q", overview)
+	}
+	runes := []rune(gotOverview)
+	if len(runes) < 90 {
+		t.Fatalf("overview too short for paging: %d scalars", len(runes))
+	}
+	_, gotPage, ok := strings.Cut(page, "\ncontent:\n")
+	if !ok || gotPage != string(runes[17:90]) || !strings.Contains(page, "offset: 17\n") || !strings.Contains(page, "next-offset: 90\n") {
+		t.Fatalf("stored search paging changed the payload or offsets: %.400q", page)
+	}
+	t.Logf("live keyless Exa result URLs: %v", urls)
+	t.Logf("stored overview: responseId=%s, scalars=%d; exact page offset=17, limit=73, next-offset=90", id, len(runes))
+	t.Logf("live keyless Exa search excerpt: %s", excerpt(search, 700))
 }
