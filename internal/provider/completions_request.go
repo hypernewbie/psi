@@ -184,6 +184,7 @@ func BuildCompletionsRequest(req Request) (map[string]any, error) {
 	if maxTokens <= 0 {
 		maxTokens = 16384
 	}
+	maxTokens = clampMaxTokensToContext(req.Model, req, maxTokens)
 	messages, err := convertCompletionsMessages(req, compat)
 	if err != nil {
 		return nil, err

@@ -43,7 +43,7 @@ func BuildResponsesRequest(req Request) (map[string]any, error) {
 		maxTokens = req.Model.MaxTokens
 	}
 	if maxTokens > 0 && compat.supportsMaxOutputTokens {
-		body["max_output_tokens"] = max(16, maxTokens)
+		body["max_output_tokens"] = max(16, clampMaxTokensToContext(req.Model, req, maxTokens))
 	}
 	if !compat.supportsMidConvoSystemMessages || !compat.supportsAdditionalTools {
 		if tools := responseTools(req.Tools, compat.supportsStrictMode); len(tools) > 0 {

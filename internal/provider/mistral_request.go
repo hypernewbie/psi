@@ -55,7 +55,7 @@ func BuildMistralRequest(req Request) (map[string]any, error) {
 		maxTokens = req.Model.MaxTokens
 	}
 	if maxTokens > 0 {
-		payload["maxTokens"] = max(16, maxTokens)
+		payload["maxTokens"] = max(16, clampMaxTokensToContext(req.Model, req, maxTokens))
 	}
 	// Models with a thinking level map use reasoning_effort; other reasoning
 	// models use prompt_mode. Effective effort falls back to "high".

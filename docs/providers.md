@@ -119,6 +119,14 @@ last tool, and the last conversation text part. psi also detects this for
 `openrouter` models whose id starts with `anthropic/`, as Pi does. No cache
 retention (`ttl`) is sent.
 
+## Request limits
+
+The output limit of a request is the smaller of the model's output cap and the
+room left in its context window. A model whose output cap equals its context
+window, such as an OpenCode Go Kimi model, would otherwise ask for more tokens
+than the endpoint can return, and the endpoint rejects that request with a
+`400`. Every adapter applies the cap, and a longer prompt lowers the limit.
+
 ## Anthropic beta features
 
 An `anthropic-messages` request that uses a beta feature has to declare it in

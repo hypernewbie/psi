@@ -52,6 +52,12 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	if maxTokens <= 0 {
 		maxTokens = 16384
 	}
+	// The endpoint refuses an output limit that leaves no room for the prompt.
+	// A thinking budget has to stay below the limit, so the cap only applies
+	// when the budget still fits.
+	if clamped := clampMaxTokensToContext(req.Model, req, maxTokens); req.Model.AdaptiveThinking || budget == 0 || clamped > budget {
+		maxTokens = clamped
+	}
 	if budget >= maxTokens && budget > 0 && !req.Model.AdaptiveThinking {
 		return nil, fmt.Errorf("thinking budget %d must be less than max output tokens %d", budget, maxTokens)
 	}

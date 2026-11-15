@@ -68,6 +68,7 @@ func BuildGoogleRequest(req Request) (map[string]any, error) {
 	if maxTokens <= 0 {
 		maxTokens = 16384
 	}
+	maxTokens = clampMaxTokensToContext(req.Model, req, maxTokens)
 	generationConfig := map[string]any{"maxOutputTokens": maxTokens}
 	body := map[string]any{"contents": contents, "generationConfig": generationConfig}
 	if req.System != "" {
