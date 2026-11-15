@@ -56,11 +56,11 @@ from `.github/workflows/ci.yml`.
 
 For each tool or capability that you add, change, rename, or remove, complete these steps in the same change:
 
-- Update the affected documentation in `docs/` and the CLI help.
-- Update the affected system-prompt guidance in `internal/config/prompt.go` and other prompt sources.
+- Update the affected documentation in `docs/` and the CLI help in both supported languages.
+- Update the affected system-prompt guidance in `internal/config/prompt.go` and other prompt sources in both supported languages.
 - Describe the actual availability, permissions, limits, and failure behavior.
 - If documentation topics change, update the topic list in `docs/docs.go`.
-- Update the affected prompt fixtures and regression tests.
+- Update the affected prompt fixtures and regression tests for both supported languages.
 
 Before you report completion, check that the documentation and prompt guidance match the implementation.
 If documentation or prompt changes are unnecessary, explain why in the change summary.
@@ -80,3 +80,15 @@ Contributor procedures that are not `psi --docs` topics are indexed in [docs/dev
 - Never include or refer to private installation details, configuration values, personal data, or identifiers from a real environment anywhere in the repository. This applies to code, comments, documentation, prompts, tests, fixtures, examples, generated files, and commit messages.
 - Never include real local hostnames, IP addresses, network identifiers, private usernames or paths, or other identifying infrastructure details. Use fictional data and placeholders instead.
 - Do not name a predecessor or attribute Psionic's design, behavior, or formats to one. Describe Psionic's capabilities on their own terms.
+
+## Localization
+
+Supported languages are English (`en`) and Simplified Chinese (`zh`). Do not add another language, aliases such as `zh-CN`, or automatic locale detection without explicit approval.
+
+- New documentation topics, built-in skills, prompt sections, CLI help entries, settings labels and descriptions, notices, errors, and UI text must include both English and Simplified Chinese versions in the same change.
+- Route user-facing UI text through a shared i18n layer with stable keys and `en`/`zh` catalogs. Do not add new hard-coded user-facing strings to individual screens, commands, or prompt builders.
+- Keep identifiers stable. Tool names, command names, paths, XML tag names, topic IDs, JSON keys, and code identifiers are not translated.
+- Do not translate user-owned content such as repository `AGENTS.md` files, `SYSTEM.md`, custom skills, or imported documentation unless the user explicitly asks.
+- Update language-specific fixtures and regression tests for both languages whenever behavior or text differs.
+- If a surface is not localized yet, document the gap and do not claim full i18n support. Current prompt-only localization covers built-in prompt text and the skills wrapper; terminal labels, notices, errors, embedded documentation bodies, and other UI strings still need migration.
+- When adding a language later, update the supported-language list, the `language` setting validation, CLI help, documentation, prompt fixtures, and tests together.
