@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +14,7 @@ import (
 
 	"psi/internal/config"
 	"psi/internal/provider"
+	"psi/internal/session"
 	"psi/internal/terminal"
 )
 
@@ -177,6 +180,80 @@ func TestLogoutPickerRemovesOnlyStoredBuiltInAPIKey(t *testing.T) {
 	}
 }
 
+func TestActiveAPIKeyChangesReachProviderRequests(t *testing.T) {
+	for _, configuredKey := range []string{"", "configured-fallback"} {
+		name := "environment fallback"
+		if configuredKey != "" {
+			name = "configured fallback precedes environment"
+		}
+		t.Run(name, func(t *testing.T) {
+			const environmentKey = "environment-fallback"
+			const replacementKey = "!replacement-$-key"
+			t.Setenv("DEEPSEEK_API_KEY", environmentKey)
+			headers := make(chan string, 3)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				headers <- req.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			r := testRuntime(t)
+			r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{"deepseek": {
+				APIKey: configuredKey,
+				Models: []config.ModelMeta{{ID: "synthetic-deepseek", API: "openai-completions", BaseURL: server.URL, MaxTokens: 1234, Input: []string{"text"}}},
+			}}}
+			writeAppFile(t, filepath.Join(r.agentDir, "auth.json"), `{"deepseek":{"type":"api_key","key":"stored-key"}}`)
+			if err := r.configure(config.StartupOverrides{Provider: "deepseek", Model: "synthetic-deepseek", Thinking: "off"}); err != nil {
+				t.Fatal(err)
+			}
+			r.state = StateIdle
+			console := authCommandConsole(t)
+			r.lifecycle = &terminalLifecycle{console: console}
+			send := func(stage, key string) {
+				t.Helper()
+				if r.authErr != nil || r.state != StateIdle || r.prov == nil {
+					t.Fatalf("%s: active provider is unavailable", stage)
+				}
+				response, err := r.prov.Send(t.Context(), provider.Request{Model: r.cfg.Model, Thinking: "off", Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "synthetic"}}}}}, nil)
+				if err != nil || response == nil || response.Text != "ok" {
+					t.Fatalf("%s: provider request failed: %v", stage, err)
+				}
+				select {
+				case header := <-headers:
+					if header != "Bearer "+key {
+						t.Fatalf("%s: provider request used the wrong credential", stage)
+					}
+				default:
+					t.Fatalf("%s: no provider request reached the server", stage)
+				}
+			}
+			send("before login", "stored-key")
+			selection := r.ov
+			if err := r.loginCommand("deepseek", console); err != nil {
+				t.Fatal(err)
+			}
+			if submitted, cancelled, err := console.HandleSecret(terminal.Input{Key: []byte(replacementKey)}); err != nil || submitted || cancelled {
+				t.Fatal("could not enter replacement key")
+			}
+			if submitted, cancelled, err := console.HandleSecret(terminal.Input{Key: []byte{'\r'}}); err != nil || !submitted || cancelled {
+				t.Fatal("could not submit replacement key")
+			}
+			r.finishLogin(console, io.Discard)
+			if r.ov != selection {
+				t.Fatal("replacing the active key changed the model selection")
+			}
+			send("after login", replacementKey)
+			r.finishLogout("deepseek", console, io.Discard)
+			fallback := configuredKey
+			if fallback == "" {
+				fallback = environmentKey
+			}
+			send("after logout", fallback)
+		})
+	}
+}
+
 func TestLogoutActiveProviderWithoutFallbackGoesOffline(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	r := testRuntime(t)
@@ -218,6 +295,72 @@ func TestLogoutWithNoStoredKeysLeavesAuthFileAbsent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.agentDir, "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("empty logout created auth.json: %v", err)
+	}
+}
+
+func TestFirstLoginRetainsSavedKeyWhenLaterPersistenceFails(t *testing.T) {
+	for _, sessionFailure := range []bool{true, false} {
+		name := "settings write"
+		wantNotice := "but could not save defaults:"
+		if sessionFailure {
+			name = "session write"
+			wantNotice = "but could not select the default model:"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("DEEPSEEK_API_KEY", "")
+			r := testRuntime(t)
+			r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{}}
+			r.state = StateOffline
+			if _, err := r.store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "synthetic prior input", Timestamp: 1}}); err != nil {
+				t.Fatal(err)
+			}
+			oldSelection, oldProvider := r.ov, r.prov
+			console := authCommandConsole(t)
+			r.lifecycle = &terminalLifecycle{console: console}
+			if err := r.loginCommand("deepseek", console); err != nil {
+				t.Fatal(err)
+			}
+			const key = "!saved-$-key"
+			console.HandleSecret(terminal.Input{Key: []byte(key)})
+			settingsPath := filepath.Join(r.agentDir, "settings.json")
+			if sessionFailure {
+				r.store.FailWritesForTest(errPoison)
+			} else {
+				writeAppFile(t, settingsPath, `{"defaultProvider":`)
+			}
+			var output bytes.Buffer
+			r.finishLogin(console, &output)
+			resolved, _, err := provider.SelectProviderAPIKey(envMap(), filepath.Join(r.agentDir, "auth.json"), "deepseek", "")
+			if err != nil || resolved != key {
+				t.Fatal("later persistence failure discarded the saved key")
+			}
+			if console.EndSecret() != "" || r.login != nil || console.Editor.Text() != "" {
+				t.Fatal("later persistence failure retained secret input")
+			}
+			if !strings.Contains(output.String(), wantNotice) || strings.Contains(output.String(), "Credentials saved to") {
+				t.Fatal("later persistence failure did not report the partial result")
+			}
+			if sessionFailure {
+				if r.state != StateStorageBlocked || r.store.WriteError() == nil || r.authErr == nil || r.ov != oldSelection || r.prov != oldProvider {
+					t.Fatal("failed session write installed the candidate or cleared storage failure")
+				}
+				if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+					t.Fatal("failed session write attempted to persist defaults")
+				}
+				return
+			}
+			if r.state != StateIdle || r.authErr != nil || r.prov == nil || r.ov.Provider != "deepseek" || r.ov.Model != "deepseek-v4-pro" {
+				t.Fatal("failed defaults write discarded the usable current selection")
+			}
+			selection, err := r.store.ModelState()
+			if err != nil || selection.Provider != r.ov.Provider || selection.ModelID != r.ov.Model {
+				t.Fatal("failed defaults write lost the persisted session selection")
+			}
+			data, err := os.ReadFile(settingsPath)
+			if err != nil || string(data) != `{"defaultProvider":` {
+				t.Fatal("failed defaults write changed the malformed settings")
+			}
+		})
 	}
 }
 

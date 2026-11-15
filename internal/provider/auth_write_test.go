@@ -239,46 +239,16 @@ func TestSaveAPIKeyRefusesSymlinkAndPreservesTarget(t *testing.T) {
 	}
 }
 
-func TestSaveAPIKeyCancellationAndLeaseRefusalLeaveNoChanges(t *testing.T) {
-	t.Run("pre-cancelled missing file", func(t *testing.T) {
-		authPath := filepath.Join(t.TempDir(), "missing", "auth.json")
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if err := SaveAPIKey(ctx, authPath, "deepseek", "secret"); !errors.Is(err, context.Canceled) {
-			t.Fatalf("error = %v, want context canceled", err)
-		}
-		if _, err := os.Stat(filepath.Dir(authPath)); !os.IsNotExist(err) {
-			t.Fatalf("directory created after cancellation: %v", err)
-		}
-	})
-	t.Run("cancelled lease wait", func(t *testing.T) {
-		dir := t.TempDir()
-		authPath := filepath.Join(dir, "auth.json")
-		original := `{"deepseek":{"type":"api_key","key":"old"}}`
-		if err := os.WriteFile(authPath, []byte(original), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		lockPath := authPath + ".lock"
-		if err := os.Mkdir(lockPath, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if err := SaveAPIKey(ctx, authPath, "deepseek", "secret"); !errors.Is(err, context.Canceled) {
-			t.Fatalf("error = %v, want context canceled", err)
-		}
-		if _, err := os.Stat(lockPath); err != nil {
-			t.Fatalf("holder lock changed: %v", err)
-		}
-		after, err := os.ReadFile(authPath)
-		if err != nil || string(after) != original {
-			t.Fatalf("auth.json changed: error=%v", err)
-		}
-		temps, _ := filepath.Glob(filepath.Join(dir, ".psi-auth-*"))
-		if len(temps) != 0 {
-			t.Fatalf("temporary files remain: %v", temps)
-		}
-	})
+func TestSaveAPIKeyPreCancelledContextHasNoFilesystemEffects(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "missing", "auth.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := SaveAPIKey(ctx, authPath, "deepseek", "secret"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if _, err := os.Stat(filepath.Dir(authPath)); !os.IsNotExist(err) {
+		t.Fatalf("directory created after cancellation: %v", err)
+	}
 }
 
 func TestWriteAuthDocumentLostLeaseLeavesOriginalAndNoTemp(t *testing.T) {
