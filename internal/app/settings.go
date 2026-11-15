@@ -281,6 +281,15 @@ func modelThinkingSummary(r *runtime) string {
 	return strconv.Itoa(count) + " configured"
 }
 
+// globalThinkingDefault is the effective global default shown to the picker.
+// An empty configured value behaves as off, matching resolution.
+func (r *runtime) globalThinkingDefault() string {
+	if r.settings.DefaultThinkingSet && r.settings.DefaultThinking != "" {
+		return r.settings.DefaultThinking
+	}
+	return "off"
+}
+
 func intSettingValues(labels []string, values []int, current int) ([]terminal.SettingsValue, int) {
 	out := make([]terminal.SettingsValue, 0, len(values)+1)
 	selected := 0
@@ -354,11 +363,7 @@ func modelThinkingLevelItems(r *runtime, providerID, modelID string, meta config
 		items = append(items, session.SessionInfo{ID: level, FirstMessage: provider.ThinkingDescription(pm, level)})
 	}
 	if _, exists := r.settings.ModelThinkingLevels[providerID+"/"+modelID]; exists {
-		global := "off"
-		if r.settings.DefaultThinkingSet {
-			global = r.settings.DefaultThinking
-		}
-		items = append(items, session.SessionInfo{ID: modelThinkingClearChoice, FirstMessage: "Revert to global default (" + global + ")"})
+		items = append(items, session.SessionInfo{ID: modelThinkingClearChoice, FirstMessage: "Revert to global default (" + r.globalThinkingDefault() + ")"})
 	}
 	return items
 }
@@ -402,10 +407,7 @@ func (r *runtime) applyModelThinkingLevel(target, level string, out io.Writer) e
 	if current {
 		sessionLevel := level
 		if clear {
-			sessionLevel = "off"
-			if r.settings.DefaultThinkingSet {
-				sessionLevel = r.settings.DefaultThinking
-			}
+			sessionLevel = r.globalThinkingDefault()
 		}
 		sessionLevel = provider.ClampThinkingLevel(r.cfg.Model, sessionLevel)
 		if _, err := r.command(&terminal.Command{Name: "thinking", Arg: sessionLevel}, out); err != nil {

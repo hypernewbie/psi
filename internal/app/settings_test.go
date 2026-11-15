@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"psi/internal/config"
+	"psi/internal/provider"
 	"psi/internal/terminal"
 	pitheme "psi/internal/theme"
 )
@@ -69,6 +70,9 @@ func TestSettingsPickerHasTenRows(t *testing.T) {
 	last := picker.Items[len(picker.Items)-1]
 	if last.ID != "model-thinking" || last.Values[last.Selected].Label != "none" {
 		t.Fatalf("model thinking row = %+v", last)
+	}
+	if last.Description != "Override the default thinking level for specific models" {
+		t.Fatalf("model thinking description = %q", last.Description)
 	}
 }
 
@@ -577,5 +581,56 @@ func TestApplyModelThinkingLevelClearKeepsOtherOverrides(t *testing.T) {
 	}
 	if _, exists := readModelThinkingLevels(t, r)["anthropic/m"]; exists {
 		t.Fatal("cleared key remains in the file")
+	}
+}
+
+func TestModelThinkingLevelItemsIncludeClearRow(t *testing.T) {
+	r := testRuntime(t)
+	meta, err := r.models.SelectModel("anthropic", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	levels := provider.SupportedThinking(providerModel("anthropic", meta))
+	if len(levels) == 0 {
+		t.Fatal("fixture supports no thinking levels")
+	}
+	items := modelThinkingLevelItems(r, "anthropic", "m", meta)
+	if len(items) != len(levels) {
+		t.Fatalf("items without override = %d, want %d", len(items), len(levels))
+	}
+	for i, level := range levels {
+		if items[i].ID != level {
+			t.Fatalf("item %d = %q, want %q", i, items[i].ID, level)
+		}
+	}
+
+	r.settings.DefaultThinking = "low"
+	r.settings.DefaultThinkingSet = true
+	r.settings.ModelThinkingLevels = map[string]string{"anthropic/m": "high"}
+	items = modelThinkingLevelItems(r, "anthropic", "m", meta)
+	if len(items) != len(levels)+1 {
+		t.Fatalf("items with override = %d, want %d", len(items), len(levels)+1)
+	}
+	clear := items[len(items)-1]
+	if clear.ID != modelThinkingClearChoice {
+		t.Fatalf("clear ID = %q, want %q", clear.ID, modelThinkingClearChoice)
+	}
+	if clear.FirstMessage != "Revert to global default (low)" {
+		t.Fatalf("clear description = %q", clear.FirstMessage)
+	}
+
+	r.settings.DefaultThinkingSet = false
+	items = modelThinkingLevelItems(r, "anthropic", "m", meta)
+	clear = items[len(items)-1]
+	if clear.FirstMessage != "Revert to global default (off)" {
+		t.Fatalf("unset clear description = %q", clear.FirstMessage)
+	}
+
+	r.settings.DefaultThinkingSet = true
+	r.settings.DefaultThinking = ""
+	items = modelThinkingLevelItems(r, "anthropic", "m", meta)
+	clear = items[len(items)-1]
+	if clear.FirstMessage != "Revert to global default (off)" {
+		t.Fatalf("empty clear description = %q", clear.FirstMessage)
 	}
 }
