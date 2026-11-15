@@ -1,5 +1,5 @@
 {
-  "reference": "Pi Markdown component at d5b3de22d0e24a3e9c38a9410d3329b099717283",
+  "reference": "Pi Markdown component at c3cc91632d0a1950fb122605b190233f2aa0006e",
   "size": "60x16",
   "width": 60,
   "source": "# Result\n\nThe fix **passes** with `go test`.\n\n```go\nfmt.Println(\"ok\")\n```",

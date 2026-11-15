@@ -4,7 +4,7 @@
 
 PLAN5 has local implementation and acceptance evidence. Human and native-platform acceptance remains incomplete. The gate table separates local results from the remaining acceptance gaps.
 
-No live provider request ran. Provider tests use synthetic data and loopback servers. The pinned references remain Pi `d5b3de22d0e24a3e9c38a9410d3329b099717283` and Codex `23934d31b15b1127c83535f84854e5009f7cd51d`.
+No live provider request ran. Provider tests use synthetic data and loopback servers. The pinned references remain Pi `c3cc91632d0a1950fb122605b190233f2aa0006e` and Codex `23934d31b15b1127c83535f84854e5009f7cd51d`.
 
 ## Compaction checkpoint
 

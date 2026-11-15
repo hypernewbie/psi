@@ -4,7 +4,7 @@
 
 Baseline: `99ac018`. This audit covers live submissions, assistant streams, tool chains, restart replay, and configuration feedback.
 
-Pi source reference: `d5b3de22d0e24a3e9c38a9410d3329b099717283` in `temp/pi-mono`.
+Pi source reference: `c3cc91632d0a1950fb122605b190233f2aa0006e` in `temp/pi-mono`.
 
 - `UserMessageComponent` uses vertical padding around user text.
 - `AssistantMessageComponent` tests for visible content before adding its spacer.

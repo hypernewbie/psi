@@ -94,7 +94,7 @@ writeFileSync(
 			version: pkg.version,
 			generatedAt: manifest.generatedAt,
 			sha256: hashes,
-			protocolReference: "d5b3de22d0e24a3e9c38a9410d3329b099717283",
+			protocolReference: "c3cc91632d0a1950fb122605b190233f2aa0006e",
 			generator: "snapshot-models-v2",
 			providers,
 			scope: "chat model IDs, APIs, public endpoints, input/reasoning metadata, thinking maps, and compatibility metadata only; no credentials or headers",

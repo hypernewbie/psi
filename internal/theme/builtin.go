@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// These unmodified palettes are from Pi d5b3de22d0e24a3e9c38a9410d3329b099717283.
+// These unmodified palettes are from Pi c3cc91632d0a1950fb122605b190233f2aa0006e.
 // Their upstream SHA-256 values are documented in docs/plan5-acceptance.md.
 //
 //go:embed themes/dark.json themes/light.json

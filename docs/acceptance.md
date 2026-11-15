@@ -8,7 +8,7 @@ PLAN4 UI evidence is tracked separately in [the UI acceptance ledger](ui-accepta
 The earlier review withdrew unsupported blanket pass claims.
 This continuation starts from `085c51a` and adds indexed activation, actual Pi interchange, and public catalog support.
 
-The compatibility reference is Pi revision `d5b3de22d0e24a3e9c38a9410d3329b099717283`, session v3.
+The compatibility reference is Pi revision `c3cc91632d0a1950fb122605b190233f2aa0006e`, session v3.
 The reference adapter uses the unmodified reader and writer from that checkout.
 Its manifest records the revision and reader hash.
 No live provider request ran during this continuation.

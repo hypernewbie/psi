@@ -18,7 +18,7 @@ type Token struct {
 	Fallback string
 }
 
-// tokenRegistry follows theme-tokens.ts at Pi d5b3de22d0e24a3e9c38a9410d3329b099717283.
+// tokenRegistry follows theme-tokens.ts at Pi c3cc91632d0a1950fb122605b190233f2aa0006e.
 var tokenRegistry = []Token{
 	{Name: "accent", Slot: Foreground},
 	{Name: "border", Slot: Foreground},

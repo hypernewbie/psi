@@ -2,7 +2,7 @@
 
 ## Pinned revisions
 
-- Pi: `d5b3de22d0e24a3e9c38a9410d3329b099717283` (`temp/pi-mono`).
+- Pi: `c3cc91632d0a1950fb122605b190233f2aa0006e` (`temp/pi-mono`).
 - psi baseline: `d45a88b8563b7c1cde13e0f33f89b9abacb6cf24`.
 - PLAN3 implementation review starts at `2bb1c55`.
 
@@ -23,10 +23,10 @@ The adapter records these source hashes:
 
 | Source | SHA-256 |
 |---|---|
-| `packages/coding-agent/src/core/session-manager.ts` | `6dd4b725c91f7b3102ec30b4e7d26f0ae486e603e9744b2eca781d57c2a7466c` |
+| `packages/coding-agent/src/core/session-manager.ts` | `4c95253a50b3a7f3dd3d4320c5e535c9556e88140d81a426089c455c2ca2ed93` |
 | `packages/coding-agent/src/core/compaction/compaction.ts` | `32714966eb644da31cd84e8eb172965256160626b3d26ae9752c3894300f2b0b` |
 | `packages/tui/src/word-navigation.ts` | `b73e915a524926ac8881731e89026b0bc7b5b0bd465de67257af81a420465c7f` |
-| `packages/agent/src/agent-loop.ts` | `9d7589b5071ea3b8b3e3c624f9cfc09a976ebf7436024a58213837de4645167d` |
+| `packages/agent/src/agent-loop.ts` | `a2c7dc92644bae8655a263e1f5b6ecca6a0d3057002f978e709ed27ec8dd5a92` |
 | `packages/coding-agent/src/core/tools/file-mutation-queue.ts` | `33cb06ac9bcdf32c8b84d9d12e33be44c503a7670f668e003a3262cd34294d11` |
 
 The generated manifest uses adapter version `native-node-types-v3-compaction-agent-loop`.

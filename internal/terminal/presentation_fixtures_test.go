@@ -29,7 +29,7 @@ func TestPlan4BaselineFixtureIsSyntheticAndCanaryFree(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.PsiRevision != "9baf1d786b367417592d173f4299ddc2c8fe5985" || fixture.PiRevision != "d5b3de22d0e24a3e9c38a9410d3329b099717283" {
+	if fixture.PsiRevision != "9baf1d786b367417592d173f4299ddc2c8fe5985" || fixture.PiRevision != "c3cc91632d0a1950fb122605b190233f2aa0006e" {
 		t.Fatalf("baseline revisions drifted: %+v", fixture)
 	}
 	capture := strings.Join(fixture.Offline, "\n")
@@ -71,7 +71,7 @@ func TestPlan4PiMarkdownFixture(t *testing.T) {
 			t.Errorf("message row %d: got %q want %q", i, got[i], fixture.MessageRows[i])
 		}
 	}
-	if !strings.Contains(fixture.Reference, "d5b3de22d0e24a3e9c38a9410d3329b099717283") || len(fixture.StyleTokens) == 0 || len(fixture.Omissions) == 0 {
+	if !strings.Contains(fixture.Reference, "c3cc91632d0a1950fb122605b190233f2aa0006e") || len(fixture.StyleTokens) == 0 || len(fixture.Omissions) == 0 {
 		t.Fatal("Markdown fixture must identify pinned behavior and intentional omissions")
 	}
 }
@@ -105,7 +105,7 @@ func TestPlan4PiEditorAndFooterFixture(t *testing.T) {
 			t.Errorf("row %d: got %q want %q", i, got, wantRows[i])
 		}
 	}
-	if !strings.Contains(fixture.Reference, "d5b3de22d0e24a3e9c38a9410d3329b099717283") {
+	if !strings.Contains(fixture.Reference, "c3cc91632d0a1950fb122605b190233f2aa0006e") {
 		t.Fatal("expected component fixture lacks pinned Pi reference")
 	}
 }

@@ -3,7 +3,7 @@
 Pinned upstream reference:
 
 - Clone URL: `https://github.com/badlogic/pi-mono.git`
-- Revision: `d5b3de22d0e24a3e9c38a9410d3329b099717283`
+- Revision: `c3cc91632d0a1950fb122605b190233f2aa0006e`
 - Package: `packages/coding-agent/` version `1.4.0`
 - Session version: `3` (`CURRENT_SESSION_VERSION`)
 - Local checkout (ignored): `temp/pi-mono/`

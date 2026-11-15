@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 const [sourceArg, outputArg] = process.argv.slice(2);
 if (!sourceArg || !outputArg) throw new Error('usage: node scripts/build-reference.mjs SOURCE_CHECKOUT OUTPUT_MODULE');
 const source = resolve(sourceArg), output = resolve(outputArg);
-const pinned = 'd5b3de22d0e24a3e9c38a9410d3329b099717283';
+const pinned = 'c3cc91632d0a1950fb122605b190233f2aa0006e';
 const revision = execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 if (revision !== pinned) throw new Error('reference revision does not match the pin');
 if (execFileSync('git', ['-C', source, 'status', '--porcelain', '--untracked-files=no'], {encoding:'utf8'}).trim()) throw new Error('reference source has tracked changes');

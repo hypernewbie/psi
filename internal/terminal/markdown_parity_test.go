@@ -34,7 +34,7 @@ func TestPiMarkdownParityMatchesPinnedRenderer(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fixture.Reference, "d5b3de22d0e24a3e9c38a9410d3329b099717283") {
+	if !strings.Contains(fixture.Reference, "c3cc91632d0a1950fb122605b190233f2aa0006e") {
 		t.Fatalf("Markdown parity fixtures must identify the pinned Pi revision: %q", fixture.Reference)
 	}
 	if len(fixture.Fixtures) == 0 {
