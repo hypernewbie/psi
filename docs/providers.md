@@ -149,7 +149,9 @@ features.
 An `anthropic-messages` request declares eager tool input streaming on every
 tool, unless the model does not support it. A model without that support gets
 the fine-grained tool streaming feature instead. A budget thinking profile
-states its display, so the endpoint returns summarized thinking.
+states its display, so the endpoint returns summarized thinking. A model that
+lists allowed fallback models names them in the request, so the endpoint can
+fall back to another model when the first one is unavailable.
 
 Provider selection precedence matches Pi: command-line flags, then the session's
 recorded model, then `defaultProvider`/`defaultModel` from settings. See

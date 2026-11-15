@@ -78,3 +78,24 @@ func listCompat(model ModelMeta, name string) int {
 	}
 	return len(items)
 }
+
+// fallbackModels returns the models the endpoint may fall back to.
+func fallbackModels(model ModelMeta) []string {
+	raw, ok := model.Compat.Raw("allowedFallbackModels")
+	if !ok {
+		return nil
+	}
+	var items []struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(raw, &items) != nil {
+		return nil
+	}
+	models := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Model != "" {
+			models = append(models, item.Model)
+		}
+	}
+	return models
+}

@@ -237,3 +237,41 @@ func TestAnthropicBudgetThinkingStatesItsDisplay(t *testing.T) {
 		t.Fatalf("budget thinking profile = %+v", thinking)
 	}
 }
+
+// A model with allowed fallback models names them in the request, and the
+// server-side fallback feature is declared.
+func TestAnthropicRequestNamesItsFallbackModels(t *testing.T) {
+	model := ModelMeta{ID: "claude-fable-5", API: "anthropic-messages", Provider: "anthropic", MaxTokens: 64000,
+		Compat: completionCompat(t, map[string]any{"allowedFallbackModels": []any{
+			map[string]any{"provider": "anthropic", "model": "claude-opus-5"},
+		}})}
+	body, err := BuildAnthropicRequest(Request{Model: model, Thinking: "off",
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallbacks, ok := body["fallbacks"].([]any)
+	if !ok || len(fallbacks) != 1 {
+		t.Fatalf("fallbacks = %v, want one fallback model", body["fallbacks"])
+	}
+	if fallbacks[0].(map[string]any)["model"] != "claude-opus-5" {
+		t.Fatalf("fallback model = %v", fallbacks[0])
+	}
+	features := anthropicBetaFeatures(model, Request{Model: model, Thinking: "off"}, nil)
+	if !containsFeature(features, anthropicBetaServerSideFallback) {
+		t.Fatalf("fallback feature missing: %v", features)
+	}
+}
+
+// A model without allowed fallback models names none.
+func TestAnthropicRequestWithoutFallbackModels(t *testing.T) {
+	model := ModelMeta{ID: "claude-opus-5-5", API: "anthropic-messages", Provider: "anthropic", MaxTokens: 64000}
+	body, err := BuildAnthropicRequest(Request{Model: model, Thinking: "off",
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := body["fallbacks"]; present {
+		t.Fatalf("unexpected fallbacks: %v", body["fallbacks"])
+	}
+}

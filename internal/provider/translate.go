@@ -197,6 +197,15 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	} else if req.Thinking != "off" {
 		out["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget, "display": "summarized"}
 	}
+	// The endpoint falls back to another model when the first one is
+	// unavailable.
+	if models := fallbackModels(req.Model); len(models) > 0 {
+		fallbacks := make([]any, 0, len(models))
+		for _, name := range models {
+			fallbacks = append(fallbacks, map[string]any{"model": name})
+		}
+		out["fallbacks"] = fallbacks
+	}
 	return out, nil
 }
 
