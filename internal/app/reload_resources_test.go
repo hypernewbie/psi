@@ -3,11 +3,13 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"psi/internal/config"
 	"psi/internal/session"
+	"psi/internal/skills"
 )
 
 func TestReloadResourcesRefreshesInstructionsAndSkills(t *testing.T) {
@@ -90,5 +92,120 @@ func TestReloadResourcesAppliesQueueModes(t *testing.T) {
 	}
 	if r.settings.SteeringMode != "all" || r.settings.FollowUpMode != "all" {
 		t.Fatalf("failed reload changed queue modes: steering=%q followUp=%q", r.settings.SteeringMode, r.settings.FollowUpMode)
+	}
+}
+
+func TestReloadLanguage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	cwd, agentDir := t.TempDir(), t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &runtime{store: store, agentDir: agentDir, settings: config.Settings{DefaultTools: []string{"read"}, Language: config.LanguageEnglish}}
+	settingsPath := filepath.Join(agentDir, "settings.json")
+
+	writeSettings := func(language string) {
+		t.Helper()
+		if err := os.WriteFile(settingsPath, []byte(`{"language":"`+language+`"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeSettings(config.LanguageEnglish)
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageEnglish)
+	if r.settings.Language != config.LanguageEnglish {
+		t.Fatalf("language = %q", r.settings.Language)
+	}
+
+	writeSettings(config.LanguageChinese)
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+	if r.settings.Language != config.LanguageChinese || r.cfg.System != r.prompt {
+		t.Fatalf("Chinese reload not installed: language=%q cfg=%q", r.settings.Language, r.cfg.System)
+	}
+
+	writeSettings(config.LanguageEnglish)
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageEnglish)
+
+	// An active CLI override survives reload and keeps the loaded setting
+	// distinct from the effective prompt language.
+	r.options.Language = config.LanguageChinese
+	writeSettings(config.LanguageEnglish)
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+	if r.settings.Language != config.LanguageEnglish {
+		t.Fatalf("loaded default = %q, want en", r.settings.Language)
+	}
+}
+
+func TestReloadLanguageAtomicity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	cwd, agentDir := t.TempDir(), t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppFile(t, filepath.Join(agentDir, "skills", "local", "SKILL.md"), "---\nname: local\ndescription: LOCAL_SKILL\n---\nbody\n")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	writeAppFile(t, settingsPath, `{"language":"en","steeringMode":"one-at-a-time","followUpMode":"one-at-a-time"}`)
+	r := &runtime{store: store, agentDir: agentDir, settings: config.Settings{DefaultTools: []string{"read"}}}
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	beforePrompt, beforeSections, beforeSkills := r.prompt, r.sections, r.skills
+	beforeSystem, beforeCfgSections := r.cfg.System, r.cfg.Sections
+	beforeSettings := r.settings
+
+	writeAppFile(t, settingsPath, `{"language":"zh","steeringMode":"all","followUpMode":"all"}`)
+	guardPath := filepath.Join(agentDir, "AGENTS.override.md")
+	if err := os.Mkdir(guardPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err == nil {
+		t.Fatal("instruction read error did not fail reload")
+	}
+	assertReloadLanguageUnchanged(t, r, beforePrompt, beforeSections, beforeSkills, beforeSystem, beforeCfgSections, beforeSettings)
+	if err := os.Remove(guardPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, payload := range []string{`{"language":`, `{"language":"fr"}`, `{"language":"zh","steeringMode":"all","followUpMode":"all","language":null}`} {
+		writeAppFile(t, settingsPath, payload)
+		if err := r.reloadResources(); err == nil {
+			t.Fatalf("settings %s did not fail reload", payload)
+		}
+		assertReloadLanguageUnchanged(t, r, beforePrompt, beforeSections, beforeSkills, beforeSystem, beforeCfgSections, beforeSettings)
+	}
+
+	writeAppFile(t, settingsPath, `{"language":"zh","steeringMode":"one-at-a-time","followUpMode":"one-at-a-time"}`)
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+}
+
+func assertReloadLanguageUnchanged(t *testing.T, r *runtime, prompt string, sections []config.PromptSection, skills []skills.Skill, system string, cfgSections []config.PromptSection, settings config.Settings) {
+	t.Helper()
+	if r.prompt != prompt || !reflect.DeepEqual(r.sections, sections) || !reflect.DeepEqual(r.skills, skills) {
+		t.Fatal("failed reload changed prompt resources")
+	}
+	if r.cfg.System != system || !reflect.DeepEqual(r.cfg.Sections, cfgSections) {
+		t.Fatal("failed reload changed cfg prompt fields")
+	}
+	if r.settings.Language != settings.Language || !reflect.DeepEqual(r.settings.Skills, settings.Skills) || r.settings.SteeringMode != settings.SteeringMode || r.settings.FollowUpMode != settings.FollowUpMode {
+		t.Fatalf("failed reload changed settings: %+v", r.settings)
 	}
 }

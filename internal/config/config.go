@@ -2,10 +2,10 @@
 //
 // Supported keys (COMPATIBILITY.md): defaultProvider, defaultModel,
 // defaultThinkingLevel, sessionDir, defaultTools, skills, enableSkillCommands,
-// compaction{enabled,reserveTokens,keepRecentTokens,modelOverrides}, shellPath,
-// shellCommandPrefix, network timeouts/retries, instructions, models.json
-// endpoint metadata, auth env refs, quietStartup. Everything else is
-// ignored (harmless UI prefs) or rejected (active providers/credentials).
+// language, compaction{enabled,reserveTokens,keepRecentTokens,modelOverrides},
+// shellPath, shellCommandPrefix, network timeouts/retries, instructions,
+// models.json endpoint metadata, auth env refs, quietStartup. Everything else
+// is ignored (harmless UI prefs) or rejected (active providers/credentials).
 package config
 
 import (
@@ -92,6 +92,7 @@ type Settings struct {
 	DefaultThinkingSet bool
 	SteeringMode       string // "one-at-a-time" (Pi default) or "all"
 	FollowUpMode       string // "one-at-a-time" (Pi default) or "all"
+	Language           string // built-in prompt language: "en" or "zh"
 	SessionDir         string
 	SessionDirSource   string // "cli"|"env"|"settings"|"default"
 	DefaultTools       []string
@@ -124,6 +125,7 @@ func defaultSettings() Settings {
 		DefaultThinking:         "off",
 		SteeringMode:            "one-at-a-time",
 		FollowUpMode:            "one-at-a-time",
+		Language:                LanguageEnglish,
 		DefaultTools:            []string{"read", "bash", "edit", "write"},
 		EnableSkills:            true,
 		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
@@ -153,6 +155,7 @@ type rawSettings struct {
 	DefaultThinking     *string  `json:"defaultThinkingLevel"`
 	SteeringMode        *string  `json:"steeringMode"`
 	FollowUpMode        *string  `json:"followUpMode"`
+	Language            *string  `json:"language"`
 	SessionDir          *string  `json:"sessionDir"`
 	DefaultTools        []string `json:"defaultTools"`
 	Skills              any      `json:"skills"`
@@ -421,6 +424,16 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		}
 		out.FollowUpMode = *raw.FollowUpMode
 		set("followUpMode", *raw.FollowUpMode)
+	}
+	if _, present := data["language"]; present && raw.Language == nil {
+		return fmt.Errorf("language must be \"en\" or \"zh\"")
+	}
+	if raw.Language != nil {
+		if !ValidLanguage(*raw.Language) {
+			return fmt.Errorf("unsupported language %q", *raw.Language)
+		}
+		out.Language = *raw.Language
+		set("language", *raw.Language)
 	}
 	if raw.SessionDir != nil {
 		out.SessionDir = *raw.SessionDir
@@ -1277,5 +1290,5 @@ func AssemblePrompt(cwd string, instructions []InstructionFile, skillDescs []str
 // AssemblePromptWithOverrides applies Pi-style CLI system-prompt overrides
 // without removing project context, skill descriptions, or the tool loadout.
 func AssemblePromptWithOverrides(cwd string, instructions []InstructionFile, skillDescs []string, tools []string, systemPrompt string, useSystemPrompt bool, appendSystemPrompts []string) string {
-	return RenderSections(BuildPromptSections(cwd, instructions, skillDescs, tools, systemPrompt, useSystemPrompt, appendSystemPrompts))
+	return RenderSections(BuildPromptSections(cwd, instructions, skillDescs, tools, systemPrompt, useSystemPrompt, appendSystemPrompts, LanguageEnglish))
 }

@@ -42,7 +42,7 @@ import (
 type Options struct {
 	Help, Version, Continue, Resume                                      bool
 	SessionPath, SessionID, Provider, Model, Thinking, SessionDir, Tools string
-	Name, ExcludeTools, Mode, TUIMode, SystemPrompt                      string
+	Name, ExcludeTools, Mode, TUIMode, SystemPrompt, Language            string
 	AppendSystemPrompts                                                  []string
 	ListModels                                                           bool
 	ListModelsFilter                                                     string
@@ -60,7 +60,7 @@ var cliValueFlags = map[string]bool{
 	"session-dir": true, "tools": true, "t": true, "theme": true,
 	"use-theme": true, "name": true, "n": true, "exclude-tools": true,
 	"xt": true, "mode": true, "tui-mode": true, "system-prompt": true,
-	"append-system-prompt": true,
+	"append-system-prompt": true, "language": true,
 }
 
 var cliBoolFlags = map[string]bool{
@@ -239,6 +239,13 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.StringVar(&o.SystemPrompt, "system-prompt", "", "set the system prompt text or file path")
 	fs.Func("append-system-prompt", "append system prompt text or file path (repeatable)", func(value string) error {
 		o.AppendSystemPrompts = append(o.AppendSystemPrompts, value)
+		return nil
+	})
+	fs.Func("language", "built-in prompt language: en or zh (Psi-only, this run only)", func(value string) error {
+		if !config.ValidLanguage(value) {
+			return fmt.Errorf("--language must be \"en\" or \"zh\"")
+		}
+		o.Language = value
 		return nil
 	})
 	fs.Func("list-models", "list models from the local Pi catalog (optional search text)", func(value string) error {
@@ -450,6 +457,9 @@ Pi-compatible options:
   --docs [topic]             Print psi documentation (no topic prints the list)
   --help, -h                 Show this help
   --version, -v              Show version
+
+Psi-only options:
+  --language <en|zh>         Built-in system-prompt language for this run (prompt text only)
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Use -- before a message that starts with a hyphen.
@@ -2511,6 +2521,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 					} else if path != nil {
 						if err := r.persistSettingsValue(path, value.Value); err != nil {
 							notice(terminal.NoticeError, "Saved for this session only: "+err.Error())
+						} else if item.ID == "language" && r.options.Language != "" {
+							notice(terminal.NoticeInfo, "Stored the default language; --language keeps the current prompt language.")
 						}
 					}
 					if err == nil {

@@ -74,6 +74,24 @@ func (r *runtime) settingsEntries() []settingsEntry {
 	case "false":
 		colorSelected = 2
 	}
+	languageValues := []terminal.SettingsValue{
+		{Label: "English", Value: config.LanguageEnglish},
+		{Label: "简体中文", Value: config.LanguageChinese},
+	}
+	language := r.settings.Language
+	if language == "" {
+		language = config.LanguageEnglish
+	}
+	languageSelected := 0
+	for i, candidate := range languageValues {
+		if candidate.Value == language {
+			languageSelected = i
+		}
+	}
+	languageDescription := "Built-in prompt language."
+	if r.options.Language != "" {
+		languageDescription += " --language remains active for this session."
+	}
 
 	return []settingsEntry{
 		{
@@ -254,6 +272,38 @@ func (r *runtime) settingsEntries() []settingsEntry {
 					return fmt.Errorf("invalid color mode")
 				}
 				return r.applyColorMode(console, setting)
+			},
+		},
+		{
+			item: terminal.SettingsItem{
+				ID:          "language",
+				Label:       "Language",
+				Description: languageDescription,
+				Values:      languageValues,
+				Selected:    languageSelected,
+			},
+			persist: []string{"language"},
+			apply: func(r *runtime, _ *terminal.Console, value terminal.SettingsValue) error {
+				language, ok := value.Value.(string)
+				if !ok || !config.ValidLanguage(language) {
+					return fmt.Errorf("invalid language")
+				}
+				if r.options.Language != "" {
+					// The CLI override stays effective; only the stored default changes.
+					r.settings.Language = language
+					return nil
+				}
+				candidate := r.settings
+				candidate.Language = language
+				prepared, err := preparePromptResources(r.options, r.store.Cwd(), r.agentDir, candidate, r.projectTrusted)
+				if err != nil {
+					return err
+				}
+				r.settings.Language = language
+				r.skills, r.prompt, r.sections = prepared.skills, prepared.prompt, prepared.sections
+				r.cfg.System = prepared.prompt
+				r.cfg.Sections = prepared.sections
+				return nil
 			},
 		},
 	}

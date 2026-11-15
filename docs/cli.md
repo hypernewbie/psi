@@ -16,6 +16,7 @@ starts. Use `--` before a prompt that begins with `-`.
 ```sh
 psi
 psi "review the diff in this folder"
+psi --language zh
 psi --continue
 psi --mode rpc
 ```
@@ -120,8 +121,17 @@ so the Pi flags that load them do not exist.
 
 ## Prompts and process
 
+- `--language en|zh` selects the built-in system-prompt language for this run.
+  `en` is the default; `zh` means Simplified Chinese. The flag overrides
+  project and user settings, survives `/reload`, and applies to a resumed
+  session instead of its stored prompt. It changes prompt text only: terminal
+  labels, notices, errors, embedded docs, user files, skill metadata, skill
+  bodies, compaction prompts, and tool schemas stay unchanged. Pi has no such
+  flag; it is Psi-only.
 - `--system-prompt <text|file>` replaces the base preamble. A path that exists
-  is read as a file.
+  is read as a file. Custom prompt text suppresses the built-in tools, rules,
+  and docs, so it does not receive the Chinese reply rule; project-context and
+  skills wrappers can still change language.
 - `--append-system-prompt <text|file>` appends a section, repeatable.
 - `-a`, `--approve` trusts project-local resources for this run.
 - `-na`, `--no-approve` denies them. Escape and `Ctrl+C` at the prompt also

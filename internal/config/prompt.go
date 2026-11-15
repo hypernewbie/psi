@@ -45,8 +45,11 @@ var fixedRules = []string{
 // BuildPromptSections returns the ordered, non-empty system-prompt sections.
 // A custom prompt (SYSTEM.md or --system-prompt) replaces the preamble and
 // suppresses tools, rules, and docs; project context, skills, and cwd still render.
-func BuildPromptSections(cwd string, instructions []InstructionFile, skillDescs []string, tools []string, systemPrompt string, useSystemPrompt bool, appendSystemPrompts []string) []PromptSection {
+func BuildPromptSections(cwd string, instructions []InstructionFile, skillDescs []string, tools []string, systemPrompt string, useSystemPrompt bool, appendSystemPrompts []string, language string) []PromptSection {
 	base, custom := defaultPreamble, false
+	if language == LanguageChinese {
+		base = chinesePreamble
+	}
 	var discoveredAppends []string
 	for _, ins := range instructions {
 		switch ins.Kind {
@@ -65,20 +68,20 @@ func BuildPromptSections(cwd string, instructions []InstructionFile, skillDescs 
 		sections = append(sections, PromptSection{Name: "preamble", Body: base})
 	}
 	if !custom {
-		if body := toolsSection(tools); body != "" {
+		if body := toolsSection(tools, language); body != "" {
 			sections = append(sections, PromptSection{Name: "tools", Body: body})
 		}
-		if body := rulesSection(tools); body != "" {
+		if body := rulesSection(tools, language); body != "" {
 			sections = append(sections, PromptSection{Name: "rules", Body: body})
 		}
-		if body := docsSection(); body != "" {
+		if body := docsSection(language); body != "" {
 			sections = append(sections, PromptSection{Name: "docs", Body: body})
 		}
 	}
 	if body := addendumSection(append(discoveredAppends, appendSystemPrompts...)); body != "" {
 		sections = append(sections, PromptSection{Name: "addendum", Body: body})
 	}
-	if body := projectContextSection(instructions); body != "" {
+	if body := projectContextSection(instructions, language); body != "" {
 		sections = append(sections, PromptSection{Name: "project_context", Body: body})
 	}
 	if body := skillsSection(skillDescs); body != "" {
@@ -101,10 +104,14 @@ func RenderSections(sections []PromptSection) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func toolsSection(tools []string) string {
+func toolsSection(tools []string, language string) string {
+	snippets := toolSnippets
+	if language == LanguageChinese {
+		snippets = chineseToolSnippets
+	}
 	var lines []string
 	for _, name := range tools {
-		if snippet, ok := toolSnippets[name]; ok && snippet != "" {
+		if snippet, ok := snippets[name]; ok && snippet != "" {
 			lines = append(lines, "- "+name+": "+snippet)
 		}
 	}
@@ -117,7 +124,11 @@ func toolsSection(tools []string) string {
 // rulesSection orders bullets the way pi does: the bash file-operations rule,
 // per-tool guidelines in tool order, then the fixed prompt rules. Duplicates
 // are dropped, first occurrence wins.
-func rulesSection(tools []string) string {
+func rulesSection(tools []string, language string) string {
+	guidelines, bashRule, fixed := toolGuidelines, "Use bash for file operations like ls, rg, find", fixedRules
+	if language == LanguageChinese {
+		guidelines, bashRule, fixed = chineseToolGuidelines, chineseBashRule, chineseFixedRules
+	}
 	var rules []string
 	seen := map[string]bool{}
 	add := func(rule string) {
@@ -130,15 +141,15 @@ func rulesSection(tools []string) string {
 	}
 	for _, name := range tools {
 		if name == "bash" {
-			add("Use bash for file operations like ls, rg, find")
+			add(bashRule)
 		}
 	}
 	for _, name := range tools {
-		for _, rule := range toolGuidelines[name] {
+		for _, rule := range guidelines[name] {
 			add(rule)
 		}
 	}
-	for _, rule := range fixedRules {
+	for _, rule := range fixed {
 		add(rule)
 	}
 	lines := make([]string, 0, len(rules))
@@ -150,7 +161,19 @@ func rulesSection(tools []string) string {
 
 // docsSection lists the topics embedded in the binary so the model can read
 // them with `psi --docs` instead of guessing.
-func docsSection() string {
+func docsSection(language string) string {
+	intro := "Psi documentation, read only when the user asks about psi itself, its CLI, settings, skills, sessions, or compaction:"
+	listCommand := "Run `psi --docs` to list topics."
+	topicCommand := "Run `psi --docs <topic>` to print one topic."
+	topicPrefix := "Topics: "
+	readWhole := "Read the whole topic before answering."
+	if language == LanguageChinese {
+		intro = chineseDocsIntro
+		listCommand = chineseDocsListCommand
+		topicCommand = chineseDocsTopicCommand
+		topicPrefix = chineseDocsTopicPrefix
+		readWhole = chineseDocsReadWhole
+	}
 	names := make([]string, 0, len(docs.Topics))
 	for _, topic := range docs.Topics {
 		names = append(names, topic.Name)
@@ -158,11 +181,11 @@ func docsSection() string {
 	if len(names) == 0 {
 		return ""
 	}
-	return "<docs>\nPsi documentation, read only when the user asks about psi itself, its CLI, settings, skills, sessions, or compaction:\n" +
-		"- Run `psi --docs` to list topics.\n" +
-		"- Run `psi --docs <topic>` to print one topic.\n" +
-		"- Topics: " + strings.Join(names, ", ") + "\n" +
-		"- Read the whole topic before answering.\n</docs>"
+	return "<docs>\n" + intro + "\n" +
+		"- " + listCommand + "\n" +
+		"- " + topicCommand + "\n" +
+		"- " + topicPrefix + strings.Join(names, ", ") + "\n" +
+		"- " + readWhole + "\n</docs>"
 }
 
 func addendumSection(appendSystemPrompts []string) string {
@@ -178,7 +201,11 @@ func addendumSection(appendSystemPrompts []string) string {
 	return "<addendum>\n" + strings.Join(parts, "\n\n") + "\n</addendum>"
 }
 
-func projectContextSection(instructions []InstructionFile) string {
+func projectContextSection(instructions []InstructionFile, language string) string {
+	intro := "Project-specific instructions and guidelines:"
+	if language == LanguageChinese {
+		intro = chineseProjectContextIntro
+	}
 	var parts []string
 	for _, ins := range instructions {
 		if ins.Kind == "system" || ins.Kind == "append-system" {
@@ -193,7 +220,7 @@ func projectContextSection(instructions []InstructionFile) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "<project_context>\nProject-specific instructions and guidelines:\n\n" + strings.Join(parts, "\n\n") + "\n</project_context>"
+	return "<project_context>\n" + intro + "\n\n" + strings.Join(parts, "\n\n") + "\n</project_context>"
 }
 
 func skillsSection(skillDescs []string) string {

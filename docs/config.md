@@ -12,6 +12,7 @@ psi --thinking LEVEL
 psi --session-dir PATH
 psi --tools read,bash,edit,write
 psi --no-tools
+psi --language en|zh
 psi --use-theme NAME
 psi --theme PATH
 psi --no-themes
@@ -42,6 +43,7 @@ never change `--docs`; it reads embedded bytes only.
 | Skills | `skills`, `enableSkillCommands` | paths + selector |
 | Compaction | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides` | bounded summaries; per-model reserve overrides; `/ac` controls are session-local |
 | Queues | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`, as in Pi |
+| Prompt language | `language` | `en` (default) or `zh` (Simplified Chinese); Psi-only, built-in prompt text only |
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
 | Display | `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `markdown.codeBlockIndent` | bounded inline spacing and code-block indent |
 | Reasoning display | `hideThinkingBlock` | `true` collapses reasoning blocks to one `Thinking...` label; `Ctrl+T` toggles and saves it |
@@ -72,7 +74,9 @@ Model-specific compaction reserves use the exact `provider/model` key. For examp
 
 `theme` selects `system` by default, a built-in (`dark` or `light`), or an exact discovered theme name. `themes` is an array of additional local file or directory paths. `--use-theme` overrides the selection; repeat `--theme PATH` to add resources; `--no-themes` disables configured and discovered resources. Theme files are data only: schema URLs are not fetched and theme/package code is not run. Project theme bodies load only after project consent. `terminal.trueColor` accepts the booleans `true`/`false` or the string `auto`; `NO_COLOR` always disables generated SGR. `/reload` installs valid theme and display settings atomically; an invalid reload keeps the last valid snapshot. `/session` reports theme, appearance, color mode, source, and diagnostics.
 
-`/settings` edits these values in place: auto-compact (session only), editor padding, output padding, autocomplete row limit, code block indent, quiet startup, theme, and color mode. A persisted change merges into the user `settings.json`: unknown keys, `$schema`, and sibling keys stay, top-level key order is kept, and malformed JSON is refused without writing. Project `.pi/settings.json` is never written and can still override a user value. With `--use-theme`, a theme change updates only the stored default; `--no-themes` lists built-in themes only. `quietStartup` loads `"header"` as on and writes a boolean only when you change that row. `Ctrl+T` toggles thinking-block visibility and persists `hideThinkingBlock` in the user settings file.
+`language` selects the built-in system-prompt language. `en` is the default and matches earlier releases. `zh` localizes the preamble, tool snippets and guidelines, fixed rules, docs section, project-context header, and skills wrapper. Tool names, XML tags, paths, command names, and topic names stay unchanged. It also adds a Chinese rule to reply in Simplified Chinese while code, commands, paths, and identifiers stay as written. A consented project `.pi/settings.json` overrides the user value; `--language` overrides both and survives `/reload`. A custom `SYSTEM.md`, project `.pi/SYSTEM.md`, or `--system-prompt` still replaces the preamble and suppresses tools, rules, and docs, so the Chinese reply rule is not injected; current project-context and skills wrappers can still change language. This MVP does not localize terminal labels, notices, errors, embedded docs bodies, user files, skill metadata, skill bodies, compaction prompts, or tool schemas. Pi ignores and preserves this Psi-only key.
+
+`/settings` edits these values in place: auto-compact (session only), editor padding, output padding, autocomplete row limit, code block indent, quiet startup, theme, color mode, and language. A persisted change merges into the user `settings.json`: unknown keys, `$schema`, and sibling keys stay, top-level key order is kept, and malformed JSON is refused without writing. Project `.pi/settings.json` is never written and can still override a user value. With `--use-theme`, a theme change updates only the stored default; `--no-themes` lists built-in themes only. `quietStartup` loads `"header"` as on and writes a boolean only when you change that row. `Ctrl+T` toggles thinking-block visibility and persists `hideThinkingBlock` in the user settings file. The Language row persists only `language`. With `--language` active, it stores the default, shows a notice, and leaves the current prompt language on the CLI value. A failed prompt rebuild keeps the old language and prompt and writes nothing; a failed write keeps the new session language and shows `Saved for this session only`. After `/reload` or a restart, project settings take precedence again.
 
 Credential references support `$VAR`, `${VAR}`, `$$`, and `$!` escapes.
 Psi rejects `!command` values without running them. Stored provider API-key entries

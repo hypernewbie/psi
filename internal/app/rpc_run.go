@@ -59,22 +59,11 @@ func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settin
 	if err != nil {
 		return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 	}
-	var instructions []config.InstructionFile
-	if !o.NoContextFiles {
-		instructions, err = config.DiscoverInstructions(cwd, agentDir, consent)
-		if err != nil {
-			return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
-		}
+	resources, err := preparePromptResources(o, cwd, agentDir, *st, consent)
+	if err != nil {
+		return nil, nil, nil, "", nil, config.StartupOverrides{}, nil, err
 	}
-	if !o.NoSkills {
-		sk, diagnostics = skills.Discover(cwd, agentDir, st.Skills, consent)
-	}
-	var appendSystemPrompts []string
-	for _, source := range o.AppendSystemPrompts {
-		appendSystemPrompts = append(appendSystemPrompts, resolveCLIPrompt(source))
-	}
-	sections = config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools, resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
-	prompt = config.RenderSections(sections)
+	sk, diagnostics, prompt, sections = resources.skills, resources.diagnostics, resources.prompt, resources.sections
 	ov = config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", *st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	if prepared != nil {
 		store = prepared
