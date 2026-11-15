@@ -1,6 +1,7 @@
 package webaccess
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -371,7 +372,7 @@ func TestFormatPageHasStableBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	text, _ := client.formatPage(page, "", nil)
+	text, _ := client.formatPage(page, "")
 	if !strings.Contains(text, "\ncontent:\npayload line") {
 		t.Fatalf("format:\n%s", text)
 	}
@@ -473,5 +474,20 @@ func TestFetchMetadataRedactsConfiguredSecrets(t *testing.T) {
 	}
 	if strings.Contains(page.URL, secret) || strings.Contains(page.FinalURL, secret) {
 		t.Fatalf("url metadata leaked: %q %q", page.URL, page.FinalURL)
+	}
+}
+
+func TestFetchMarksDecodedTextTruncation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=iso-8859-1")
+		_, _ = w.Write(bytes.Repeat([]byte{0xff}, maxBodyBytes))
+	}))
+	defer server.Close()
+	page, err := testClient(testConfig()).fetchPage(context.Background(), server.URL, "raw")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !page.Truncated || len(page.Text) > maxBodyBytes {
+		t.Fatalf("truncated=%v len=%d", page.Truncated, len(page.Text))
 	}
 }

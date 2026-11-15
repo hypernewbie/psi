@@ -23,8 +23,9 @@ them.
 Batches use at most three workers and return sections in input order, with a
 per-URL error for each failure. All URL targets are validated before any
 request; one syntactically invalid entry fails the batch without fetching the
-others. A batch that has some successes is not an error. A batch where every
-URL fails returns an error and stores nothing. Content is stored in the same
+others. A batch that has some successes is not an error and is marked
+`incomplete: true`. A batch where every URL fails returns an error and stores
+nothing. Content is stored in the same
 order and one `responseId` covers the batch.
 
 ### Search
@@ -51,8 +52,8 @@ appear as bounded reasons when the instance returns none.
 `includeContent` shares a 90-second deadline across search and page fetches.
 Fetched pages are stored in result order. A failed page records a per-result
 error without failing the search. Any failed query or page marks the snapshot
-`incomplete: true`. Cancellation stops new work, keeps completed results, and
-also marks the snapshot incomplete.
+`incomplete: true`; retrieval metadata repeats the flag. Cancellation stops new
+work, keeps completed results, and also marks the snapshot incomplete.
 
 SearXNG gets `site:` and `-site:` operators plus `time_range`. The Exa direct
 API gets `includeDomains`, `excludeDomains`, and a rolling UTC

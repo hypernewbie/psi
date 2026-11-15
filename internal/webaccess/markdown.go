@@ -46,6 +46,9 @@ const (
 	// depth so deeply nested markup cannot duplicate a large text buffer 512
 	// times. Levels below the cap keep their formatting; deeper ones flatten.
 	maxInlineRenderDepth = 16
+	// The same concern applies to nested blockquotes, which render a whole
+	// subtree before prefixing it.
+	maxBlockquoteRenderDepth = 16
 )
 
 // htmlTooDeep rejects pathological nesting before recursive projection so a
@@ -74,6 +77,7 @@ type renderer struct {
 	out         strings.Builder
 	limit       int
 	inlineDepth int
+	quoteDepth  int
 	truncated   bool
 }
 
@@ -222,7 +226,13 @@ func (r *renderer) block(n *html.Node) {
 	case "pre":
 		r.codeBlock(n)
 	case "blockquote":
-		inner := &renderer{base: r.base, limit: r.limit}
+		if r.quoteDepth >= maxBlockquoteRenderDepth {
+			for child := n.FirstChild; child != nil; child = child.NextSibling {
+				r.block(child)
+			}
+			return
+		}
+		inner := &renderer{base: r.base, limit: r.limit, quoteDepth: r.quoteDepth + 1}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			inner.block(child)
 		}

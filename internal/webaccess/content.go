@@ -76,6 +76,9 @@ func parseContentArgs(args map[string]any, cfg Config) (contentArgs, error) {
 		if !ok || strings.TrimSpace(value) == "" {
 			return out, fmt.Errorf("%s: url must be a non-empty string", classValidation)
 		}
+		if len(value) > maxURLBytes {
+			return out, fmt.Errorf("%s: url exceeds 8 KiB", classValidation)
+		}
 		out.url, out.hasURL = value, true
 	}
 	if raw, ok := args["urlIndex"]; ok {
@@ -160,16 +163,17 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 	}
 
 	text, next := c.formatContent(contentMeta{
-		id:      entry.ID,
-		kind:    entry.Kind,
-		url:     url,
-		title:   title,
-		page:    pageNumber,
-		pages:   pages,
-		length:  length,
-		start:   start,
-		limit:   args.limit,
-		payload: runes,
+		id:         entry.ID,
+		kind:       entry.Kind,
+		url:        url,
+		title:      title,
+		page:       pageNumber,
+		pages:      pages,
+		length:     length,
+		start:      start,
+		limit:      args.limit,
+		incomplete: entry.Incomplete,
+		payload:    runes,
 	})
 	details := map[string]any{
 		"responseId": entry.ID,
@@ -177,6 +181,7 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 		"length":     length,
 		"page":       pageNumber,
 		"pages":      pages,
+		"incomplete": entry.Incomplete,
 	}
 	if next < length {
 		details["nextOffset"] = next
@@ -265,16 +270,17 @@ func selectContent(entry *storedEntry, args contentArgs) (payload, url, title st
 }
 
 type contentMeta struct {
-	id      string
-	kind    string
-	url     string
-	title   string
-	page    int
-	pages   int
-	length  int
-	start   int
-	limit   int
-	payload []rune
+	id         string
+	kind       string
+	url        string
+	title      string
+	page       int
+	pages      int
+	length     int
+	start      int
+	limit      int
+	incomplete bool
+	payload    []rune
 }
 
 // formatContent builds bounded metadata, a stable `content:` boundary, and an
@@ -293,6 +299,9 @@ func (c *Client) contentMetadata(meta contentMeta, more bool, next int) string {
 	var b strings.Builder
 	b.WriteString("responseId: " + meta.id + "\n")
 	b.WriteString("kind: " + meta.kind + "\n")
+	if meta.incomplete {
+		b.WriteString("incomplete: true\n")
+	}
 	if meta.url != "" {
 		b.WriteString("url: " + clipMeta(meta.url, 2048) + "\n")
 	}

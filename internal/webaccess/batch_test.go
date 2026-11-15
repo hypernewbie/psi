@@ -181,8 +181,13 @@ func TestBatchFetchOrderedPartialResults(t *testing.T) {
 	if !strings.Contains(text, "ok: 2") || !strings.Contains(text, "failed: 1") || !strings.Contains(text, "http status: 500") {
 		t.Fatalf("counts/errors missing:\n%s", text)
 	}
-	if id, ok := batchDetails(t, result)["responseId"].(string); !ok || id == "" {
+	id, ok := batchDetails(t, result)["responseId"].(string)
+	if !ok || id == "" {
 		t.Fatalf("partial batch not stored: %+v", result.Details)
+	}
+	page := getContent(t, client, map[string]any{"responseId": id, "url": server.URL + "/first"})
+	if page.IsError || !strings.Contains(page.Content[0].Text, "incomplete: true") {
+		t.Fatalf("partial batch retrieval not marked incomplete: %s", page.Content[0].Text)
 	}
 
 	allBad := client.Dispatch(context.Background(), toolsInvocation(ToolFetch, map[string]any{

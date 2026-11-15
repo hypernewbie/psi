@@ -149,6 +149,9 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 	if err != nil {
 		return pageData{}, fmt.Errorf("%s: %v", classInvalid, err)
 	}
+	if len(decoded) > maxBodyBytes {
+		truncated = true
+	}
 	decoded = runePrefix(decoded, maxBodyBytes)
 
 	title := ""
@@ -250,7 +253,7 @@ func (c *Client) redact(s string, limit int) string {
 // formatPage renders one fetched page with bounded metadata lines followed by
 // a stable content boundary. The stored copy keeps the full bounded text; the
 // preview is capped by maxInlineContentChars.
-func (c *Client) formatPage(p pageData, responseID string, storeErr error) (string, bool) {
+func (c *Client) formatPage(p pageData, responseID string) (string, bool) {
 	previewTruncated := false
 	preview := p.Text
 	if limit := c.cfg.MaxInlineChars; limit > 0 {
@@ -261,7 +264,6 @@ func (c *Client) formatPage(p pageData, responseID string, storeErr error) (stri
 		b.WriteString("responseId: " + responseID + "\n")
 	} else {
 		b.WriteString("content-not-retained: true\n")
-		_ = storeErr
 		b.WriteString("note: content exceeded the memory cache limits or could not be stored\n")
 	}
 	b.WriteString("url: " + clipMeta(p.FinalURL, 2048) + "\n")
