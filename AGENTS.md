@@ -4,6 +4,16 @@
 
 - Never merge the default branch into a feature branch. Rebase the feature branch onto `main` instead. History stays linear, and no merge commits reach `main`.
 
+## Code readability
+
+- Write code for people who must read and change it. Compilation and passing tests are not enough.
+- Prefer clear names and direct control flow over cleverness or fewer lines.
+- Explain special values, including Unicode code points and bit masks, where the code uses them.
+- For character exceptions, state the character names and why the rule includes or excludes them.
+- Use meaningful names for constants and helper functions that clarify a rule. Do not add abstractions that only hide unexplained values.
+- Use comments to explain intent, constraints, and exceptions, not to repeat the syntax.
+- Read the changed code as a maintainer before you finish. Rewrite code that requires readers to decode literals or reconstruct unexplained rules.
+
 ## Tests
 
 Each behavioral fix must include a focused regression test for the broken behavior.
