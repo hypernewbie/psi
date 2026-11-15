@@ -122,9 +122,10 @@ func parseFetchArgs(args map[string]any, cfg Config) (fetchArgs, error) {
 			out.urls = append(out.urls, value)
 		}
 	}
+	modes := effectiveFetchModes(cfg)
 	out.mode = cfg.FetchMode
-	if out.mode == "" {
-		out.mode = effectiveFetchModes(cfg)[0]
+	if !contains(modes, out.mode) {
+		out.mode = modes[0]
 	}
 	if value, ok := args["mode"]; ok {
 		parsed, ok := value.(string)
@@ -133,7 +134,7 @@ func parseFetchArgs(args map[string]any, cfg Config) (fetchArgs, error) {
 		}
 		out.mode = parsed
 	}
-	if !contains(effectiveFetchModes(cfg), out.mode) {
+	if !contains(modes, out.mode) {
 		return out, fmt.Errorf("%s: mode %q is not enabled", classValidation, out.mode)
 	}
 	return out, nil
@@ -200,10 +201,9 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 		case <-ctx.Done():
 			errs[i] = fmt.Errorf("%s: cancelled", classCancelled)
 			continue
-		default:
+		case sem <- struct{}{}:
 		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -282,11 +282,17 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 			b.WriteString("   " + line + "\n")
 		}
 	}
-	text, _ := boundResult(b.String())
+	text, omitted := boundNumberedResult(b.String(), len(urls))
 
-	details := map[string]any{"urls": len(urls), "ok": okCount, "failed": len(urls) - okCount, "stored": responseID != ""}
+	details := map[string]any{
+		"urls": len(urls), "ok": okCount, "failed": len(urls) - okCount,
+		"incomplete": okCount < len(urls), "stored": responseID != "",
+	}
 	if responseID != "" {
 		details["responseId"] = responseID
+	}
+	if omitted > 0 {
+		details["omitted"] = omitted
 	}
 	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details}
 }
@@ -300,8 +306,9 @@ func pagedPreview(text string, limit int) string {
 }
 
 func fetchError(err error) tools.Result {
+	text, _ := boundResult("fetch_content failed: " + err.Error())
 	return tools.Result{
-		Content: []tools.Block{{Type: "text", Text: "fetch_content failed: " + err.Error()}},
+		Content: []tools.Block{{Type: "text", Text: text}},
 		IsError: true,
 	}
 }
@@ -339,6 +346,17 @@ func argInt(raw any, name string) (int64, error) {
 		return 0, fmt.Errorf("%s: %s is out of range", classValidation, name)
 	}
 	return int64(value), nil
+}
+
+func argIndex(raw any, name string) (int, error) {
+	value, err := argInt(raw, name)
+	if err != nil {
+		return 0, err
+	}
+	if uint64(value) > uint64(^uint(0)>>1) {
+		return 0, fmt.Errorf("%s: %s is out of range", classValidation, name)
+	}
+	return int(value), nil
 }
 
 func argBool(raw any, name string) (bool, error) {

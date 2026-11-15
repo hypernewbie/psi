@@ -30,13 +30,14 @@ type storedPage struct {
 // storedResult is one ordered search result. Content is optional inline page
 // text, already redacted.
 type storedResult struct {
-	Title   string
-	URL     string
-	Snippet string
-	Content string
-	Engines string
-	Date    string
-	Error   string
+	Title     string
+	URL       string
+	Snippet   string
+	Content   string
+	Engines   string
+	Date      string
+	Error     string
+	Truncated bool
 }
 
 // storedEntry is one retrievable snapshot. All variable-length fields count

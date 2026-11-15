@@ -327,6 +327,9 @@ func TestSearXNGHeaderValidationIsProviderLocal(t *testing.T) {
 	if !cfg.ExaAvailable || cfg.ExaAPIKey != "keep" {
 		t.Fatal("Exa settings must survive a SearXNG header error")
 	}
+	if cfg.SearchProvider() != "searxng" {
+		t.Fatal("invalid SearXNG configuration must not fall back to Exa")
+	}
 	if len(diags) == 0 {
 		t.Fatal("expected a diagnostic")
 	}
@@ -362,6 +365,7 @@ func TestInvalidBaseURLRules(t *testing.T) {
 		"https://searx.example/?q=1", "https://searx.example/#frag",
 		"https://", "https://searx.example:bad",
 		"https://searx.example:0", "https://searx.example:65536",
+		"https://searx.example:",
 	} {
 		cfg, diags := ParseConfig([]byte(`{"searxngBaseUrl":"`+base+`"}`), env)
 		if cfg.SearXNGAvailable {
@@ -369,6 +373,9 @@ func TestInvalidBaseURLRules(t *testing.T) {
 		}
 		if len(diags) == 0 {
 			t.Errorf("%q: missing diagnostic", base)
+		}
+		if cfg.Provider == "auto" && cfg.SearchProvider() != "searxng" {
+			t.Errorf("%q: auto must not fall back to Exa", base)
 		}
 	}
 }
@@ -401,5 +408,19 @@ func TestLoadRejectsOversizedConfigBeforeRead(t *testing.T) {
 	cfg, diags := Load(env)
 	if read || cfg.FetchEnabled || cfg.SearchEnabled || len(diags) == 0 {
 		t.Fatalf("oversized config read or enabled: read=%v cfg=%+v diags=%v", read, cfg, diags)
+	}
+}
+
+func TestEnvironmentBaseOverridesMalformedFileValue(t *testing.T) {
+	env, _ := newEnv(t, map[string]string{
+		"SEARXNG_BASE_URL": "https://env-searx.example",
+		"EXA_BASE_URL":     "https://env-exa.example/v1",
+	}, nil)
+	cfg, diags := ParseConfig([]byte(`{"searxngBaseUrl":12,"exaBaseUrl":false}`), env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if cfg.SearXNGBaseURL != "https://env-searx.example" || cfg.ExaBaseURL != "https://env-exa.example/v1" {
+		t.Fatalf("environment overrides not applied: searx=%q exa=%q", cfg.SearXNGBaseURL, cfg.ExaBaseURL)
 	}
 }

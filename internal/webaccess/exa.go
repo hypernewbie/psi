@@ -171,6 +171,9 @@ func (c *Client) searchExaMCP(ctx context.Context, query string, limit int, filt
 	if resp.StatusCode != http.StatusOK {
 		return searchResponse{}, fmt.Errorf("%s: %d", classStatus, resp.StatusCode)
 	}
+	if err := checkContentEncoding(resp); err != nil {
+		return searchResponse{}, err
+	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	var envelope []byte
 	if strings.HasPrefix(contentType, "text/event-stream") {
@@ -189,12 +192,15 @@ func (c *Client) searchExaMCP(ctx context.Context, query string, limit int, filt
 		return searchResponse{}, err
 	}
 	results := parseExaProse(text, limit)
+	if len(results) == 0 {
+		return searchResponse{}, fmt.Errorf("%s: provider prose has no results", classInvalid)
+	}
 	return searchResponse{results: results}, nil
 }
 
 func readProviderBody(ctx context.Context, resp *http.Response) ([]byte, error) {
-	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") && !resp.Uncompressed {
-		return nil, fmt.Errorf("%s: unsupported content encoding", classInvalid)
+	if err := checkContentEncoding(resp); err != nil {
+		return nil, err
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProviderBody+1))
 	if err != nil {
@@ -251,6 +257,9 @@ func formatOverview(provider, query string, results []searchHit, unresponsive []
 		}
 		if result.Error != "" {
 			b.WriteString("   fetch-error: " + clipMeta(result.Error, 200) + "\n")
+		}
+		if result.Truncated {
+			b.WriteString("   source-truncated: true (5 MiB cap)\n")
 		}
 		if len(meta) > 0 {
 			b.WriteString("   " + strings.Join(meta, " | ") + "\n")

@@ -65,7 +65,7 @@ func parseContentArgs(args map[string]any, cfg Config) (contentArgs, error) {
 	if len(id) > 128 {
 		return out, fmt.Errorf("%s: responseId exceeds 128 bytes", classValidation)
 	}
-	out.responseID = id
+	out.responseID = strings.TrimSpace(id)
 	out.limit = cfg.MaxInlineChars
 	if cfg.MaxInlineChars < 1 {
 		out.limit = DefaultInlineChars
@@ -79,24 +79,24 @@ func parseContentArgs(args map[string]any, cfg Config) (contentArgs, error) {
 		if len(value) > maxURLBytes {
 			return out, fmt.Errorf("%s: url exceeds 8 KiB", classValidation)
 		}
-		out.url, out.hasURL = value, true
+		out.url, out.hasURL = strings.TrimSpace(value), true
 	}
 	if raw, ok := args["urlIndex"]; ok {
-		value, err := argInt(raw, "urlIndex")
+		value, err := argIndex(raw, "urlIndex")
 		if err != nil {
 			return out, err
 		}
-		out.urlIndex, out.hasIndex = int(value), true
+		out.urlIndex, out.hasIndex = value, true
 	}
 	if out.hasURL && out.hasIndex {
 		return out, fmt.Errorf("%s: url and urlIndex are mutually exclusive", classValidation)
 	}
 	if raw, ok := args["offset"]; ok {
-		value, err := argInt(raw, "offset")
+		value, err := argIndex(raw, "offset")
 		if err != nil {
 			return out, err
 		}
-		out.offset, out.hasOffset = int(value), true
+		out.offset, out.hasOffset = value, true
 	}
 	if raw, ok := args["limit"]; ok {
 		value, err := argInt(raw, "limit")
@@ -127,7 +127,10 @@ func parseContentArgs(args map[string]any, cfg Config) (contentArgs, error) {
 	return out, nil
 }
 
-func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Result {
+func (c *Client) handleContent(ctx context.Context, inv tools.Invocation) tools.Result {
+	if err := ctx.Err(); err != nil {
+		return contentError(wrapClass(ctx, classCancelled, "content operation interrupted"))
+	}
 	if !c.cfg.ContentEnabled {
 		return contentError(fmt.Errorf("%s: get_search_content is disabled", classValidation))
 	}
@@ -140,7 +143,7 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 		return contentError(fmt.Errorf("%s: unknown responseId (content may have been evicted)", classValidation))
 	}
 
-	payload, url, title, pageNumber, pages, err := selectContent(entry, args)
+	payload, url, title, pageNumber, pages, truncated, err := selectContent(entry, args)
 	if err != nil {
 		return contentError(err)
 	}
@@ -148,15 +151,24 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 		return contentError(fmt.Errorf("%s: stored content is empty", classValidation))
 	}
 
+	if err := ctx.Err(); err != nil {
+		return contentError(wrapClass(ctx, classCancelled, "content operation interrupted"))
+	}
 	runes := []rune(payload)
 	length := len(runes)
 	start := args.offset
 	if args.hasFind {
-		found, ok := findTextOffset(runes, args.findText)
+		found, ok, err := findTextOffsetContext(ctx, runes, args.findText)
+		if err != nil {
+			return contentError(wrapClass(ctx, classCancelled, "content search interrupted"))
+		}
 		if !ok {
 			return contentError(fmt.Errorf("%s: findText did not match", classValidation))
 		}
 		start = found
+	}
+	if err := ctx.Err(); err != nil {
+		return contentError(wrapClass(ctx, classCancelled, "content operation interrupted"))
 	}
 	if start > length {
 		return contentError(fmt.Errorf("%s: offset is past the end of the stored text", classValidation))
@@ -173,6 +185,7 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 		start:      start,
 		limit:      args.limit,
 		incomplete: entry.Incomplete,
+		truncated:  truncated,
 		payload:    runes,
 	})
 	details := map[string]any{
@@ -182,6 +195,7 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 		"page":       pageNumber,
 		"pages":      pages,
 		"incomplete": entry.Incomplete,
+		"truncated":  truncated,
 	}
 	if next < length {
 		details["nextOffset"] = next
@@ -193,15 +207,16 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 }
 
 func contentError(err error) tools.Result {
+	text, _ := boundResult("get_search_content failed: " + err.Error())
 	return tools.Result{
-		Content: []tools.Block{{Type: "text", Text: "get_search_content failed: " + err.Error()}},
+		Content: []tools.Block{{Type: "text", Text: text}},
 		IsError: true,
 	}
 }
 
 // selectContent resolves the paged text. Fetch entries page one stored page;
 // search entries page the overview or one inline result.
-func selectContent(entry *storedEntry, args contentArgs) (payload, url, title string, pageNumber, pages int, err error) {
+func selectContent(entry *storedEntry, args contentArgs) (payload, url, title string, pageNumber, pages int, truncated bool, err error) {
 	switch entry.Kind {
 	case "search":
 		pages = len(entry.Results)
@@ -216,26 +231,26 @@ func selectContent(entry *storedEntry, args contentArgs) (payload, url, title st
 					}
 				}
 				if found < 0 {
-					return "", "", "", 0, 0, fmt.Errorf("%s: url is not in this response", classValidation)
+					return "", "", "", 0, 0, false, fmt.Errorf("%s: url is not in this response", classValidation)
 				}
 				index = found
 			}
 			if index < 0 || index >= len(entry.Results) {
-				return "", "", "", 0, 0, fmt.Errorf("%s: urlIndex is out of range", classValidation)
+				return "", "", "", 0, 0, false, fmt.Errorf("%s: urlIndex is out of range", classValidation)
 			}
 			result := entry.Results[index]
 			if result.Content == "" {
 				if result.Error != "" {
-					return "", "", "", 0, 0, fmt.Errorf("%s: stored page fetch failed: %s", classValidation, result.Error)
+					return "", "", "", 0, 0, false, fmt.Errorf("%s: stored page fetch failed: %s", classValidation, result.Error)
 				}
-				return "", "", "", 0, 0, fmt.Errorf("%s: that result has no stored content", classValidation)
+				return "", "", "", 0, 0, false, fmt.Errorf("%s: that result has no stored content", classValidation)
 			}
-			return result.Content, result.URL, result.Title, index + 1, len(entry.Results), nil
+			return result.Content, result.URL, result.Title, index + 1, len(entry.Results), result.Truncated, nil
 		}
 		if entry.Overview == "" {
-			return "", "", "", 0, 0, fmt.Errorf("%s: stored overview is empty", classValidation)
+			return "", "", "", 0, 0, false, fmt.Errorf("%s: stored overview is empty", classValidation)
 		}
-		return entry.Overview, "", "Search results", 0, len(entry.Results), nil
+		return entry.Overview, "", "Search results", 0, len(entry.Results), false, nil
 	default:
 		pages = len(entry.Pages)
 		index := 0
@@ -251,21 +266,21 @@ func selectContent(entry *storedEntry, args contentArgs) (payload, url, title st
 				}
 			}
 			if found < 0 {
-				return "", "", "", 0, 0, fmt.Errorf("%s: url is not in this response", classValidation)
+				return "", "", "", 0, 0, false, fmt.Errorf("%s: url is not in this response", classValidation)
 			}
 			index = found
 		}
 		if index < 0 || index >= len(entry.Pages) {
-			return "", "", "", 0, 0, fmt.Errorf("%s: urlIndex is out of range", classValidation)
+			return "", "", "", 0, 0, false, fmt.Errorf("%s: urlIndex is out of range", classValidation)
 		}
 		page := entry.Pages[index]
 		if page.Text == "" {
 			if page.Error != "" {
-				return "", "", "", 0, 0, fmt.Errorf("%s: stored page fetch failed: %s", classValidation, page.Error)
+				return "", "", "", 0, 0, false, fmt.Errorf("%s: stored page fetch failed: %s", classValidation, page.Error)
 			}
-			return "", "", "", 0, 0, fmt.Errorf("%s: that page has no stored text", classValidation)
+			return "", "", "", 0, 0, false, fmt.Errorf("%s: that page has no stored text", classValidation)
 		}
-		return page.Text, page.FinalURL, page.Title, index + 1, len(entry.Pages), nil
+		return page.Text, page.FinalURL, page.Title, index + 1, len(entry.Pages), page.Truncated, nil
 	}
 }
 
@@ -280,6 +295,7 @@ type contentMeta struct {
 	start      int
 	limit      int
 	incomplete bool
+	truncated  bool
 	payload    []rune
 }
 
@@ -301,6 +317,9 @@ func (c *Client) contentMetadata(meta contentMeta, more bool, next int) string {
 	b.WriteString("kind: " + meta.kind + "\n")
 	if meta.incomplete {
 		b.WriteString("incomplete: true\n")
+	}
+	if meta.truncated {
+		b.WriteString("source-truncated: true (5 MiB cap)\n")
 	}
 	if meta.url != "" {
 		b.WriteString("url: " + clipMeta(meta.url, maxURLBytes) + "\n")
@@ -372,25 +391,45 @@ func prefixLines(s string, maxLines int) string {
 // findTextOffset tries exact, then Unicode simple case-folded matching. A
 // whitespace-normalized pass is added with batched search support.
 func findTextOffset(text []rune, needle string) (int, bool) {
+	pos, ok, _ := findTextOffsetContext(context.Background(), text, needle)
+	return pos, ok
+}
+
+func findTextOffsetContext(ctx context.Context, text []rune, needle string) (int, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
 	pattern := []rune(needle)
 	if len(pattern) == 0 {
-		return 0, false
+		return 0, false, nil
 	}
 	if at := findRuneSequence(text, pattern, false); at >= 0 {
-		return at, true
+		return at, true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
 	}
 	if at := findRuneSequence(text, pattern, true); at >= 0 {
-		return at, true
+		return at, true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
 	}
 	normalized, offsets := collapseWhitespace(text)
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
 	normalizedNeedle, _ := collapseWhitespace(pattern)
 	if len(normalizedNeedle) == 0 || len(normalizedNeedle) > len(normalized) {
-		return 0, false
+		return 0, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
 	}
 	if at := findRuneSequence(normalized, normalizedNeedle, true); at >= 0 {
-		return offsets[at], true
+		return offsets[at], true, nil
 	}
-	return 0, false
+	return 0, false, ctx.Err()
 }
 
 // findRuneSequence uses KMP so a long repeated prefix in untrusted page text

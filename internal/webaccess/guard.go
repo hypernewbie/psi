@@ -104,6 +104,8 @@ func defaultDialer() *net.Dialer {
 
 // DialContext implements the transport dial hook.
 func (d *guardedDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid address", classValidation)
@@ -112,14 +114,12 @@ func (d *guardedDialer) DialContext(ctx context.Context, network, address string
 		if !d.permits(addr, address) {
 			return nil, fmt.Errorf("%s: destination is not public", classBlocked)
 		}
-		return d.dialLiteral(ctx, network, addr, port)
+		return d.dialLiteral(dialCtx, network, addr, port)
 	}
 
-	lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	addrs, err := d.resolve(lookupCtx, host)
+	addrs, err := d.resolve(dialCtx, host)
 	if err != nil {
-		return nil, wrapClass(ctx, classDNS, "lookup failed")
+		return nil, wrapClass(dialCtx, classDNS, "lookup failed")
 	}
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("%s: lookup returned no addresses", classDNS)
@@ -132,7 +132,7 @@ func (d *guardedDialer) DialContext(ctx context.Context, network, address string
 	}
 	var lastErr error
 	for _, addr := range addrs {
-		conn, err := d.dialLiteral(ctx, network, addr, port)
+		conn, err := d.dialLiteral(dialCtx, network, addr, port)
 		if err == nil {
 			return conn, nil
 		}
@@ -157,8 +157,11 @@ func (d *guardedDialer) dialLiteral(ctx context.Context, network string, addr ne
 }
 
 func (d *guardedDialer) permits(addr netip.Addr, address string) bool {
-	if d.loopbackOrigin != "" && addr.Unmap().IsLoopback() && strings.EqualFold(address, d.loopbackOrigin) {
-		return true
+	// A configured loopback provider origin must resolve only to loopback.
+	// Otherwise DNS could mix a public answer into the exception and receive
+	// provider headers intended for the local instance.
+	if d.loopbackOrigin != "" && strings.EqualFold(address, d.loopbackOrigin) {
+		return addr.Unmap().IsLoopback()
 	}
 	return addressPermitted(addr, d.allow)
 }

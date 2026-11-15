@@ -1,6 +1,7 @@
 package webaccess
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -30,6 +31,69 @@ func boundResult(s string) (string, bool) {
 		prefix = prefix[:idx]
 	}
 	return strings.TrimRight(prefix, "\n") + truncatedNotice, true
+}
+
+// boundResultWithNotice applies the shared output limits while reserving room
+// for an alternate truncation notice. The notice must start with two newlines.
+func boundResultWithNotice(s, notice string) (string, bool) {
+	if len(s) <= resultMaxBytes && lineCount(s) <= resultMaxLines {
+		return s, false
+	}
+	limit := resultMaxBytes - len(notice)
+	if limit < 0 {
+		limit = 0
+	}
+	prefix := runePrefix(s, limit)
+	if idx := lineLimit(prefix, resultMaxLines-2); idx >= 0 {
+		prefix = prefix[:idx]
+	}
+	return strings.TrimRight(prefix, "\n") + notice, true
+}
+
+// numberedSectionCount counts numbered item headers (for example "1. url:").
+// Untrusted payload lines are indented in web tool output, so they cannot
+// increase this count.
+func numberedSectionCount(s string) int {
+	count := 0
+	for _, line := range strings.Split(s, "\n") {
+		i := 0
+		for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+			i++
+		}
+		if i > 0 && i+1 < len(line) && line[i] == '.' && line[i+1] == ' ' {
+			count++
+		}
+	}
+	return count
+}
+
+// boundNumberedResult bounds a numbered batch and reports how many sections
+// the output dropped. It keeps the generic notice when only payload was cut.
+func boundNumberedResult(s string, total int) (string, int) {
+	text, truncated := boundResult(s)
+	if !truncated {
+		return text, 0
+	}
+	omitted := total - numberedSectionCount(text)
+	if omitted <= 0 {
+		return text, 0
+	}
+	notice := fmt.Sprintf("\n\n[truncated; %d section(s) omitted]", omitted)
+	for attempt := 0; attempt < 4; attempt++ {
+		next, _ := boundResultWithNotice(s, notice)
+		nextOmitted := total - numberedSectionCount(next)
+		if nextOmitted <= 0 {
+			return text, 0
+		}
+		nextNotice := fmt.Sprintf("\n\n[truncated; %d section(s) omitted]", nextOmitted)
+		text = next
+		omitted = nextOmitted
+		if nextNotice == notice {
+			return text, omitted
+		}
+		notice = nextNotice
+	}
+	return text, omitted
 }
 
 // runeLimit returns at most max Unicode scalars without allocating the full

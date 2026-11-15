@@ -495,6 +495,7 @@ func TestFetchMarksDecodedTextTruncation(t *testing.T) {
 func TestValidateTargetRejectsUnusablePorts(t *testing.T) {
 	for _, raw := range []string{
 		"http://example.com:0/",
+		"http://example.com:/",
 		"http://example.com:65536/",
 		"http://example.com:-1/",
 	} {
@@ -511,5 +512,33 @@ func TestFetchWrappedDialTimeoutKeepsClass(t *testing.T) {
 	})}
 	if _, err := client.fetchPage(context.Background(), "https://example.com/", "readable"); err == nil || !strings.Contains(err.Error(), classTimeout) {
 		t.Fatalf("err = %v, want %s", err, classTimeout)
+	}
+}
+
+func TestFetchDoesNotSuggestDisabledContentTool(t *testing.T) {
+	cfg := testConfig()
+	cfg.ContentEnabled = false
+	cfg.MaxInlineChars = minInlineChars
+	client := testClient(cfg)
+	text, _ := client.formatPage(pageData{
+		FinalURL: "https://example.com/",
+		Mode:     "readable",
+		Text:     strings.Repeat("a", minInlineChars+1),
+	}, "response-id")
+	if strings.Contains(text, "continue:") {
+		t.Fatalf("disabled content tool received a continuation instruction:\n%s", text)
+	}
+}
+
+func TestErrorResultsAreBounded(t *testing.T) {
+	client := testClient(testConfig())
+	key := strings.Repeat("k", resultMaxBytes+100)
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolFetch, map[string]any{key: true}))
+	if !result.IsError {
+		t.Fatal("unknown argument accepted")
+	}
+	text := result.Content[0].Text
+	if len(text) > resultMaxBytes || !strings.HasSuffix(text, "[truncated]") {
+		t.Fatalf("error result not bounded: len=%d", len(text))
 	}
 }

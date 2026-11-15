@@ -111,6 +111,9 @@ func TestContentOffsetAndFindRules(t *testing.T) {
 	if !strings.Contains(result.Content[0].Text, "offset: 6") {
 		t.Fatalf("find offset:\n%s", result.Content[0].Text)
 	}
+	if res := getContent(t, client, map[string]any{"responseId": "  " + id + "  "}); res.IsError {
+		t.Fatalf("padded responseId: %s", res.Content[0].Text)
+	}
 
 	for name, args := range map[string]map[string]any{
 		"find with offset":   {"responseId": id, "findText": "x", "offset": 1},
@@ -287,5 +290,39 @@ func TestFindTextLongRepeatedPrefix(t *testing.T) {
 func TestFindTextWhitespaceCanBeLongerThanText(t *testing.T) {
 	if got, ok := findTextOffset([]rune("a b"), "a  b"); !ok || got != 0 {
 		t.Fatalf("got %d ok=%v", got, ok)
+	}
+}
+
+type cancelAfterCheck struct {
+	context.Context
+	checks int
+}
+
+func (c *cancelAfterCheck) Err() error {
+	c.checks++
+	if c.checks > 1 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestFindTextChecksContextBetweenPasses(t *testing.T) {
+	ctx := &cancelAfterCheck{Context: context.Background()}
+	if _, _, err := findTextOffsetContext(ctx, []rune("abcdef"), "missing"); err == nil {
+		t.Fatal("cancellation between find passes was ignored")
+	}
+}
+
+func TestContentRetrievalKeepsSourceTruncationFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, strings.Repeat("a", maxBodyBytes+1))
+	}))
+	defer server.Close()
+	client := testClient(testConfig())
+	id := fetchContentID(t, client, server.URL)
+	result := getContent(t, client, map[string]any{"responseId": id, "limit": 1})
+	if result.IsError || !strings.Contains(result.Content[0].Text, "source-truncated: true") {
+		t.Fatalf("truncation flag lost: %s", result.Content[0].Text)
 	}
 }

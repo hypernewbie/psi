@@ -184,6 +184,10 @@ func parseExaProse(text string, limit int) []searchHit {
 			current.Date = clipMeta(strings.TrimSpace(strings.TrimPrefix(trimmed, "Published:")), 64)
 		case strings.HasPrefix(trimmed, "Author:"):
 			// Author is not retained.
+		case strings.HasPrefix(trimmed, "Highlights:"),
+			strings.HasPrefix(trimmed, "Text:"),
+			strings.HasPrefix(trimmed, "Content:"):
+			// Section markers are not snippets.
 		default:
 			if trimmed != "" && current.URL != "" && len(snippet) < 20 {
 				snippet = append(snippet, trimmed)

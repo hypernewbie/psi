@@ -33,6 +33,7 @@ func htmlToMarkdown(data []byte, base *url.URL, limit int) (title, markdown stri
 	r := &renderer{base: base, out: strings.Builder{}, limit: limit}
 	r.block(root)
 	text := tidyMarkdown(r.out.String())
+	truncated = r.truncated || r.inlineCut
 	if len(text) > limit {
 		text = runePrefix(text, limit)
 		truncated = true
@@ -79,6 +80,9 @@ type renderer struct {
 	inlineDepth int
 	quoteDepth  int
 	truncated   bool
+	// inlineCut records that an inline subrenderer dropped content. The parent
+	// may still write the returned prefix, so it cannot stop writes yet.
+	inlineCut bool
 }
 
 func (r *renderer) write(s string) {
@@ -87,10 +91,14 @@ func (r *renderer) write(s string) {
 	}
 	if r.out.Len()+len(s) <= r.limit {
 		r.out.WriteString(s)
-		return
+	} else {
+		r.out.WriteString(runePrefix(s, r.limit-r.out.Len()))
+		r.truncated = true
 	}
-	r.out.WriteString(runePrefix(s, r.limit-r.out.Len()))
-	r.truncated = true
+	if r.inlineCut {
+		r.truncated = true
+		r.inlineCut = false
+	}
 }
 
 func (r *renderer) inlineRenderer() *renderer {
@@ -112,12 +120,18 @@ func (r *renderer) remaining() int {
 func (r *renderer) inlineText(n *html.Node) string {
 	sub := r.inlineRenderer()
 	sub.inline(n)
+	if sub.truncated || sub.inlineCut {
+		r.inlineCut = true
+	}
 	return sub.out.String()
 }
 
 func (r *renderer) inlineChildren(n *html.Node) string {
 	sub := r.inlineRenderer()
 	sub.inlineChildrenInPlace(n)
+	if sub.truncated || sub.inlineCut {
+		r.inlineCut = true
+	}
 	return sub.out.String()
 }
 
@@ -244,6 +258,9 @@ func (r *renderer) block(n *html.Node) {
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			inner.block(child)
 		}
+		if inner.truncated || inner.inlineCut {
+			r.inlineCut = true
+		}
 		body := strings.TrimSpace(inner.out.String())
 		if body != "" {
 			var lines []string
@@ -354,6 +371,9 @@ func (r *renderer) resolveLink(raw string) string {
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "http", "https":
+		if _, err := validateTarget(u.String()); err != nil {
+			return ""
+		}
 		return u.String()
 	default:
 		return ""
@@ -455,7 +475,24 @@ func tidyMarkdown(s string) string {
 	lines := strings.Split(s, "\n")
 	var out []string
 	blank := 0
+	fence := 0
 	for _, line := range lines {
+		if fence > 0 {
+			// Fenced code is preformatted: keep trailing spaces and blank
+			// lines. The renderer chooses a fence longer than any backtick run
+			// inside the block, so only the closing line can match.
+			out = append(out, line)
+			if leadingBackticks(line) >= fence {
+				fence = 0
+			}
+			continue
+		}
+		if run := leadingBackticks(line); run >= 3 {
+			out = append(out, line)
+			fence = run
+			blank = 0
+			continue
+		}
 		line = strings.TrimRight(line, " \t")
 		if line == "" {
 			blank++
@@ -468,6 +505,14 @@ func tidyMarkdown(s string) string {
 		out = append(out, line)
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func leadingBackticks(s string) int {
+	n := 0
+	for n < len(s) && s[n] == '`' {
+		n++
+	}
+	return n
 }
 
 // runePrefix returns at most n bytes without splitting a rune.

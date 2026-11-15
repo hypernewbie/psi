@@ -151,6 +151,9 @@ func TestExaMCPSSEParsing(t *testing.T) {
 	if !strings.Contains(result.Content[0].Text, "provider: exa") {
 		t.Fatalf("provider:\n%s", result.Content[0].Text)
 	}
+	if strings.Contains(result.Content[0].Text, "Highlights:") {
+		t.Fatalf("section marker retained as a snippet:\n%s", result.Content[0].Text)
+	}
 }
 
 func TestExaMCPLargeFrameAndIdleStream(t *testing.T) {
@@ -199,6 +202,7 @@ func TestExaMCPEnvelopeErrors(t *testing.T) {
 		"wrong id":      `{"jsonrpc":"2.0","id":"OTHER","result":{"content":[{"type":"text","text":"x"}]}}`,
 		"wrong version": `{"jsonrpc":"1.0","id":"ID","result":{"content":[{"type":"text","text":"x"}]}}`,
 		"no text":       `{"jsonrpc":"2.0","id":"ID","result":{"content":[{"type":"text","text":""}]}}`,
+		"no results":    `{"jsonrpc":"2.0","id":"ID","result":{"content":[{"type":"text","text":"not a result"}]}}`,
 		"malformed":     `not json`,
 	}
 	for name, template := range cases {
@@ -345,5 +349,22 @@ func TestExaMCPMultipleTextBlocks(t *testing.T) {
 	}
 	if !strings.Contains(text, "useful highlight") {
 		t.Fatalf("joined text lost highlight:\n%s", text)
+	}
+}
+
+func TestExaMCPRejectsUnsupportedContentEncoding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Encoding", "br")
+		fmt.Fprint(w, mcpSSE(body["id"].(string), "Title: A\nURL: https://a.example/"))
+	}))
+	defer server.Close()
+	client := testClient(exaConfig("https://api.exa.ai", ""))
+	client.mcpURL = server.URL
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q"}))
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "unsupported content encoding") {
+		t.Fatalf("result = %s", result.Content[0].Text)
 	}
 }

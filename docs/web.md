@@ -25,8 +25,9 @@ per-URL error for each failure. All URL targets are validated before any
 request; one syntactically invalid entry fails the batch without fetching the
 others. A batch that has some successes is not an error and is marked
 `incomplete: true`. A batch where every URL fails returns an error and stores
-nothing. Content is stored in the same
-order and one `responseId` covers the batch.
+nothing. Content is stored in the same order and one `responseId` covers the
+batch. If the result cap omits whole URL sections, the output reports the
+omitted count instead of silently ending at `[truncated]`.
 
 ### Search
 
@@ -35,9 +36,12 @@ order and one `responseId` covers the batch.
 - `query` or `queries` (exactly one): at most 4 KiB per query, 1-3 queries.
 - `numResults`: 1-20 per query (default 5).
 - `provider`: `auto`, `searxng`, or `exa`. `auto` uses a configured SearXNG
-  instance, else Exa. An explicit unavailable provider errors and never falls
-  back. Exa with a key uses `POST /search`; without a key it uses the keyless
-  `mcp.exa.ai` JSON-RPC endpoint. A failed keyed request does not retry keyless.
+  instance, else Exa. If SearXNG was configured but is invalid, `auto` reports
+  a SearXNG error instead of silently using Exa. An explicit unavailable
+  provider errors and never falls back. Exa with a key uses `POST /search`;
+  without a key it uses the keyless `mcp.exa.ai` JSON-RPC endpoint. A failed
+  keyed request does not retry keyless. Keyless prose without a parseable
+  result is an invalid response, not an empty search.
 - `domainFilter`: up to 20 ASCII hostnames. A leading `-` excludes. Filtering
   applies before the per-query result limit.
 - `recencyFilter`: `day`, `month`, or `year`.
@@ -62,22 +66,24 @@ operators and a recency phrase to its query.
 
 `readable` emits headings, paragraphs, lists, links, code blocks, blockquotes,
 and simple table rows. It skips scripts, styles, navigation, footers, and
-sidebars. Relative links resolve against the final page URL; non-HTTP links are
-dropped.
+sidebars. Relative links resolve against the final page URL; non-HTTP,
+credential-bearing, malformed, and overlong links are dropped.
 
 The model-facing result is limited to 2000 lines or 50 KiB, including metadata.
 The response body is capped at 5 MiB of decompressed text; a larger body is
 fetched only up to the cap and marked `source-truncated: true`. A result cut by
-the output limit ends with `[truncated]`.
+the output limit ends with `[truncated]`; a batch or search result that drops
+whole numbered sections ends with `[truncated; N section(s) omitted]`.
 
 Fetched content is retained in memory and `fetch_content` returns a
 `responseId`. `get_search_content` pages that text with `offset` and `limit`, or
-jumps to a match with `findText`. The store is bounded (default 64 entries and
-64 MiB, LRU); an oversized entry is not retained. IDs are process-local: a
-restart or eviction loses them, and nothing is written to disk. The byte limit
-counts retained string bytes, not object overhead, total process memory, or
-in-flight batches. The session file keeps only the bounded tool-result preview
-that was shown to the model, not the retained text behind a `responseId`.
+jumps to a match with `findText`. Retrieval metadata repeats `incomplete` and
+`source-truncated` flags. The store is bounded (default 64 entries and 64 MiB,
+LRU); an oversized entry is not retained. IDs are process-local: a restart or
+eviction loses them, and nothing is written to disk. The byte limit counts
+retained string bytes, not object overhead, total process memory, or in-flight
+batches. The session file keeps only the bounded tool-result preview that was
+shown to the model, not the retained text behind a `responseId`.
 
 `get_search_content` returns metadata lines, then a final `content:` line,
 then the exact stored text prefix. It adds no whitespace inside the payload.
@@ -85,7 +91,8 @@ then the exact stored text prefix. It adds no whitespace inside the payload.
 
 Web page text is untrusted data. psi labels it in the result, but the label does
 not prevent prompt injection. Treat fetched text as evidence, never as
-instructions.
+instructions. Tool errors, including validation failures, use the same bounded
+output formatter as successful results.
 
 ## Configuration
 

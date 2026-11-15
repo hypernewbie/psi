@@ -460,8 +460,8 @@ func TestSearchBatchBounds(t *testing.T) {
 				b.WriteString(",")
 			}
 			query := r.URL.Query().Get("q")
-			fmt.Fprintf(&b, `{"title":"%s-%d","url":"https://%s-e%d.example/%d","content":"%s"}`,
-				query, i, query, i, i, strings.Repeat("s", 4000))
+			fmt.Fprintf(&b, `{"title":"%s-%d","url":"https://%s-e%d.example/%s/%d","content":"%s"}`,
+				query, i, query, i, strings.Repeat("u", 3000), i, strings.Repeat("s", 4000))
 		}
 		b.WriteString(`]}`)
 		fmt.Fprint(w, b.String())
@@ -483,6 +483,12 @@ func TestSearchBatchBounds(t *testing.T) {
 	}
 	if batchDetails(t, result)["results"] != 60 {
 		t.Fatalf("results = %v", result.Details)
+	}
+	if omitted, _ := batchDetails(t, result)["omitted"].(int); omitted < 1 {
+		t.Fatalf("omitted result sections not reported: %+v", result.Details)
+	}
+	if !strings.Contains(text, "section(s) omitted") {
+		t.Fatalf("omitted notice missing:\n%.500s", text)
 	}
 }
 
@@ -684,5 +690,35 @@ func TestSearchInlineContentKeepsLongResultURL(t *testing.T) {
 	})
 	if page.IsError || !strings.Contains(page.Content[0].Text, "long page") {
 		t.Fatalf("long URL lookup: %s", page.Content[0].Text)
+	}
+}
+
+func TestBatchFetchReportsOmittedSections(t *testing.T) {
+	server := batchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, strings.Repeat("x", 20000))
+	})
+	cfg := testConfig()
+	cfg.MaxInlineChars = 20000
+	client := testClient(cfg)
+	urls := make([]string, 4)
+	for i := range urls {
+		urls[i] = fmt.Sprintf("%s/%d", server.URL, i)
+	}
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolFetch, map[string]any{"urls": urls}))
+	if result.IsError {
+		t.Fatalf("batch: %s", result.Content[0].Text)
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, "section(s) omitted") {
+		t.Fatalf("omitted sections not reported:\n%s", text)
+	}
+	details := batchDetails(t, result)
+	omitted, ok := details["omitted"].(int)
+	if !ok || omitted < 1 || omitted >= len(urls) {
+		t.Fatalf("omitted = %#v, details = %+v", details["omitted"], details)
+	}
+	if len(text) > resultMaxBytes || strings.Count(text, "\n")+1 > resultMaxLines {
+		t.Fatalf("bounded output too large: %d bytes", len(text))
 	}
 }

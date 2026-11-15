@@ -386,3 +386,17 @@ func TestProviderWrappedDialTimeoutKeepsClass(t *testing.T) {
 		t.Fatalf("result = %s", result.Content[0].Text)
 	}
 }
+
+func TestProviderRedirectRejectsInvalidTargets(t *testing.T) {
+	origin := &url.URL{Scheme: "https", Host: "searx.example"}
+	req := &http.Request{URL: &url.URL{
+		Scheme: "https",
+		User:   url.UserPassword("user", "secret"),
+		Host:   "searx.example",
+		Path:   "/redirected",
+	}}
+	via := []*http.Request{{URL: origin}}
+	if err := providerRedirect(req, via); err == nil {
+		t.Fatal("provider redirect with credentials was accepted")
+	}
+}

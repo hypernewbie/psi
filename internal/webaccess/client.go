@@ -108,6 +108,9 @@ func providerRedirect(req *http.Request, via []*http.Request) error {
 	if !strings.EqualFold(origin.Scheme, req.URL.Scheme) || !strings.EqualFold(origin.Host, req.URL.Host) {
 		return fmt.Errorf("%s: cross-origin provider redirect is not allowed", classBlocked)
 	}
+	if _, err := validateTarget(req.URL.String()); err != nil {
+		return fmt.Errorf("%s: provider redirect target is invalid", classValidation)
+	}
 	return nil
 }
 
@@ -115,7 +118,18 @@ func providerRedirect(req *http.Request, via []*http.Request) error {
 // fabricated internal call cannot bypass the advertised set.
 func (c *Client) Dispatch(ctx context.Context, inv tools.Invocation) tools.Result {
 	if err := ctx.Err(); err != nil {
-		return fetchError(fmt.Errorf("%s: cancelled", classCancelled))
+		err = wrapClass(ctx, classCancelled, "tool cancelled")
+		switch inv.Name {
+		case ToolSearch:
+			return searchError(err)
+		case ToolContent:
+			return contentError(err)
+		case ToolFetch:
+			return fetchError(err)
+		default:
+			text, _ := boundResult(fmt.Sprintf("web access failed: %v", err))
+			return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: text}}}
+		}
 	}
 	switch inv.Name {
 	case ToolSearch:
@@ -125,6 +139,7 @@ func (c *Client) Dispatch(ctx context.Context, inv tools.Invocation) tools.Resul
 	case ToolContent:
 		return c.handleContent(ctx, inv)
 	default:
-		return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("unknown web tool %q", inv.Name)}}}
+		text, _ := boundResult(fmt.Sprintf("unknown web tool %q", inv.Name))
+		return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: text}}}
 	}
 }

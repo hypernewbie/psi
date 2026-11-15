@@ -65,6 +65,9 @@ func validateTarget(raw string) (*url.URL, error) {
 func parsePort(u *url.URL) (string, error) {
 	port := u.Port()
 	if port == "" {
+		if strings.HasSuffix(u.Host, ":") {
+			return "", fmt.Errorf("%s: url has an invalid port", classValidation)
+		}
 		if strings.EqualFold(u.Scheme, "https") {
 			return "443", nil
 		}
@@ -109,8 +112,8 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return pageData{}, fmt.Errorf("%s: %d", classStatus, resp.StatusCode)
 	}
-	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") && !resp.Uncompressed {
-		return pageData{}, fmt.Errorf("%s: unsupported content encoding", classInvalid)
+	if err := checkContentEncoding(resp); err != nil {
+		return pageData{}, err
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -186,6 +189,14 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 		Text:      text,
 		Truncated: truncated,
 	}, nil
+}
+
+func checkContentEncoding(resp *http.Response) error {
+	enc := resp.Header.Get("Content-Encoding")
+	if enc != "" && !strings.EqualFold(enc, "identity") && !resp.Uncompressed {
+		return fmt.Errorf("%s: unsupported content encoding", classInvalid)
+	}
+	return nil
 }
 
 func textMediaType(mediaType string) bool {
@@ -280,7 +291,7 @@ func (c *Client) formatPage(p pageData, responseID string) (string, bool) {
 	}
 	if previewTruncated {
 		b.WriteString(fmt.Sprintf("preview-truncated: true (%d scalar limit)\n", c.cfg.MaxInlineChars))
-		if responseID != "" {
+		if responseID != "" && c.cfg.ContentEnabled {
 			b.WriteString("continue: call get_search_content with responseId " + responseID + " and offset 0\n")
 		}
 	}

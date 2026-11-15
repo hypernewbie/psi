@@ -49,6 +49,7 @@ type Config struct {
 	ContentEnabled bool
 
 	SearXNGAvailable bool
+	SearXNGRequested bool // endpoint present, even if invalid
 	ExaAvailable     bool
 
 	FetchMode      string
@@ -527,18 +528,23 @@ func contains(list []string, value string) bool {
 
 func applySearXNG(cfg *Config, root map[string]json.RawMessage, env Env, diags *[]string) {
 	base := ""
-	if raw, ok := root["searxngBaseUrl"]; ok {
-		if err := json.Unmarshal(raw, &base); err != nil {
-			*diags = append(*diags, "web access: searxngBaseUrl must be one string")
-			cfg.SearXNGBaseURL = ""
-			return
-		}
-	}
-	if value, ok := env.lookup("SEARXNG_BASE_URL"); ok {
+	value, overrideSet := env.lookup("SEARXNG_BASE_URL")
+	if overrideSet {
 		base = value
 		if base == "" {
 			cfg.SearXNGBaseURL = ""
 			return
+		}
+		cfg.SearXNGRequested = true
+	} else if raw, ok := root["searxngBaseUrl"]; ok {
+		if err := json.Unmarshal(raw, &base); err != nil {
+			cfg.SearXNGRequested = true
+			*diags = append(*diags, "web access: searxngBaseUrl must be one string")
+			cfg.SearXNGBaseURL = ""
+			return
+		}
+		if base != "" {
+			cfg.SearXNGRequested = true
 		}
 	}
 	if base == "" {
@@ -565,18 +571,17 @@ func applySearXNG(cfg *Config, root map[string]json.RawMessage, env Env, diags *
 
 func applyExa(cfg *Config, root map[string]json.RawMessage, env Env, diags *[]string) {
 	base := ""
-	if raw, ok := root["exaBaseUrl"]; ok {
-		if err := json.Unmarshal(raw, &base); err != nil {
-			*diags = append(*diags, "web access: exaBaseUrl must be one string")
-			cfg.ExaAvailable = false
-			return
-		}
-	}
 	override, overrideSet := env.lookup("EXA_BASE_URL")
 	if overrideSet {
 		base = override
 		if base == "" {
 			*diags = append(*diags, "web access: EXA_BASE_URL must not be empty")
+			cfg.ExaAvailable = false
+			return
+		}
+	} else if raw, ok := root["exaBaseUrl"]; ok {
+		if err := json.Unmarshal(raw, &base); err != nil {
+			*diags = append(*diags, "web access: exaBaseUrl must be one string")
 			cfg.ExaAvailable = false
 			return
 		}
@@ -699,8 +704,11 @@ func normalizeBaseURL(raw string, allowHTTP bool) (string, error) {
 	if u.Host == "" || u.Hostname() == "" {
 		return "", errors.New("host")
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if u.User != nil || u.ForceQuery || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("components")
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return "", errors.New("port")
 	}
 	if port := u.Port(); port != "" {
 		value, err := strconv.Atoi(port)
@@ -730,7 +738,8 @@ func isLoopbackHost(host string) bool {
 func (c Config) searxngConfigured() bool { return c.SearXNGAvailable && c.SearXNGBaseURL != "" }
 
 // SearchProvider resolves auto to a concrete provider. An explicit provider is
-// returned even when unavailable; callers must check availability.
+// returned even when unavailable; callers must check availability. A configured
+// but invalid SearXNG is returned rather than falling back to Exa.
 func (c Config) SearchProvider() string {
 	if c.Provider != "auto" {
 		return c.Provider
@@ -738,14 +747,21 @@ func (c Config) SearchProvider() string {
 	if c.searxngConfigured() {
 		return "searxng"
 	}
+	// A malformed SearXNG configuration must not make auto silently use Exa.
+	if c.SearXNGRequested {
+		return "searxng"
+	}
 	return "exa"
 }
 
-// ProviderError reports why an explicitly selected provider cannot run.
+// ProviderError reports why a selected provider cannot run.
 func (c Config) ProviderError(name string) error {
 	switch name {
 	case "searxng":
 		if !c.searxngConfigured() {
+			if c.SearXNGRequested {
+				return errors.New("SearXNG configuration is invalid")
+			}
 			return errors.New("SearXNG is not configured")
 		}
 	case "exa":

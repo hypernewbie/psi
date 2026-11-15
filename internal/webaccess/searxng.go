@@ -18,13 +18,14 @@ const maxProviderBody = 5 << 20
 
 // searxngResult is the projected subset retained from one SearXNG item.
 type searchHit struct {
-	Title   string
-	URL     string
-	Snippet string
-	Engines string
-	Date    string
-	Content string
-	Error   string
+	Title     string
+	URL       string
+	Snippet   string
+	Engines   string
+	Date      string
+	Content   string
+	Error     string
+	Truncated bool
 }
 
 // searchSearXNG issues one JSON request and projects bounded results.
@@ -68,8 +69,8 @@ func (c *Client) searchSearXNG(ctx context.Context, query string, limit int, fil
 	if resp.StatusCode != http.StatusOK {
 		return searchResponse{}, fmt.Errorf("%s: %d", classStatus, resp.StatusCode)
 	}
-	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") && !resp.Uncompressed {
-		return searchResponse{}, fmt.Errorf("%s: unsupported content encoding", classInvalid)
+	if err := checkContentEncoding(resp); err != nil {
+		return searchResponse{}, err
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProviderBody+1))
 	if err != nil {
@@ -229,6 +230,9 @@ func classifyProviderError(ctx context.Context, err error) error {
 	}
 	if hasClass(message, classDNS) {
 		return fmt.Errorf("%s: lookup failed", classDNS)
+	}
+	if hasClass(message, classValidation) {
+		return fmt.Errorf("%s: provider redirect target is invalid", classValidation)
 	}
 	return fmt.Errorf("%s: provider request failed", classTransport)
 }

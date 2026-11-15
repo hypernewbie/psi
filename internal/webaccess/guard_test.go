@@ -135,3 +135,18 @@ func TestResolverCalledOncePerAttempt(t *testing.T) {
 		t.Fatalf("resolver calls = %d, want 1", rec.calls)
 	}
 }
+
+func TestLoopbackExemptionRejectsPublicResolution(t *testing.T) {
+	rec := &recordingDialer{}
+	rec.resolve = func(ctx context.Context, host string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+	d := &guardedDialer{loopbackOrigin: "localhost:8080", resolve: rec.resolve, dial: rec.dial}
+	_, err := d.DialContext(context.Background(), "tcp", "localhost:8080")
+	if err == nil || !strings.Contains(err.Error(), classBlocked) {
+		t.Fatalf("err = %v, want blocked", err)
+	}
+	if len(rec.addresses) != 0 {
+		t.Fatalf("public answer was dialed under a loopback exemption: %v", rec.addresses)
+	}
+}
