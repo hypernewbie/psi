@@ -172,7 +172,7 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 	reviewSettings(t, agentDir, server.URL)
 	// Only psi and bash exist on the child PATH. The workspace has no reference
 	// checkout, Node executable, extensions, or network catalog implementation.
-	q := startReviewProcess(t, home, work, agentDir, copied, bin, "--deny-project", "--session-dir", filepath.Join(home, "sessions"), "--tools", "read,write,edit,bash")
+	q := startReviewProcess(t, home, work, agentDir, copied, bin, "", "--deny-project", "--session-dir", filepath.Join(home, "sessions"), "--tools", "read,write,edit,bash")
 	q.prompt()
 	q.write("complete synthetic standalone task\r")
 	q.wait("STANDALONE_DONE")

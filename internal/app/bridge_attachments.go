@@ -145,6 +145,9 @@ func (h *bridgeHandler) attachModelMatches(expect pibridge.AttachmentExpect) boo
 // all. A normal running turn accepts steering through the current loop;
 // cancellation, compaction, and every idle-state mismatch still refuse.
 func (h *bridgeHandler) attachBusyReason(runBusy bool) string {
+	if h.r.shellActive {
+		return "busy"
+	}
 	if runBusy {
 		switch h.r.state {
 		case StateWaiting, StateStreaming, StateRunningTool:

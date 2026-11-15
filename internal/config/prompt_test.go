@@ -25,7 +25,7 @@ func TestBuildPromptSectionsBoundaries(t *testing.T) {
 			cwd:       "/workspace",
 			tools:     []string{"read"},
 			wantNames: []string{"preamble", "tools", "rules", "docs", "cwd"},
-			absent:    []string{"- bash: Execute shell commands", "Use bash for file operations"},
+			absent:    []string{"- bash: Run commands in the selected shell (the tool name is not a Bash-language guarantee)", "Use bash for file operations"},
 		},
 		{
 			name:      "no instructions no skills",

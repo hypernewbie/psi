@@ -2,7 +2,9 @@
 
 psi saves every conversation as a JSONL file unless `--no-session` is used.
 A file records messages, tool calls and results, model and thinking changes,
-compactions, and session metadata.
+compactions, shell executions, and session metadata. A shell entry can be the
+first durable entry: psi then writes the header and setup state with it, without
+creating a synthetic user prompt.
 
 ## Storage
 
@@ -45,6 +47,14 @@ Precedence for the session directory:
 
 `--no-session` keeps the conversation in memory and writes no file. `/session`
 prints the active file, workspace, provider, model, thinking level, and usage.
+
+Interactive `!command` saves one Pi v3 `bashExecution` entry with the command,
+sanitized bounded output, exit or cancellation state, and truncation metadata.
+It creates no user message and makes no provider request. `!!command` sets
+`excludeFromContext`, so later ordinary and compaction requests omit it; the
+entry stays in the local file and its output stays visible. Reopen is
+storage-level: richer terminal replay and shell-history recall are not
+implemented.
 
 ## Resume
 

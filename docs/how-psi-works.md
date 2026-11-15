@@ -114,6 +114,16 @@ Before reading `.pi/settings.json`, project skills, project themes, or a project
 `--approve` and `--deny-project` answer ahead of time; deny is the default.
 
 Trust controls which project resources load. It is not a sandbox. Tools run
-with the permissions of the psi process, and the `bash` and `powershell` tools inherit its
-environment. Context files such as `AGENTS.md` load without the trust prompt,
-matching Pi.
+with the permissions of the psi process, and the `bash`, `powershell`, and
+interactive `!command` path inherit its environment. Context files such as
+`AGENTS.md` load without the trust prompt, matching Pi.
+
+## Shell execution
+
+The interactive `!command` path runs locally and makes no provider request. It
+is serial with model work: psi refuses a shell while a model run or bridge
+preparation is active, and refuses model or session mutation while a shell is
+unsettled. `!!command` excludes its saved command and output from model context
+but leaves them in the local session file. Output is final-only; there is no
+live chunk stream, transcript replay format, or shell-history recall. The
+shared shell resolver is described in [Environment](env.md).

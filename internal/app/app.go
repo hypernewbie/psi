@@ -480,6 +480,7 @@ OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API ke
 A custom provider using openai-completions, openai-responses, or anthropic-messages may omit the API key; built-in openai and anthropic may omit it only on an explicit non-default baseUrl override. An omitted key sends no generated auth header. authHeader: true still requires a key; explicit headers still apply.
 Eligible built-in openai-codex, zai and opencode-go models show remaining quota in unused footer space. Codex shows primary ChatGPT quota; Go shows rolling (R), weekly (W), and monthly (M) percentages. Reads are best effort and back off after failures.
 MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; this layer supports stdio and streamable HTTP. --no-mcp disables MCP.
+Interactive editor: !command runs a local shell command; !!command also excludes its saved command and output from model context.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }
@@ -832,6 +833,10 @@ type runtime struct {
 	// modelSyncHook is a test seam for gating the settlement boundary after
 	// the final queue read. Nil in production.
 	modelSyncHook func()
+	// shellRunner is the per-runtime editor shell seam. Nil uses the shared
+	// BashTool runner; tests replace it before the REPL starts.
+	shellRunner shellRunFunc
+	shellActive bool
 }
 
 // activeTool is one running tool call tracked by call ID.
@@ -1931,6 +1936,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 	status := terminal.NewStatusWriter(out)
 	events := make(chan event.Event, 64)
 	done := make(chan error, 1)
+	shellRun := r.shellRunner
+	if shellRun == nil {
+		shellRun = defaultShellRun
+	}
 	// Capability requests are served on this loop so mutation stays
 	// single-owner; the bridge client only carries them.
 	bridge := newBridgeHandler(r, console)
@@ -1979,6 +1988,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 	}()
 	var suppressPaste bool
+	var shell *shellLifetime
+	var shellResults <-chan shellResult
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
@@ -2032,6 +2043,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	spinnerIndex := 0
 	activityText := ""
 	lastSpinner := time.Time{}
+	operationActive := func() bool { return busy || shell != nil }
 	activityFrame := func() string {
 		if activityText == "" {
 			return ""
@@ -2062,6 +2074,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cancel()
 	}
 	cancelActive := func() {
+		if shell != nil {
+			r.state = StateCancelling
+			console.SetThinking(false)
+			shell.cancelRun()
+			return
+		}
 		if manualCompact != nil && !manualCompact.started {
 			// The outgoing run has already been cancelled. Keep its owner
 			// until settlement so undelivered input is still recovered.
@@ -2605,6 +2623,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var compactionCountAtStart uint64
 	var activeConfig agent.Config
 	startInputMode := func(input agent.UserInput, focus string, mode inputMode, silent bool) (bool, string) {
+		if r.shellActive {
+			return false, "shell"
+		}
 		if login != nil {
 			if !silent {
 				notice(terminal.NoticeError, "Finish or cancel the "+login.label+" sign-in before submitting.")
@@ -3015,7 +3036,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		startInputMode(agent.UserInput{}, "", inputCompactEndTurn, false)
 	}
 	endTurnReady := func() bool {
-		if busy || exiting || r.state != StateIdle || r.selector != nil {
+		if busy || shell != nil || exiting || r.state != StateIdle || r.selector != nil {
 			return false
 		}
 		proj, err := r.store.Projection()
@@ -3161,26 +3182,24 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if quota.observe(r) {
 			stopQuotaTimer()
 		}
-		if exiting && !busy && login == nil {
+		if exiting && !operationActive() && login == nil {
 			if count := len(r.recovery); count > 0 {
 				fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("%d undelivered attachment prompt(s) were not sent; Phi keeps a saved copy.", count)))
 			}
 			return console.Err()
 		}
-		if suspendPending && !busy && login == nil {
+		if suspendPending && !operationActive() && login == nil {
 			suspendPending = false
 			if err := suspend(); err != nil {
 				return err
 			}
 		}
 		if err := console.Err(); err != nil {
-			if !busy && login == nil {
+			if !operationActive() && login == nil {
 				return err
 			}
 			outputErr, exiting = err, true
-			if busy {
-				cancel()
-			}
+			cancelActive()
 			cancelLogin()
 		}
 		if exiting {
@@ -3197,9 +3216,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			close(queued)
 			inputSource = queued
 		}
-		if !released && frameTick == nil && (stream.Pending() || console.NeedsDraw() || (busy && activityText != "")) {
+		if !released && frameTick == nil && (stream.Pending() || console.NeedsDraw() || (operationActive() && activityText != "")) {
 			delay := time.Second / 30
-			if busy && !stream.Pending() && !console.NeedsDraw() {
+			if operationActive() && !stream.Pending() && !console.NeedsDraw() {
 				delay = 80 * time.Millisecond
 			}
 			frameTimer.Reset(delay)
@@ -3241,7 +3260,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					console.Status(activityFrame())
 				}
 			}
-			if busy && activityText != "" && time.Since(lastSpinner) >= 80*time.Millisecond {
+			if operationActive() && activityText != "" && time.Since(lastSpinner) >= 80*time.Millisecond {
 				spinnerIndex = (spinnerIndex + 1) % len(spinnerFrames)
 				lastSpinner = time.Now()
 				console.Status(activityFrame())
@@ -3259,7 +3278,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if isSuspend(sig) {
-				if busy {
+				if operationActive() {
 					suspendPending = true
 					cancelActive()
 				} else if login != nil {
@@ -3272,7 +3291,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if isResume(sig) {
 				// Reacquire tail only, no full replay (3.3, P2-032).
-				if !busy {
+				if !operationActive() {
 					r.draw(console)
 				}
 				continue
@@ -3280,7 +3299,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if isShutdown(sig) {
 				exiting = true
 			}
-			if busy {
+			if operationActive() {
 				cancelActive()
 			} else if login != nil {
 				cancelLogin()
@@ -3335,6 +3354,99 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case result := <-quota.done:
 			if quota.handleResult(result) {
 				r.draw(console)
+			}
+		case res := <-shellResults:
+			settled := shell
+			shell = nil
+			shellResults = nil
+			r.shellActive = false
+			if settled == nil {
+				continue
+			}
+			exclude := settled.exclude
+			var fullPath *string
+			if res.fullOutputPath != "" {
+				path := res.fullOutputPath
+				fullPath = &path
+			}
+			message := session.AgentMessage{Role: "bashExecution", BashExecution: &session.BashExecutionMessage{
+				Role:               "bashExecution",
+				Command:            settled.command,
+				Output:             res.output,
+				ExitCode:           res.exitCode,
+				Cancelled:          res.cancelled,
+				Truncated:          res.truncated,
+				FullOutputPath:     fullPath,
+				Timestamp:          time.Now().UnixMilli(),
+				ExcludeFromContext: &exclude,
+			}}
+			_, appendErr := settled.store.AppendMessage(message)
+			state := "done"
+			switch {
+			case res.cancelled:
+				state = "cancelled"
+			case res.infraErr != nil || appendErr != nil:
+				state = "failed"
+			case res.exitCode == nil:
+				state = "interrupted"
+			case *res.exitCode != 0:
+				state = "failed"
+			}
+			console.ClearToolRow()
+			setActivity("")
+			summary := tools.SummarizeArguments("bash", map[string]any{"command": settled.command}, settled.store.Cwd(), "")
+			status.UpdateSummary("bash", settled.callID, summary, state, presentationDisplay(r.settings), r.theme, noColorEnvironment())
+			if visible := strings.TrimRight(res.output, "\n"); visible != "" {
+				print(visible)
+			} else if !res.cancelled && res.infraErr == nil && res.exitCode != nil && *res.exitCode == 0 && appendErr == nil {
+				print("(no output)")
+			}
+			if res.cancelled {
+				print("(cancelled)")
+			}
+			if res.exitCode != nil && *res.exitCode != 0 {
+				print(fmt.Sprintf("(exit %d)", *res.exitCode))
+			}
+			if res.truncated {
+				if res.fullOutputPath != "" {
+					print("[Output truncated. Full output: " + res.fullOutputPath + "]")
+				} else {
+					print("[Output truncated]")
+				}
+			}
+			if appendErr != nil {
+				r.state = StateStorageBlocked
+				notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. "+appendErr.Error())
+			} else {
+				if !settled.exclude {
+					r.bumpContextRev()
+				}
+				r.state = StateIdle
+				if r.authErr != nil {
+					r.state = StateOffline
+				}
+				if settled.store.WriteError() != nil {
+					r.state = StateStorageBlocked
+				}
+			}
+			r.syncBridge()
+			if exiting {
+				return outputErr
+			}
+			if suspendPending {
+				suspendPending = false
+				if err := suspend(); err != nil {
+					return err
+				}
+			} else {
+				console.Status("")
+				r.refreshPresentation(console)
+				r.draw(console)
+			}
+			if r.state == StateIdle && len(initialMessages) > 0 {
+				message := initialMessages[0]
+				initialMessages = initialMessages[1:]
+				start(message, message, "", "", "", false)
 			}
 		case ev := <-events:
 			recordEventFrames(func() { applyEvent(ev) })
@@ -3594,7 +3706,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if r.login != nil {
 					r.cancelLogin(console)
 				}
-				if busy {
+				if operationActive() {
 					exiting = true
 					cancelActive()
 					continue
@@ -3784,7 +3896,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
-				if busy {
+				if operationActive() {
 					suspendPending = true
 					cancelActive()
 				} else if err := suspend(); err != nil {
@@ -4065,7 +4177,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 16 {
+			if !operationActive() && !input.Paste && len(input.Key) == 1 && input.Key[0] == 16 {
 				status, err := r.cycleModel(1)
 				if err != nil {
 					notice(terminal.NoticeError, err.Error())
@@ -4075,7 +4187,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.draw(console)
 				continue
 			}
-			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
+			if !operationActive() && !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
 				r.refreshModelsForPicker(notice)
 				openSelector(modelSelector(r), console.Editor.Text(), console.Editor.Pos(), "", true)
 				continue
@@ -4111,20 +4223,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Status("Skill and web cards: " + state)
 				continue
 			}
-			if !input.Paste && string(input.Key) == "\x1b[Z" {
+			if !operationActive() && !input.Paste && string(input.Key) == "\x1b[Z" {
 				cycleThinking()
 				continue
 			}
 			draftBefore, cursorBefore := console.Editor.Text(), console.Editor.Pos()
-			text, submitted, quit, abort := console.Handle(input, busy)
+			text, submitted, quit, abort := console.Handle(input, operationActive())
 			if submitted {
 				submittedDraft, submittedCursor = draftBefore, cursorBefore
 			}
-			if abort && busy {
+			if abort && operationActive() {
 				cancelActive()
 			}
 			if quit {
-				if busy {
+				if operationActive() {
 					exiting = true
 					cancelActive()
 					continue
@@ -4164,6 +4276,49 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if err := r.checkBump(busy || compacting || exiting, false); err == nil {
 					startInputMode(agent.UserInput{}, "", inputBump, true)
 				}
+				r.draw(console)
+				continue
+			}
+			if shell != nil {
+				if cmd, ok := terminal.ParseCommand(text); ok {
+					switch cmd.Name {
+					case "quit":
+						exiting = true
+						cancelActive()
+						continue
+					case "session", "hotkeys":
+						if _, err := r.command(cmd, out); err != nil {
+							notice(terminal.NoticeError, err.Error())
+						}
+						r.draw(console)
+						continue
+					}
+				}
+				notice(terminal.NoticeInfo, "Finish or cancel the shell command before changing the session.")
+				console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+				console.RefreshCompletion()
+				r.draw(console)
+				continue
+			}
+			if parsedShell, ok := terminal.ParseShellCommand(text); ok {
+				if busy || bridge.busy() || r.reloadPending || r.store.WriteError() != nil || (r.state != StateIdle && r.state != StateOffline) {
+					notice(terminal.NoticeInfo, "Finish or cancel the current operation before running a shell command.")
+					console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+					console.RefreshCompletion()
+					r.draw(console)
+					continue
+				}
+				cancelACEndTurn()
+				callID := fmt.Sprintf("shell-%d", time.Now().UnixNano())
+				cwd := r.store.Cwd()
+				tool := &tools.BashTool{Cwd: cwd, ShellPath: r.settings.ShellPath, ShellPrefix: r.settings.ShellPrefix}
+				shell = startShellLifetime(context.Background(), shellRun, tool, parsedShell.Command, parsedShell.Exclude, callID, r.generation, r.store)
+				shellResults = shell.results
+				r.shellActive = true
+				r.state = StateRunningTool
+				console.SetToolRow("$ " + terminal.SanitizeStatusRow(parsedShell.Command))
+				setActivity("Running shell")
+				r.syncBridge()
 				r.draw(console)
 				continue
 			}

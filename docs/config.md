@@ -45,7 +45,7 @@ never change `--docs`; it reads embedded bytes only.
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
 | Display | `editorPaddingX`, `outputPad`, `softWrap`, `autocompleteMaxVisible`, `markdown.codeBlockIndent`, `contextUsageDisplay` | bounded inline spacing, committed-output wrapping, code-block indent, and footer context caption |
 | Reasoning display | `hideThinkingBlock` | `true` collapses reasoning blocks to one `Thinking...` label; `Ctrl+T` toggles and saves it |
-| Shell | `shellPath`, `shellCommandPrefix` | `shellPath` overrides `bash` shell discovery (Windows defaults to Git Bash before `PATH`); `shellCommandPrefix` prepends `bash` commands; project values require consent |
+| Shell | `shellPath`, `shellCommandPrefix` | `shellPath` selects first; otherwise `PSI_SHELL`; on Unix inherited `SHELL`, then `sh`; on Windows Git Bash discovery. Invalid explicit values error; `shellCommandPrefix` prepends commands; project values require consent |
 | Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`, `retry.maxAgentDelayMs` | default idle timeout 300000 ms; 0 disables it; at most 10 retries; response and summary retries default to 2s exponential backoff capped at 60s |
 | Instructions | user/project files | see below |
 | Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | bundled catalog and Pi cache; no network refresh |

@@ -488,11 +488,15 @@ func TestSummaryJSONNumberAndNumberValue(t *testing.T) {
 	_ = sNaN
 }
 
-// TestBashShellEnv: coverage for PSI_SHELL env var.
+// TestBashShellEnv: coverage for PSI_SHELL env var and shellPath precedence.
 func TestBashShellEnv(t *testing.T) {
 	t.Setenv("PSI_SHELL", "/bin/sh")
 	tool := &BashTool{}
 	if s := tool.customShell(); s != "/bin/sh" {
 		t.Errorf("got %q, want /bin/sh", s)
+	}
+	tool.ShellPath = "/bin/dash"
+	if s := tool.customShell(); s != "/bin/dash" {
+		t.Errorf("got %q, want shellPath to win", s)
 	}
 }

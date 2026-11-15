@@ -179,11 +179,42 @@ recent session. See [Sessions](sessions.md).
 
 ## Run a shell command
 
-There is no `!command` prefix. Ask psi to run the command, or use your own
-terminal. The `bash` tool runs in the workspace with the psi process
-environment and returns the last 2000 lines or 50 KiB. If a timeout occurs
-after the shell has exited while a background process keeps writing output,
-the timeout message includes the shell's exit code and elapsed time.
+In the editor, `!command` runs a local shell command in the session working
+directory. psi trims the whole submission, consumes `!!` before `!`, and trims
+the command. Quoting, internal whitespace, and newlines stay verbatim. An empty
+`!` or `!!` is ordinary prompt text. `!!! ls` runs the excluded command `! ls`.
+The prefix works only in the interactive editor: CLI positional prompts, RPC
+prompts, and bridge requests do not parse it.
+
+`!!command` saves the command and output locally but sets
+`excludeFromContext`, so they do not enter later ordinary or compaction model
+requests. The output is still visible in the terminal. The JSONL session file
+is not secret storage.
+
+An admitted command runs once, makes no provider request, and does not need
+provider credentials or model-tool allowlists. psi shows the command row, a
+running state, then final sanitized output and an explicit no-output, exit,
+cancellation, or truncation marker. There are no live chunks. Esc/Ctrl+C, quit,
+EOF, suspend, and terminal failure cancel and join the owned process before psi
+returns. A second shell, a model run, bridge preparation, or a session mutation
+is refused while the shell is unsettled; a refused submission restores the
+draft. Output is bounded to the last 50 KiB or 2000 lines, and a capture file
+is advertised only when it exists.
+
+The command runs with the psi process environment and permissions. It can
+modify files before cancellation or a storage error; psi cannot roll it back
+and never retries it automatically. If the first durable append fails, psi
+reports `UNSAVED`, keeps the committed leaf unchanged, and blocks later
+mutations.
+
+The `bash` tool uses the same shell selection and runs in the workspace. It
+returns the last 2000 lines or 50 KiB. If a timeout occurs after the shell has
+exited while a background process keeps writing output, the timeout message
+includes the shell's exit code and elapsed time. See [Environment](env.md) for
+the exact shell precedence.
+
+RPC `bash`, streamed terminal chunks, replay formatting, shell-history recall,
+and model/shell concurrency are not implemented.
 
 ## Web access
 

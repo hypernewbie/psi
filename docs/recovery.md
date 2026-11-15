@@ -56,6 +56,12 @@ rerunning that tool. The synthetic result is sent only as model context and is
 not written to the session. Psi cannot determine whether an interrupted side
 effect already happened.
 
+A shell entry that was never appended is not replayed or rerun. A cancelled or
+infrastructure-failed shell entry has no exit code, so its outcome is unknown
+apart from the saved partial output. Recovery never reruns an interactive
+`!`/`!!` command. Append failure leaves the committed leaf unchanged and blocks
+later mutations.
+
 Truncated tail: psi refuses to append after an incomplete final record. Recover
 from a copy:
 

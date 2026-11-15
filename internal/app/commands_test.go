@@ -48,6 +48,12 @@ func TestCommandTable(t *testing.T) {
 	if !strings.Contains(terminal.HotkeysText(), "\n") || strings.Contains(terminal.HotkeysText(), `\n`) {
 		t.Errorf("/hotkeys must render separate lines: %q", terminal.HotkeysText())
 	}
+	if !strings.Contains(terminal.HotkeysText(), "!command") || !strings.Contains(terminal.HotkeysText(), "!!command") {
+		t.Errorf("/hotkeys must document interactive shell commands: %q", terminal.HotkeysText())
+	}
+	if help := helpText("test"); !strings.Contains(help, "!command") || !strings.Contains(help, "!!command") {
+		t.Errorf("CLI help must document interactive shell commands: %q", help)
+	}
 	// Skill + unknown.
 	if cmd, ok := terminal.ParseCommand("/skill:review fix"); !ok || cmd.Name != "skill:review" {
 		t.Errorf("skill parse: %v %v", cmd, ok)
