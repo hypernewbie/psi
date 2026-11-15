@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"psi/internal/config"
 	"psi/internal/providerregistry"
@@ -74,7 +75,7 @@ func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
 	}
 	data = stripAuthBOM(data)
 	var entries map[string]json.RawMessage
-	if err := json.Unmarshal(data, &entries); err != nil || entries == nil {
+	if !utf8.Valid(data) || json.Unmarshal(data, &entries) != nil || entries == nil {
 		return nil, fmt.Errorf("auth.json is malformed")
 	}
 	return entries, nil

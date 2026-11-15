@@ -21,12 +21,15 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
 - On Unix, `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
+- Secret prompt: keys are masked and never enter prompt recall. `Enter` saves, `Esc` or `Ctrl+C` cancels. Paste must fit within 256 KiB and contain no newline. `Ctrl+J` does not submit.
 - Draft budget 256 KiB UTF-8, never splits grapheme
 
 Commands (bounded inline completion and searchable editor pickers; no fullscreen):
 
 - `/settings` — change supported live settings; changes apply immediately, persisted values merge into the user `settings.json`, and the picker is unavailable during a run
 - `/trust` — save a project trust decision for future sessions; restart psi for the decision to take effect
+- `/login [provider]` — open the API-key provider picker or the masked key prompt; Anthropic and Codex login are unavailable
+- `/logout` — remove a stored built-in API key, including Anthropic; leave OAuth, environment variables, and `models.json` unchanged
 - `/model [provider/model]` — open the model picker or set a model directly
 - `/thinking [level]` — open the supported-level picker or set a level directly; `Ctrl+S` saves the highlighted level as the global default
 - `/name [name]` — show or set the session display name

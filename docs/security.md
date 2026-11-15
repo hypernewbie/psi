@@ -52,6 +52,14 @@ them in `/session`, and refuses `!command` credential values without running
 them. Codex OAuth tokens are refreshed in place with a Pi-compatible directory
 lock.
 
+Interactive `/login` masks the key and excludes it from conversation history
+and prompt recall. It does not check the key with the provider. Keys remain
+unencrypted in `auth.json`. New auth files use mode `0600`, and new parent
+directories use mode `0700` on Unix. `/login` and `/logout` preserve existing
+modes and refuse symlinked auth files. `/logout` removes only the selected
+stored API key, not OAuth credentials, environment variables, or `models.json`
+credentials.
+
 Session files record prompts, tool calls, tool output, and file contents shown
 to the model. Treat a session file as sensitive as the work it describes.
 

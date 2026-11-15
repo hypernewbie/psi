@@ -66,6 +66,10 @@ environment variable. See [Providers](providers.md).
 
 ## Interactive API-key login
 
+Login and logout require an interactive terminal and a writable active session.
+They are unavailable during a run, picker, compaction, or reload. RPC and
+noninteractive clients must use environment variables or pre-written credentials.
+
 Use `/login [provider]` in an interactive session. With no provider argument,
 psi opens a searchable provider picker. The prompt masks the key; do not put
 keys in command arguments. Login supports `deepseek`, `google`, `groq`,
@@ -82,6 +86,8 @@ provider's environment variable. psi does not validate the key during login;
 the first provider request can still fail. If the session is offline and the
 provider has a default model, login selects it and saves the default provider
 and model. Otherwise, the key is saved without changing the current model.
+If model selection or defaults persistence fails after the key is saved, psi
+reports the failure and keeps the saved key.
 
 Use `/logout` to select and remove a stored built-in API key from
 `auth.json`. This includes Anthropic API keys. It does not remove OAuth

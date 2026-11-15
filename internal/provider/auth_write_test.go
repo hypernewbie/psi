@@ -375,6 +375,7 @@ func TestInvalidAuthDocumentRejectsCredentialFallbackAndLogoutListing(t *testing
 		data []byte
 	}{
 		{name: "null", data: []byte("null")},
+		{name: "invalid UTF-8", data: []byte("{\"deepseek\":{\"type\":\"api_key\",\"key\":\"corrupt-\xff-key\"}}")},
 		{name: "oversize", data: []byte(`{"unrelated":"` + strings.Repeat("x", maxAuthJSONSize) + `"}`)},
 	}
 	for _, tc := range cases {
@@ -386,7 +387,7 @@ func TestInvalidAuthDocumentRejectsCredentialFallbackAndLogoutListing(t *testing
 
 			key, source, err := SelectProviderAPIKey(map[string]string{"DEEPSEEK_API_KEY": "environment-key"}, authPath, "deepseek", "")
 			if err == nil || key != "" || source != "" {
-				t.Fatalf("invalid auth.json fell back to credentials: key=%q source=%q err=%v", key, source, err)
+				t.Fatalf("invalid auth.json resolved a credential: key=%q source=%q err=%v", key, source, err)
 			}
 			providers, err := StoredAPIKeyProviders(authPath)
 			if err == nil || providers != nil {

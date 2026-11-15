@@ -55,7 +55,9 @@ Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Kimi 
 
 A provider that `models.json` declares uses an API key from `auth.json` or from its own `apiKey` entry. It has no environment variable, and an unsupported stored credential stops the selection.
 
-psi has no login interface, does not support Anthropic OAuth, and does not execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
+Interactive `/login` supports 16 built-in API-key providers, excluding Anthropic and OpenAI Codex. `/logout` removes stored built-in API keys, including Anthropic, but never OAuth credentials, environment variables, or `models.json` credentials. Login stores the key without a provider request. See [Providers](providers.md) for the supported login providers.
+
+psi does not support Anthropic OAuth or execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
 
 ## Documentation topics
 

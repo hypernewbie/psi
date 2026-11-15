@@ -40,7 +40,11 @@ psi resolves a credential in this order:
 2. Credentials declared for the provider in `models.json`.
 3. The provider's environment variable.
 
-`auth.json` entries are written by Pi. For API-key providers the shape is:
+Malformed JSON, invalid UTF-8, and documents larger than 4 MiB stop credential
+selection and `/logout` listing. psi does not fall back to another credential
+source after these errors.
+
+Pi and psi write compatible `auth.json` entries. For API-key providers the shape is:
 
 ```json
 { "anthropic": { "type": "api_key", "key": "sk-ant-..." } }

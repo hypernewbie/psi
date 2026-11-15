@@ -17,9 +17,11 @@ go build -o psi ./cmd/psi
 ./psi --resume
 ```
 
-Codex uses your existing ChatGPT OAuth login from Pi. Log in through Pi first (`/login openai-codex`). No login UI here, and no OpenAI API key fallback.
+For API-key setup without Pi, start `./psi` and enter `/login`. Select a provider and enter the key at the masked prompt. psi stores the key in Pi-compatible `auth.json`. Login does not check the key with the provider. `/logout` removes stored built-in API keys, not OAuth credentials, environment variables, or `models.json` credentials.
 
-Each API-key provider uses its own environment variable. See [Providers](docs/providers.md) for the credentials each provider accepts. OpenCode Go selects the API and endpoint from each model's metadata.
+Interactive login supports 16 built-in API-key providers, excluding Anthropic and OpenAI Codex. Codex uses your existing ChatGPT OAuth login from Pi. Log in through Pi first (`/login openai-codex`). There is no OpenAI API key fallback.
+
+API-key providers also accept stored or configured keys and their own environment variables. See [Providers](docs/providers.md) for credential precedence and supported login providers. OpenCode Go selects the API and endpoint from each model's metadata.
 
 For example, Anthropic takes an API key:
 
