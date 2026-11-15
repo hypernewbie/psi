@@ -41,7 +41,7 @@ func TestRPCSessionHistoryToolWorksBeforeCompaction(t *testing.T) {
 
 func TestSessionHistoryPromptIsPresentWithoutSelectedTools(t *testing.T) {
 	names := promptToolNames(nil, nil)
-	prompt := config.RenderSections(config.BuildPromptSections(t.TempDir(), nil, nil, names, "", false, nil))
+	prompt := config.RenderSections(config.BuildPromptSections(t.TempDir(), nil, nil, names, "", false, nil, config.LanguageEnglish))
 	if !strings.Contains(prompt, "read_session: Read a narrow raw excerpt") || !strings.Contains(prompt, "Search or list before reading") {
 		t.Fatalf("history tool guidance missing: %s", prompt)
 	}

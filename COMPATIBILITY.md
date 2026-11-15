@@ -57,6 +57,7 @@ Additional storage rules:
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | names listed under `--tools` in `psi --help`, with replacement and `+`/`-` | unknown names rejected |
 | `skills` | `skills` path subset; `enableSkillCommands` is parsed but not wired | instructions only, no install/run at discovery |
+| `language` | `en` (default) or `zh` (Simplified Chinese); Psi-only | built-in prompt text and skills wrapper only; Pi ignores and preserves the key |
 | `compaction` | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides[provider/model].reserveTokens` | compatible entries, bounded summary; model-specific reserve |
 | `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |
 | `network` | idle timeout + bounded retries | one HTTP transport |
@@ -71,7 +72,7 @@ Additional storage rules:
 Unsupported package/extension declarations never trigger install or code loading.
 Unknown harmless UI prefs need no per-key warning.
 
-`/settings` changes the supported subset above in place. Persisted values merge into the user `settings.json`; unknown keys, `$schema`, nested siblings, and top-level key order stay. Malformed JSON is refused without writing. Project `.pi/settings.json` is never written and can still override a user value. Auto-compact is session-only. `quietStartup: "header"` loads as on and is written as a boolean only when that row changes. `Ctrl+T` also toggles and persists `hideThinkingBlock`.
+`/settings` changes the supported subset above in place. Persisted values merge into the user `settings.json`; unknown keys, `$schema`, nested siblings, and top-level key order stay. The Language row stores only `language`; with `--language` active it changes the stored default but not the active prompt. Malformed JSON is refused without writing. Project `.pi/settings.json` is never written and can still override a user value. Auto-compact is session-only. `quietStartup: "header"` loads as on and is written as a boolean only when that row changes. `Ctrl+T` also toggles and persists `hideThinkingBlock`. `language: "zh"` localizes the default preamble, tool snippets and guidelines, fixed rules, docs section, project-context header, and skills wrapper. Custom `SYSTEM.md` or `--system-prompt` replacement behavior is unchanged, so custom text never receives the Chinese reply rule. Tools, XML tags, paths, command names, topic names, user files, skill metadata, skill bodies, terminal UI, notices, errors, embedded docs, compaction prompts, and tool schemas are not translated.
 
 ## MCP tools
 
