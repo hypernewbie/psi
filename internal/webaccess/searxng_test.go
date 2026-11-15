@@ -38,6 +38,8 @@ func TestSearXNGRequestShapeAndProjection(t *testing.T) {
 			{"title":"One","url":"https://one.example/a","content":"snippet one","engines":["alpha","beta"],"publishedDate":"2026-01-02"},
 			{"title":null,"url":"https://two.example/b","content":null,"engines":null},
 			{"title":"Bad","url":"not a url"},
+			{"title":"Port zero","url":"http://zero.example:0/"},
+			{"title":"Credentials","url":"http://user:pass@secret.example/"},
 			{"title":"Overlong","url":"https://three.example/`+strings.Repeat("x", maxURLBytes)+`"}
 		]}`)
 	}))
@@ -60,8 +62,10 @@ func TestSearXNGRequestShapeAndProjection(t *testing.T) {
 	if !strings.Contains(text, "One") || !strings.Contains(text, "https://two.example/b") {
 		t.Fatalf("results:\n%s", text)
 	}
-	if strings.Contains(text, "not a url") || strings.Contains(text, "Overlong") {
-		t.Fatalf("malformed URL survived:\n%s", text)
+	for _, bad := range []string{"not a url", "Port zero", "Credentials", "Overlong"} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("malformed URL %q survived:\n%s", bad, text)
+		}
 	}
 	if !strings.Contains(text, "engines: alpha, beta") {
 		t.Fatalf("engines:\n%s", text)
@@ -368,6 +372,17 @@ func TestProviderHostNamedDNSStillTransport(t *testing.T) {
 	})}
 	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q"}))
 	if !result.IsError || !strings.Contains(result.Content[0].Text, classTransport) || strings.Contains(result.Content[0].Text, classDNS) {
+		t.Fatalf("result = %s", result.Content[0].Text)
+	}
+}
+
+func TestProviderWrappedDialTimeoutKeepsClass(t *testing.T) {
+	client := testClient(searxConfig(t, "https://searx.example"))
+	client.provider = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("timeout: dial interrupted")
+	})}
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q"}))
+	if !result.IsError || !strings.Contains(result.Content[0].Text, classTimeout) {
 		t.Fatalf("result = %s", result.Content[0].Text)
 	}
 }

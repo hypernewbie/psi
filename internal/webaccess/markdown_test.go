@@ -34,3 +34,16 @@ func TestHTMLDeepInlineFormattingBounded(t *testing.T) {
 		t.Fatalf("inline nesting not bounded: %d markers", got)
 	}
 }
+
+func TestHTMLTableRowsKeepCellBoundaries(t *testing.T) {
+	body := `<html><body><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table></body></html>`
+	_, markdown, _, err := htmlToMarkdown([]byte(body), nil, 10000)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	for _, want := range []string{"A | B", "1 | 2"} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("table row %q missing:\n%s", want, markdown)
+		}
+	}
+}

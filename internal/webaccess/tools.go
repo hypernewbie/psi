@@ -40,11 +40,18 @@ func (c *Client) Definitions() []provider.ToolDef {
 	return out
 }
 
-func (c *Client) fetchDefinition() provider.ToolDef {
-	modes := c.cfg.FetchModes
-	if len(modes) == 0 {
-		modes = []string{"readable"}
+func effectiveFetchModes(cfg Config) []string {
+	if len(cfg.FetchModes) == 0 {
+		if cfg.FetchMode != "" {
+			return []string{cfg.FetchMode}
+		}
+		return []string{"readable"}
 	}
+	return cfg.FetchModes
+}
+
+func (c *Client) fetchDefinition() provider.ToolDef {
+	modes := effectiveFetchModes(c.cfg)
 	return provider.ToolDef{
 		Name: ToolFetch,
 		Description: "Fetch one URL or up to 20 URLs. `readable` returns Markdown and `raw` returns decoded text. " +
@@ -116,6 +123,9 @@ func parseFetchArgs(args map[string]any, cfg Config) (fetchArgs, error) {
 		}
 	}
 	out.mode = cfg.FetchMode
+	if out.mode == "" {
+		out.mode = effectiveFetchModes(cfg)[0]
+	}
 	if value, ok := args["mode"]; ok {
 		parsed, ok := value.(string)
 		if !ok {
@@ -123,7 +133,7 @@ func parseFetchArgs(args map[string]any, cfg Config) (fetchArgs, error) {
 		}
 		out.mode = parsed
 	}
-	if !contains(cfg.FetchModes, out.mode) {
+	if !contains(effectiveFetchModes(cfg), out.mode) {
 		return out, fmt.Errorf("%s: mode %q is not enabled", classValidation, out.mode)
 	}
 	return out, nil
@@ -227,7 +237,7 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 	entry := &storedEntry{Kind: "fetch", Incomplete: okCount < len(urls)}
 	for i := range urls {
 		if errs[i] != nil {
-			entry.Pages = append(entry.Pages, storedPage{URL: clipMeta(c.redact(urls[i], maxURLBytes), 2048), Error: errs[i].Error()})
+			entry.Pages = append(entry.Pages, storedPage{URL: clipMeta(c.redact(urls[i], maxURLBytes), maxURLBytes), Error: errs[i].Error()})
 			continue
 		}
 		page := pages[i]
@@ -255,11 +265,11 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 	b.WriteString("content:\n")
 	for i := range urls {
 		if errs[i] != nil {
-			b.WriteString(fmt.Sprintf("%d. url: %s\n   error: %s\n", i+1, clipMeta(c.redact(urls[i], maxURLBytes), 2048), errs[i].Error()))
+			b.WriteString(fmt.Sprintf("%d. url: %s\n   error: %s\n", i+1, clipMeta(c.redact(urls[i], maxURLBytes), maxURLBytes), errs[i].Error()))
 			continue
 		}
 		page := pages[i]
-		b.WriteString(fmt.Sprintf("%d. url: %s\n", i+1, clipMeta(page.FinalURL, 2048)))
+		b.WriteString(fmt.Sprintf("%d. url: %s\n", i+1, clipMeta(page.FinalURL, maxURLBytes)))
 		if page.Title != "" {
 			b.WriteString("   title: " + clipMeta(page.Title, 300) + "\n")
 		}

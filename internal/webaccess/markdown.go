@@ -98,7 +98,15 @@ func (r *renderer) inlineRenderer() *renderer {
 	if depth > maxInlineRenderDepth {
 		depth = maxInlineRenderDepth
 	}
-	return &renderer{base: r.base, limit: r.limit, inlineDepth: depth}
+	return &renderer{base: r.base, limit: r.remaining(), inlineDepth: depth}
+}
+
+func (r *renderer) remaining() int {
+	remaining := r.limit - r.out.Len()
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 func (r *renderer) inlineText(n *html.Node) string {
@@ -232,7 +240,7 @@ func (r *renderer) block(n *html.Node) {
 			}
 			return
 		}
-		inner := &renderer{base: r.base, limit: r.limit, quoteDepth: r.quoteDepth + 1}
+		inner := &renderer{base: r.base, limit: r.remaining(), quoteDepth: r.quoteDepth + 1}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			inner.block(child)
 		}
@@ -291,10 +299,19 @@ func (r *renderer) codeBlock(n *html.Node) {
 	if text == "" {
 		return
 	}
-	fence := "```"
-	for strings.Contains(text, fence) {
-		fence += "`"
+	fenceLen := 3
+	run := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '`' {
+			run++
+			if run+1 > fenceLen {
+				fenceLen = run + 1
+			}
+			continue
+		}
+		run = 0
 	}
+	fence := strings.Repeat("`", fenceLen)
 	r.write("\n\n" + fence + "\n" + text + "\n" + fence + "\n\n")
 }
 

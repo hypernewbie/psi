@@ -143,8 +143,7 @@ func projectSearXNGItem(raw json.RawMessage) (searchHit, bool) {
 	if target == "" {
 		return searchHit{}, false
 	}
-	u, err := url.Parse(target)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if _, err := validateTarget(target); err != nil {
 		return searchHit{}, false
 	}
 	if len(target) > maxURLBytes {
@@ -165,7 +164,7 @@ func projectSearXNGItem(raw json.RawMessage) (searchHit, bool) {
 	}
 	return searchHit{
 		Title:   clipMeta(str("title"), 300),
-		URL:     clipMeta(target, 2048),
+		URL:     clipMeta(target, maxURLBytes),
 		Snippet: clipMeta(str("content"), 2000),
 		Engines: engines,
 		Date:    clipMeta(str("publishedDate"), 64),
@@ -219,6 +218,12 @@ func classifyProviderError(ctx context.Context, err error) error {
 		return fmt.Errorf("%s: provider request timed out", classTimeout)
 	}
 	message := err.Error()
+	if hasClass(message, classCancelled) {
+		return fmt.Errorf("%s: cancelled", classCancelled)
+	}
+	if hasClass(message, classTimeout) {
+		return fmt.Errorf("%s: provider request timed out", classTimeout)
+	}
 	if hasClass(message, classBlocked) {
 		return fmt.Errorf("%s: destination is not public", classBlocked)
 	}

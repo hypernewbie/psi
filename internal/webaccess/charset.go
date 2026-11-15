@@ -51,8 +51,9 @@ func sniffCharset(body []byte) string {
 	return ""
 }
 
-// decodeText converts body bytes to UTF-8, replacing invalid input. A BOM
-// under the declared charset; otherwise the header wins.
+// decodeText converts body bytes to UTF-8, replacing invalid input. A BOM or
+// HTML meta declaration wins over the Content-Type header; otherwise the
+// header wins, defaulting to UTF-8.
 func decodeText(body []byte, contentType string) (string, error) {
 	name := sniffCharset(body)
 	if name == "" {

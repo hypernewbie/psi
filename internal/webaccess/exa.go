@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -114,8 +113,7 @@ func projectExaHit(item exaItem) (searchHit, bool) {
 	if target == "" || len(target) > maxURLBytes {
 		return searchHit{}, false
 	}
-	u, err := url.Parse(target)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if _, err := validateTarget(target); err != nil {
 		return searchHit{}, false
 	}
 	snippet := strings.Join(item.Highlights, " ")
@@ -124,7 +122,7 @@ func projectExaHit(item exaItem) (searchHit, bool) {
 	}
 	return searchHit{
 		Title:   clipMeta(item.Title, 300),
-		URL:     clipMeta(target, 2048),
+		URL:     clipMeta(target, maxURLBytes),
 		Snippet: clipMeta(snippet, 2000),
 		Engines: "exa",
 		Date:    clipMeta(item.PublishedDate, 64),
@@ -236,7 +234,7 @@ func formatOverview(provider, query string, results []searchHit, unresponsive []
 	}
 	for i, result := range results {
 		b.WriteString(fmt.Sprintf("\n%d. %s\n", i+1, clipMeta(result.Title, 300)))
-		b.WriteString("   " + clipMeta(result.URL, 2048) + "\n")
+		b.WriteString("   " + clipMeta(result.URL, maxURLBytes) + "\n")
 		if result.Snippet != "" {
 			snippet := clipMeta(result.Snippet, 2000)
 			if runes := []rune(snippet); len(runes) > 500 {

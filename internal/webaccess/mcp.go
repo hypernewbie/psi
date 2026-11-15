@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 )
 
@@ -149,11 +148,8 @@ func rateLimited(meta map[string]json.RawMessage) bool {
 }
 
 func validResultURL(raw string) bool {
-	if raw == "" || len(raw) > maxURLBytes {
-		return false
-	}
-	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+	_, err := validateTarget(raw)
+	return err == nil
 }
 
 // parseExaProse projects the basic Title:/URL: result format into bounded hits.
@@ -181,7 +177,7 @@ func parseExaProse(text string, limit int) []searchHit {
 				flush()
 			}
 			if validResultURL(target) {
-				current.URL = clipMeta(target, 2048)
+				current.URL = clipMeta(target, maxURLBytes)
 				current.Engines = "exa"
 			}
 		case strings.HasPrefix(trimmed, "Published:"):

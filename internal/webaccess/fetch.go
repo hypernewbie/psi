@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -69,10 +70,9 @@ func parsePort(u *url.URL) (string, error) {
 		}
 		return "80", nil
 	}
-	for _, r := range port {
-		if r < '0' || r > '9' {
-			return "", fmt.Errorf("%s: url has an invalid port", classValidation)
-		}
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 {
+		return "", fmt.Errorf("%s: url has an invalid port", classValidation)
 	}
 	return port, nil
 }
@@ -229,6 +229,10 @@ func classifyTransport(ctx context.Context, err error) error {
 		}
 		msg := urlErr.Err.Error()
 		switch {
+		case hasClass(msg, classCancelled):
+			return fmt.Errorf("%s: cancelled", classCancelled)
+		case hasClass(msg, classTimeout):
+			return fmt.Errorf("%s: deadline exceeded", classTimeout)
 		case hasClass(msg, classBlocked):
 			return fmt.Errorf("%s: destination is not public", classBlocked)
 		case hasClass(msg, classValidation):
@@ -266,7 +270,7 @@ func (c *Client) formatPage(p pageData, responseID string) (string, bool) {
 		b.WriteString("content-not-retained: true\n")
 		b.WriteString("note: content exceeded the memory cache limits or could not be stored\n")
 	}
-	b.WriteString("url: " + clipMeta(p.FinalURL, 2048) + "\n")
+	b.WriteString("url: " + clipMeta(p.FinalURL, maxURLBytes) + "\n")
 	if p.Title != "" {
 		b.WriteString("title: " + clipMeta(p.Title, 300) + "\n")
 	}

@@ -491,3 +491,25 @@ func TestFetchMarksDecodedTextTruncation(t *testing.T) {
 		t.Fatalf("truncated=%v len=%d", page.Truncated, len(page.Text))
 	}
 }
+
+func TestValidateTargetRejectsUnusablePorts(t *testing.T) {
+	for _, raw := range []string{
+		"http://example.com:0/",
+		"http://example.com:65536/",
+		"http://example.com:-1/",
+	} {
+		if _, err := validateTarget(raw); err == nil || !strings.Contains(err.Error(), classValidation) {
+			t.Errorf("%s accepted: %v", raw, err)
+		}
+	}
+}
+
+func TestFetchWrappedDialTimeoutKeepsClass(t *testing.T) {
+	client := testClient(testConfig())
+	client.page = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("timeout: dial interrupted")
+	})}
+	if _, err := client.fetchPage(context.Background(), "https://example.com/", "readable"); err == nil || !strings.Contains(err.Error(), classTimeout) {
+		t.Fatalf("err = %v, want %s", err, classTimeout)
+	}
+}

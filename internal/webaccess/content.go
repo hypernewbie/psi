@@ -187,7 +187,7 @@ func (c *Client) handleContent(_ context.Context, inv tools.Invocation) tools.Re
 		details["nextOffset"] = next
 	}
 	if url != "" {
-		details["url"] = clipMeta(url, 2048)
+		details["url"] = clipMeta(url, maxURLBytes)
 	}
 	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details}
 }
@@ -303,7 +303,7 @@ func (c *Client) contentMetadata(meta contentMeta, more bool, next int) string {
 		b.WriteString("incomplete: true\n")
 	}
 	if meta.url != "" {
-		b.WriteString("url: " + clipMeta(meta.url, 2048) + "\n")
+		b.WriteString("url: " + clipMeta(meta.url, maxURLBytes) + "\n")
 	}
 	if meta.title != "" {
 		b.WriteString("title: " + clipMeta(meta.title, 300) + "\n")
@@ -373,42 +373,59 @@ func prefixLines(s string, maxLines int) string {
 // whitespace-normalized pass is added with batched search support.
 func findTextOffset(text []rune, needle string) (int, bool) {
 	pattern := []rune(needle)
-	if len(pattern) == 0 || len(pattern) > len(text) {
+	if len(pattern) == 0 {
 		return 0, false
 	}
-	for i := 0; i+len(pattern) <= len(text); i++ {
-		if runesEqual(text[i:i+len(pattern)], pattern, false) {
-			return i, true
-		}
+	if at := findRuneSequence(text, pattern, false); at >= 0 {
+		return at, true
 	}
-	for i := 0; i+len(pattern) <= len(text); i++ {
-		if runesEqual(text[i:i+len(pattern)], pattern, true) {
-			return i, true
-		}
+	if at := findRuneSequence(text, pattern, true); at >= 0 {
+		return at, true
 	}
 	normalized, offsets := collapseWhitespace(text)
 	normalizedNeedle, _ := collapseWhitespace(pattern)
 	if len(normalizedNeedle) == 0 || len(normalizedNeedle) > len(normalized) {
 		return 0, false
 	}
-	for i := 0; i+len(normalizedNeedle) <= len(normalized); i++ {
-		if runesEqual(normalized[i:i+len(normalizedNeedle)], normalizedNeedle, true) {
-			return offsets[i], true
-		}
+	if at := findRuneSequence(normalized, normalizedNeedle, true); at >= 0 {
+		return offsets[at], true
 	}
 	return 0, false
 }
 
-func runesEqual(a, b []rune, fold bool) bool {
-	for i := range a {
-		if a[i] == b[i] {
-			continue
+// findRuneSequence uses KMP so a long repeated prefix in untrusted page text
+// cannot make a failed search quadratic.
+func findRuneSequence(text, pattern []rune, fold bool) int {
+	if len(pattern) == 0 || len(pattern) > len(text) {
+		return -1
+	}
+	fail := make([]int, len(pattern))
+	for i, j := 1, 0; i < len(pattern); i++ {
+		for j > 0 && !runeMatches(pattern[i], pattern[j], fold) {
+			j = fail[j-1]
 		}
-		if !fold || !foldEqual(a[i], b[i]) {
-			return false
+		if runeMatches(pattern[i], pattern[j], fold) {
+			j++
+		}
+		fail[i] = j
+	}
+	j := 0
+	for i, r := range text {
+		for j > 0 && !runeMatches(r, pattern[j], fold) {
+			j = fail[j-1]
+		}
+		if runeMatches(r, pattern[j], fold) {
+			j++
+		}
+		if j == len(pattern) {
+			return i - len(pattern) + 1
 		}
 	}
-	return true
+	return -1
+}
+
+func runeMatches(a, b rune, fold bool) bool {
+	return a == b || (fold && foldEqual(a, b))
 }
 
 func foldEqual(a, b rune) bool {

@@ -244,6 +244,14 @@ func TestFetchModeFailuresDisableFetchOnly(t *testing.T) {
 	if !cfg.SearchEnabled || !cfg.ContentEnabled {
 		t.Fatal("other tools must stay enabled")
 	}
+	cfg, _ = ParseConfig([]byte(`{"fetch":{"allowedModes":["raw"]}}`), env)
+	if !cfg.FetchEnabled || cfg.FetchMode != "raw" {
+		t.Fatalf("disabled or wrong default mode: %+v", cfg)
+	}
+	args, err := parseFetchArgs(map[string]any{"url": "https://example.com"}, cfg)
+	if err != nil || args.mode != "raw" {
+		t.Fatalf("parsed mode = %q err=%v", args.mode, err)
+	}
 }
 
 func TestRoutingFailureDisablesSearchOnly(t *testing.T) {
@@ -353,6 +361,7 @@ func TestInvalidBaseURLRules(t *testing.T) {
 		"ftp://searx.example", "https://user:pw@searx.example",
 		"https://searx.example/?q=1", "https://searx.example/#frag",
 		"https://", "https://searx.example:bad",
+		"https://searx.example:0", "https://searx.example:65536",
 	} {
 		cfg, diags := ParseConfig([]byte(`{"searxngBaseUrl":"`+base+`"}`), env)
 		if cfg.SearXNGAvailable {
@@ -366,12 +375,14 @@ func TestInvalidBaseURLRules(t *testing.T) {
 
 func TestAllowRangesRejectBroadMappedIPv4(t *testing.T) {
 	env, _ := newEnv(t, nil, nil)
-	cfg, diags := ParseConfig([]byte(`{"ssrf":{"allowRanges":["::ffff:0.0.0.0/32"]}}`), env)
-	if len(diags) == 0 || cfg.SearchEnabled || cfg.FetchEnabled || cfg.ContentEnabled {
-		t.Fatalf("broad mapped range must disable all tools: %+v %v", cfg, diags)
-	}
-	if len(cfg.AllowRanges) != 0 {
-		t.Fatalf("invalid range retained: %v", cfg.AllowRanges)
+	for _, prefix := range []string{"::ffff:0.0.0.0/32", "::ffff:0.0.0.0/96"} {
+		cfg, diags := ParseConfig([]byte(`{"ssrf":{"allowRanges":["`+prefix+`"]}}`), env)
+		if len(diags) == 0 || cfg.SearchEnabled || cfg.FetchEnabled || cfg.ContentEnabled {
+			t.Fatalf("%s must disable all tools: %+v %v", prefix, cfg, diags)
+		}
+		if len(cfg.AllowRanges) != 0 {
+			t.Fatalf("%s: invalid range retained: %v", prefix, cfg.AllowRanges)
+		}
 	}
 }
 

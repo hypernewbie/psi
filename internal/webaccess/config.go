@@ -277,6 +277,8 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 				cfg.FetchModes = effective
 				if mode != "" {
 					cfg.FetchMode = mode
+				} else if !contains(effective, cfg.FetchMode) {
+					cfg.FetchMode = effective[0]
 				}
 			}
 		}
@@ -440,7 +442,7 @@ func applySSRF(cfg *Config, raw json.RawMessage) error {
 		if err != nil {
 			return err
 		}
-		if prefix.Addr().Is4In6() && prefix.Bits() < 96 {
+		if prefix.Addr().Is4In6() && prefix.Bits() <= 96 {
 			return errors.New("mapped IPv4 range is too broad")
 		}
 		out = append(out, normalizePrefix(prefix))
@@ -699,6 +701,12 @@ func normalizeBaseURL(raw string, allowHTTP bool) (string, error) {
 	}
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("components")
+	}
+	if port := u.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return "", errors.New("port")
+		}
 	}
 	if scheme == "http" && !allowHTTP && !isLoopbackHost(u.Hostname()) {
 		return "", errors.New("http")

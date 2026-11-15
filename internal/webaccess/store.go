@@ -107,14 +107,6 @@ func (e *storedEntry) computeSize() int64 {
 	return total
 }
 
-// pageText selects the paged text for a fetch entry.
-func (e *storedEntry) pageText(index int) (storedPage, bool) {
-	if index < 0 || index >= len(e.Pages) {
-		return storedPage{}, false
-	}
-	return e.Pages[index], true
-}
-
 // store is a process-lifetime LRU bounded by entry count and retained bytes.
 type store struct {
 	mu         sync.Mutex
@@ -226,8 +218,6 @@ var newResponseID = func() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-// censorControl removes control characters from retained metadata so one line
-// of model-facing output cannot be forged by stored values.
 // clipOverview keeps the line structure that separates queries and ranked
 // results, while censoring other controls and bounding the total.
 func clipOverview(s string) string {
@@ -247,6 +237,8 @@ func clipOverview(s string) string {
 	return runePrefix(b.String(), overviewCap)
 }
 
+// censorControl removes control characters from retained metadata so one line
+// of model-facing output cannot be forged by stored values.
 func censorControl(s string) string {
 	var b strings.Builder
 	for _, r := range s {

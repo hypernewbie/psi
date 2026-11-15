@@ -273,3 +273,19 @@ func TestContentDetailsStaySmall(t *testing.T) {
 		t.Fatalf("details = %d bytes", len(encoded))
 	}
 }
+
+func TestFindTextLongRepeatedPrefix(t *testing.T) {
+	text := []rune(strings.Repeat("a", 1<<16) + "target")
+	if got, ok := findTextOffset(text, "target"); !ok || got != 1<<16 {
+		t.Fatalf("match at end: got %d ok=%v", got, ok)
+	}
+	if _, ok := findTextOffset(text, strings.Repeat("a", 4095)+"b"); ok {
+		t.Fatal("near miss with a long repeated prefix matched")
+	}
+}
+
+func TestFindTextWhitespaceCanBeLongerThanText(t *testing.T) {
+	if got, ok := findTextOffset([]rune("a b"), "a  b"); !ok || got != 0 {
+		t.Fatalf("got %d ok=%v", got, ok)
+	}
+}

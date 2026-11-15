@@ -652,3 +652,37 @@ func TestProviderErrorsAreNotRetried(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchInlineContentKeepsLongResultURL(t *testing.T) {
+	const suffix = 3000
+	var pagePath string
+	var server *httptest.Server
+	server = batchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/search" {
+			fmt.Fprintf(w, `{"results":[{"title":"long","url":"%s/page/%s"}]}`, server.URL, strings.Repeat("x", suffix))
+			return
+		}
+		pagePath = r.URL.Path
+		fmt.Fprint(w, "<html><body><p>long page</p></body></html>")
+	})
+	client := testClient(searxConfig(t, server.URL))
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{
+		"query": "q", "includeContent": true,
+	}))
+	if result.IsError {
+		t.Fatalf("search: %s", result.Content[0].Text)
+	}
+	if len(pagePath) != len("/page/")+suffix {
+		t.Fatalf("fetched path length = %d, want %d", len(pagePath), len("/page/")+suffix)
+	}
+	if got := batchDetails(t, result)["fetched"]; got != 1 {
+		t.Fatalf("fetched = %v, want 1", got)
+	}
+	target := server.URL + "/page/" + strings.Repeat("x", suffix)
+	page := getContent(t, client, map[string]any{
+		"responseId": extractResponseID(t, result.Content[0].Text), "url": target,
+	})
+	if page.IsError || !strings.Contains(page.Content[0].Text, "long page") {
+		t.Fatalf("long URL lookup: %s", page.Content[0].Text)
+	}
+}
