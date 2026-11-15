@@ -595,3 +595,99 @@ func TestProvidersHTTPErrorIntegration(t *testing.T) {
 		})
 	}
 }
+
+// The error names the reason the server gave, so the user does not have to
+// read "Bad Request" to learn what the endpoint rejected.
+func TestProviderErrorNamesTheServerReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		wantReason string
+		wantError  string
+	}{
+		{
+			name:       "anthropic error object",
+			status:     400,
+			body:       `{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 1048576 > 64000, which is the maximum allowed"}}`,
+			wantReason: "max_tokens: 1048576 > 64000, which is the maximum allowed",
+			wantError:  "invalid_request (status 400): max_tokens: 1048576 > 64000, which is the maximum allowed",
+		},
+		{
+			name:       "openai error object",
+			status:     400,
+			body:       `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model.","type":"invalid_request_error"}}`,
+			wantReason: "Unsupported parameter: 'reasoning_effort' is not supported with this model.",
+			wantError:  "invalid_request (status 400): Unsupported parameter: 'reasoning_effort' is not supported with this model.",
+		},
+		{
+			name:       "top level message",
+			status:     400,
+			body:       `{"code":1261,"message":"Prompt exceeds max length"}`,
+			wantReason: "Prompt exceeds max length",
+			wantError:  "context_limit (status 400): Prompt exceeds max length",
+		},
+		{
+			name:       "error string",
+			status:     503,
+			body:       `{"error":"Service Unavailable"}`,
+			wantReason: "Service Unavailable",
+			wantError:  "transport (status 503): Service Unavailable",
+		},
+		{
+			name:      "html page keeps the status text",
+			status:    502,
+			body:      `<html><body>502 Bad Gateway</body></html>`,
+			wantError: "transport (status 502): Bad Gateway",
+		},
+		{
+			name:      "empty body keeps the status text",
+			status:    400,
+			body:      "",
+			wantError: "invalid_request (status 400): Bad Request",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{
+				StatusCode: tc.status,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(tc.body)),
+			}
+			pe := classifyHTTPError(resp)
+			if pe.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", pe.Reason, tc.wantReason)
+			}
+			if got := pe.Error(); got != tc.wantError {
+				t.Errorf("Error() = %q, want %q", got, tc.wantError)
+			}
+		})
+	}
+}
+
+// A long reason stays bounded, and a reason that spans lines becomes one
+// line.
+func TestProviderErrorReasonStaysBounded(t *testing.T) {
+	long := strings.Repeat("x", 400)
+	resp := &http.Response{
+		StatusCode: 400,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"` + long + `"}}`)),
+	}
+	pe := classifyHTTPError(resp)
+	if len([]rune(pe.Reason)) != 303 {
+		t.Fatalf("reason length = %d, want 303", len([]rune(pe.Reason)))
+	}
+	if !strings.HasSuffix(pe.Reason, "...") {
+		t.Fatalf("reason = %q, want a truncated ending", pe.Reason)
+	}
+	resp = &http.Response{
+		StatusCode: 400,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"first line\nsecond line"}}`)),
+	}
+	pe = classifyHTTPError(resp)
+	if pe.Reason != "first line second line" {
+		t.Fatalf("reason = %q, want one line", pe.Reason)
+	}
+}

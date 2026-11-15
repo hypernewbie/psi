@@ -127,6 +127,16 @@ window, such as an OpenCode Go Kimi model, would otherwise ask for more tokens
 than the endpoint can return, and the endpoint rejects that request with a
 `400`. Every adapter applies the cap, and a longer prompt lowers the limit.
 
+## Provider errors
+
+A failed request reports the kind of failure, the HTTP status, and the reason
+the server gave. An endpoint that rejects a request usually states why, so the
+reason is shown instead of the status text alone. The reason comes from a
+structured error body, it stays on one line, and it is bounded in length. The
+rest of the response body stays private, because a gateway can echo request
+data into it. An endpoint that returns no usable reason reports the HTTP
+status text.
+
 ## Anthropic beta features
 
 An `anthropic-messages` request that uses a beta feature has to declare it in

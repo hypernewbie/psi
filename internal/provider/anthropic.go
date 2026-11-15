@@ -58,6 +58,7 @@ type ProviderError struct {
 	Kind       ErrorKind
 	Status     int
 	Message    string
+	Reason     string // the reason the server gave, when the error body states one
 	Detail     string // bounded response body used for retry classification; not displayed
 	RetryAfter time.Duration
 }
@@ -65,6 +66,9 @@ type ProviderError struct {
 func (e *ProviderError) Error() string {
 	if e.Status != 0 && zhipuUsageLimitPattern.MatchString(e.Message) {
 		return fmt.Sprintf("%d: %s", e.Status, e.Message)
+	}
+	if e.Reason != "" {
+		return fmt.Sprintf("%s (status %d): %s", e.Kind, e.Status, e.Reason)
 	}
 	return fmt.Sprintf("%s (status %d): %s", e.Kind, e.Status, e.Message)
 }
@@ -320,7 +324,45 @@ func classifyHTTPError(resp *http.Response) *ProviderError {
 			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
 	}
-	return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: msg, Detail: string(b), RetryAfter: parseRetryAfter(resp.Header.Get("retry-after"))}
+	return &ProviderError{Kind: kind, Status: resp.StatusCode, Message: msg, Reason: providerReason(b), Detail: string(b), RetryAfter: parseRetryAfter(resp.Header.Get("retry-after"))}
+}
+
+// providerReason reads the reason from a structured error body. A gateway can
+// echo request data, so only a single-line message from a known error shape
+// is used, and it is bounded.
+func providerReason(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	reason := payload.Message
+	if len(payload.Error) > 0 {
+		var asObject struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(payload.Error, &asObject) == nil && asObject.Message != "" {
+			reason = asObject.Message
+		} else {
+			var asString string
+			if json.Unmarshal(payload.Error, &asString) == nil && asString != "" {
+				reason = asString
+			}
+		}
+	}
+	reason = strings.Join(strings.Fields(reason), " ")
+	if reason == "" {
+		return ""
+	}
+	if runes := []rune(reason); len(runes) > 300 {
+		return string(runes[:300]) + "..."
+	}
+	return reason
 }
 
 func parseRetryAfter(s string) time.Duration {
