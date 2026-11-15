@@ -134,6 +134,8 @@ Environment overrides:
 | `EXA_API_KEY` | Overrides a configured literal key |
 | `PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS` | `true`, `false`, `1`, or `0`; overrides `allowHttpBaseUrls` |
 
+These overrides also apply when `web-search.json` is absent.
+
 `exaApiKey` accepts a literal value or `$NAME`. A `!command` value is refused;
 psi never runs a command to obtain a credential.
 

@@ -150,3 +150,20 @@ func TestLoopbackExemptionRejectsPublicResolution(t *testing.T) {
 		t.Fatalf("public answer was dialed under a loopback exemption: %v", rec.addresses)
 	}
 }
+
+type timeoutDialError struct{}
+
+func (timeoutDialError) Error() string   { return "i/o timeout" }
+func (timeoutDialError) Timeout() bool   { return true }
+func (timeoutDialError) Temporary() bool { return true }
+
+func TestDialTimeoutKeepsTimeoutClass(t *testing.T) {
+	rec := &recordingDialer{dialFn: func(context.Context, string, string) (net.Conn, error) {
+		return nil, timeoutDialError{}
+	}}
+	d := &guardedDialer{dial: rec.dial}
+	_, err := d.DialContext(context.Background(), "tcp", "93.184.216.34:443")
+	if err == nil || !strings.Contains(err.Error(), classTimeout) {
+		t.Fatalf("err = %v, want timeout", err)
+	}
+}

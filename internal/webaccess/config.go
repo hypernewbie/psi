@@ -131,7 +131,7 @@ func ResolvePath(env Env) string {
 // yields defaults. Any non-missing read error disables every web tool.
 func Load(env Env) (Config, []string) {
 	path := ResolvePath(env)
-	cfg, diags := defaultConfig()
+	cfg, _ := defaultConfig()
 	if env.ReadFile == nil {
 		return disableAll(cfg, "web access: cannot read web-search.json")
 	}
@@ -145,8 +145,8 @@ func Load(env Env) (Config, []string) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return disableAll(cfg, "web access: cannot read web-search.json")
 		}
-		finalize(&cfg)
-		return cfg, diags
+		parsed, _ := ParseConfig([]byte("{}"), env)
+		return parsed, parsed.Diagnostics
 	}
 	parsed, _ := ParseConfig(data, env)
 	return parsed, parsed.Diagnostics
@@ -198,14 +198,6 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 	var shared, fetchErrs, routeErrs, providerErrs []string
 
 	// Shared values: enablement, HTTP permission, inline limit, exemptions, cache.
-	if raw, ok := root["allowHttpBaseUrls"]; ok {
-		var v bool
-		if err := json.Unmarshal(raw, &v); err != nil {
-			shared = append(shared, "web access: allowHttpBaseUrls must be a boolean")
-		} else {
-			cfg.AllowHTTPBaseURLs = v
-		}
-	}
 	if override, ok := env.lookup("PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS"); ok {
 		switch strings.ToLower(strings.TrimSpace(override)) {
 		case "true", "1":
@@ -214,6 +206,17 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 			cfg.AllowHTTPBaseURLs = false
 		default:
 			shared = append(shared, "web access: PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS must be true, false, 1, or 0")
+		}
+	} else if raw, ok := root["allowHttpBaseUrls"]; ok {
+		if jsonNull(raw) {
+			shared = append(shared, "web access: allowHttpBaseUrls must be a boolean")
+		} else {
+			var v bool
+			if err := json.Unmarshal(raw, &v); err != nil {
+				shared = append(shared, "web access: allowHttpBaseUrls must be a boolean")
+			} else {
+				cfg.AllowHTTPBaseURLs = v
+			}
 		}
 	}
 	if raw, ok := root["maxInlineContentChars"]; ok {
@@ -265,18 +268,18 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 
 	// Fetch modes.
 	if raw, ok := root["fetch"]; ok {
-		modes, mode, err := decodeFetch(raw)
+		modes, mode, modeSet, err := decodeFetch(raw)
 		if err != nil {
 			fetchErrs = append(fetchErrs, err.Error())
 		} else {
 			effective := intersectModes(modes)
 			if len(effective) == 0 {
 				fetchErrs = append(fetchErrs, "web access: fetch.allowedModes has no supported mode")
-			} else if mode != "" && !contains(effective, mode) {
+			} else if modeSet && !contains(effective, mode) {
 				fetchErrs = append(fetchErrs, "web access: fetch.defaultMode is not in the allowed modes")
 			} else {
 				cfg.FetchModes = effective
-				if mode != "" {
+				if modeSet {
 					cfg.FetchMode = mode
 				} else if !contains(effective, cfg.FetchMode) {
 					cfg.FetchMode = effective[0]
@@ -331,6 +334,10 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 	return cfg, diags
 }
 
+func jsonNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
+}
+
 func decodeObject(data []byte) (map[string]json.RawMessage, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -372,6 +379,9 @@ func decodeEnabled(raw json.RawMessage) (*bool, error) {
 	if !ok {
 		return nil, nil
 	}
+	if jsonNull(value) {
+		return nil, errors.New("not a boolean")
+	}
 	var v bool
 	if err := json.Unmarshal(value, &v); err != nil {
 		return nil, err
@@ -406,6 +416,9 @@ func decodeTools(raw json.RawMessage) (webSearch, fetch, content *bool, err erro
 		if !ok {
 			return nil, nil
 		}
+		if jsonNull(enabled) {
+			return nil, errors.New("not a boolean")
+		}
 		var v bool
 		if err := json.Unmarshal(enabled, &v); err != nil {
 			return nil, err
@@ -432,6 +445,9 @@ func applySSRF(cfg *Config, raw json.RawMessage) error {
 	ranges, ok := obj["allowRanges"]
 	if !ok {
 		return nil
+	}
+	if jsonNull(ranges) {
+		return errors.New("not an array")
 	}
 	var list []string
 	if err := json.Unmarshal(ranges, &list); err != nil {
@@ -486,25 +502,32 @@ func applyCache(cfg *Config, raw json.RawMessage) error {
 	return nil
 }
 
-func decodeFetch(raw json.RawMessage) (modes []string, def string, err error) {
+func decodeFetch(raw json.RawMessage) (modes []string, def string, defSet bool, err error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-		return nil, "", errors.New("web access: fetch must be an object")
+		return nil, "", false, errors.New("web access: fetch must be an object")
 	}
 	modes = []string{"readable", "raw"}
 	if value, ok := obj["allowedModes"]; ok {
+		if jsonNull(value) {
+			return nil, "", false, errors.New("web access: fetch.allowedModes must be a string array")
+		}
 		var list []string
 		if err := json.Unmarshal(value, &list); err != nil {
-			return nil, "", errors.New("web access: fetch.allowedModes must be a string array")
+			return nil, "", false, errors.New("web access: fetch.allowedModes must be a string array")
 		}
 		modes = list
 	}
 	if value, ok := obj["defaultMode"]; ok {
-		if err := json.Unmarshal(value, &def); err != nil {
-			return nil, "", errors.New("web access: fetch.defaultMode must be one string")
+		if jsonNull(value) {
+			return nil, "", false, errors.New("web access: fetch.defaultMode must be one string")
 		}
+		if err := json.Unmarshal(value, &def); err != nil {
+			return nil, "", false, errors.New("web access: fetch.defaultMode must be one string")
+		}
+		defSet = true
 	}
-	return modes, def, nil
+	return modes, def, defSet, nil
 }
 
 func intersectModes(modes []string) []string {
@@ -537,6 +560,12 @@ func applySearXNG(cfg *Config, root map[string]json.RawMessage, env Env, diags *
 		}
 		cfg.SearXNGRequested = true
 	} else if raw, ok := root["searxngBaseUrl"]; ok {
+		if jsonNull(raw) {
+			cfg.SearXNGRequested = true
+			*diags = append(*diags, "web access: searxngBaseUrl must be one string")
+			cfg.SearXNGBaseURL = ""
+			return
+		}
 		if err := json.Unmarshal(raw, &base); err != nil {
 			cfg.SearXNGRequested = true
 			*diags = append(*diags, "web access: searxngBaseUrl must be one string")
@@ -580,6 +609,11 @@ func applyExa(cfg *Config, root map[string]json.RawMessage, env Env, diags *[]st
 			return
 		}
 	} else if raw, ok := root["exaBaseUrl"]; ok {
+		if jsonNull(raw) {
+			*diags = append(*diags, "web access: exaBaseUrl must be one string")
+			cfg.ExaAvailable = false
+			return
+		}
 		if err := json.Unmarshal(raw, &base); err != nil {
 			*diags = append(*diags, "web access: exaBaseUrl must be one string")
 			cfg.ExaAvailable = false
@@ -599,6 +633,11 @@ func applyExa(cfg *Config, root map[string]json.RawMessage, env Env, diags *[]st
 
 	key := ""
 	if raw, ok := root["exaApiKey"]; ok {
+		if jsonNull(raw) {
+			*diags = append(*diags, "web access: exaApiKey must be one string")
+			cfg.ExaAvailable = false
+			return
+		}
 		if err := json.Unmarshal(raw, &key); err != nil {
 			*diags = append(*diags, "web access: exaApiKey must be one string")
 			cfg.ExaAvailable = false
@@ -693,7 +732,11 @@ func forbiddenHeader(name string) bool {
 }
 
 func normalizeBaseURL(raw string, allowHTTP bool) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
+	if strings.Contains(raw, "#") {
+		return "", errors.New("components")
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
 		return "", err
 	}

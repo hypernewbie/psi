@@ -154,6 +154,9 @@ func validResultURL(raw string) bool {
 
 // parseExaProse projects the basic Title:/URL: result format into bounded hits.
 func parseExaProse(text string, limit int) []searchHit {
+	if limit < 1 {
+		return nil
+	}
 	var hits []searchHit
 	var current searchHit
 	var snippet []string

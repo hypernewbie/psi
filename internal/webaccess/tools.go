@@ -277,7 +277,17 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 			b.WriteString("   source-truncated: true (5 MiB cap)\n")
 		}
 		b.WriteString("   content:\n")
-		preview := pagedPreview(page.Text, c.cfg.MaxInlineChars)
+		preview := ""
+		previewTruncated := false
+		if limit := c.cfg.MaxInlineChars; limit > 0 {
+			preview, previewTruncated = runeLimit(page.Text, limit)
+		}
+		if previewTruncated {
+			b.WriteString(fmt.Sprintf("   preview-truncated: true (%d scalar limit)\n", c.cfg.MaxInlineChars))
+			if responseID != "" && c.cfg.ContentEnabled {
+				b.WriteString(fmt.Sprintf("   continue: call get_search_content with responseId %s, urlIndex %d, and offset 0\n", responseID, i))
+			}
+		}
 		for _, line := range strings.Split(preview, "\n") {
 			b.WriteString("   " + line + "\n")
 		}
@@ -295,14 +305,6 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 		details["omitted"] = omitted
 	}
 	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details}
-}
-
-func pagedPreview(text string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	preview, _ := runeLimit(text, limit)
-	return preview
 }
 
 func fetchError(err error) tools.Result {

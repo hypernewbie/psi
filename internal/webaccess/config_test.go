@@ -211,11 +211,15 @@ func TestHTTPOverrideValidation(t *testing.T) {
 func TestMalformedSharedValuesDisableAll(t *testing.T) {
 	cases := []string{
 		`{"allowHttpBaseUrls":"yes"}`,
+		`{"allowHttpBaseUrls":null}`,
 		`{"maxInlineContentChars":1.5}`,
 		`{"ssrf":{"allowRanges":["not-a-cidr"]}}`,
+		`{"ssrf":{"allowRanges":null}}`,
 		`{"cache":{"maxEntries":0}}`,
 		`{"cache":{"maxBytes":1e30}}`,
 		`{"tools":{"fetchContent":{"enabled":"yes"}}}`,
+		`{"tools":{"fetchContent":{"enabled":null}}}`,
+		`{"webSearch":{"enabled":null}}`,
 		`[]`,
 		`{"webSearch":`, // truncated JSON
 	}
@@ -363,6 +367,7 @@ func TestInvalidBaseURLRules(t *testing.T) {
 	for _, base := range []string{
 		"ftp://searx.example", "https://user:pw@searx.example",
 		"https://searx.example/?q=1", "https://searx.example/#frag",
+		"https://searx.example/#", "https://searx.example#",
 		"https://", "https://searx.example:bad",
 		"https://searx.example:0", "https://searx.example:65536",
 		"https://searx.example:",
@@ -422,5 +427,56 @@ func TestEnvironmentBaseOverridesMalformedFileValue(t *testing.T) {
 	}
 	if cfg.SearXNGBaseURL != "https://env-searx.example" || cfg.ExaBaseURL != "https://env-exa.example/v1" {
 		t.Fatalf("environment overrides not applied: searx=%q exa=%q", cfg.SearXNGBaseURL, cfg.ExaBaseURL)
+	}
+}
+
+func TestNullProviderValuesAreRejected(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"searxngBaseUrl":null}`), env)
+	if len(diags) == 0 || cfg.SearXNGAvailable {
+		t.Fatalf("null SearXNG base: %+v %v", cfg, diags)
+	}
+	if cfg.SearchProvider() != "searxng" {
+		t.Fatal("invalid SearXNG configuration must not fall back to Exa")
+	}
+	cfg, diags = ParseConfig([]byte(`{"exaBaseUrl":null}`), env)
+	if len(diags) == 0 || cfg.ExaAvailable {
+		t.Fatalf("null Exa base: %+v %v", cfg, diags)
+	}
+	cfg, diags = ParseConfig([]byte(`{"exaApiKey":null}`), env)
+	if len(diags) == 0 || cfg.ExaAvailable {
+		t.Fatalf("null Exa key: %+v %v", cfg, diags)
+	}
+}
+
+func TestLoadAppliesEnvironmentWithoutFile(t *testing.T) {
+	env, _ := newEnv(t, map[string]string{
+		"SEARXNG_BASE_URL":                   "https://searx.example",
+		"EXA_API_KEY":                        "key",
+		"PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS": "true",
+	}, nil)
+	cfg, diags := Load(env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if !cfg.SearXNGAvailable || cfg.SearXNGBaseURL != "https://searx.example" || cfg.SearchProvider() != "searxng" {
+		t.Fatalf("SearXNG environment override not applied: %+v", cfg)
+	}
+	if cfg.ExaAPIKey != "key" {
+		t.Fatalf("Exa key environment override not applied: %q", cfg.ExaAPIKey)
+	}
+	if !cfg.AllowHTTPBaseURLs {
+		t.Fatal("HTTP environment override not applied")
+	}
+}
+
+func TestEnvironmentHTTPPermissionOverridesMalformedFileValue(t *testing.T) {
+	env, _ := newEnv(t, map[string]string{"PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS": "true"}, nil)
+	cfg, diags := ParseConfig([]byte(`{"allowHttpBaseUrls":"yes","searxngBaseUrl":"http://searx.example"}`), env)
+	if len(diags) != 0 {
+		t.Fatalf("valid environment override should ignore malformed file value: %v", diags)
+	}
+	if !cfg.AllowHTTPBaseURLs || cfg.SearXNGBaseURL != "http://searx.example" {
+		t.Fatalf("override not applied: %+v", cfg)
 	}
 }

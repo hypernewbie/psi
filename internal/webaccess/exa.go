@@ -94,6 +94,9 @@ func (c *Client) searchExaDirect(ctx context.Context, query string, limit int, f
 }
 
 func projectExaItems(items []exaItem, limit int) []searchHit {
+	if limit < 1 {
+		return nil
+	}
 	var out []searchHit
 	for _, item := range items {
 		hit, ok := projectExaHit(item)

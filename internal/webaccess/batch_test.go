@@ -722,3 +722,26 @@ func TestBatchFetchReportsOmittedSections(t *testing.T) {
 		t.Fatalf("bounded output too large: %d bytes", len(text))
 	}
 }
+
+func TestBatchFetchMarksPreviewTruncation(t *testing.T) {
+	server := batchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, strings.Repeat("y", 50))
+	})
+	cfg := testConfig()
+	cfg.MaxInlineChars = 20
+	client := testClient(cfg)
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolFetch, map[string]any{
+		"urls": []string{server.URL + "/preview", server.URL + "/other"},
+	}))
+	if result.IsError {
+		t.Fatalf("batch: %s", result.Content[0].Text)
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, "preview-truncated: true (20 scalar limit)") {
+		t.Fatalf("preview truncation not reported:\n%s", text)
+	}
+	if !strings.Contains(text, "urlIndex 0") {
+		t.Fatalf("continuation missing:\n%s", text)
+	}
+}

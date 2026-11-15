@@ -57,7 +57,7 @@ overrides are unset.
 | `EXA_API_KEY` | Overrides a configured literal Exa key |
 | `PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS` | `true`, `false`, `1`, or `0`; allows plain-HTTP provider base URLs |
 
-These variables affect `web-search.json` only. See [Web access](web.md).
+These variables affect `web-search.json` only. They also apply when the file is absent. See [Web access](web.md).
 
 ## Shell
 

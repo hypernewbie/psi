@@ -151,6 +151,10 @@ func (d *guardedDialer) dialLiteral(ctx context.Context, network string, addr ne
 		if ctx.Err() != nil {
 			return nil, wrapClass(ctx, classTimeout, "dial interrupted")
 		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, fmt.Errorf("%s: dial timed out", classTimeout)
+		}
 		return nil, fmt.Errorf("%s: dial failed", classTransport)
 	}
 	return conn, nil
