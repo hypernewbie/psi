@@ -898,7 +898,8 @@ func (l *Loop) savePartial(text, thinking, stop, reason string, cfg Config) erro
 }
 
 // toFailureAssistant adds the durable failure reason and Pi's one-empty-text
-// marker shape when the response has no content.
+// marker shape when the response has no content. An outputless marker has zero
+// usage; a visible partial keeps the authoritative response usage.
 func toFailureAssistant(resp *provider.Response, cfg Config, reason string) session.AgentMessage {
 	message := toSessionAssistant(resp, cfg)
 	if message.Assistant == nil {
@@ -906,6 +907,9 @@ func toFailureAssistant(resp *provider.Response, cfg Config, reason string) sess
 	}
 	if len(message.Assistant.Content) == 0 {
 		message.Assistant.Content = []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: ""}}}
+	}
+	if !hasVisibleAssistantContent(message.Assistant) {
+		message.Assistant.Usage = session.Usage{}
 	}
 	message.Assistant.ErrorMessage = &reason
 	return message

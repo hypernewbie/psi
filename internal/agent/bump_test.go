@@ -484,6 +484,46 @@ func TestBumpProviderFailureWithoutOutputKeepsSingleMarker(t *testing.T) {
 	}
 }
 
+func TestBumpFailureMarkerUsage(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		wantUse bool
+	}{
+		{name: "empty marker", wantUse: false},
+		{name: "visible partial", text: "partial", wantUse: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, fake, loop, _ := bumpSetup(t)
+			fake.Responses = []*provider.Response{{
+				Text: tc.text, StopReason: "error",
+				Usage: provider.Usage{Input: 3, Output: 4, TotalTokens: 7},
+			}}
+			if err := loop.Submit(context.Background(), "hello", bumpConfig()); err == nil {
+				t.Fatal("Submit succeeded")
+			}
+			assistants := assistantEntries(store)
+			if len(assistants) != 1 {
+				t.Fatalf("assistant records=%d; want one failure marker", len(assistants))
+			}
+			marker := assistants[0]
+			if marker.ErrorMessage == nil || marker.StopReason != "error" {
+				t.Fatalf("failure marker shape=%+v", marker)
+			}
+			if tc.wantUse {
+				if marker.Usage.TotalTokens != 7 {
+					t.Fatalf("visible partial usage=%+v; want retained", marker.Usage)
+				}
+				return
+			}
+			if marker.Usage.TotalTokens != 0 || marker.Usage.Input != 0 || marker.Usage.Output != 0 {
+				t.Fatalf("empty marker copied usage: %+v", marker.Usage)
+			}
+		})
+	}
+}
+
 func TestBumpWhitespaceOnlyPartialKeepsSingleMarker(t *testing.T) {
 	store, _, fake, loop, events := bumpSetup(t)
 	cfg := bumpConfig()
