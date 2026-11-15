@@ -185,3 +185,55 @@ func TestAnthropicAllowEmptySignatureCompatMatchesPi(t *testing.T) {
 		t.Fatalf("empty unsigned thinking block was not dropped: %+v", got)
 	}
 }
+
+// The tool definitions declare eager tool input streaming unless the model
+// does not support it, and the fine-grained beta covers the models that do
+// not.
+func TestAnthropicToolsDeclareEagerToolInputStreaming(t *testing.T) {
+	tools := []ToolDef{{Name: "read", Description: "Read a file", Schema: map[string]any{"type": "object", "properties": map[string]any{}}}}
+	model := ModelMeta{ID: "qwen3.8-flash", API: "anthropic-messages", Provider: "opencode-go"}
+	body, err := BuildAnthropicRequest(Request{Model: model, Thinking: "off", Tools: tools,
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := body["tools"].([]map[string]any)
+	if declared[0]["eager_input_streaming"] != true {
+		t.Fatalf("tool did not declare eager input streaming: %+v", declared[0])
+	}
+	features := anthropicBetaFeatures(model, Request{Model: model, Thinking: "off", Tools: tools}, nil)
+	if containsFeature(features, anthropicBetaFineGrainedToolStreaming) {
+		t.Fatalf("eager streaming model declared the fine-grained feature: %v", features)
+	}
+
+	unsupported := model
+	unsupported.Compat = completionCompat(t, map[string]any{"supportsEagerToolInputStreaming": false})
+	body, err = BuildAnthropicRequest(Request{Model: unsupported, Thinking: "off", Tools: tools,
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared = body["tools"].([]map[string]any)
+	if _, present := declared[0]["eager_input_streaming"]; present {
+		t.Fatalf("model without eager streaming declared it: %+v", declared[0])
+	}
+	features = anthropicBetaFeatures(unsupported, Request{Model: unsupported, Thinking: "off", Tools: tools}, nil)
+	if !containsFeature(features, anthropicBetaFineGrainedToolStreaming) {
+		t.Fatalf("model without eager streaming did not declare the fine-grained feature: %v", features)
+	}
+}
+
+// The budget thinking profile states its display, so the endpoint returns
+// summarized thinking.
+func TestAnthropicBudgetThinkingStatesItsDisplay(t *testing.T) {
+	model := ModelMeta{ID: "qwen3.8-flash", API: "anthropic-messages", Provider: "opencode-go", Reasoning: true, MaxTokens: 16384}
+	body, err := BuildAnthropicRequest(Request{Model: model, Thinking: "high",
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hello"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thinking, _ := body["thinking"].(map[string]any)
+	if thinking["type"] != "enabled" || thinking["display"] != "summarized" {
+		t.Fatalf("budget thinking profile = %+v", thinking)
+	}
+}

@@ -146,6 +146,11 @@ configured value removes the header. psi does not declare the features that
 need native tool changes or message threads, because it does not send those
 features.
 
+An `anthropic-messages` request declares eager tool input streaming on every
+tool, unless the model does not support it. A model without that support gets
+the fine-grained tool streaming feature instead. A budget thinking profile
+states its display, so the endpoint returns summarized thinking.
+
 Provider selection precedence matches Pi: command-line flags, then the session's
 recorded model, then `defaultProvider`/`defaultModel` from settings. See
 [Configuration](config.md).

@@ -166,12 +166,17 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 	}
 	if len(req.Tools) > 0 {
 		var tools []map[string]any
+		eagerToolInput := boolCompat(req.Model, "supportsEagerToolInputStreaming", true)
 		for _, t := range req.Tools {
 			schema := t.Schema
 			if schema == nil {
 				schema = map[string]any{"type": "object", "properties": map[string]any{}}
 			}
-			tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "input_schema": schema})
+			tool := map[string]any{"name": t.Name, "description": t.Description, "input_schema": schema}
+			if eagerToolInput {
+				tool["eager_input_streaming"] = true
+			}
+			tools = append(tools, tool)
 		}
 		out["tools"] = tools
 	}
@@ -190,7 +195,7 @@ func BuildAnthropicRequest(req Request) (map[string]any, error) {
 			out["thinking"] = thinking
 		}
 	} else if req.Thinking != "off" {
-		out["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
+		out["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget, "display": "summarized"}
 	}
 	return out, nil
 }
