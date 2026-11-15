@@ -70,6 +70,14 @@ A custom preamble (`SYSTEM.md` or `--system-prompt`) suppresses `tools`,
 the `skills` prompt section; a `/skill:` invocation adds the body to that user
 message, and discovery still advertises names, descriptions, and paths only.
 
+`language: "zh"` localizes the built-in prose in these sections and adds a
+Simplified Chinese reply rule. Section names, tool names, XML tags, paths, and
+user-authored text stay unchanged. A custom preamble is not translated and does
+not receive the Chinese reply rule. The interactive terminal displays reasoning
+text when the model emits it, unless hidden with `Ctrl+T` or
+`hideThinkingBlock`. The language setting does not force the model's reasoning
+language, and RPC mode does not emit thinking deltas.
+
 Each section is stored in the session as a named entry. When configuration
 changes, psi appends section values and null values for removals.
 

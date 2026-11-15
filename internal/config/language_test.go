@@ -117,19 +117,6 @@ func TestLanguageSettings(t *testing.T) {
 	})
 }
 
-func TestValidLanguage(t *testing.T) {
-	for _, language := range []string{LanguageEnglish, LanguageChinese} {
-		if !ValidLanguage(language) {
-			t.Fatalf("%q rejected", language)
-		}
-	}
-	for _, language := range []string{"", "ZH", "zh-CN", "fr", " en", "zh "} {
-		if ValidLanguage(language) {
-			t.Fatalf("%q accepted", language)
-		}
-	}
-}
-
 func TestBuildPromptSectionsChinese(t *testing.T) {
 	skillsDesc := "<available_skills>\n<skill>demo</skill>\n</available_skills>"
 

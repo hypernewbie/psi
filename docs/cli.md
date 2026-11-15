@@ -57,7 +57,9 @@ UI: clients receive `auto_retry_start` before each wait and one
 `prompt` expands a `/skill:<name> [args]` message before any user event, queue,
 store, or provider side effect. An unknown, unreadable, or oversized skill
 returns an error response instead of submitting the unexpanded command.
-It has no terminal UI, theme, or picker.
+It has no terminal UI, theme, or picker. RPC events carry visible assistant
+text and tool calls; reasoning/thinking deltas are not emitted. Reasoning
+remains available in the interactive terminal and in persisted session records.
 
 Print mode (`--print/-p`), Pi's JSON event mode, HTML export, and `@file`
 arguments are not supported.

@@ -316,6 +316,7 @@ func validateName(name string) []string {
 }
 
 // FormatForPrompt advertises name/description/path without the body.
+// language "zh" selects the Chinese wrapper; other values use English.
 // Excludes disable-model-invocation skills from automatic advertisement.
 func FormatForPrompt(skills []Skill, language string) string {
 	var vis []Skill

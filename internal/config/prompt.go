@@ -68,6 +68,7 @@ var fixedRules = []string{
 }
 
 // BuildPromptSections returns the ordered, non-empty system-prompt sections.
+// language selects the built-in prose; only LanguageChinese changes it.
 // A custom prompt (SYSTEM.md or --system-prompt) replaces the preamble and
 // suppresses tools, rules, and docs; project context, skills, and cwd still render.
 func BuildPromptSections(cwd string, instructions []InstructionFile, skillDescs []string, tools []string, systemPrompt string, useSystemPrompt bool, appendSystemPrompts []string, language string) []PromptSection {
