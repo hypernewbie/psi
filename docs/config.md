@@ -102,7 +102,7 @@ An unsupported stored auth type stops key selection instead of silently changing
 the billing path. Codex uses its OAuth entry and never falls back to an API key.
 
 With no saved provider/model, the default is Anthropic `claude-sonnet-4-5`.
-The public snapshot contains provenance-tracked model metadata for every registered provider. It includes API, endpoint, input, thinking, and supported compatibility data from `@earendil-works/pi-ai` version `1.4.0`.
+The public snapshot contains provenance-tracked model metadata for every registered provider. It includes API, endpoint, input, thinking, and supported compatibility data from `@earendil-works/pi-ai` version `1.5.2`.
 Source hashes are in `internal/config/data/catalog-source.json`.
 The snapshot contains capabilities, not credentials, private endpoints, or user defaults.
 Psi also reads newer model data from Pi's `models-store.json` cache.
