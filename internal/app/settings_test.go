@@ -556,3 +556,26 @@ func TestApplyModelThinkingLevelWritesUserSettingsOnly(t *testing.T) {
 		t.Fatalf("user override = %q, want high", got)
 	}
 }
+
+func TestApplyModelThinkingLevelClearKeepsOtherOverrides(t *testing.T) {
+	r := testRuntime(t)
+	addSettingsModel(r)
+	if err := r.applyModelThinkingLevel("anthropic/m2", "medium", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.applyModelThinkingLevel("anthropic/m", "high", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.applyModelThinkingLevel("anthropic/m", modelThinkingClearChoice, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.settings.ModelThinkingLevels["anthropic/m2"]; got != "medium" {
+		t.Fatalf("in-memory sibling = %q, want medium", got)
+	}
+	if got := readModelThinkingLevels(t, r)["anthropic/m2"]; got != "medium" {
+		t.Fatalf("stored sibling = %q, want medium", got)
+	}
+	if _, exists := readModelThinkingLevels(t, r)["anthropic/m"]; exists {
+		t.Fatal("cleared key remains in the file")
+	}
+}
