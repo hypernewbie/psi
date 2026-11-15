@@ -612,6 +612,8 @@ func TestBridgeThinkingSwitchPersists(t *testing.T) {
 	if len(levels) < 2 {
 		t.Skipf("model supports %d thinking levels", len(levels))
 	}
+	// A per-model default must not replace this direct bridge choice.
+	r.settings.ModelThinkingLevels = map[string]string{r.ov.Provider + "/" + r.ov.Model: levels[0]}
 	level := levels[len(levels)-1]
 	before := countEntries(t, r)
 

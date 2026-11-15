@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 )
 
-// SettingsUpdate sets one settings.json value at a 1- or 2-element path.
-// Path forms: {"outputPad"} or {"terminal", "trueColor"}.
+// SettingsUpdate sets or removes one settings.json value at a 1- or 2-element
+// path. Path forms: {"outputPad"} or {"terminal", "trueColor"}.
 type SettingsUpdate struct {
 	Path  []string
 	Value json.RawMessage
