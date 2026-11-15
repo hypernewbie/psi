@@ -124,6 +124,10 @@ The bridge is silent: errors never reach the TUI.
 - A missing `Accepted` within 4 s counts as transient. Phi's own hello
   deadline is 5 s, and its exceeded status is terminal, so the local timer
   fires first and keeps the retry.
+- A stream that ends during the write reports the end of the stream, and the
+  status that ended it comes from the next read. The client uses that status,
+  so a rejection that arrives during the handshake stops the client instead
+  of looking like a transient failure.
 - A stream write blocked past 5 s is a local transport fault, not Phi's
   verdict: the stream is dropped and reconnected.
 - Capability requests are forwarded to the host loop; a full request queue

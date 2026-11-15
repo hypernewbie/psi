@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	mrand "math/rand/v2"
 	"os"
 	"runtime"
@@ -499,7 +500,7 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 		return false, err
 	}
 	deadline := time.Now().Add(attachDeadline)
-	if err := sendFrame(ctx, cancel, stream, hello, writeBudget(deadline)); err != nil {
+	if err := sendHello(ctx, cancel, stream, hello, writeBudget(deadline)); err != nil {
 		return false, err
 	}
 
@@ -611,6 +612,38 @@ func sendFrame(ctx context.Context, cancel context.CancelFunc, stream pibridgepb
 	case <-timer.C:
 		cancel()
 		return errWriteTimeout
+	}
+}
+
+// sendHello writes the Hello frame. A stream that ends during the write
+// reports io.EOF, and the status that ended it comes from the next read.
+// Without that status, a rejection looks like a transport failure and the
+// client keeps reconnecting to a peer that will reject it again.
+func sendHello(ctx context.Context, cancel context.CancelFunc, stream pibridgepb.Integration_ConnectClient, hello *pibridgepb.PiToPhi, wait time.Duration) error {
+	err := sendFrame(ctx, cancel, stream, hello, wait)
+	if err == nil || !errors.Is(err, io.EOF) {
+		return err
+	}
+	if statusErr := streamStatus(ctx, stream); statusErr != nil {
+		return statusErr
+	}
+	return err
+}
+
+// streamStatus reads the status that ended the stream. The read is bounded
+// by the stream context, so a stream that is still open does not hold the
+// caller.
+func streamStatus(ctx context.Context, stream pibridgepb.Integration_ConnectClient) error {
+	errc := make(chan error, 1)
+	go func() {
+		_, err := stream.Recv()
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

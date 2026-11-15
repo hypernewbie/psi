@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -699,3 +700,42 @@ type restoringStream struct {
 }
 
 func (s *restoringStream) Send(*pibridgepb.PiToPhi) error { return nil }
+
+// A stream that ends during the write reports io.EOF, and the status that
+// ended it comes from the next read. The client has to use that status, or a
+// rejection looks like a transport failure and the client keeps reconnecting
+// to a peer that will reject it again.
+type endingStream struct {
+	grpc.ClientStream
+	sendErr error
+	recvErr error
+}
+
+func (s *endingStream) Send(*pibridgepb.PiToPhi) error { return s.sendErr }
+func (s *endingStream) Recv() (*pibridgepb.PhiToPi, error) {
+	return nil, s.recvErr
+}
+
+func TestSendHelloReportsTheStatusThatEndedTheStream(t *testing.T) {
+	stream := &endingStream{sendErr: io.EOF, recvErr: status.Error(codes.Unauthenticated, "rejected")}
+	err := sendHello(context.Background(), func() {}, stream, &pibridgepb.PiToPhi{}, time.Second)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("error = %v, want the rejection status", err)
+	}
+}
+
+func TestSendHelloKeepsAWriteErrorThatIsNotAnEnd(t *testing.T) {
+	stream := &endingStream{sendErr: errWriteTimeout, recvErr: status.Error(codes.Unauthenticated, "rejected")}
+	err := sendHello(context.Background(), func() {}, stream, &pibridgepb.PiToPhi{}, time.Second)
+	if !errors.Is(err, errWriteTimeout) {
+		t.Fatalf("error = %v, want the write timeout", err)
+	}
+}
+
+func TestSendHelloKeepsTheEndWhenNoStatusArrives(t *testing.T) {
+	stream := &endingStream{sendErr: io.EOF, recvErr: io.EOF}
+	err := sendHello(context.Background(), func() {}, stream, &pibridgepb.PiToPhi{}, time.Second)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("error = %v, want the end of the stream", err)
+	}
+}

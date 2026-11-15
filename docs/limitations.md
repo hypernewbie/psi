@@ -115,3 +115,7 @@ select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 Context-limit recovery permits at most one compaction and retry before visible partial output.
 
 Live provider service acceptance has not run.
+
+The `anthropic-messages` protocol sends no prompt-cache markers. Pi marks the instruction prompt, the last tool, and the last conversation message, so the endpoint caches that prefix. psi sends those markers only on the OpenRouter Anthropic-style Completions route. A request on the Anthropic Messages protocol pays the full input price for the prefix.
+
+The Anthropic thinking budget table is psi's own ladder. It uses the same budgets as Pi for the `minimal` and `low` levels, half of Pi's budgets for `medium` and `high`, and two further budgets for the `xhigh` and `max` levels, which Pi clamps to `high`. Every catalog model that uses a budget leaves room for the largest budget in the ladder.
