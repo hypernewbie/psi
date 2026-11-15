@@ -92,9 +92,7 @@ func TestActualAppLoginMVP(t *testing.T) {
 	waitLogin(t, q, "model picker canceled", canary, func() bool {
 		return semanticEditorReady(q.screen) && !strings.Contains(q.screen.Text(), "Models ·")
 	})
-	q.write("\x15/name acceptance\r")
-	waitLoginOutput(t, q, "session record created", "Session name set: acceptance", canary)
-	q.write("/quit\r")
+	q.write("\x15/quit\r")
 	finishLoginPTY(t, q, canary)
 
 	q2 := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
@@ -152,6 +150,70 @@ func TestActualAppLoginMVP(t *testing.T) {
 	}
 	if settings["defaultProvider"] != "deepseek" || settings["defaultModel"] != "deepseek-v4-pro" {
 		t.Fatal("first-login defaults were not persisted")
+	}
+}
+
+func TestCheckLoginSessions(t *testing.T) {
+	const canary = "login-session-secret-canary"
+	for _, tc := range []struct {
+		name    string
+		setup   func(*testing.T, string)
+		wantErr bool
+	}{
+		{
+			name: "empty directory",
+			setup: func(t *testing.T, root string) {
+				if err := os.Mkdir(root, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "clean session files",
+			setup: func(t *testing.T, root string) {
+				writeAppFile(t, filepath.Join(root, "first.jsonl"), `{}`)
+				writeAppFile(t, filepath.Join(root, "workspace", "second.jsonl"), `{}`)
+			},
+		},
+		{
+			name: "nested canary",
+			setup: func(t *testing.T, root string) {
+				writeAppFile(t, filepath.Join(root, "first.jsonl"), `{}`)
+				writeAppFile(t, filepath.Join(root, "workspace", "second.jsonl"), canary)
+			},
+			wantErr: true,
+		},
+		{
+			name:    "missing directory",
+			wantErr: true,
+		},
+		{
+			name: "non-directory root",
+			setup: func(t *testing.T, root string) {
+				writeAppFile(t, root, "")
+			},
+			wantErr: true,
+		},
+		{
+			name: "session read error",
+			setup: func(t *testing.T, root string) {
+				writeAppFile(t, filepath.Join(root, "first.jsonl"), `{}`)
+				if err := os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "unreadable.jsonl")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agentDir := t.TempDir()
+			if tc.setup != nil {
+				tc.setup(t, filepath.Join(agentDir, "sessions"))
+			}
+			if err := checkLoginSessions(agentDir, canary); (err != nil) != tc.wantErr {
+				t.Fatalf("session scan error = %v, want error = %t", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -244,15 +306,17 @@ func drainLoginPTY(t *testing.T, q *reviewPTY, canary string) {
 
 func checkLoginSessions(agentDir, canary string) error {
 	root := filepath.Join(agentDir, "sessions")
-	found := 0
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() {
+		return os.ErrInvalid
+	}
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() || filepath.Ext(path) != ".jsonl" {
 			return nil
 		}
-		found++
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -264,9 +328,6 @@ func checkLoginSessions(agentDir, canary string) error {
 	})
 	if err != nil {
 		return os.ErrInvalid
-	}
-	if found == 0 {
-		return os.ErrNotExist
 	}
 	return nil
 }

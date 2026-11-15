@@ -62,6 +62,9 @@ credentials.
 
 Session files record prompts, tool calls, tool output, and file contents shown
 to the model. Treat a session file as sensitive as the work it describes.
+On Unix, new session directories and missing parents use mode `0700`. This
+includes the agent directory when startup creates it. Existing directory
+modes stay unchanged.
 
 ## What leaves the process
 

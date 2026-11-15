@@ -454,6 +454,7 @@ Pi-compatible options:
   --version, -v              Show version, commit, and build
 
 Interactive credential setup: use /login [provider] for a masked API-key prompt or provider picker. Use /logout to remove a stored API key.
+Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
