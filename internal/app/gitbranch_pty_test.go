@@ -111,7 +111,7 @@ func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *tes
 			}
 		}
 	}
-	// waitIdle returns once the run has fully settled. The "Working…"
+	// waitIdle returns once the run has fully settled. The "Working"
 	// activity line is present for the whole run and cleared on settle, so
 	// its absence means the app accepts commands again; a 40 ms quiet gap
 	// absorbs the last in-flight settle frame. Submitting /quit before this
@@ -124,7 +124,7 @@ func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *tes
 		quiet := time.NewTimer(40 * time.Millisecond)
 		defer quiet.Stop()
 		for {
-			if strings.Contains(screen.Text(), "Working…") {
+			if strings.Contains(screen.Text(), "Working") {
 				if !quiet.Stop() {
 					select {
 					case <-quiet.C:

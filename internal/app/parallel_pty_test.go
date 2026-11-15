@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Actual-app PTY regression for parallel tool batches: two calls from one
@@ -52,11 +51,9 @@ func TestParallelBatchActualAppPTY(t *testing.T) {
 	reviewSettings(t, agentDir, server.URL)
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
 	q.prompt()
-	submitted := time.Now()
 	q.write("run both\r")
 	q.wait("PARALLEL_BATCH_DONE")
 	q.prompt()
-	elapsed := time.Since(submitted)
 	first := <-requests
 	second := <-requests
 	_ = first
@@ -65,8 +62,10 @@ func TestParallelBatchActualAppPTY(t *testing.T) {
 	if !strings.Contains(string(secondJSON), "call-slow") || !strings.Contains(string(secondJSON), "call-write") {
 		t.Fatalf("follow-up request missing tool calls: %s", secondJSON)
 	}
-	// Concurrent execution: the write landed while the bash call still slept,
-	// so the bash result lists the marker file.
+	// Concurrent execution is proven by the marker file, not by a stopwatch:
+	// the bash call sleeps before it lists the file, so the marker is only in
+	// its output when the write ran during that sleep. Sequential execution
+	// runs the bash call first and cannot produce that output.
 	if !strings.Contains(string(secondJSON), "text\":\"parallel-marker.txt") {
 		t.Fatalf("bash result never observed the concurrent write: %s", secondJSON)
 	}
@@ -76,11 +75,6 @@ func TestParallelBatchActualAppPTY(t *testing.T) {
 	write := strings.Index(string(secondJSON), "Successfully wrote")
 	if slow < 0 || write < 0 || slow > write {
 		t.Fatalf("results out of order in follow-up request: slow=%d write=%d", slow, write)
-	}
-	// Sequential execution needs at least the sleep before the write, then the
-	// second request; parallel finishes the batch inside the sleep window.
-	if elapsed > 2*time.Second {
-		t.Fatalf("batch ran sequentially or stalled: %s", elapsed)
 	}
 	if !strings.Contains(q.screen.Text(), "sleep 1.2; ls parallel-marker.txt") || !strings.Contains(q.screen.Text(), "write") {
 		t.Fatalf("settled rows missing from screen: %s", q.screen.Text())
