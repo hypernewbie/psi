@@ -53,6 +53,7 @@ Additional storage rules:
 |---|---|---|
 | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `moonshotai`, `kimi-coding`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, `mistral`, and the providers `models.json` declares | use the model's declared registered API; reject unsupported provider/API pairs |
 | `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic budget/adaptive profiles and Codex effort maps; an unadvertised level is clamped, not refused |
+| `modelThinkingLevels` | object keyed by `provider/modelId`, levels `off,minimal,low,medium,high,xhigh,max` | per-model default applied at startup and on a model change; psi writes and clears entries from `/settings` and merges the project file per key; an unadvertised level is clamped |
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
 | `defaultTools` | `read,bash,edit,write` with replacement and `+`/`-` | four tools only |
 | `skills` | `skills`, `enableSkillCommands` selector + path subset | instructions only, no install/run at discovery |

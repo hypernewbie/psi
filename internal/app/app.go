@@ -427,7 +427,7 @@ Pi-compatible options:
   --session-dir <dir>        Session directory
   --provider <name>          Select provider; use configured model if omitted
   --model <id|provider/id>   Select model; :thinking suffix is supported
-  --thinking <level>         Set thinking level
+  --thinking <level>         Override saved thinking defaults at startup
   --system-prompt <text|file> Set system prompt text or load it from a file
   --append-system-prompt <text|file> Append system prompt text or file (repeatable)
   --name, -n <name>          Set session display name
@@ -661,6 +661,7 @@ type runtime struct {
 	selectorDraft            string
 	selectorCursor           int
 	selectorRestoreOnSuccess bool
+	modelThinkingTarget      string
 	tty                      *terminal.Term
 	lifecycle                *terminalLifecycle
 	signals                  chan os.Signal
@@ -771,6 +772,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		return err
 	}
 	ov.Model = meta.ID
+	ov.Thinking = config.ResolveThinkingLevel(r.settings, ov.Provider, meta.ID, ov.Thinking, ov.ThinkingExplicit)
 	if ov.Thinking == "" {
 		ov.Thinking = "off"
 	}
@@ -873,17 +875,6 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	return nil
 }
 
-// thinkingForModelSwitch follows Pi's _getThinkingLevelForModelSwitch: with
-// no explicit level requested, the settings defaultThinkingLevel wins over
-// the current session level when one is configured; otherwise the current
-// level carries over. configure clamps the result to the target model.
-func (r *runtime) thinkingForModelSwitch() string {
-	if r.settings.DefaultThinkingSet {
-		return r.settings.DefaultThinking
-	}
-	return r.ov.Thinking
-}
-
 func (r *runtime) compactionProvider(reference string) (provider.Provider, provider.ModelMeta, func(), error) {
 	if r.authErr != nil {
 		// Pi resolves the summarization request only when it summarizes: the
@@ -906,6 +897,7 @@ func (r *runtime) compactionProvider(reference string) (provider.Provider, provi
 	}
 	next := r.ov
 	next.Provider, next.Model, next.Thinking = parts[0], parts[1], "off"
+	next.ThinkingExplicit = true
 	candidate := *r
 	candidate.prov = nil
 	if err := candidate.configure(next); err != nil {
@@ -2497,7 +2489,21 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.settingsPicker.Page(1)
 					r.draw(console)
 				case "\r", " ":
-					item, value, ok := r.settingsPicker.Cycle()
+					item, selected := r.settingsPicker.SelectedItem()
+					if !selected {
+						r.draw(console)
+						continue
+					}
+					if item.ID == "model-thinking" && string(input.Key) == "\r" {
+						closeSettings()
+						r.refreshModelsForPicker(notice)
+						selector := NewSelector(modelSelectorItems(r), r.ov.Provider+"/"+r.ov.Model)
+						selector.Models = true
+						selector.ModelThinking = true
+						openSelector(selector, "", 0, "", false)
+						continue
+					}
+					_, value, ok := r.settingsPicker.Cycle()
 					if !ok {
 						r.draw(console)
 						continue
@@ -2534,6 +2540,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if !input.Paste {
 					switch key {
 					case "\x1b", string([]byte{3}):
+						if r.selector.ModelThinking || r.selector.ModelThinkingLevel {
+							r.modelThinkingTarget = ""
+							closeSelector(false)
+							openSettings()
+							continue
+						}
 						closeSelector(true)
 						continue
 					case "\x1b[A", "\x1bOA":
@@ -2552,9 +2564,60 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.selector.MovePage(1)
 						r.draw(console)
 						continue
+					case "\x13":
+						if !r.selector.Thinking || r.selector.ModelThinkingLevel {
+							continue
+						}
+						selected := r.selector.SelectedItem()
+						if selected == nil {
+							continue
+						}
+						if err := r.saveThinkingDefault(selected.ID, out); err != nil {
+							notice(terminal.NoticeError, err.Error())
+							closeSelector(false)
+							continue
+						}
+						notice(terminal.NoticeInfo, "Saved default thinking level: "+selected.ID)
+						closeSelector(false)
+						continue
 					case "\r":
 						selected := r.selector.SelectedItem()
 						if selected == nil {
+							continue
+						}
+						if r.selector.ModelThinking {
+							target := selected.ID
+							providerID, modelID, found := strings.Cut(target, "/")
+							providerID, modelID = strings.TrimSpace(providerID), strings.TrimSpace(modelID)
+							if !found || providerID == "" || modelID == "" {
+								notice(terminal.NoticeError, "invalid model "+target)
+								r.modelThinkingTarget = ""
+								closeSelector(false)
+								openSettings()
+								continue
+							}
+							meta, err := r.models.SelectModel(providerID, modelID)
+							if err != nil {
+								notice(terminal.NoticeError, err.Error())
+								r.modelThinkingTarget = ""
+								closeSelector(false)
+								openSettings()
+								continue
+							}
+							r.modelThinkingTarget = target
+							levelSelector := NewSelector(modelThinkingLevelItems(r, providerID, meta.ID, meta), r.settings.ModelThinkingLevels[target])
+							levelSelector.Thinking = true
+							levelSelector.ModelThinkingLevel = true
+							openSelector(levelSelector, "", 0, "", false)
+							continue
+						}
+						if r.selector.ModelThinkingLevel {
+							if err := r.applyModelThinkingLevel(r.modelThinkingTarget, selected.ID, out); err != nil {
+								notice(terminal.NoticeError, err.Error())
+							}
+							r.modelThinkingTarget = ""
+							closeSelector(false)
+							openSettings()
 							continue
 						}
 						if r.selector.Thinking {
@@ -3100,7 +3163,6 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 		return false, nil
 	}
 	next := r.ov
-	next.Thinking = r.thinkingForModelSwitch()
 	parts := strings.Fields(arg)
 	if len(parts) == 1 {
 		if strings.Contains(parts[0], "/") {
@@ -3117,6 +3179,7 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 	if strings.TrimSpace(next.Model) == "" {
 		return false, fmt.Errorf("use /model [provider/]model")
 	}
+	next.ThinkingExplicit = false
 	candidate := *r
 	candidate.prov = nil
 	if err := candidate.configure(next); err != nil {
@@ -3163,6 +3226,7 @@ func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error)
 	}
 	next := r.ov
 	next.Thinking = level
+	next.ThinkingExplicit = true
 	candidate := *r
 	candidate.prov = nil
 	if err := candidate.configure(next); err != nil {

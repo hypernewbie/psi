@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -606,6 +607,7 @@ func (h *bridgeHandler) startModelSwitch(req pibridge.Request, runBusy bool) {
 	}
 	next := h.r.ov
 	next.Provider, next.Model = providerID, model
+	next.ThinkingExplicit = false
 	h.begin(req, next)
 }
 
@@ -634,6 +636,7 @@ func (h *bridgeHandler) startThinkingSwitch(req pibridge.Request, runBusy bool) 
 	}
 	next := h.r.ov
 	next.Thinking = level
+	next.ThinkingExplicit = true
 	h.begin(req, next)
 }
 
@@ -738,6 +741,15 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 	// A native command or a session change while the worker ran invalidates
 	// the candidate: its change would land on a different runtime.
 	if h.r.ov != prep.base || h.r.generation != prep.gen || h.r.store.Header().ID != prep.session {
+		discard("")
+		return
+	}
+	// Settings saves replace the published map instead of mutating it, so the
+	// candidate holds an immutable snapshot. A change after the worker started
+	// makes the candidate's defaults stale.
+	if !maps.Equal(h.r.settings.ModelThinkingLevels, cand.settings.ModelThinkingLevels) ||
+		h.r.settings.DefaultThinking != cand.settings.DefaultThinking ||
+		h.r.settings.DefaultThinkingSet != cand.settings.DefaultThinkingSet {
 		discard("")
 		return
 	}

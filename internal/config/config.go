@@ -1,7 +1,8 @@
 // Package config loads the narrow supported subset (Phase 4).
 //
 // Supported keys (COMPATIBILITY.md): defaultProvider, defaultModel,
-// defaultThinkingLevel, sessionDir, defaultTools, skills, enableSkillCommands,
+// defaultThinkingLevel, modelThinkingLevels, sessionDir, defaultTools, skills,
+// enableSkillCommands,
 // compaction{enabled,reserveTokens,keepRecentTokens,modelOverrides}, shellPath,
 // shellCommandPrefix, network timeouts/retries, instructions, models.json
 // endpoint metadata, auth env refs, quietStartup. Everything else is
@@ -90,13 +91,16 @@ type Settings struct {
 	// DefaultThinkingSet reports that a settings file provided
 	// defaultThinkingLevel. Pi uses that value when the model changes.
 	DefaultThinkingSet bool
-	SteeringMode       string // "one-at-a-time" (Pi default) or "all"
-	FollowUpMode       string // "one-at-a-time" (Pi default) or "all"
-	SessionDir         string
-	SessionDirSource   string // "cli"|"env"|"settings"|"default"
-	DefaultTools       []string
-	Skills             []string
-	EnableSkills       bool
+	// ModelThinkingLevels maps "provider/modelId" to a default thinking
+	// level. Pi stores the same map under modelThinkingLevels.
+	ModelThinkingLevels map[string]string
+	SteeringMode        string // "one-at-a-time" (Pi default) or "all"
+	FollowUpMode        string // "one-at-a-time" (Pi default) or "all"
+	SessionDir          string
+	SessionDirSource    string // "cli"|"env"|"settings"|"default"
+	DefaultTools        []string
+	Skills              []string
+	EnableSkills        bool
 	// HideThinkingBlock hides reasoning blocks behind Pi's collapsed label.
 	HideThinkingBlock    bool
 	Compaction           CompactionConfig
@@ -122,6 +126,7 @@ func defaultSettings() Settings {
 		AutocompleteMaxVisible:  5,
 		MarkdownCodeBlockIndent: "  ",
 		DefaultThinking:         "off",
+		ModelThinkingLevels:     map[string]string{},
 		SteeringMode:            "one-at-a-time",
 		FollowUpMode:            "one-at-a-time",
 		DefaultTools:            []string{"read", "bash", "edit", "write"},
@@ -148,16 +153,17 @@ type rawSettings struct {
 	Markdown               *struct {
 		CodeBlockIndent *string `json:"codeBlockIndent"`
 	} `json:"markdown"`
-	DefaultProvider     *string  `json:"defaultProvider"`
-	DefaultModel        *string  `json:"defaultModel"`
-	DefaultThinking     *string  `json:"defaultThinkingLevel"`
-	SteeringMode        *string  `json:"steeringMode"`
-	FollowUpMode        *string  `json:"followUpMode"`
-	SessionDir          *string  `json:"sessionDir"`
-	DefaultTools        []string `json:"defaultTools"`
-	Skills              any      `json:"skills"`
-	EnableSkillCommands *bool    `json:"enableSkillCommands"`
-	HideThinkingBlock   *bool    `json:"hideThinkingBlock"`
+	DefaultProvider     *string           `json:"defaultProvider"`
+	DefaultModel        *string           `json:"defaultModel"`
+	DefaultThinking     *string           `json:"defaultThinkingLevel"`
+	ModelThinkingLevels map[string]string `json:"modelThinkingLevels"`
+	SteeringMode        *string           `json:"steeringMode"`
+	FollowUpMode        *string           `json:"followUpMode"`
+	SessionDir          *string           `json:"sessionDir"`
+	DefaultTools        []string          `json:"defaultTools"`
+	Skills              any               `json:"skills"`
+	EnableSkillCommands *bool             `json:"enableSkillCommands"`
+	HideThinkingBlock   *bool             `json:"hideThinkingBlock"`
 	Compaction          *struct {
 		Enabled          *bool `json:"enabled"`
 		ReserveTokens    *int  `json:"reserveTokens"`
@@ -205,7 +211,7 @@ func LoadSettings(userPath, projectPath string, projectConsent bool) (LoadResult
 }
 
 // LoadProjectSettings applies project settings.json on top of an earlier load.
-// base is consumed: applyRaw mutates its slices in place.
+// base is consumed: applyRaw mutates its slices and maps in place.
 func LoadProjectSettings(base LoadResult, projectPath string) (LoadResult, error) {
 	loaded, err := applySettingsFile(base, projectPath, "project:"+projectPath)
 	if err != nil {
@@ -234,6 +240,16 @@ func applySettingsFile(loaded LoadResult, path, src string) (LoadResult, error) 
 func validateSettings(loaded LoadResult) (LoadResult, error) {
 	if loaded.Settings.DefaultThinking != "" && !validThinking(loaded.Settings.DefaultThinking) {
 		return LoadResult{}, fmt.Errorf("unsupported defaultThinkingLevel %q", loaded.Settings.DefaultThinking)
+	}
+	keys := make([]string, 0, len(loaded.Settings.ModelThinkingLevels))
+	for key := range loaded.Settings.ModelThinkingLevels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if level := loaded.Settings.ModelThinkingLevels[key]; !validThinking(level) {
+			return LoadResult{}, fmt.Errorf("unsupported modelThinkingLevels[%q] %q", key, level)
+		}
 	}
 	return loaded, nil
 }
@@ -407,6 +423,15 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		out.DefaultThinking = *raw.DefaultThinking
 		out.DefaultThinkingSet = true
 		set("defaultThinkingLevel", *raw.DefaultThinking)
+	}
+	if raw.ModelThinkingLevels != nil {
+		if out.ModelThinkingLevels == nil {
+			out.ModelThinkingLevels = map[string]string{}
+		}
+		for key, level := range raw.ModelThinkingLevels {
+			out.ModelThinkingLevels[key] = level
+		}
+		sources["modelThinkingLevels"] = src
 	}
 	if raw.SteeringMode != nil {
 		if *raw.SteeringMode != "all" && *raw.SteeringMode != "one-at-a-time" {
@@ -673,6 +698,10 @@ type StartupOverrides struct {
 	SessionDir string
 	NoSession  bool
 	Explain    string
+	// ThinkingExplicit reports that CLI, a restored session, or a direct
+	// command supplied the level, so model and global defaults must not
+	// replace it.
+	ThinkingExplicit bool
 }
 
 // ResolveStartup implements precedence with conflict explanation.
@@ -723,7 +752,25 @@ func ResolveStartup(cliProvider, cliModel, cliThinking, cliSessionDir string, cl
 		sessionDir = cliSessionDir
 	}
 	sort.Strings(notes)
-	return StartupOverrides{Provider: provider, Model: model, Thinking: thinking, SessionDir: sessionDir, NoSession: cliNoSession, Explain: strings.Join(notes, "; ")}
+	return StartupOverrides{Provider: provider, Model: model, Thinking: thinking, SessionDir: sessionDir, NoSession: cliNoSession, Explain: strings.Join(notes, "; "),
+		ThinkingExplicit: cliThinking != "" || restoredThinking != ""}
+}
+
+// ResolveThinkingLevel returns the thinking level for providerID/modelID.
+// An explicit level (CLI, restored session, or a direct /thinking choice)
+// wins. Otherwise a per-model override wins, then the global default when
+// the settings file set one, then the carried level.
+func ResolveThinkingLevel(settings Settings, providerID, modelID, carried string, explicit bool) string {
+	if explicit {
+		return carried
+	}
+	if level, ok := settings.ModelThinkingLevels[providerID+"/"+modelID]; ok {
+		return level
+	}
+	if settings.DefaultThinkingSet {
+		return settings.DefaultThinking
+	}
+	return carried
 }
 
 // ResolveCredential supports literal and environment-reference forms.

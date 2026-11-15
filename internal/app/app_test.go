@@ -454,7 +454,13 @@ func TestAppProcess(t *testing.T) {
 		return
 	}
 	args := []string{"--deny-project", "--tools", "read"}
-	if testTools := os.Getenv("PSI_APP_TEST_TOOLS"); testTools != "" {
+	if raw := os.Getenv("PSI_APP_TEST_ARGS"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &args); err != nil {
+			fmt.Fprintln(os.Stderr, "invalid PSI_APP_TEST_ARGS:", err)
+			os.Exit(1)
+		}
+	}
+	if testTools := os.Getenv("PSI_APP_TEST_TOOLS"); testTools != "" && len(args) > 2 {
 		args[2] = testTools
 	}
 	if err := Run(args, "test"); err != nil {

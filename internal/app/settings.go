@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -11,6 +12,8 @@ import (
 	"strings"
 
 	"psi/internal/config"
+	"psi/internal/provider"
+	"psi/internal/session"
 	"psi/internal/terminal"
 	pitheme "psi/internal/theme"
 )
@@ -256,7 +259,35 @@ func (r *runtime) settingsEntries() []settingsEntry {
 				return r.applyColorMode(console, setting)
 			},
 		},
+		{
+			item: terminal.SettingsItem{
+				ID:          "model-thinking",
+				Label:       "Default thinking level per model",
+				Description: "Override the default thinking level for specific models",
+				Values:      []terminal.SettingsValue{{Label: modelThinkingSummary(r), Value: modelThinkingSummary(r)}},
+			},
+			apply: func(*runtime, *terminal.Console, terminal.SettingsValue) error {
+				return nil
+			},
+		},
 	}
+}
+
+func modelThinkingSummary(r *runtime) string {
+	count := len(r.settings.ModelThinkingLevels)
+	if count == 0 {
+		return "none"
+	}
+	return strconv.Itoa(count) + " configured"
+}
+
+// globalThinkingDefault is the effective global default shown to the picker.
+// An empty configured value behaves as off, matching resolution.
+func (r *runtime) globalThinkingDefault() string {
+	if r.settings.DefaultThinkingSet && r.settings.DefaultThinking != "" {
+		return r.settings.DefaultThinking
+	}
+	return "off"
 }
 
 func intSettingValues(labels []string, values []int, current int) ([]terminal.SettingsValue, int) {
@@ -305,16 +336,119 @@ func (r *runtime) persistSettingsValue(path []string, value any) error {
 	if path == nil {
 		return nil
 	}
-	if r.agentDir == "" {
-		return fmt.Errorf("agent directory is unavailable")
-	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	return config.UpdateUserSettings(filepath.Join(r.agentDir, "settings.json"), []config.SettingsUpdate{
-		{Path: path, Value: raw},
-	})
+	return r.writeUserSettings([]config.SettingsUpdate{{Path: path, Value: raw}})
+}
+
+// writeUserSettings applies settings updates to the agent settings file.
+func (r *runtime) writeUserSettings(updates []config.SettingsUpdate) error {
+	if r.agentDir == "" {
+		return fmt.Errorf("agent directory is unavailable")
+	}
+	return config.UpdateUserSettings(filepath.Join(r.agentDir, "settings.json"), updates)
+}
+
+const modelThinkingClearChoice = "(clear override)"
+
+// modelThinkingLevelItems builds the level choices for one target model and
+// appends a clear row when that model already has an override.
+func modelThinkingLevelItems(r *runtime, providerID, modelID string, meta config.ModelMeta) []session.SessionInfo {
+	pm := providerModel(providerID, meta)
+	levels := provider.SupportedThinking(pm)
+	items := make([]session.SessionInfo, 0, len(levels)+1)
+	for _, level := range levels {
+		items = append(items, session.SessionInfo{ID: level, FirstMessage: provider.ThinkingDescription(pm, level)})
+	}
+	if _, exists := r.settings.ModelThinkingLevels[providerID+"/"+modelID]; exists {
+		items = append(items, session.SessionInfo{ID: modelThinkingClearChoice, FirstMessage: "Revert to global default (" + r.globalThinkingDefault() + ")"})
+	}
+	return items
+}
+
+// applyModelThinkingLevel writes or clears one per-model default. A change for
+// the live model also applies to the current session; another model waits for
+// its next switch.
+func (r *runtime) applyModelThinkingLevel(target, level string, out io.Writer) error {
+	providerID, modelID, found := strings.Cut(target, "/")
+	providerID, modelID = strings.TrimSpace(providerID), strings.TrimSpace(modelID)
+	if !found || providerID == "" || modelID == "" {
+		return fmt.Errorf("invalid model %q", target)
+	}
+	meta, err := r.models.SelectModel(providerID, modelID)
+	if err != nil {
+		return err
+	}
+	clear := level == modelThinkingClearChoice
+	update := config.SettingsUpdate{Path: []string{"modelThinkingLevels", target}}
+	if clear {
+		update.Remove = true
+	} else {
+		pm := providerModel(providerID, meta)
+		supported := false
+		for _, candidate := range provider.SupportedThinking(pm) {
+			if candidate == level {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return fmt.Errorf("unsupported thinking level %q for %s/%s", level, providerID, modelID)
+		}
+		raw, err := json.Marshal(level)
+		if err != nil {
+			return err
+		}
+		update.Value = raw
+	}
+	current := providerID == r.ov.Provider && meta.ID == r.ov.Model
+	if current {
+		sessionLevel := level
+		if clear {
+			sessionLevel = r.globalThinkingDefault()
+		}
+		sessionLevel = provider.ClampThinkingLevel(r.cfg.Model, sessionLevel)
+		if _, err := r.command(&terminal.Command{Name: "thinking", Arg: sessionLevel}, out); err != nil {
+			return err
+		}
+	}
+	if err := r.writeUserSettings([]config.SettingsUpdate{update}); err != nil {
+		if current {
+			return fmt.Errorf("Saved for this session only: %w", err)
+		}
+		return fmt.Errorf("Failed to save model thinking default: %w", err)
+	}
+	levels := maps.Clone(r.settings.ModelThinkingLevels)
+	if clear {
+		delete(levels, target)
+	} else {
+		if levels == nil {
+			levels = map[string]string{}
+		}
+		levels[target] = level
+	}
+	r.settings.ModelThinkingLevels = levels
+	return nil
+}
+
+// saveThinkingDefault applies a level to the live session and persists it as
+// the global default. A failed write keeps the session change but saves none.
+func (r *runtime) saveThinkingDefault(level string, out io.Writer) error {
+	if _, err := r.command(&terminal.Command{Name: "thinking", Arg: level}, out); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(level)
+	if err != nil {
+		return err
+	}
+	if err := r.writeUserSettings([]config.SettingsUpdate{{Path: []string{"defaultThinkingLevel"}, Value: raw}}); err != nil {
+		return fmt.Errorf("Saved for this session only: %w", err)
+	}
+	r.settings.DefaultThinking = level
+	r.settings.DefaultThinkingSet = true
+	return nil
 }
 
 func (r *runtime) handleSettingsCommand(arg string, out io.Writer) (bool, error) {

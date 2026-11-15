@@ -304,3 +304,39 @@ func TestPickerHelpTextFitsNarrowWidths(t *testing.T) {
 		t.Fatalf("narrow picker kept the wide key hint: %q", joined)
 	}
 }
+
+func TestThinkingPickerAdvertisesSaveDefaultOnlyForPlainThinking(t *testing.T) {
+	items := []session.SessionInfo{{ID: "off", FirstMessage: "disabled"}, {ID: "high", FirstMessage: "effective effort high"}}
+	plain := NewSelector(items, "off")
+	plain.Thinking = true
+	text := strings.Join(plain.RenderPickerRows(80, 19, true), "\n")
+	if !strings.Contains(text, "Ctrl+S save default") {
+		t.Fatalf("plain thinking picker lost the save default hint: %q", text)
+	}
+	for _, width := range []int{20, 30} {
+		rows := plain.RenderPickerRows(width, 19, true)
+		for _, row := range rows {
+			if terminal.CellWidth(row) > width {
+				t.Fatalf("thinking help overflowed width %d: %q (%d)", width, row, terminal.CellWidth(row))
+			}
+		}
+	}
+
+	perModel := NewSelector(items, "off")
+	perModel.Thinking = true
+	perModel.ModelThinkingLevel = true
+	if strings.Contains(strings.Join(perModel.RenderPickerRows(80, 19, true), "\n"), "Ctrl+S") {
+		t.Fatal("per-model level picker advertised the global save key")
+	}
+
+	models := NewSelector([]session.SessionInfo{{ID: "anthropic/m", FirstMessage: "credential available"}}, "anthropic/m")
+	models.Models = true
+	if strings.Contains(strings.Join(models.RenderPickerRows(80, 19, true), "\n"), "Ctrl+S") {
+		t.Fatal("model picker advertised the thinking save key")
+	}
+
+	sessions := NewSelector(items, "")
+	if strings.Contains(strings.Join(sessions.RenderPickerRows(80, 19, true), "\n"), "Ctrl+S") {
+		t.Fatal("session picker advertised the thinking save key")
+	}
+}

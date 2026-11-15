@@ -32,7 +32,7 @@ func (r *runtime) cycleModel(direction int) (string, error) {
 	nextModel := models[current]
 	next := r.ov
 	next.Provider, next.Model = nextModel.provider, nextModel.option.Model.ID
-	next.Thinking = r.thinkingForModelSwitch()
+	next.ThinkingExplicit = false
 
 	candidate := *r
 	candidate.prov = nil

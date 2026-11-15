@@ -18,6 +18,8 @@ import (
 
 	"github.com/creack/pty"
 
+	"psi/internal/config"
+	"psi/internal/provider"
 	"psi/internal/testutil"
 )
 
@@ -316,4 +318,199 @@ func TestActualAppSettingsShortTerminal(t *testing.T) {
 	if stored.Terminal["trueColor"] != true {
 		t.Fatalf("terminal.trueColor = %v\n%s", stored.Terminal["trueColor"], data)
 	}
+}
+
+func TestActualAppModelThinkingDefaults(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("app settings workflow needs a Unix PTY")
+	}
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	writeAppFile(t, settingsPath, `{"defaultProvider":"anthropic","defaultModel":"local-model","compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"local-model","reasoning":true,"maxTokens":64000,"contextWindow":200000}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+
+	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := models.SelectModel("anthropic", "local-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	levels := provider.SupportedThinking(providerModel("anthropic", meta))
+	if len(levels) < 2 {
+		t.Fatalf("fixture advertises %d thinking levels, want at least 2", len(levels))
+	}
+	want := levels[1]
+
+	openLastSettingsRow := func(session *settingsAppSession) {
+		session.write("/settings\r")
+		session.wait("Auto-compact")
+		session.write(strings.Repeat("\x1b[B", 9))
+		session.waitScreen("→ Default thinking level per model")
+		session.write("\r")
+	}
+
+	session := startSettingsApp(t, home, agentDir, ws)
+	session.wait("/ commands")
+	session.waitEditor()
+	openLastSettingsRow(session)
+
+	// The active model is already selected in the model picker.
+	session.waitScreen("local-model")
+	session.write("\r")
+	// Down once from the first supported level.
+	session.waitScreen("minimal")
+	session.write("\x1b[B\r")
+	session.waitScreen("1 configured")
+	session.write("\x03")
+	session.waitEditor()
+	session.write("/session\r")
+	session.waitScreen("continuation: ok")
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Levels map[string]string `json:"modelThinkingLevels"`
+	}
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Levels["anthropic/local-model"] != want {
+		t.Fatalf("stored level = %q, want %q in %s", stored.Levels["anthropic/local-model"], want, data)
+	}
+
+	// Cancel from the model step, then from the level step. Each must return
+	// to settings; /session proves no hidden selector consumed later input.
+	openLastSettingsRow(session)
+	session.waitScreen("local-model")
+	session.write("\x03")
+	session.waitScreen("Default thinking level per model")
+	session.write("\x03")
+	session.waitEditor()
+	session.write("/session\r")
+	session.waitScreen("continuation: ok")
+
+	openLastSettingsRow(session)
+	session.waitScreen("local-model")
+	session.write("\r")
+	session.waitScreen("minimal")
+	session.write("\x03")
+	session.waitScreen("Default thinking level per model")
+	session.write("\x03")
+	session.waitEditor()
+	session.write("/session\r")
+	session.waitScreen("continuation: ok")
+
+	data, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final struct {
+		Levels  map[string]string `json:"modelThinkingLevels"`
+		Default string            `json:"defaultThinkingLevel"`
+	}
+	if err := json.Unmarshal(data, &final); err != nil {
+		t.Fatal(err)
+	}
+	if len(final.Levels) != 1 || final.Levels["anthropic/local-model"] != want {
+		t.Fatalf("cancelled flow changed the map: %s", data)
+	}
+	if final.Default != "" {
+		t.Fatalf("cancelled flow wrote a global default: %s", data)
+	}
+
+	session.quit()
+}
+
+func TestActualAppSaveThinkingDefault(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("app settings workflow needs a Unix PTY")
+	}
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	writeAppFile(t, settingsPath, `{"defaultProvider":"anthropic","defaultModel":"local-model","compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"local-model","reasoning":true,"maxTokens":64000,"contextWindow":200000}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+
+	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := models.SelectModel("anthropic", "local-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	levels := provider.SupportedThinking(providerModel("anthropic", meta))
+	if len(levels) < 2 {
+		t.Fatalf("fixture advertises %d thinking levels, want at least 2", len(levels))
+	}
+	want := levels[1]
+
+	session := startSettingsApp(t, home, agentDir, ws)
+	session.wait("/ commands")
+	session.waitEditor()
+	session.write("/thinking\r")
+	session.waitScreen("Thinking levels")
+	session.write("\x1b[B\x13")
+	session.waitScreen("Saved default thinking level")
+	session.waitEditor()
+	session.write("/session\r")
+	session.waitScreen("thinking " + want)
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Default string `json:"defaultThinkingLevel"`
+	}
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Default != want {
+		t.Fatalf("defaultThinkingLevel = %q, want %q in %s", stored.Default, want, data)
+	}
+
+	// The per-model level picker shares the Thinking rendering flag but must
+	// not honor Ctrl+S. Cancel returns to settings.
+	session.write("/settings\r")
+	session.wait("Auto-compact")
+	session.write(strings.Repeat("\x1b[B", 9))
+	session.waitScreen("→ Default thinking level per model")
+	session.write("\r")
+	session.waitScreen("local-model")
+	session.write("\r")
+	session.waitScreen("Thinking levels")
+	session.write("\x13\x03")
+	session.waitScreen("Default thinking level per model")
+	session.write("\x03")
+	session.waitEditor()
+	session.write("/session\r")
+	session.waitScreen("continuation: ok")
+
+	data, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after struct {
+		Default string                     `json:"defaultThinkingLevel"`
+		Levels  map[string]json.RawMessage `json:"modelThinkingLevels"`
+	}
+	if err := json.Unmarshal(data, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Default != want {
+		t.Fatalf("per-model Ctrl+S changed the global default to %q: %s", after.Default, data)
+	}
+	if len(after.Levels) != 0 {
+		t.Fatalf("per-model Ctrl+S wrote a per-model entry: %s", data)
+	}
+
+	session.quit()
 }

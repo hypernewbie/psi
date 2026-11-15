@@ -22,6 +22,10 @@ type Selector struct {
 	PageSize int
 	Models   bool
 	Thinking bool
+	// ModelThinking marks the model picker in the per-model default flow.
+	ModelThinking bool
+	// ModelThinkingLevel marks the level picker in that flow.
+	ModelThinkingLevel bool
 
 	Selected     int
 	SelectedID   string
@@ -271,9 +275,25 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		appendRow("  "+s.Filtered[s.Selected].FirstMessage, terminal.TokenMuted)
 	}
 	if help {
-		appendRow(pickerHelpText(width), terminal.TokenMuted)
+		hint := pickerHelpText(width)
+		if s.Thinking && !s.ModelThinkingLevel {
+			hint = thinkingPickerHelpText(width)
+		}
+		appendRow(hint, terminal.TokenMuted)
 	}
 	return rows
+}
+
+// thinkingPickerHelpText adds the save-default key to the plain thinking
+// picker. The per-model level picker keeps the shared hint.
+func thinkingPickerHelpText(width int) string {
+	return terminal.FitHint(width,
+		"↑/↓ select · PageUp/PageDown move · Enter apply · Ctrl+S save default · Esc cancel",
+		"↑↓ select · PgUp/PgDn · Enter · Ctrl+S save default · Esc",
+		"↑↓ · Enter · Ctrl+S · Esc",
+		"Enter Ctrl+S Esc",
+		"Enter Esc",
+	)
 }
 
 // pickerHelpText keeps the key hint on one row. A narrow terminal gets a

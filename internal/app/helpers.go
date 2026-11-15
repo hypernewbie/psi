@@ -15,14 +15,18 @@ import (
 )
 
 func modelSelector(r *runtime) *Selector {
+	selector := NewSelector(modelSelectorItems(r), r.ov.Provider+"/"+r.ov.Model)
+	selector.Models = true
+	return selector
+}
+
+func modelSelectorItems(r *runtime) []session.SessionInfo {
 	var items []session.SessionInfo
 	for _, model := range r.usableModels() {
 		m := model.option.Model
 		items = append(items, session.SessionInfo{ID: model.provider + "/" + m.ID, FirstMessage: fmt.Sprintf("%s; %s, context %d, output %d", model.credential, m.API, m.ContextWindow, m.MaxTokens)})
 	}
-	selector := NewSelector(items, r.ov.Provider+"/"+r.ov.Model)
-	selector.Models = true
-	return selector
+	return items
 }
 
 // usableModel is one model the session can use, with the credential detail

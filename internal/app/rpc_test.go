@@ -634,3 +634,24 @@ func TestRPCRunRPCGuards(t *testing.T) {
 		t.Fatalf("resume accepted: %v", err)
 	}
 }
+
+func TestRPCSetModelAppliesPerModelThinkingDefault(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-rpc-default")
+	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
+	meta := s.r.models.Providers["anthropic"]
+	for i := range meta.Models {
+		if meta.Models[i].ID == "rpc-test-model-2" {
+			meta.Models[i].MaxTokens = 16384
+		}
+	}
+	s.r.models.Providers["anthropic"] = meta
+	s.r.settings.ModelThinkingLevels = map[string]string{"anthropic/rpc-test-model-2": "medium"}
+
+	resp := s.handle(rpcCommand{ID: strptr("m1"), Type: "set_model", Provider: "anthropic", ModelID: "rpc-test-model-2"})
+	if resp == nil || !resp.Success {
+		t.Fatalf("set_model = %+v", resp)
+	}
+	if s.r.ov.Model != "rpc-test-model-2" || s.r.ov.Thinking != "medium" {
+		t.Fatalf("switch selected %s at %q, want medium", s.r.ov.Model, s.r.ov.Thinking)
+	}
+}

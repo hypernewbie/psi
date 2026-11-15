@@ -309,3 +309,134 @@ func TestUpdateUserSettingsRefusesNonObjectParent(t *testing.T) {
 		t.Fatalf("file changed: %q", data)
 	}
 }
+
+func removeSetting(t *testing.T, path string, parts ...string) error {
+	t.Helper()
+	return UpdateUserSettings(path, []SettingsUpdate{{Path: parts, Remove: true}})
+}
+
+func TestUpdateUserSettingsRemovesNestedKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeSettingsFileForTest(t, path, `{"modelThinkingLevels":{"anthropic/a":"low","anthropic/b":"high","z":1},"theme":"dark"}`, 0o600)
+
+	if err := removeSetting(t, path, "modelThinkingLevels", "anthropic/b"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Levels map[string]json.RawMessage `json:"modelThinkingLevels"`
+		Theme  string                     `json:"theme"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Levels) != 2 || string(raw.Levels["anthropic/a"]) != `"low"` || string(raw.Levels["z"]) != "1" {
+		t.Fatalf("nested removal left %v\n%s", raw.Levels, data)
+	}
+	if raw.Theme != "dark" {
+		t.Fatalf("theme = %q", raw.Theme)
+	}
+	text := string(data)
+	if strings.Index(text, `"anthropic/a"`) > strings.Index(text, `"z"`) {
+		t.Fatalf("nested order not preserved:\n%s", text)
+	}
+	if strings.Contains(text, `"anthropic/b"`) {
+		t.Fatalf("removed key remains:\n%s", text)
+	}
+}
+
+func TestUpdateUserSettingsRemovesEmptyParent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeSettingsFileForTest(t, path, `{"theme":"dark","modelThinkingLevels":{"anthropic/a":"low"}}`, 0o600)
+
+	if err := removeSetting(t, path, "modelThinkingLevels", "anthropic/a"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "modelThinkingLevels") {
+		t.Fatalf("empty parent remains:\n%s", data)
+	}
+	if string(data) != "{\n  \"theme\": \"dark\"\n}" {
+		t.Fatalf("file = %q", data)
+	}
+}
+
+func TestUpdateUserSettingsRemovesTopLevelKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeSettingsFileForTest(t, path, `{"theme":"dark","outputPad":1}`, 0o600)
+
+	if err := removeSetting(t, path, "theme"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "{\n  \"outputPad\": 1\n}" {
+		t.Fatalf("file = %q", data)
+	}
+}
+
+func TestUpdateUserSettingsRemoveMissingKeyIsNoOp(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		file  string
+		parts []string
+	}{
+		{"missing top-level", `{"theme":"dark"}`, []string{"missing"}},
+		{"missing parent", `{"theme":"dark"}`, []string{"modelThinkingLevels", "x"}},
+		{"null parent", `{"modelThinkingLevels":null}`, []string{"modelThinkingLevels", "x"}},
+		{"missing child", `{"modelThinkingLevels":{"anthropic/a":"low"}}`, []string{"modelThinkingLevels", "anthropic/b"}},
+		{"empty parent", `{"modelThinkingLevels":{}}`, []string{"modelThinkingLevels", "x"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			writeSettingsFileForTest(t, path, tc.file, 0o600)
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := removeSetting(t, path, tc.parts...); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+				t.Fatal("no-op removal rewrote the file")
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != tc.file {
+				t.Fatalf("file changed: %q", data)
+			}
+		})
+	}
+}
+
+func TestUpdateUserSettingsRemoveRejectsNonObjectParent(t *testing.T) {
+	for _, parent := range []string{`"text"`, `[1,2]`} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		content := `{"modelThinkingLevels":` + parent + `}`
+		writeSettingsFileForTest(t, path, content, 0o600)
+		if err := removeSetting(t, path, "modelThinkingLevels", "x"); err == nil || !strings.Contains(err.Error(), "must be an object") {
+			t.Fatalf("parent %s: error = %v", parent, err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != content {
+			t.Fatalf("parent %s: file changed: %q", parent, data)
+		}
+	}
+}
