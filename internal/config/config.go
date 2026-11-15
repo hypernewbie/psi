@@ -136,7 +136,7 @@ func defaultSettings() Settings {
 		ModelThinkingLevels:     map[string]string{},
 		SteeringMode:            "one-at-a-time",
 		FollowUpMode:            "one-at-a-time",
-		DefaultTools:            []string{"read", "bash", "edit", "write"},
+		DefaultTools:            []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"},
 		EnableSkills:            true,
 		SoftWrap:                true,
 		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
@@ -634,14 +634,14 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 // resolveTools implements Pi defaultTools semantics: plain names replace the
 // inherited selection; +name/-name add or remove.
 func resolveTools(list []string) ([]string, error) {
-	return ResolveTools(list, []string{"read", "bash", "edit", "write"})
+	return ResolveTools(list, []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"})
 }
 
 func ResolveTools(list, inherited []string) ([]string, error) {
 	if len(list) == 0 {
 		return []string{}, nil
 	}
-	known := map[string]bool{"read": true, "bash": true, "edit": true, "write": true}
+	known := map[string]bool{"read": true, "bash": true, "edit": true, "write": true, "web_search": true, "fetch_content": true, "get_search_content": true}
 	hasPlain := false
 	for _, t := range list {
 		if t != "" && t[0] != '+' && t[0] != '-' {
@@ -687,7 +687,7 @@ func ResolveTools(list, inherited []string) ([]string, error) {
 		}
 	}
 	var out []string
-	for _, k := range []string{"read", "bash", "edit", "write"} {
+	for _, k := range []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"} {
 		if set[k] {
 			out = append(out, k)
 		}
@@ -1346,7 +1346,7 @@ func ancestorDirs(cwd string) []string {
 }
 
 // AssemblePrompt builds the effective system prompt: short psi base for the
-// four tools + instructions + workspace + skill descriptions. Deterministic.
+// selected tools + instructions + workspace + skill descriptions. Deterministic.
 func AssemblePrompt(cwd string, instructions []InstructionFile, skillDescs []string, tools []string) string {
 	return AssemblePromptWithOverrides(cwd, instructions, skillDescs, tools, "", false, nil)
 }

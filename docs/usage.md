@@ -148,6 +148,13 @@ environment and returns the last 2000 lines or 50 KiB. If a timeout occurs
 after the shell has exited while a background process keeps writing output,
 the timeout message includes the shell's exit code and elapsed time.
 
+## Web access
+
+`web_search` finds pages through SearXNG or Exa. `fetch_content` fetches a URL
+or a batch of up to 20. `get_search_content` pages retained text by
+`responseId`. Web tools read `web-search.json`; see [Web access](web.md) for
+configuration, limits, and the network guard.
+
 ## Adjust the terminal
 
 psi is inline in the terminal by default. `--tui-mode regular` and `--mode text`

@@ -168,3 +168,25 @@ func TestCwdSectionPreservesWhitespace(t *testing.T) {
 		t.Fatalf("cwd whitespace was not preserved: %q", rendered)
 	}
 }
+
+func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
+	tools := []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"}
+	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, tools, "", false, nil))
+	for _, want := range []string{
+		"web_search: Search the web with one to three queries",
+		"fetch_content: Fetch one or up to 20 public HTTP(S) URLs",
+		"Batch up to three queries",
+		"Batch up to 20 URLs",
+		"Search snapshots keep per-query order",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+	search := strings.Index(prompt, "- web_search:")
+	fetch := strings.Index(prompt, "- fetch_content:")
+	content := strings.Index(prompt, "- get_search_content:")
+	if search < 0 || fetch < 0 || content < 0 || !(search < fetch && fetch < content) {
+		t.Fatalf("web tool order: %d %d %d", search, fetch, content)
+	}
+}

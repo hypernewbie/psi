@@ -1,0 +1,365 @@
+package webaccess
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+type fakeFS struct {
+	files map[string]string
+}
+
+func newEnv(t *testing.T, vars, files map[string]string) (Env, *fakeFS) {
+	t.Helper()
+	fs := &fakeFS{files: map[string]string{}}
+	for name, body := range files {
+		fs.files[name] = body
+	}
+	home := "/home/tester"
+	env := Env{
+		HomeDir: home,
+		LookupEnv: func(key string) (string, bool) {
+			v, ok := vars[key]
+			return v, ok
+		},
+		Stat: func(path string) (os.FileInfo, error) {
+			if _, ok := fs.files[path]; !ok {
+				return nil, os.ErrNotExist
+			}
+			return fakeInfo{name: filepath.Base(path)}, nil
+		},
+		ReadFile: func(path string) ([]byte, error) {
+			body, ok := fs.files[path]
+			if !ok {
+				return nil, os.ErrNotExist
+			}
+			return []byte(body), nil
+		},
+	}
+	return env, fs
+}
+
+type fakeInfo struct{ name string }
+
+func (f fakeInfo) Name() string       { return f.name }
+func (f fakeInfo) Size() int64        { return 1 }
+func (f fakeInfo) Mode() os.FileMode  { return 0o644 }
+func (f fakeInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeInfo) IsDir() bool        { return false }
+func (f fakeInfo) Sys() any           { return nil }
+
+func TestResolvePathPrecedence(t *testing.T) {
+	xdgFile := "/xdg/pi/web-search.json"
+	legacy := "/home/tester/.pi/web-search.json"
+	agent := "/home/tester/.pi/agent/web-search.json"
+
+	cases := []struct {
+		name  string
+		vars  map[string]string
+		files map[string]string
+		want  string
+	}{
+		{"agent dir", map[string]string{"PI_CODING_AGENT_DIR": "/explicit"}, nil, "/explicit/web-search.json"},
+		{"xdg existing", map[string]string{"XDG_CONFIG_HOME": "/xdg"}, map[string]string{xdgFile: "{}", legacy: "{}"}, xdgFile},
+		{"xdg falls to legacy", map[string]string{"XDG_CONFIG_HOME": "/xdg"}, map[string]string{legacy: "{}"}, legacy},
+		{"xdg no files", map[string]string{"XDG_CONFIG_HOME": "/xdg"}, nil, xdgFile},
+		{"agent existing", nil, map[string]string{agent: "{}", legacy: "{}"}, agent},
+		{"legacy fallback", nil, map[string]string{legacy: "{}"}, legacy},
+		{"default agent path", nil, nil, agent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, _ := newEnv(t, tc.vars, tc.files)
+			if got := ResolvePath(env); got != tc.want {
+				t.Fatalf("ResolvePath = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMissingFileUsesDefaults(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := Load(env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v, want none", diags)
+	}
+	if !cfg.FetchEnabled || cfg.FetchMode != "readable" {
+		t.Fatalf("defaults = %+v", cfg)
+	}
+	if cfg.MaxInlineChars != DefaultInlineChars || cfg.CacheMaxEntries != DefaultCacheEntries {
+		t.Fatalf("limits = %+v", cfg)
+	}
+}
+
+func TestUnsupportedCredentialFieldsAreIgnored(t *testing.T) {
+	body := `{"crawl4aiApiToken":"CANARY-TOKEN","firecrawlApiKey":"CANARY-FIRE","fetchRouting":{"providers":["crawl4ai"]},"provider":"auto"}`
+	env, _ := newEnv(t, nil, map[string]string{"/home/tester/.pi/agent/web-search.json": body})
+	cfg, diags := Load(env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if !cfg.FetchEnabled {
+		t.Fatal("fetch should stay enabled")
+	}
+	joined := strings.Join(diags, " ")
+	if strings.Contains(joined, "CANARY") {
+		t.Fatalf("diagnostics leaked a value: %s", joined)
+	}
+}
+
+func TestProviderAliasAndEnablementPrecedence(t *testing.T) {
+	body := `{
+		"provider":"searxng","searchProvider":"exa",
+		"webSearch":{"enabled":false},
+		"tools":{"fetchContent":{"enabled":false},"webSearch":{"enabled":true}},
+		"searxngBaseUrl":"https://searx.example/base/",
+		"fetch":{"allowedModes":["raw","readable","answer"],"defaultMode":"raw"}
+	}`
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(body), env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if cfg.Provider != "searxng" {
+		t.Fatalf("provider = %q", cfg.Provider)
+	}
+	if !cfg.SearchEnabled {
+		t.Fatal("tools.webSearch.enabled should override webSearch.enabled")
+	}
+	if cfg.FetchEnabled {
+		t.Fatal("tools.fetchContent.enabled=false must win")
+	}
+	if cfg.SearXNGBaseURL != "https://searx.example/base" {
+		t.Fatalf("base = %q", cfg.SearXNGBaseURL)
+	}
+	if cfg.FetchMode != "raw" || len(cfg.FetchModes) != 2 {
+		t.Fatalf("modes = %v default = %q", cfg.FetchModes, cfg.FetchMode)
+	}
+}
+
+func TestEnvironmentOverrides(t *testing.T) {
+	env, _ := newEnv(t, map[string]string{
+		"SEARXNG_BASE_URL": "https://env.example/searx",
+		"EXA_BASE_URL":     "https://exa.example/v1/",
+		"EXA_API_KEY":      "env-key",
+	}, map[string]string{"/home/tester/.pi/agent/web-search.json": `{
+		"searxngBaseUrl":"https://file.example",
+		"exaBaseUrl":"https://file-exa.example",
+		"exaApiKey":"literal-key"
+	}`})
+	cfg, diags := Load(env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if cfg.SearXNGBaseURL != "https://env.example/searx" {
+		t.Fatalf("searxng = %q", cfg.SearXNGBaseURL)
+	}
+	if cfg.ExaBaseURL != "https://exa.example/v1" {
+		t.Fatalf("exa = %q", cfg.ExaBaseURL)
+	}
+	if cfg.ExaAPIKey != "env-key" {
+		t.Fatalf("key = %q", cfg.ExaAPIKey)
+	}
+}
+
+func TestEmptySearXNGOverrideDisablesProvider(t *testing.T) {
+	env, _ := newEnv(t, map[string]string{"SEARXNG_BASE_URL": ""}, map[string]string{"/home/tester/.pi/agent/web-search.json": `{"searxngBaseUrl":"https://file.example","provider":"searxng"}`})
+	cfg, _ := Load(env)
+	if cfg.SearXNGBaseURL != "" || cfg.SearXNGAvailable {
+		t.Fatalf("searxng should be unconfigured: %+v", cfg)
+	}
+	if err := cfg.ProviderError("searxng"); err == nil {
+		t.Fatal("explicit searxng selection must error")
+	}
+}
+
+func TestPlainHTTPRequiresLoopbackOrFlag(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"searxngBaseUrl":"http://searx.example"}`), env)
+	if len(diags) == 0 || cfg.SearXNGAvailable {
+		t.Fatalf("http base should be refused: %+v %v", cfg.SearXNGAvailable, diags)
+	}
+	cfg, _ = ParseConfig([]byte(`{"allowHttpBaseUrls":true,"searxngBaseUrl":"http://searx.example:8080"}`), env)
+	if cfg.SearXNGBaseURL != "http://searx.example:8080" {
+		t.Fatalf("base = %q", cfg.SearXNGBaseURL)
+	}
+	cfg, _ = ParseConfig([]byte(`{"searxngBaseUrl":"http://127.0.0.1:8888"}`), env)
+	if cfg.SearXNGBaseURL != "http://127.0.0.1:8888" {
+		t.Fatalf("loopback base = %q", cfg.SearXNGBaseURL)
+	}
+}
+
+func TestHTTPOverrideValidation(t *testing.T) {
+	env, _ := newEnv(t, map[string]string{"PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS": "maybe"}, nil)
+	cfg, diags := ParseConfig([]byte(`{}`), env)
+	if len(diags) == 0 {
+		t.Fatal("invalid override must produce a diagnostic")
+	}
+	if cfg.FetchEnabled || cfg.SearchEnabled || cfg.ContentEnabled {
+		t.Fatal("invalid shared value must disable all web tools")
+	}
+	env, _ = newEnv(t, map[string]string{"PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS": " TRUE "}, nil)
+	cfg, _ = ParseConfig([]byte(`{"searxngBaseUrl":"http://searx.example"}`), env)
+	if cfg.SearXNGBaseURL != "http://searx.example" {
+		t.Fatalf("override should allow http, got %q", cfg.SearXNGBaseURL)
+	}
+}
+
+func TestMalformedSharedValuesDisableAll(t *testing.T) {
+	cases := []string{
+		`{"allowHttpBaseUrls":"yes"}`,
+		`{"maxInlineContentChars":1.5}`,
+		`{"ssrf":{"allowRanges":["not-a-cidr"]}}`,
+		`{"cache":{"maxEntries":0}}`,
+		`{"cache":{"maxBytes":1e30}}`,
+		`{"tools":{"fetchContent":{"enabled":"yes"}}}`,
+		`[]`,
+		`{"webSearch":`, // truncated JSON
+	}
+	for _, body := range cases {
+		env, _ := newEnv(t, nil, nil)
+		cfg, diags := ParseConfig([]byte(body), env)
+		if len(diags) == 0 {
+			t.Errorf("%s: expected a diagnostic", body)
+		}
+		if cfg.FetchEnabled || cfg.SearchEnabled || cfg.ContentEnabled {
+			t.Errorf("%s: web tools must be disabled", body)
+		}
+	}
+}
+
+func TestFetchModeFailuresDisableFetchOnly(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, _ := ParseConfig([]byte(`{"fetch":{"allowedModes":["answer"],"defaultMode":"readable"}}`), env)
+	if cfg.FetchEnabled {
+		t.Fatal("fetch must be disabled")
+	}
+	cfg, _ = ParseConfig([]byte(`{"fetch":{"allowedModes":["readable"],"defaultMode":"raw"}}`), env)
+	if cfg.FetchEnabled {
+		t.Fatal("unsupported default must disable fetch")
+	}
+	if !cfg.SearchEnabled || !cfg.ContentEnabled {
+		t.Fatal("other tools must stay enabled")
+	}
+}
+
+func TestRoutingFailureDisablesSearchOnly(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, _ := ParseConfig([]byte(`{"provider":["searxng","exa"]}`), env)
+	if cfg.SearchEnabled {
+		t.Fatal("search must be disabled")
+	}
+	if !cfg.FetchEnabled || !cfg.ContentEnabled {
+		t.Fatal("fetch and content stay enabled")
+	}
+}
+
+func TestInlineLimitRules(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`{"maxInlineContentChars":500}`, DefaultInlineChars},
+		{`{"maxInlineContentChars":3000}`, 3000},
+		{`{"maxInlineContentChars":500000}`, maxInlineChars},
+	} {
+		cfg, _ := ParseConfig([]byte(tc.body), env)
+		if cfg.MaxInlineChars != tc.want {
+			t.Errorf("%s: got %d want %d", tc.body, cfg.MaxInlineChars, tc.want)
+		}
+	}
+}
+
+func TestAllowRangesNormalizeMappedIPv4(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"ssrf":{"allowRanges":["198.18.0.0/15","::ffff:10.0.0.0/104"]}}`), env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if len(cfg.AllowRanges) != 2 || !cfg.AllowRanges[1].Addr().Is4() || cfg.AllowRanges[1].Bits() != 8 {
+		t.Fatalf("ranges = %v", cfg.AllowRanges)
+	}
+}
+
+func TestCredentialRules(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"exaApiKey":"!security find-generic-password"}`), env)
+	if len(diags) == 0 || cfg.ExaAvailable {
+		t.Fatalf("command credential must be refused: %+v %v", cfg.ExaAvailable, diags)
+	}
+	for _, d := range diags {
+		if strings.Contains(d, "security find") {
+			t.Fatalf("diagnostic leaked command text: %s", d)
+		}
+	}
+
+	env, _ = newEnv(t, map[string]string{"EXA_API_KEY": "fallback"}, nil)
+	cfg, diags = ParseConfig([]byte(`{"exaApiKey":"$MISSING_KEY"}`), env)
+	if len(diags) == 0 || cfg.ExaAvailable {
+		t.Fatalf("missing $NAME must error despite EXA_API_KEY: %+v %v", cfg.ExaAvailable, diags)
+	}
+
+	env, _ = newEnv(t, map[string]string{"NAMED_KEY": "named"}, nil)
+	cfg, _ = ParseConfig([]byte(`{"exaApiKey":"$NAMED_KEY"}`), env)
+	if cfg.ExaAPIKey != "named" {
+		t.Fatalf("key = %q", cfg.ExaAPIKey)
+	}
+}
+
+func TestSearXNGHeaderValidationIsProviderLocal(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"searxngBaseUrl":"https://searx.example","searxngHeaders":{"X-Api-Key":"secret","x-api-key":"secret"},"exaApiKey":"keep"}`), env)
+	if cfg.SearXNGAvailable || cfg.SearXNGBaseURL != "" {
+		t.Fatal("duplicate header names must disable SearXNG")
+	}
+	if !cfg.ExaAvailable || cfg.ExaAPIKey != "keep" {
+		t.Fatal("Exa settings must survive a SearXNG header error")
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected a diagnostic")
+	}
+	for _, d := range diags {
+		if strings.Contains(d, "secret") || strings.Contains(d, "x-api-key") {
+			t.Fatalf("diagnostic leaked header detail: %s", d)
+		}
+	}
+
+	cfg, diags = ParseConfig([]byte(`{"searxngBaseUrl":"https://searx.example","searxngHeaders":{"Host":"evil"}}`), env)
+	if cfg.SearXNGAvailable {
+		t.Fatal("forbidden header must disable SearXNG")
+	}
+	for _, d := range diags {
+		if strings.Contains(strings.ToLower(d), "host") {
+			t.Fatalf("diagnostic leaked a header name: %s", d)
+		}
+	}
+}
+
+func TestUnsupportedKeysIgnored(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"futureKey":{"nested":[1,2]},"provider":"auto"}`), env)
+	if len(diags) != 0 || cfg.Provider != "auto" {
+		t.Fatalf("cfg=%+v diags=%v", cfg, diags)
+	}
+}
+
+func TestInvalidBaseURLRules(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	for _, base := range []string{
+		"ftp://searx.example", "https://user:pw@searx.example",
+		"https://searx.example/?q=1", "https://searx.example/#frag",
+		"https://", "https://searx.example:bad",
+	} {
+		cfg, diags := ParseConfig([]byte(`{"searxngBaseUrl":"`+base+`"}`), env)
+		if cfg.SearXNGAvailable {
+			t.Errorf("%q should be rejected", base)
+		}
+		if len(diags) == 0 {
+			t.Errorf("%q: missing diagnostic", base)
+		}
+	}
+}

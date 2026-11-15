@@ -2,7 +2,7 @@
 
 psi is a minimal AI coding agent for the terminal, written in Go. Give it a
 goal and a working folder, and it can read files, run shell commands, edit
-content, and work through multi-step tasks.
+content, search the web, fetch pages, and work through multi-step tasks.
 
 psi speaks Pi's session and settings formats, uses Pi's model catalog, and
 renders an inline terminal interface. It is not a Pi extension host: there is

@@ -14,17 +14,14 @@ import (
 	"psi/internal/session"
 	"psi/internal/skills"
 	"psi/internal/terminal"
+	"psi/internal/webaccess"
 )
 
 // activateSession loads the console-free core of startup: tool defaults, the
 // model catalog, instructions, skills, the assembled prompt, overrides, and
 // the opened session. Pickers stay with the caller: console and lifecycle are
 // only touched by the interactive resume selector.
-func activateSession(o Options, cwd, agentDir string, st *config.Settings, consent bool, console *terminal.Console, lifecycle *terminalLifecycle) (models *config.ModelsFile, sk []skills.Skill, diagnostics []skills.Diagnostic, prompt string, sections []config.PromptSection, ov config.StartupOverrides, store *session.Store, err error) {
-	return activateSessionWithStore(o, cwd, agentDir, st, consent, console, lifecycle, nil)
-}
-
-func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settings, consent bool, console *terminal.Console, lifecycle *terminalLifecycle, prepared *session.Store) (models *config.ModelsFile, sk []skills.Skill, diagnostics []skills.Diagnostic, prompt string, sections []config.PromptSection, ov config.StartupOverrides, store *session.Store, err error) {
+func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settings, consent bool, console *terminal.Console, lifecycle *terminalLifecycle, prepared *session.Store, web *webaccess.Client) (models *config.ModelsFile, sk []skills.Skill, diagnostics []skills.Diagnostic, prompt string, sections []config.PromptSection, ov config.StartupOverrides, store *session.Store, err error) {
 	if o.NoTools {
 		st.DefaultTools = []string{}
 	} else {
@@ -73,7 +70,7 @@ func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settin
 	for _, source := range o.AppendSystemPrompts {
 		appendSystemPrompts = append(appendSystemPrompts, resolveCLIPrompt(source))
 	}
-	sections = config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, st.DefaultTools, resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
+	sections = config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, filterPromptTools(st.DefaultTools, web), resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
 	prompt = config.RenderSections(sections)
 	ov = config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", *st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	if prepared != nil {
@@ -136,7 +133,12 @@ func runRPC(o Options, version string) error {
 		}
 	}
 	st := loaded.Settings
-	models, sk, _, prompt, sections, _, store, err := activateSessionWithStore(o, cwd, agentDir, &st, consent, nil, nil, preparedStore)
+	web, webDiagnostics := loadWebAccess()
+	defer web.CloseIdle()
+	for _, line := range webDiagnosticsLines(webDiagnostics) {
+		fmt.Fprintln(os.Stderr, line)
+	}
+	models, sk, _, prompt, sections, _, store, err := activateSessionWithStore(o, cwd, agentDir, &st, consent, nil, nil, preparedStore, web)
 	if err != nil {
 		return err
 	}
@@ -150,11 +152,14 @@ func runRPC(o Options, version string) error {
 		return err
 	}
 	r := &runtime{
-		store: store, version: version, options: o, settings: st,
+		store: store, version: version, options: o, settings: st, web: web,
 		models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir,
 		projectTrusted: consent,
 	}
 	cleanup := func() {
+		if r.web != nil {
+			r.web.CloseIdle()
+		}
 		if r.prov != nil {
 			r.prov.CloseIdle()
 		}

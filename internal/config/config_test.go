@@ -320,11 +320,11 @@ func TestDefaultToolsSemantics(t *testing.T) {
 	}
 	// +/- modifies.
 	got, err = resolveTools([]string{"-write"})
-	if err != nil || len(got) != 3 || containsStr(got, "write") {
+	if err != nil || len(got) != 6 || containsStr(got, "write") {
 		t.Errorf("remove: %v %v", got, err)
 	}
 	got, err = resolveTools([]string{"+write"})
-	if err != nil || len(got) != 4 {
+	if err != nil || len(got) != 7 {
 		t.Errorf("add: %v %v", got, err)
 	}
 	if _, err := resolveTools([]string{"exec"}); err == nil {
