@@ -44,10 +44,10 @@ var registry = map[string]Spec{
 		ID: "opencode-go", Name: "OpenCode Go", Auth: AuthAPIKey,
 		Environment: "OPENCODE_API_KEY", DefaultAPI: "",
 		Endpoints: map[string]string{
-			"anthropic-messages":   "https://opencode.ai/inference/go",
-			"google-generative-ai": "https://opencode.ai/inference/go/v1",
-			"openai-completions":   "https://opencode.ai/inference/go/v1",
-			"openai-responses":     "https://opencode.ai/inference/go/v1",
+			"anthropic-messages":   "https://opencode.ai/inference/go/anthropic",
+			"google-generative-ai": "https://opencode.ai/inference/go/google/v1beta",
+			"openai-completions":   "https://opencode.ai/inference/go/openai/v1",
+			"openai-responses":     "https://opencode.ai/inference/go/openai/v1",
 		},
 	},
 	"deepseek": {
@@ -124,7 +124,9 @@ var registry = map[string]Spec{
 
 // opencodeCachePaths contains only base paths observed in the pinned public
 // catalog and the Pi models-store schema used by this implementation. Matching
-// is exact; a cache entry cannot choose an arbitrary origin or subpath.
+// is exact; a cache entry cannot choose an arbitrary origin or subpath. The
+// shorter paths are the ones the previous catalog pin published, so a cache
+// that still carries them stays usable.
 var opencodeCachePaths = map[string]map[string]bool{
 	"anthropic-messages": {
 		"/inference/go":           true,

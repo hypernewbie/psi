@@ -82,7 +82,7 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 
 
 - **Anthropic Messages** uses `ANTHROPIC_API_KEY`; **MiniMax** uses `MINIMAX_API_KEY` and its `/anthropic` base path. Both use the Anthropic Messages stream format. MiniMax thinking controls and OpenCode `allowEmptySignature` follow model metadata.
-- **OpenCode Go** uses `OPENCODE_API_KEY`. Each model selects one registered API: Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses. Its catalog endpoint path is model-specific. Requests add `x-opencode-session` unless an explicit case-insensitive header overrides it.
+- **OpenCode Go** uses `OPENCODE_API_KEY`. Each model selects one registered API: Anthropic Messages, OpenAI Chat Completions, Google Generative AI, or generic OpenAI Responses. Its catalog endpoint path is model-specific: `/inference/go/anthropic`, `/inference/go/google/v1beta`, or `/inference/go/openai/v1`. Requests add `x-opencode-session` unless an explicit case-insensitive header overrides it.
 - **DeepSeek** uses `DEEPSEEK_API_KEY` with OpenAI Chat Completions. **Z.AI** uses `ZAI_API_KEY` with its coding Completions endpoint. Their reasoning and tool-stream behavior follows supported model metadata.
 - **Google Generative AI** uses `GEMINI_API_KEY`, `x-goog-api-key`, and the `:streamGenerateContent?alt=sse` route. Google Vertex and OAuth are not implemented.
 - **Kimi For Coding** uses `KIMI_API_KEY` with OpenAI Chat Completions at `https://api.kimi.com/coding/v1`. The bundled catalog carries Pi's effort map and always-thinking behavior. The Kimi OAuth login is not implemented.
