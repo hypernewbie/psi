@@ -406,6 +406,24 @@ func TestActualAppModelThinkingDefaults(t *testing.T) {
 	session.write("/session\r")
 	session.waitScreen("continuation: ok")
 
+	data, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final struct {
+		Levels  map[string]string `json:"modelThinkingLevels"`
+		Default string            `json:"defaultThinkingLevel"`
+	}
+	if err := json.Unmarshal(data, &final); err != nil {
+		t.Fatal(err)
+	}
+	if len(final.Levels) != 1 || final.Levels["anthropic/local-model"] != want {
+		t.Fatalf("cancelled flow changed the map: %s", data)
+	}
+	if final.Default != "" {
+		t.Fatalf("cancelled flow wrote a global default: %s", data)
+	}
+
 	session.quit()
 }
 
