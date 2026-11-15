@@ -86,6 +86,35 @@ func CommandDescriptions() map[string]string {
 	return descriptions
 }
 
+// ShellCommand is one interactive bang-prefixed shell submission. Exclude
+// means !!: the result is saved locally but excluded from model context.
+type ShellCommand struct {
+	Command string
+	Exclude bool
+}
+
+// ParseShellCommand recognizes only interactive editor "!command" and
+// "!!command" submissions. Empty prefixes are ordinary prompt text; triple
+// bang means an excluded command whose text starts with one bang.
+func ParseShellCommand(line string) (ShellCommand, bool) {
+	t := strings.TrimSpace(line)
+	if strings.HasPrefix(t, "!!") {
+		command := strings.TrimSpace(t[2:])
+		if command == "" {
+			return ShellCommand{}, false
+		}
+		return ShellCommand{Command: command, Exclude: true}, true
+	}
+	if strings.HasPrefix(t, "!") {
+		command := strings.TrimSpace(t[1:])
+		if command == "" {
+			return ShellCommand{}, false
+		}
+		return ShellCommand{Command: command}, true
+	}
+	return ShellCommand{}, false
+}
+
 // ParseCommand splits "/name arg". An unknown /command is ordinary user
 // text, like Pi: it is sent to the model as a prompt.
 func ParseCommand(line string) (*Command, bool) {
@@ -140,6 +169,7 @@ func HotkeysText() string {
 		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
 		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+O expand/collapse skill blocks and web cards (not saved) · Ctrl+C cancels run (idle: clear draft, empty exits)",
 		"  In /thinking: Ctrl+S saves the highlighted level as the global default",
+		"  !command runs locally · !!command also excludes its saved command/output from model context",
 		"  Ctrl+D delete/exit · paste literal, no submit",
 	}, "\n")
 }

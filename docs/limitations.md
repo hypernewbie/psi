@@ -18,7 +18,19 @@ Tools run with the current OS user permissions.
 Project consent and workspace paths do not provide a sandbox.
 Per-tool approval, a permission-policy language, and automatic Git operations are excluded.
 The shell tool intentionally inherits the psi process environment.
-Regression shell processes instead use an isolated environment.
+Interactive `!command` uses the same environment and permissions. Regression
+shell processes instead use an isolated environment.
+
+M1 shell limits: no RPC `bash`/`abort_bash`, no streamed terminal chunks, no
+shell replay formatter or shell-history recall, and no model/shell concurrency.
+`!!command` exclusion is a provider-context boundary, not secret storage: the
+local JSONL file still contains the command and output.
+
+The shell resolver differs from Pi on Unix: psi uses inherited `SHELL`, then
+`sh`, rather than Bash first. `PSI_SHELL` remains a psi-specific explicit
+override. On Windows, discovery order matches Git Bash, but cleanup stops only
+the leader and legacy WSL `System32`/`Sysnative` launchers are unsupported by
+the `-c` runner.
 
 ## Phi integration
 

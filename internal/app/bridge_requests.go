@@ -291,6 +291,9 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 	case req.Expired():
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
 		return
+	case h.r.shellActive:
+		req.ReplyCompact(pibridge.CompactRefused, "busy")
+		return
 	case h.r.store == nil, h.r.selector != nil:
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
 		return
@@ -368,6 +371,9 @@ func (h *bridgeHandler) startReload(req pibridge.Request, runBusy bool) {
 	switch {
 	case req.Expired():
 		req.ReplyReload(false, "unavailable")
+		return
+	case h.r.shellActive:
+		req.ReplyReload(false, "busy")
 		return
 	case h.r.store == nil, h.r.selector != nil:
 		req.ReplyReload(false, "unavailable")
@@ -546,7 +552,7 @@ func (h *bridgeHandler) invokeSkill(req pibridge.Request, runBusy bool) {
 		return
 	}
 	switch {
-	case h.prep != nil, req.Expired():
+	case h.prep != nil, req.Expired(), h.r.shellActive:
 		req.ReplyInvokeSkill(false, "unavailable")
 		return
 	case h.r.store == nil, h.r.state == StateStorageBlocked, h.r.state == StateCompacting, h.r.selector != nil:
@@ -564,7 +570,7 @@ func (h *bridgeHandler) invokeSkill(req pibridge.Request, runBusy bool) {
 // session, generation, and skill list still match what the request assumed.
 func (h *bridgeHandler) finishSkill(prep *bridgePrep, runBusy bool) {
 	switch {
-	case prep.err != nil, prep.expanded == "", prep.request.Expired():
+	case prep.err != nil, prep.expanded == "", prep.request.Expired(), h.r.shellActive:
 		prep.request.ReplyInvokeSkill(false, "unavailable")
 		return
 	case h.r.store == nil, h.r.generation != prep.gen, h.r.store.Header().ID != prep.session:
@@ -715,7 +721,7 @@ func (h *bridgeHandler) beginWork(req pibridge.Request, work func() (string, err
 func (h *bridgeHandler) settingsAllowed(req pibridge.Request, runBusy bool) bool {
 	r := h.r
 	if req.Expired() || h.runCancelling || r.reloadPending || r.store == nil || r.store.WriteError() != nil ||
-		r.selector != nil || r.settingsPicker != nil || r.login != nil {
+		r.selector != nil || r.settingsPicker != nil || r.login != nil || r.shellActive {
 		return false
 	}
 	switch r.state {

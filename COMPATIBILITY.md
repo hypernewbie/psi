@@ -58,7 +58,7 @@ Additional storage rules:
 | `defaultTools` | names listed under `--tools` in `psi --help`, with replacement and `+`/`-` | unknown names rejected |
 | `skills` | `skills` path subset; `enableSkillCommands` is parsed but not wired | instructions only, no install/run at discovery |
 | `compaction` | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides[provider/model].reserveTokens` | compatible entries, bounded summary; model-specific reserve |
-| `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |
+| `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables; shared by the `bash` tool and interactive `!`/`!!` |
 | `network` | idle timeout + bounded retries | one HTTP transport |
 | instructions | `AGENTS.override.md`, `AGENTS.md`, fallbacks, `SYSTEM.md`, `APPEND_SYSTEM.md` | documented discovery + consent |
 | `models.json` | endpoints, model metadata and overrides for supported providers; provider IDs that models.json declares | public snapshot and Pi cache. No network refresh |
@@ -131,7 +131,8 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 ## Platform
 
 - Linux and WSL2 have local runtime and PTY evidence (WSLg is not required; the TUI is text-only).
-- Shell for `bash` tool: `bash` on PATH, run in workspace cwd, process-group cancellation.
+- Shell for `bash` tool and `!`/`!!`: explicit `shellPath`, then `PSI_SHELL`; on Unix inherited `SHELL`, then `sh` (a deliberate Pi deviation, not Bash-first); on Windows Git Bash discovery only, then `bash.exe` on `PATH`. Bare names use PATH; relative executable paths with separators use the stored session cwd without lexical symlink cleaning. Legacy WSL `System32`/`Sysnative` launchers run command text over stdin. Unix uses process-group cleanup; Windows stops the leader only.
+- Interactive editor `!command` and `!!command` run serially in the session cwd, save one `bashExecution` entry, and make no provider request. `!!` excludes saved command/output from model context but not from the local JSONL file. Output is final-only (last 50 KiB/2000 lines); Esc/Ctrl+C and every exit path cancel and join. Refused admission restores the draft.
 - macOS is a build target. PLAN5 cross-build and app test-binary compilation passed for amd64 and arm64; native runtime acceptance remains open.
 - Windows portable and ConPTY evidence is recorded in `docs/ui-acceptance.md`. PLAN5 cross-build and app test-binary compilation passed. Unix-only coverage stays out: process-group cleanup, PTY harness tests, suspend/resume, and mode-bit tests. Windows stops the shell leader only. Descendants outlive cancellation.
 

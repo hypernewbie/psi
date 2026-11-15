@@ -12,6 +12,7 @@ import (
 func TestBashKillsDescendantsAndReturnsTail(t *testing.T) {
 	ws := t.TempDir()
 	reg := NewRegistry(ws)
+	reg.Bash.ShellPath = "bash"
 	start := time.Now()
 	res := reg.Bash.ExecuteCtx(context.Background(), Invocation{Name: Bash, Arguments: map[string]any{"command": "sleep 30 & wait", "timeout": 0.05}})
 	if !res.IsError || time.Since(start) > time.Second {

@@ -48,9 +48,11 @@ func TestReviewCancellationAfterLeaderExit(t *testing.T) {
 	pidPath := filepath.Join(dir, "leader.pid")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	reg := NewRegistry(dir)
+	reg.Bash.ShellPath = "bash"
 	done := make(chan Result, 1)
 	go func() {
-		done <- NewRegistry(dir).DispatchCtx(ctx, Invocation{Name: Bash, Arguments: map[string]any{
+		done <- reg.DispatchCtx(ctx, Invocation{Name: Bash, Arguments: map[string]any{
 			"command": "echo $$ > leader.pid; (for ((i=0;i<200;i++)); do printf x; sleep 0.02; done) &",
 		}})
 	}()

@@ -224,6 +224,9 @@ func startReviewProcess(t *testing.T, home, work, agentDir, binary, searchPath s
 
 func startReviewProcessEnv(t *testing.T, home, work, agentDir, binary, searchPath string, extraEnv []string, args ...string) *reviewPTY {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Join(home, "tmp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReviewAppProcess$")
 	if binary != "" {
 		executable, err := filepath.Abs(binary)
