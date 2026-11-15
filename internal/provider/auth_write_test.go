@@ -345,6 +345,30 @@ func TestAuthEntriesRejectsNonRegularFilesAndFollowsRegularSymlinks(t *testing.T
 	}
 }
 
+func TestDanglingAuthSymlinkFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("dangling symlink behavior is POSIX-only")
+	}
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.Symlink(filepath.Join(dir, "missing.json"), authPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	entries, err := AuthEntries(authPath)
+	if err == nil || entries != nil {
+		t.Fatalf("dangling auth symlink treated as missing: entries=%v err=%v", entries, err)
+	}
+	key, source, err := SelectProviderAPIKey(map[string]string{"DEEPSEEK_API_KEY": "fallback-key"}, authPath, "deepseek", "")
+	if err == nil || key != "" || source != "" {
+		t.Fatalf("dangling auth symlink allowed fallback: key=%q source=%q err=%v", key, source, err)
+	}
+	providers, err := StoredAPIKeyProviders(authPath)
+	if err == nil || providers != nil {
+		t.Fatalf("dangling auth symlink was reported as an empty logout list: providers=%v err=%v", providers, err)
+	}
+}
+
 func TestInvalidAuthDocumentRejectsCredentialFallbackAndLogoutListing(t *testing.T) {
 	cases := []struct {
 		name string

@@ -67,9 +67,6 @@ func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
 	authReads.Add(1)
 	data, readErr := readAuthShared(authPath)
 	if readErr != nil {
-		if os.IsNotExist(readErr) {
-			return nil, nil
-		}
 		if _, statErr := os.Lstat(authPath); os.IsNotExist(statErr) {
 			return nil, nil
 		}
