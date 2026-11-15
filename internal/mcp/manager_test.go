@@ -335,8 +335,15 @@ func TestManagerReloadNullRootKeepsAcceptedConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.Reload(Input{UserPath: path, Cwd: dir, ReadAvailable: true})
-	time.Sleep(300 * time.Millisecond)
-	snapshot := manager.Snapshot()
+	deadline := time.Now().Add(5 * time.Second)
+	var snapshot *Snapshot
+	for time.Now().Before(deadline) {
+		snapshot = manager.Snapshot()
+		if snapshot.ReloadError != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if _, ok := snapshot.Find("mcp__fixture__echo"); !ok {
 		t.Fatalf("malformed reload withdrew the accepted catalog: %+v", snapshot.Servers)
 	}
@@ -460,7 +467,7 @@ func TestManagerServerQueueDoesNotStarveAnotherServer(t *testing.T) {
 		manager.Wait()
 	})
 	snapshot := waitServerState(t, manager, "a", serverStateReady)
-	waitServerState(t, manager, "b", serverStateReady)
+	snapshot = waitServerState(t, manager, "b", serverStateReady)
 	slow, ok := snapshot.Find("mcp__a__slow")
 	if !ok {
 		t.Fatal("slow tool missing")

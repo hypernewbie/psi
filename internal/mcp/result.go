@@ -45,7 +45,6 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 	out := tools.Result{IsError: result.IsError}
 	var textParts []string
 	var content []tools.Block
-	var notices []string
 	for _, block := range result.Content {
 		switch item := block.(type) {
 		case *sdk.TextContent:
@@ -56,19 +55,16 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 				content = append(content, converted)
 			} else {
 				notice := fmt.Sprintf("MCP image omitted: unsupported MIME type %q or image larger than 3 MiB", safeMIME(item.MIMEType))
-				notices = append(notices, notice)
 				textParts = append(textParts, notice)
 				content = append(content, tools.Block{Type: "text", Text: notice})
 			}
 		case *sdk.EmbeddedResource:
 			block, notice, err := convertResource(item.Resource)
 			if notice != "" {
-				notices = append(notices, notice)
 				textParts = append(textParts, notice)
 			}
 			if err != nil {
 				notice := "MCP embedded resource could not be converted: " + err.Error()
-				notices = append(notices, notice)
 				textParts = append(textParts, notice)
 				content = append(content, tools.Block{Type: "text", Text: notice})
 				continue
@@ -81,17 +77,14 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 			}
 		case *sdk.ResourceLink:
 			notice := resourceLinkText(item)
-			notices = append(notices, notice)
 			textParts = append(textParts, notice)
 			content = append(content, tools.Block{Type: "text", Text: notice})
 		case *sdk.AudioContent:
 			notice := "MCP audio content is not supported"
-			notices = append(notices, notice)
 			textParts = append(textParts, notice)
 			content = append(content, tools.Block{Type: "text", Text: notice})
 		default:
 			notice := "MCP returned unsupported content"
-			notices = append(notices, notice)
 			textParts = append(textParts, notice)
 			content = append(content, tools.Block{Type: "text", Text: notice})
 		}
@@ -133,7 +126,6 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 			noticeBlocks = append(noticeBlocks, tools.Block{Type: "text", Text: "MCP output was truncated and the full output could not be saved."})
 		}
 	}
-	_ = notices
 	for _, block := range noticeBlocks {
 		content = append(content, block)
 	}
@@ -154,7 +146,8 @@ func safeMIME(mime string) string {
 }
 
 func imageBlock(data []byte, mime string) (tools.Block, bool) {
-	switch strings.ToLower(strings.TrimSpace(mime)) {
+	mime = strings.ToLower(strings.TrimSpace(mime))
+	switch mime {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":
 	default:
 		return tools.Block{}, false
@@ -162,7 +155,7 @@ func imageBlock(data []byte, mime string) (tools.Block, bool) {
 	if len(data) == 0 || len(data) > maxResultImage {
 		return tools.Block{}, false
 	}
-	return tools.Block{Type: "image", Data: base64.StdEncoding.EncodeToString(data), MimeType: strings.ToLower(mime)}, true
+	return tools.Block{Type: "image", Data: base64.StdEncoding.EncodeToString(data), MimeType: mime}, true
 }
 
 func convertResource(resource *sdk.ResourceContents) (*tools.Block, string, error) {

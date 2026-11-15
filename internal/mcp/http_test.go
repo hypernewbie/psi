@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2038,5 +2039,24 @@ func TestCancelBodyClosesOnRequestCancellation(t *testing.T) {
 	case <-body.closed:
 	case <-time.After(time.Second):
 		t.Fatal("request cancellation did not close the response body")
+	}
+}
+
+func TestHeaderRoundTripperMarksListenerNetworkFailure(t *testing.T) {
+	base := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("synthetic listener failure")
+	})
+	conn := &connection{ctx: context.Background(), cancel: func() {}, listenerStarted: make(chan struct{})}
+	conn.errClass.Store("")
+	transport := &headerRoundTripper{base: base, conn: conn}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.test/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(req); err == nil {
+		t.Fatal("listener failure was swallowed")
+	}
+	if !conn.listenerUnavailable.Load() {
+		t.Fatal("listener failure did not mark notifications unavailable")
 	}
 }
