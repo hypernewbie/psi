@@ -495,6 +495,7 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 	}
 	next := r.ov
 	next.Provider, next.Model = providerID, modelID
+	next.ThinkingExplicit = false
 	cand := *r
 	cand.prov = nil
 	if err := cand.configure(next); err != nil {

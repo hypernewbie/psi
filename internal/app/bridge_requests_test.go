@@ -212,6 +212,7 @@ func TestBridgeModelsListReportsOnlySelectableEntries(t *testing.T) {
 func TestBridgeSetModelPersistsThenAcknowledges(t *testing.T) {
 	r := testRuntime(t)
 	addModel(r, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
+	r.settings.ModelThinkingLevels = map[string]string{"anthropic/m2": "medium"}
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
 	f, h := startBridgeRuntime(t, r)
 
@@ -240,6 +241,9 @@ func TestBridgeSetModelPersistsThenAcknowledges(t *testing.T) {
 	}
 	if r.ov.Provider != "anthropic" || r.ov.Model != "m2" {
 		t.Fatalf("installed configuration is %s/%s", r.ov.Provider, r.ov.Model)
+	}
+	if r.ov.Thinking != "medium" {
+		t.Fatalf("installed thinking = %q, want per-model medium", r.ov.Thinking)
 	}
 	if got := countEntries(t, r) - before; got != 1 {
 		t.Fatalf("switch persisted %d entries, want 1", got)
@@ -638,4 +642,97 @@ func TestBridgeThinkingSwitchPersists(t *testing.T) {
 	if snap.GetStateSnapshot().GetThinkingLevel() != level {
 		t.Fatalf("snapshot did not publish the level: %+v", snap.GetStateSnapshot())
 	}
+}
+
+// Saving a default for another model does not change the live model, level, or
+// generation. Without a settings comparison, the prepared candidate would still
+// install its old default over the new one.
+func TestBridgeThinkingCandidateInvalidatedByDefaultSave(t *testing.T) {
+	r := testRuntime(t)
+	addModel(r, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
+	r.settings.ModelThinkingLevels = map[string]string{"anthropic/m2": "low"}
+	f, h := startBridgeRuntime(t, r)
+
+	before := countEntries(t, r)
+	generation := r.generation
+	f.inject <- &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_SetModelRequest{
+		SetModelRequest: &pibridgepb.SetModelRequest{RequestId: "req-save-race", Provider: "anthropic", Model: "m2"},
+	}}
+	h.handle(nextRequest(t, r.bridge), false)
+	select {
+	case <-h.completed():
+	case <-time.After(10 * time.Second):
+		t.Fatal("preparation did not finish")
+	}
+	snapshot := h.prep.cand.settings
+
+	if err := r.applyModelThinkingLevel("anthropic/m2", "high", io.Discard); err != nil {
+		t.Fatalf("saving another model's default failed: %v", err)
+	}
+	if r.ov.Model != "m" || r.ov.Thinking != "off" {
+		t.Fatalf("other-model save changed the session to %s at %q", r.ov.Model, r.ov.Thinking)
+	}
+	if r.generation != generation {
+		t.Fatalf("save moved the runtime generation from %d to %d", generation, r.generation)
+	}
+	if got := config.ResolveThinkingLevel(snapshot, "anthropic", "m2", "off", false); got != "low" {
+		t.Fatalf("worker snapshot was mutated to %q, want low", got)
+	}
+	if got := r.settings.ModelThinkingLevels["anthropic/m2"]; got != "high" {
+		t.Fatalf("live default = %q, want high", got)
+	}
+
+	h.finishPreparation(false)
+	ack := f.waitFrame(t, "stale default refusal", func(frame *pibridgepb.PiToPhi) bool {
+		return frame.GetSetModelAck() != nil
+	}).GetSetModelAck()
+	if ack.GetRequestId() != "req-save-race" || ack.GetOk() {
+		t.Fatalf("stale candidate was installed: %+v", ack)
+	}
+	if countEntries(t, r) != before {
+		t.Fatal("refused switch wrote a model-change entry")
+	}
+
+	t.Run("global save", func(t *testing.T) {
+		gr := testRuntime(t)
+		addModel(gr, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
+		gr.settings.DefaultThinking = "low"
+		gr.settings.DefaultThinkingSet = true
+		gf, gh := startBridgeRuntime(t, gr)
+
+		before := countEntries(t, gr)
+		gf.inject <- &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_SetModelRequest{
+			SetModelRequest: &pibridgepb.SetModelRequest{RequestId: "req-global-race", Provider: "anthropic", Model: "m2"},
+		}}
+		gh.handle(nextRequest(t, gr.bridge), false)
+		select {
+		case <-gh.completed():
+		case <-time.After(10 * time.Second):
+			t.Fatal("preparation did not finish")
+		}
+
+		// The session is already off, so only the saved global default changes.
+		if err := gr.saveThinkingDefault("off", io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := readDefaultThinkingLevel(t, gr); !ok || got != "off" {
+			t.Fatalf("saved default = %q (set=%v), want off", got, ok)
+		}
+
+		gh.finishPreparation(false)
+		ack := gf.waitFrame(t, "global stale refusal", func(frame *pibridgepb.PiToPhi) bool {
+			return frame.GetSetModelAck() != nil
+		}).GetSetModelAck()
+		if ack.GetRequestId() != "req-global-race" || ack.GetOk() {
+			t.Fatalf("candidate with the old global default was installed: %+v", ack)
+		}
+		if gr.ov.Model != "m" || gr.ov.Thinking != "off" {
+			t.Fatalf("refused switch changed the session to %s at %q", gr.ov.Model, gr.ov.Thinking)
+		}
+		if countEntries(t, gr) != before {
+			t.Fatal("refused switch wrote a model-change entry")
+		}
+	})
 }

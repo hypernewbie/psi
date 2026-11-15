@@ -49,9 +49,12 @@ psi --list-models sonnet
   default model for that provider is used. A provider that `models.json`
   declares works here too.
 - `--model <id|provider/id>` selects a model ID or a qualified ID. An optional
-  `:<thinking>` suffix sets the thinking level for this run.
+  `:<thinking>` suffix overrides saved thinking defaults for the initial
+  selection.
 - `--thinking <level>` accepts `off`, `minimal`, `low`, `medium`, `high`,
-  `xhigh`, or `max`.
+  `xhigh`, or `max`. It overrides saved thinking defaults for the initial
+  selection; a later model change resolves the per-model and global defaults
+  again.
 - `--list-models [search]` prints the bundled, cached, and configured models,
   optionally filtered by fuzzy search, and exits. It never touches the network.
 

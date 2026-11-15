@@ -135,6 +135,7 @@ func HotkeysText() string {
 		"  Ctrl+P cycle model · Ctrl+L select model · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
 		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
 		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  In /thinking: Ctrl+S saves the highlighted level as the global default",
 		"  Ctrl+D delete/exit · paste literal, no submit",
 	}, "\n")
 }

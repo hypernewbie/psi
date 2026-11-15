@@ -14,6 +14,8 @@ import (
 type SettingsUpdate struct {
 	Path  []string
 	Value json.RawMessage
+	// Remove deletes the addressed key instead of writing a value.
+	Remove bool
 }
 
 // UpdateUserSettings merges updates into the settings file at path.
@@ -38,7 +40,7 @@ func UpdateUserSettings(path string, updates []SettingsUpdate) error {
 				return fmt.Errorf("settings path element is empty")
 			}
 		}
-		if !json.Valid(update.Value) {
+		if !update.Remove && !json.Valid(update.Value) {
 			return fmt.Errorf("invalid value for %s", update.Path[len(update.Path)-1])
 		}
 	}
@@ -163,6 +165,13 @@ func readSettingsObject(path string) (map[string]json.RawMessage, []string, erro
 func applySettingsUpdate(values map[string]json.RawMessage, update SettingsUpdate) (bool, error) {
 	if len(update.Path) == 1 {
 		key := update.Path[0]
+		if update.Remove {
+			if _, ok := values[key]; !ok {
+				return false, nil
+			}
+			delete(values, key)
+			return true, nil
+		}
 		if current, ok := values[key]; ok && jsonEquivalent(current, update.Value) {
 			return false, nil
 		}
@@ -178,6 +187,18 @@ func applySettingsUpdate(values map[string]json.RawMessage, update SettingsUpdat
 			return false, fmt.Errorf("%s must be an object", parent)
 		}
 		nested, nestedOrder = decoded, order
+	}
+	if update.Remove {
+		if _, ok := nested[child]; !ok {
+			return false, nil
+		}
+		delete(nested, child)
+		if len(nested) == 0 {
+			delete(values, parent)
+			return true, nil
+		}
+		values[parent] = encodeSettingsObject(nested, nestedOrder, nil)
+		return true, nil
 	}
 	if current, ok := nested[child]; ok && jsonEquivalent(current, update.Value) {
 		return false, nil

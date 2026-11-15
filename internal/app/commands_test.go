@@ -690,3 +690,10 @@ func TestCloneCommandPreconditions(t *testing.T) {
 		t.Fatalf("expected stat error on inaccessible file, got nil")
 	}
 }
+
+func TestHotkeysDescribeThinkingSaveScope(t *testing.T) {
+	text := terminal.HotkeysText()
+	if !strings.Contains(text, "In /thinking: Ctrl+S saves the highlighted level as the global default") {
+		t.Fatalf("/hotkeys is missing the thinking-only save key: %q", text)
+	}
+}

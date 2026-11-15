@@ -55,16 +55,20 @@ func TestSettingsCommandRejectsArguments(t *testing.T) {
 	}
 }
 
-func TestSettingsPickerHasNineRows(t *testing.T) {
+func TestSettingsPickerHasTenRows(t *testing.T) {
 	r := testSettingsRuntime(t)
 	picker := r.newSettingsPicker()
 	labels := make([]string, len(picker.Items))
 	for i, item := range picker.Items {
 		labels[i] = item.Label
 	}
-	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode"}
+	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode", "Default thinking level per model"}
 	if strings.Join(labels, "|") != strings.Join(want, "|") {
 		t.Fatalf("labels = %v", labels)
+	}
+	last := picker.Items[len(picker.Items)-1]
+	if last.ID != "model-thinking" || last.Values[last.Selected].Label != "none" {
+		t.Fatalf("model thinking row = %+v", last)
 	}
 }
 
@@ -299,5 +303,256 @@ func TestOutputPaddingRefreshesPresentation(t *testing.T) {
 	r.refreshPresentation(console)
 	if r.footerSnapshot.Display.OutputPad != 1 {
 		t.Fatalf("refreshed padding = %d", r.footerSnapshot.Display.OutputPad)
+	}
+}
+
+func addSettingsModel(r *runtime) {
+	meta := r.models.Providers["anthropic"]
+	meta.Models = append(meta.Models, config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
+	r.models.Providers["anthropic"] = meta
+}
+
+func readModelThinkingLevels(t *testing.T, r *runtime) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(r.agentDir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Levels map[string]string `json:"modelThinkingLevels"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	return raw.Levels
+}
+
+func TestApplyModelThinkingLevelWritesOverride(t *testing.T) {
+	r := testRuntime(t)
+	if err := r.applyModelThinkingLevel("anthropic/m", "high", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readModelThinkingLevels(t, r)["anthropic/m"]; got != "high" {
+		t.Fatalf("stored level = %q, want high", got)
+	}
+	if got := r.settings.ModelThinkingLevels["anthropic/m"]; got != "high" {
+		t.Fatalf("in-memory level = %q, want high", got)
+	}
+}
+
+func TestApplyModelThinkingLevelClearsOverride(t *testing.T) {
+	t.Run("configured global default", func(t *testing.T) {
+		r := testRuntime(t)
+		r.settings.DefaultThinking = "low"
+		r.settings.DefaultThinkingSet = true
+		if err := r.applyModelThinkingLevel("anthropic/m", "high", &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.applyModelThinkingLevel("anthropic/m", modelThinkingClearChoice, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := readModelThinkingLevels(t, r)["anthropic/m"]; exists {
+			t.Fatal("override remains in the file")
+		}
+		if len(r.settings.ModelThinkingLevels) != 0 {
+			t.Fatalf("in-memory overrides remain: %v", r.settings.ModelThinkingLevels)
+		}
+		if r.ov.Thinking != "low" {
+			t.Fatalf("session thinking = %q, want global low", r.ov.Thinking)
+		}
+	})
+
+	t.Run("unset global default", func(t *testing.T) {
+		r := testRuntime(t)
+		if err := r.applyModelThinkingLevel("anthropic/m", "high", &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.applyModelThinkingLevel("anthropic/m", modelThinkingClearChoice, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := readModelThinkingLevels(t, r)["anthropic/m"]; exists {
+			t.Fatal("override remains in the file")
+		}
+		if r.ov.Thinking != "off" {
+			t.Fatalf("session thinking = %q, want off", r.ov.Thinking)
+		}
+	})
+}
+
+func TestApplyModelThinkingLevelAppliesToCurrentModelOnly(t *testing.T) {
+	r := testRuntime(t)
+	addSettingsModel(r)
+	before := r.ov.Thinking
+	if err := r.applyModelThinkingLevel("anthropic/m2", "high", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if r.ov.Thinking != before {
+		t.Fatalf("other-model override changed session thinking to %q", r.ov.Thinking)
+	}
+	if got := r.settings.ModelThinkingLevels["anthropic/m2"]; got != "high" {
+		t.Fatalf("other-model override = %q, want high", got)
+	}
+	if err := r.applyModelThinkingLevel("anthropic/m", "medium", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if r.ov.Thinking != "medium" {
+		t.Fatalf("current-model override left session thinking at %q", r.ov.Thinking)
+	}
+}
+
+func TestApplyModelThinkingLevelKeepsSessionChangeWhenWriteFails(t *testing.T) {
+	writeMalformed := func(t *testing.T, r *runtime) string {
+		t.Helper()
+		path := filepath.Join(r.agentDir, "settings.json")
+		content := `{"modelThinkingLevels":`
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return content
+	}
+
+	t.Run("set current model", func(t *testing.T) {
+		r := testRuntime(t)
+		content := writeMalformed(t, r)
+		err := r.applyModelThinkingLevel("anthropic/m", "high", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "Saved for this session only") {
+			t.Fatalf("error = %v", err)
+		}
+		if r.ov.Thinking != "high" {
+			t.Fatalf("session thinking = %q, want high", r.ov.Thinking)
+		}
+		if len(r.settings.ModelThinkingLevels) != 0 {
+			t.Fatalf("failed write changed the map: %v", r.settings.ModelThinkingLevels)
+		}
+		data, readErr := os.ReadFile(filepath.Join(r.agentDir, "settings.json"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(data) != content {
+			t.Fatalf("malformed file changed: %q", data)
+		}
+	})
+
+	t.Run("clear current model", func(t *testing.T) {
+		r := testRuntime(t)
+		r.settings.ModelThinkingLevels = map[string]string{"anthropic/m": "high"}
+		content := writeMalformed(t, r)
+		err := r.applyModelThinkingLevel("anthropic/m", modelThinkingClearChoice, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "Saved for this session only") {
+			t.Fatalf("error = %v", err)
+		}
+		if r.ov.Thinking != "off" {
+			t.Fatalf("session thinking = %q, want off", r.ov.Thinking)
+		}
+		if r.settings.ModelThinkingLevels["anthropic/m"] != "high" {
+			t.Fatalf("failed clear changed the map: %v", r.settings.ModelThinkingLevels)
+		}
+		data, readErr := os.ReadFile(filepath.Join(r.agentDir, "settings.json"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(data) != content {
+			t.Fatalf("malformed file changed: %q", data)
+		}
+	})
+
+	t.Run("other model", func(t *testing.T) {
+		r := testRuntime(t)
+		addSettingsModel(r)
+		before := r.ov.Thinking
+		writeMalformed(t, r)
+		err := r.applyModelThinkingLevel("anthropic/m2", "high", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "Failed to save model thinking default") {
+			t.Fatalf("error = %v", err)
+		}
+		if strings.Contains(err.Error(), "Saved for this session only") {
+			t.Fatalf("other-model failure claimed a session save: %v", err)
+		}
+		if r.ov.Thinking != before {
+			t.Fatalf("other-model failure changed session thinking to %q", r.ov.Thinking)
+		}
+		if len(r.settings.ModelThinkingLevels) != 0 {
+			t.Fatalf("failed write changed the map: %v", r.settings.ModelThinkingLevels)
+		}
+	})
+}
+
+func TestApplyModelThinkingLevelRejectsInvalidInput(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target string
+		level  string
+	}{
+		{"empty target", "", "high"},
+		{"missing model", "anthropic/", "high"},
+		{"missing provider", "/m", "high"},
+		{"no separator", "m", "high"},
+		{"unknown model", "anthropic/missing", "high"},
+		{"unsupported level", "anthropic/m", "turbo"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := testRuntime(t)
+			before := r.ov.Thinking
+			if err := r.applyModelThinkingLevel(tc.target, tc.level, &bytes.Buffer{}); err == nil {
+				t.Fatal("invalid input was accepted")
+			}
+			if r.ov.Thinking != before {
+				t.Fatalf("invalid input changed session thinking to %q", r.ov.Thinking)
+			}
+			if len(r.settings.ModelThinkingLevels) != 0 {
+				t.Fatalf("invalid input changed the map: %v", r.settings.ModelThinkingLevels)
+			}
+			if _, err := os.Stat(filepath.Join(r.agentDir, "settings.json")); !os.IsNotExist(err) {
+				t.Fatalf("invalid input wrote settings: %v", err)
+			}
+		})
+	}
+}
+
+func TestWriteUserSettingsRequiresAgentDirectory(t *testing.T) {
+	r := testRuntime(t)
+	r.agentDir = ""
+	t.Chdir(t.TempDir())
+	err := r.writeUserSettings([]config.SettingsUpdate{{Path: []string{"theme"}, Value: json.RawMessage(`"dark"`)}})
+	if err == nil || !strings.Contains(err.Error(), "agent directory is unavailable") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat("settings.json"); !os.IsNotExist(statErr) {
+		t.Fatalf("relative settings file was written: %v", statErr)
+	}
+}
+
+func TestModelThinkingRowIsInert(t *testing.T) {
+	r := testRuntime(t)
+	path, err := r.applySetting("model-thinking", terminal.SettingsValue{Label: "none", Value: "none"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != nil {
+		t.Fatalf("path = %v, want nil", path)
+	}
+	if _, err := os.Stat(filepath.Join(r.agentDir, "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("row apply wrote settings: %v", err)
+	}
+}
+
+func TestApplyModelThinkingLevelWritesUserSettingsOnly(t *testing.T) {
+	r := testRuntime(t)
+	projectPath := filepath.Join(r.store.Cwd(), ".pi", "settings.json")
+	const projectSettings = `{"modelThinkingLevels":{"anthropic/m":"off"},"theme":"dark"}`
+	writeAppFile(t, projectPath, projectSettings)
+
+	if err := r.applyModelThinkingLevel("anthropic/m", "high", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != projectSettings {
+		t.Fatalf("project settings changed: %q", data)
+	}
+	if got := readModelThinkingLevels(t, r)["anthropic/m"]; got != "high" {
+		t.Fatalf("user override = %q, want high", got)
 	}
 }

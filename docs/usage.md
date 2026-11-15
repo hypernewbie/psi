@@ -55,7 +55,15 @@ one message per turn) or `all`.
   credential, or `/model [provider/]model` sets a session-local choice. `Ctrl+L`
   opens the same picker.
 - `/thinking` opens the supported-level picker, or `/thinking <level>` sets one.
-  `Shift+Tab` cycles the levels the selected model supports.
+  `Shift+Tab` cycles the levels the selected model supports. `Ctrl+S` in the
+  picker saves the highlighted level as the global default.
+- `/settings` sets a per-model default under `Default thinking level per model`.
+  The current model uses a new default at once; other models use theirs on the
+  next switch.
+- An explicit CLI, restored, or `/thinking` level applies to that selection.
+  A later model change applies `modelThinkingLevels[provider/modelId]` first,
+  then `defaultThinkingLevel`, then the carried level. An unadvertised level
+  is clamped to the nearest supported level.
 - `/reload` re-reads instructions, skills, theme/display settings, and
   `steeringMode`/`followUpMode` and resources; new queue modes apply to the
   next run. Model, tool, shell, and network settings are not reloaded.
