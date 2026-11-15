@@ -31,7 +31,9 @@ stdin and writing JSONL events on stdout: `prompt`, `abort`, `get_state`,
 usable credential, the same rule as `/model`. `get_available_thinking_levels`
 lists the live model's advertised levels; `set_thinking_level` accepts any
 level the model can apply and clamps it when the model does not advertise it.
-It has no terminal UI, theme, or picker.
+It has no terminal UI, theme, or picker. RPC events carry visible assistant
+text and tool calls; reasoning/thinking deltas are not emitted. Reasoning
+remains available in the interactive terminal and in persisted session records.
 
 Print mode (`--print/-p`), Pi's JSON event mode, HTML export, and `@file`
 arguments are not supported.

@@ -148,6 +148,19 @@ func TestReloadLanguage(t *testing.T) {
 	if r.settings.Language != config.LanguageEnglish {
 		t.Fatalf("loaded default = %q, want en", r.settings.Language)
 	}
+
+	// A CLI override changes the prompt language, not the settings contract:
+	// malformed settings still fail the reload and leave the old state.
+	if err := os.WriteFile(settingsPath, []byte(`{"language":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err == nil {
+		t.Fatal("malformed settings were hidden by the CLI override")
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+	if r.settings.Language != config.LanguageEnglish || r.cfg.System != r.prompt {
+		t.Fatalf("failed reload changed state: language=%q cfg=%q", r.settings.Language, r.cfg.System)
+	}
 }
 
 func TestReloadLanguageAtomicity(t *testing.T) {
@@ -182,7 +195,7 @@ func TestReloadLanguageAtomicity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, payload := range []string{`{"language":`, `{"language":"fr"}`, `{"language":"zh","steeringMode":"all","followUpMode":"all","language":null}`} {
+	for _, payload := range []string{`{"language":`, `{"language":"fr"}`, `{"language":null,"steeringMode":"all","followUpMode":"all"}`} {
 		writeAppFile(t, settingsPath, payload)
 		if err := r.reloadResources(); err == nil {
 			t.Fatalf("settings %s did not fail reload", payload)

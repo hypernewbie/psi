@@ -468,6 +468,9 @@ func TestApplyLanguageCLIOverride(t *testing.T) {
 	r.options.Language = config.LanguageChinese
 	r.prompt, r.sections = "OLD_PROMPT", []config.PromptSection{{Name: "old", Body: "OLD"}}
 	r.cfg.System = "OLD_CFG"
+	if err := os.Mkdir(filepath.Join(r.agentDir, "AGENTS.override.md"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path, err := r.applySetting("language", terminal.SettingsValue{Label: "简体中文", Value: config.LanguageChinese}, nil)
 	if err != nil {
 		t.Fatal(err)
