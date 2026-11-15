@@ -46,7 +46,9 @@ eleven otherwise.
 - `pi.history.v1`: read editor recall, newest first.
 - `pi.context.v1`: token/window/percent telemetry, present only when known.
 - `pi.skills.v1`: list session skills and dispatch one through the native
-  `/skill:` path, including during an active run (queued with provenance).
+  `/skill:` path, including during an active run. An active run queues the
+  expanded Pi block with invocation provenance; the transcript renders it
+  collapsed. Unknown names and unreadable files are refused.
 - `pi.transcript-search.v2`: bounded visible-text search of the active
   branch, paginated by anchor and index.
 - `pi.compact.v1`: readiness reporting and one admitted native compaction

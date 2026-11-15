@@ -111,12 +111,27 @@ func TestInvoke(t *testing.T) {
 	setSyntheticHome(t)
 	agent := t.TempDir()
 	ws := t.TempDir()
-	fp := writeSkill(t, filepath.Join(agent, "skills"), "doer", "name: doer\ndescription: Does things", "follow these steps")
+	fp := writeSkill(t, filepath.Join(agent, "skills"), "doer", "name: doer\ndescription: Does things", "  follow these steps  \n")
 	got, _ := Discover(ws, agent, nil, true)
-	_ = fp
+	base := filepath.Dir(fp)
+	block := "<skill name=\"doer\" location=\"" + fp + "\">\n" +
+		"References are relative to " + base + ".\n\n" +
+		"follow these steps\n</skill>"
 	out, err := Invoke(got, "doer", "--fast")
-	if err != nil || !contains(out, "follow these steps") || !contains(out, "--fast") {
-		t.Errorf("invoke: %q %v", out, err)
+	if err != nil || out != block+"\n\n--fast" {
+		t.Errorf("invoke with args: %q %v, want %q", out, err, block+"\n\n--fast")
+	}
+	out, err = Invoke(got, "doer", "")
+	if err != nil || out != block {
+		t.Errorf("invoke without args: %q %v, want %q", out, err, block)
+	}
+	out, err = Invoke(got, "doer", "  --fast  ")
+	if err != nil || out != block+"\n\n--fast" {
+		t.Errorf("invoke trimmed args: %q %v, want %q", out, err, block+"\n\n--fast")
+	}
+	out, err = Invoke(got, "doer", "  \t ")
+	if err != nil || out != block {
+		t.Errorf("blank args added a tail: %q %v", out, err)
 	}
 	if _, err := Invoke(got, "missing", ""); err == nil {
 		t.Errorf("missing skill must fail without provider request")

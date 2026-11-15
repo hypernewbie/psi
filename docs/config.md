@@ -39,7 +39,7 @@ never change `--docs`; it reads embedded bytes only.
 | Reasoning | `defaultThinkingLevel`, `modelThinkingLevels` | off/minimal/low/medium/high/xhigh/max; `modelThinkingLevels` keys are `provider/modelId` |
 | Sessions | `sessionDir` | CLI > env (`PI_CODING_AGENT_SESSION_DIR`) > settings > default |
 | Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |
-| Skills | `skills`, `enableSkillCommands` | paths + selector |
+| Skills | `skills`, `enableSkillCommands` | skill paths; `enableSkillCommands` is parsed but not wired, so `/skill:` stays registered |
 | Compaction | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides` | bounded summaries; per-model reserve overrides; `/ac` controls are session-local |
 | Queues | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`, as in Pi |
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |

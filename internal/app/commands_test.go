@@ -697,3 +697,10 @@ func TestHotkeysDescribeThinkingSaveScope(t *testing.T) {
 		t.Fatalf("/hotkeys is missing the thinking-only save key: %q", text)
 	}
 }
+
+func TestHotkeysDescribeSkillExpansionScope(t *testing.T) {
+	text := terminal.HotkeysText()
+	if !strings.Contains(text, "Ctrl+O expand/collapse skill blocks (not saved)") {
+		t.Fatalf("/hotkeys is missing the skill-only expansion key: %q", text)
+	}
+}

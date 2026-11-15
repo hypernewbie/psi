@@ -3,6 +3,7 @@ package session
 import (
 	"io"
 	"os"
+	"sync"
 )
 
 // Per-store I/O seams keep failure tests deterministic without global hooks.
@@ -63,4 +64,43 @@ func (s *Store) FailWritesForTest(err error) {
 		s.storage = &storageOps{}
 	}
 	s.storage.open = func(string, int, os.FileMode) (durableFile, error) { return nil, err }
+}
+
+// FailWritesAfterForTest allows successfulOpens successful durable opens, then
+// fails later ones. It uses the same per-store seam and keeps no global state.
+func (s *Store) FailWritesAfterForTest(successfulOpens int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.storage == nil {
+		s.storage = &storageOps{}
+	}
+	open := s.storage.open
+	if open == nil {
+		open = func(path string, flags int, mode os.FileMode) (durableFile, error) {
+			return os.OpenFile(path, flags, mode)
+		}
+	}
+	var mu sync.Mutex
+	remaining := max(0, successfulOpens)
+	s.storage.open = func(path string, flags int, mode os.FileMode) (durableFile, error) {
+		mu.Lock()
+		allowed := remaining > 0
+		mu.Unlock()
+		if !allowed {
+			return nil, err
+		}
+		f, openErr := open(path, flags, mode)
+		if openErr != nil {
+			return nil, openErr
+		}
+		mu.Lock()
+		if remaining > 0 {
+			remaining--
+			mu.Unlock()
+			return f, nil
+		}
+		mu.Unlock()
+		_ = f.Close()
+		return nil, err
+	}
 }

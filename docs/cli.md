@@ -30,6 +30,9 @@ stdin and writing JSONL events on stdout: `prompt`, `abort`, `get_state`,
 usable credential, the same rule as `/model`. `get_available_thinking_levels`
 lists the live model's advertised levels; `set_thinking_level` accepts any
 level the model can apply and clamps it when the model does not advertise it.
+`prompt` expands a `/skill:<name> [args]` message before any user event, queue,
+store, or provider side effect. An unknown, unreadable, or oversized skill
+returns an error response instead of submitting the unexpanded command.
 It has no terminal UI, theme, or picker.
 
 Print mode (`--print/-p`), Pi's JSON event mode, HTML export, and `@file`

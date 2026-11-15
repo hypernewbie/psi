@@ -302,8 +302,8 @@ func escapeXML(s string) string {
 	return r.Replace(s)
 }
 
-// Invoke expands /skill:name into Pi-style user input (skill body + args).
-// Reports missing/unreadable without a provider request.
+// Invoke expands /skill:name into Pi's exact skill block plus the optional
+// argument tail. Reports missing/unreadable without a provider request.
 func Invoke(skills []Skill, name, args string) (string, error) {
 	for _, s := range skills {
 		if s.Name == name {
@@ -312,11 +312,13 @@ func Invoke(skills []Skill, name, args string) (string, error) {
 				return "", fmt.Errorf("skill %q unreadable: %w", name, err)
 			}
 			_, body := parseFrontmatter(string(b))
-			body = "Skill directory: " + s.BaseDir + "\nResolve relative paths from this directory.\n\n" + body
-			if strings.TrimSpace(args) != "" {
-				return body + "\n\nArguments: " + args, nil
+			out := "<skill name=\"" + s.Name + "\" location=\"" + s.FilePath + "\">\n" +
+				"References are relative to " + s.BaseDir + ".\n\n" +
+				body + "\n</skill>"
+			if tail := strings.TrimSpace(args); tail != "" {
+				return out + "\n\n" + tail, nil
 			}
-			return body, nil
+			return out, nil
 		}
 	}
 	return "", fmt.Errorf("skill %q not found", name)

@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"psi/internal/agent"
 	"psi/internal/pibridge"
 	pibridgepb "psi/internal/pibridge/pb"
 	"psi/internal/session"
 	"psi/internal/skills"
+	"psi/internal/terminal"
 )
 
 func skillsRequest(id string) *pibridgepb.PhiToPi {
@@ -115,13 +117,15 @@ func TestBridgeInvokeSkillUnknownIsRefused(t *testing.T) {
 
 func TestBridgeInvokeSkillWhileBusyQueuesExpandedText(t *testing.T) {
 	r := testRuntime(t)
-	r.skills = []skills.Skill{bridgeSkill(t, "alpha", "first", "expanded alpha body")}
+	skill := bridgeSkill(t, "alpha", "first", "expanded alpha body")
+	r.skills = []skills.Skill{skill}
 	loop := &agent.Loop{}
 	f, h := startBridgeRuntime(t, r)
 	h.activeLoop = loop
 	h.start = func(string, string, string, string, string, bool) {
 		t.Error("busy dispatch must queue, not start a second run")
 	}
+	before := countEntries(t, r)
 
 	f.inject <- invokeSkillRequest("req-queue", "alpha")
 	h.handle(nextRequest(t, r.bridge), true)
@@ -134,9 +138,137 @@ func TestBridgeInvokeSkillWhileBusyQueuesExpandedText(t *testing.T) {
 	if !ack.GetOk() {
 		t.Fatalf("ack = %+v, want queued", ack)
 	}
+	want := "<skill name=\"alpha\" location=\"" + skill.FilePath + "\">\n" +
+		"References are relative to " + skill.BaseDir + ".\n\nexpanded alpha body\n</skill>"
 	pending := loop.PendingSteering()
-	if len(pending) != 1 || !strings.Contains(pending[0], "expanded alpha body") {
-		t.Fatalf("pending = %q, want the expanded skill body", pending)
+	if len(pending) != 1 || pending[0] != want {
+		t.Fatalf("pending = %q, want %q", pending, want)
+	}
+	queued := loop.TakeSteering()
+	if len(queued) != 1 || queued[0].Text() != want || queued[0].Invocation != "/skill:alpha" || queued[0].Source != "skill" || queued[0].Display != want {
+		t.Fatalf("queued input = %+v, want the exact block plus /skill:alpha provenance", queued)
+	}
+	if got := countEntries(t, r); got != before {
+		t.Fatalf("queued skill changed the store: %d entries, want %d", got, before)
+	}
+}
+
+// The idle bridge path captures the exact start arguments and reuses the same
+// block text for both live display states.
+func TestBridgeInvokeSkillStartsExactBlock(t *testing.T) {
+	r := testRuntime(t)
+	skill := bridgeSkill(t, "alpha", "first", "IDLE_ALPHA_BODY")
+	r.skills = []skills.Skill{skill}
+	f, h := startBridgeRuntime(t, r)
+	before := countEntries(t, r)
+	type startArgs struct {
+		text, display, focus, invocation, source string
+		compact                                  bool
+		calls                                    int
+	}
+	var got startArgs
+	h.start = func(text, display, focus, invocation, source string, compact bool) {
+		got = startArgs{text, display, focus, invocation, source, compact, got.calls + 1}
+	}
+
+	f.inject <- invokeSkillRequest("req-idle", "alpha")
+	h.handle(nextRequest(t, r.bridge), false)
+	<-h.completed()
+	h.finishPreparation(false)
+
+	ack := f.waitFrame(t, "idle invoke ack", func(frame *pibridgepb.PiToPhi) bool {
+		return frame.GetInvokeSkillAck() != nil
+	}).GetInvokeSkillAck()
+	if !ack.GetOk() {
+		t.Fatalf("ack = %+v, want started", ack)
+	}
+	want := "<skill name=\"alpha\" location=\"" + skill.FilePath + "\">\n" +
+		"References are relative to " + skill.BaseDir + ".\n\nIDLE_ALPHA_BODY\n</skill>"
+	if got.calls != 1 || got.text != want || got.display != want || got.focus != "" || got.invocation != "/skill:alpha" || got.source != "skill" || got.compact {
+		t.Fatalf("start args = %+v, want exact block and skill provenance", got)
+	}
+	collapsed := strings.Join(terminal.FormatUserMessageWithDisplay(got.display, 80, true, terminal.DefaultDisplaySettings()), "\n")
+	if !strings.Contains(collapsed, "[skill] alpha (ctrl+o to expand)") || strings.Contains(collapsed, "IDLE_ALPHA_BODY") {
+		t.Fatalf("collapsed display = %q", collapsed)
+	}
+	display := terminal.DefaultDisplaySettings()
+	display.ExpandSkills = true
+	expanded := strings.Join(terminal.FormatUserMessageWithDisplay(got.display, 80, true, display), "\n")
+	if !strings.Contains(expanded, "IDLE_ALPHA_BODY") || !strings.Contains(expanded, "References are relative to") {
+		t.Fatalf("expanded display = %q", expanded)
+	}
+	if got := countEntries(t, r); got != before {
+		t.Fatalf("start stub changed the store: %d entries, want %d", got, before)
+	}
+}
+
+// A skill file removed after discovery refuses before start or queue.
+func TestBridgeInvokeSkillRefusesDeletedFile(t *testing.T) {
+	r := testRuntime(t)
+	skill := bridgeSkill(t, "alpha", "first", "body")
+	r.skills = []skills.Skill{skill}
+	f, h := startBridgeRuntime(t, r)
+	loop := &agent.Loop{}
+	h.activeLoop = loop
+	h.start = func(string, string, string, string, string, bool) {
+		t.Error("a deleted skill file started a run")
+	}
+	before := countEntries(t, r)
+	if err := os.Remove(skill.FilePath); err != nil {
+		t.Fatal(err)
+	}
+
+	f.inject <- invokeSkillRequest("req-deleted", "alpha")
+	h.handle(nextRequest(t, r.bridge), true)
+	<-h.completed()
+	h.finishPreparation(true)
+
+	ack := f.waitFrame(t, "deleted invoke ack", func(frame *pibridgepb.PiToPhi) bool {
+		return frame.GetInvokeSkillAck() != nil
+	}).GetInvokeSkillAck()
+	if ack.GetOk() || ack.GetReason() != "unavailable" {
+		t.Fatalf("ack = %+v, want unavailable", ack)
+	}
+	if pending := loop.PendingSteering(); len(pending) != 0 {
+		t.Fatalf("deleted skill was queued: %q", pending)
+	}
+	if got := countEntries(t, r); got != before {
+		t.Fatalf("deleted skill changed the store: %d entries, want %d", got, before)
+	}
+}
+
+// A disconnected client expires the request before its preparation can
+// dispatch; no start, queue, or store change may follow.
+func TestBridgeInvokeSkillDisconnectedBeforeFinish(t *testing.T) {
+	r := testRuntime(t)
+	r.skills = []skills.Skill{bridgeSkill(t, "alpha", "first", "body")}
+	f, h := startBridgeRuntime(t, r)
+	loop := &agent.Loop{}
+	h.activeLoop = loop
+	h.start = func(string, string, string, string, string, bool) {
+		t.Error("a disconnected request started a run")
+	}
+	before := countEntries(t, r)
+
+	f.inject <- invokeSkillRequest("req-gone", "alpha")
+	req := nextRequest(t, r.bridge)
+	h.handle(req, true)
+	<-h.completed()
+	r.bridge.Close()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-req.Context().Done():
+	case <-timer.C:
+		t.Fatal("request context did not end after disconnect")
+	}
+	h.finishPreparation(true)
+
+	if pending := loop.PendingSteering(); len(pending) != 0 {
+		t.Fatalf("disconnected skill was queued: %q", pending)
+	}
+	if got := countEntries(t, r); got != before {
+		t.Fatalf("disconnected skill changed the store: %d entries, want %d", got, before)
 	}
 }
 

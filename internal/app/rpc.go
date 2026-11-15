@@ -284,25 +284,19 @@ func (s *rpcRunner) userMessage(text string) {
 	s.emit(map[string]any{"type": "message_end", "message": body})
 }
 
-// expandSkill expands a /skill:name invocation the way Pi's prompt path does.
-// Anything else, including unknown skills, passes through untouched.
-func (s *rpcRunner) expandSkill(text string) string {
+// expandSkill expands a /skill:name invocation into Pi's skill block.
+// Non-skill text passes through unchanged. Expansion failures are returned so
+// the prompt is refused before any user event, queue, store, or provider call.
+func (s *rpcRunner) expandSkill(text string) (string, error) {
 	if !strings.HasPrefix(text, "/skill:") {
-		return text
+		return text, nil
 	}
 	rest := strings.TrimSpace(strings.TrimPrefix(text, "/skill:"))
 	name, args := rest, ""
 	if i := strings.IndexAny(rest, " \t"); i >= 0 {
 		name, args = rest[:i], strings.TrimSpace(rest[i+1:])
 	}
-	if name == "" {
-		return text
-	}
-	expanded, err := skills.Invoke(s.r.skills, name, args)
-	if err != nil {
-		return text
-	}
-	return expanded
+	return skills.Invoke(s.r.skills, name, args)
 }
 
 // handle runs one command. Prompt is the one async exception: its response
@@ -352,7 +346,11 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "prompt", "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.")
 		return &out
 	}
-	text := s.expandSkill(cmd.Message)
+	text, err := s.expandSkill(cmd.Message)
+	if err != nil {
+		out := rpcErr(cmd.ID, "prompt", err.Error())
+		return &out
+	}
 	if strings.TrimSpace(text) == "" {
 		out := rpcErr(cmd.ID, "prompt", "empty submission rejected")
 		return &out

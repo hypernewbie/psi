@@ -24,13 +24,19 @@ kept in the session file, so replay and resume show the same blocks. `Ctrl+T`
 collapses the block to one `Thinking...` label; the reasoning stays in the
 file either way.
 
+A `/skill:<name> [args]` submission becomes Pi's `<skill …>` block in the user
+message. The transcript keeps it collapsed as `[skill] name (ctrl+o to
+expand)` and shows the arguments as a separate user row. `Ctrl+O` expands or
+collapses skill blocks in memory; it is not saved.
+
 Tool calls in one assistant response run concurrently. `write` and `edit` share
 one per-file queue so mutations serialize; `read` and `bash` do not queue.
 Results settle in call order behind a barrier the next request cannot cross.
 
 Steering messages enter at the next turn boundary. Follow-up messages enter
 after the current run ends. Cancelling stops the run, records unstarted calls as
-`not_started`, and returns queued text to the editor.
+`not_started`, and returns queued text to the editor; a queued skill returns as
+`/skill:name args` and rereads its file on resubmission.
 
 ## Context
 
@@ -53,8 +59,9 @@ The system prompt is assembled from ordered sections:
 | `loop` | active loop guidance, omitted when no loop is active |
 
 A custom preamble (`SYSTEM.md` or `--system-prompt`) suppresses `tools`,
-`rules`, and `docs`. The other sections still apply. Skill bodies are not in the
-prompt; psi reads a skill file when the task matches its description.
+`rules`, and `docs`. The other sections still apply. Skill bodies are not in
+the `skills` prompt section; a `/skill:` invocation adds the body to that user
+message, and discovery still advertises names, descriptions, and paths only.
 
 Each section is stored in the session as a named entry. When configuration
 changes, psi appends section values and null values for removals.

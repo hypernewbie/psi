@@ -14,6 +14,7 @@ import (
 	east "github.com/yuin/goldmark/extension/ast"
 	gmtext "github.com/yuin/goldmark/text"
 
+	"psi/internal/skills"
 	pitheme "psi/internal/theme"
 )
 
@@ -73,7 +74,20 @@ func FormatUserMessage(source string, width int, noColor bool, palette ...*pithe
 	return FormatUserMessageWithDisplay(source, width, noColor, DefaultDisplaySettings(), palette...)
 }
 
+// FormatUserMessageWithDisplay renders Pi's skill invocation group when the
+// complete message is a skill block, and the ordinary user surface otherwise.
 func FormatUserMessageWithDisplay(source string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
+	if strings.TrimSpace(source) == "" {
+		return nil
+	}
+	if block, ok := skills.ParseBlock(source); ok {
+		return formatSkillInvocation(block, width, noColor, display, palette...)
+	}
+	return formatPlainUserMessage(source, width, noColor, display, palette...)
+}
+
+// formatPlainUserMessage keeps the ordinary user surface unchanged.
+func formatPlainUserMessage(source string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}

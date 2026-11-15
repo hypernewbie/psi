@@ -712,6 +712,8 @@ type runtime struct {
 	activeTools []activeTool
 	timerFrames int
 	eventFrames int
+	// skillExpanded is the in-memory Ctrl+O state. A restart starts collapsed.
+	skillExpanded bool
 }
 
 // activeTool is one running tool call tracked by call ID.
@@ -719,6 +721,14 @@ type activeTool struct {
 	name    string
 	callID  string
 	summary event.ToolSummary
+}
+
+// busySkillRefused reports whether a busy native skill submission must restore
+// the draft instead of queueing. The active loop is required but its Running()
+// state is not: startup and settlement windows keep the loop and deliver late
+// queues. A cancelled or exiting run has no queue consumer.
+func (r *runtime) busySkillRefused(loop *agent.Loop, cancel context.CancelFunc, exiting bool) bool {
+	return loop == nil || cancel == nil || exiting || r.state == StateCancelling || r.store == nil || r.store.WriteError() != nil
 }
 
 // liveToolRow renders the newest active call's running row. A parallel
@@ -1148,15 +1158,17 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	}
 	projection := r.store.ProjectionIfCached()
 	branch := r.gitBranchFor(r.store.Cwd())
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t/%q", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, projection != nil, r.settings.HideThinkingBlock, branch)
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t/%t/%q", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, r.settings.HideThinkingBlock, projection != nil, r.skillExpanded, branch)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
 			home = os.Getenv("USERPROFILE")
 		}
 		sessionName := r.store.SessionName()
+		display := presentationDisplay(r.settings)
+		display.ExpandSkills = r.skillExpanded
 		snapshot := terminal.PresentationSnapshot{
-			Display:          presentationDisplay(r.settings),
+			Display:          display,
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName, GitBranch: branch,
 			Provider: r.ov.Provider, ProviderCount: footerProviderCount(r.models), Model: r.ov.Model,
 			Thinking: footerThinkingLabel(r.cfg.Model, r.ov.Thinking), AutoCompact: r.cfg.AutoCompact, Theme: r.theme,
@@ -1905,8 +1917,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.bumpContextRev()
 		}
 		if strings.TrimSpace(input.Display) != "" {
+			display := input.Display
+			if input.Source == "skill" {
+				if _, ok := skills.ParseBlock(input.Text()); ok {
+					display = input.Text()
+				}
+			}
 			console.EnsureTranscriptGap()
-			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: input.Display})
+			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: display})
 		}
 		runOutcome, visibleRunText = "", false
 		ctx, stop := context.WithCancel(context.Background())
@@ -2011,6 +2029,43 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 		console.RefreshCompletion()
 		r.draw(console)
+	}
+	// submitNativeSkill is the one expansion path for idle and busy /skill:
+	// submissions. Busy Enter steers, busy Alt+Enter queues a follow-up, and
+	// any refusal restores the captured draft without starting or queueing.
+	submitNativeSkill := func(cmd *terminal.Command, text string, followUp bool) {
+		name := strings.TrimPrefix(cmd.Name, "skill:")
+		invocation := "/skill:" + name
+		if strings.TrimSpace(cmd.Arg) != "" {
+			invocation += " " + cmd.Arg
+		}
+		if busy && r.busySkillRefused(activeLoop, cancel, exiting) {
+			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+			console.RefreshCompletion()
+			r.draw(console)
+			return
+		}
+		expanded, err := skills.Invoke(r.skills, name, cmd.Arg)
+		if err != nil {
+			print("error: " + err.Error())
+			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+			console.RefreshCompletion()
+			r.draw(console)
+			return
+		}
+		if busy {
+			if followUp {
+				activeLoop.FollowUpWithProvenance(expanded, invocation, "skill")
+				console.SetFollowUpRows(activeLoop.PendingFollowUp())
+			} else {
+				activeLoop.SteerWithProvenance(expanded, invocation, "skill")
+				console.SetSteeringRows(activeLoop.PendingSteering())
+			}
+			r.bumpContextRev()
+			r.draw(console)
+			return
+		}
+		start(expanded, text, "", invocation, "skill", false)
 	}
 	startCompact := func(focus string) error {
 		if writeErr := r.store.WriteError(); writeErr != nil {
@@ -2716,6 +2771,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Status("Thinking blocks: " + state)
 				continue
 			}
+			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 15 {
+				// Ctrl+O expands or collapses skill blocks, like Pi's
+				// app.tools.expand. The flag stays in memory and is never saved.
+				r.skillExpanded = !r.skillExpanded
+				r.footerKey = ""
+				console.RequestFullRedraw()
+				r.draw(console)
+				state := "collapsed"
+				if r.skillExpanded {
+					state = "expanded"
+				}
+				console.Status("Skill blocks: " + state)
+				continue
+			}
 			if !busy && !input.Paste && string(input.Key) == "\x1b[Z" {
 				cycleThinking()
 				continue
@@ -2744,9 +2813,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if busy {
-				// Pi's editor stays live while a run is active. AC policy commands
-				// can update session-local policy; /ac compact waits for this run
-				// to settle and then resumes it after compaction.
+				// Pi's editor stays live while a run is active. Native skill
+				// commands dispatch before the generic busy slash fallback.
+				if cmd, ok := terminal.ParseCommand(text); ok && strings.HasPrefix(cmd.Name, "skill:") {
+					submitNativeSkill(cmd, text, input.FollowUp)
+					continue
+				}
+				// AC policy commands can update session-local policy; /ac compact
+				// waits for this run to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
 						notice(terminal.NoticeInfo, "Finish or cancel the run before changing settings.")
@@ -2841,19 +2915,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if strings.HasPrefix(cmd.Name, "skill:") {
-					name := strings.TrimPrefix(cmd.Name, "skill:")
-					expanded, err := skills.Invoke(r.skills, name, cmd.Arg)
-					if err != nil {
-						print("error: " + err.Error())
-						r.draw(console)
-					} else {
-						// P2-043, P2-054: expanded input + visible invocation provenance, one user entry.
-						invocation := "/skill:" + name
-						if strings.TrimSpace(cmd.Arg) != "" {
-							invocation += " " + cmd.Arg
-						}
-						start(expanded, text, "", invocation, "skill", false)
-					}
+					submitNativeSkill(cmd, text, false)
 					continue
 				}
 				if cmd.Name == "ac" || cmd.Name == "autocompact" {

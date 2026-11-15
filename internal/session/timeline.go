@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"psi/internal/event"
+	"psi/internal/skills"
 	toolsummary "psi/internal/tools"
 )
 
@@ -206,8 +207,12 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 		switch {
 		case m.User != nil:
 			text := timelineUserText(m.User.Content, nil)
-			if invocation, ok := inputs[e.ID()]; ok {
-				text = invocation
+			// A complete Pi skill block is its own display source. Only text
+			// that cannot be rendered that way prefers the typed invocation.
+			if _, ok := skills.ParseBlock(text); !ok {
+				if invocation, ok := inputs[e.ID()]; ok {
+					text = invocation
+				}
 			}
 			add(e, KindUser, text)
 		case m.Assistant != nil:

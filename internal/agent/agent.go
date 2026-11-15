@@ -70,7 +70,7 @@ type Loop struct {
 	sink         func(event.Event)
 	steerMu      sync.Mutex
 	steering     []UserInput
-	followUps    []string
+	followUps    []UserInput
 	steeringMode string
 	followUpMode string
 	// pendingBytes counts decoded image bytes still owned by queued or
@@ -121,6 +121,16 @@ func (in UserInput) Empty() bool {
 	default:
 		return true
 	}
+}
+
+// RecoveryText is the editor-safe source for a stopped queue entry. Skill
+// commands restore as invocations, so the bounded editor never receives an
+// expanded body; every other input keeps its display text.
+func (in UserInput) RecoveryText() string {
+	if in.Source == "skill" && in.Invocation != "" {
+		return in.Invocation
+	}
+	return in.Display
 }
 
 func New(store *session.Store, reg *tools.Registry, prov provider.Provider, sink func(event.Event)) *Loop {
@@ -176,11 +186,17 @@ func (l *Loop) PendingSteering() []string {
 
 // FollowUp queues a message until the current run has no more tools or steering.
 func (l *Loop) FollowUp(text string) {
+	l.FollowUpWithProvenance(text, "", "")
+}
+
+// FollowUpWithProvenance queues a follow-up plus the invocation that produced
+// it, so a dispatched skill keeps its provenance through late delivery.
+func (l *Loop) FollowUpWithProvenance(text, invocation, source string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 	l.steerMu.Lock()
-	l.followUps = append(l.followUps, text)
+	l.followUps = append(l.followUps, UserInput{Content: text, Display: text, Invocation: invocation, Source: source})
 	l.steerMu.Unlock()
 }
 
@@ -188,7 +204,11 @@ func (l *Loop) FollowUp(text string) {
 func (l *Loop) PendingFollowUp() []string {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
-	return append([]string(nil), l.followUps...)
+	out := make([]string, len(l.followUps))
+	for i, input := range l.followUps {
+		out[i] = input.Display
+	}
+	return out
 }
 
 // SetQueueModes mirrors Pi's steeringMode and followUpMode settings. Unknown
@@ -236,7 +256,7 @@ func (l *Loop) takeSteering() []UserInput {
 	return takeQueued(l.steeringMode, &l.steering)
 }
 
-func (l *Loop) takeFollowUp() []string {
+func (l *Loop) takeFollowUp() []UserInput {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
 	return takeQueued(l.followUpMode, &l.followUps)
@@ -273,13 +293,18 @@ func (l *Loop) ClearSteering() []string {
 	return out
 }
 
-// ClearFollowUp takes and clears the queued follow-up messages.
+// ClearFollowUp takes and clears the queued follow-up messages. Queued skill
+// commands return as invocations so editor recovery stays bounded.
 func (l *Loop) ClearFollowUp() []string {
 	l.steerMu.Lock()
 	defer l.steerMu.Unlock()
 	out := l.followUps
 	l.followUps = nil
-	return out
+	texts := make([]string, len(out))
+	for i, input := range out {
+		texts[i] = input.RecoveryText()
+	}
+	return texts
 }
 
 // releasePending drops bytes that a successful append made durable.
@@ -328,14 +353,25 @@ func (l *Loop) deliverQueuedSteering() (bool, error) {
 // would otherwise finish, honoring the follow-up queue mode.
 func (l *Loop) deliverFollowUp() (bool, error) {
 	msgs := l.takeFollowUp()
-	for i, text := range msgs {
-		if _, err := l.store.AppendMessage(userMsg(text)); err != nil {
+	for i, input := range msgs {
+		uid, err := l.store.AppendMessage(userMsg(input.Content))
+		if err != nil {
 			l.steerMu.Lock()
 			l.followUps = append(msgs[i:], l.followUps...)
 			l.steerMu.Unlock()
 			return false, fmt.Errorf("storage failure, stopping: %w", err)
 		}
-		l.sink(event.Event{Type: event.FollowUpDelivered, Text: text})
+		// The user message is durable from here. A provenance failure keeps only
+		// the unappended remainder; the durable message is never queued again.
+		if input.Invocation != "" {
+			if _, err := l.store.AppendProvenance(uid, input.Invocation, input.Source); err != nil {
+				l.steerMu.Lock()
+				l.followUps = append(msgs[i+1:], l.followUps...)
+				l.steerMu.Unlock()
+				return false, fmt.Errorf("storage failure, stopping: %w", err)
+			}
+		}
+		l.sink(event.Event{Type: event.FollowUpDelivered, Text: input.Display})
 	}
 	return len(msgs) > 0, nil
 }

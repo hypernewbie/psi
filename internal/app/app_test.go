@@ -16,6 +16,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -287,6 +288,39 @@ func testRuntimeWithCwd(t *testing.T, cwd string) *runtime {
 	return r
 }
 
+// Queueing is allowed during startup/settlement windows but never for a run
+// that is already cancelling, exiting, or storage-blocked.
+func TestBusySkillRefusalPreconditions(t *testing.T) {
+	r := testRuntime(t)
+	loop := &agent.Loop{}
+	cancel := func() {}
+	r.state = StateIdle
+	if r.busySkillRefused(loop, cancel, false) {
+		t.Fatal("settlement window rejected a skill queue")
+	}
+	r.state = StateCancelling
+	if !r.busySkillRefused(loop, cancel, false) {
+		t.Fatal("cancelling run accepted a queued skill")
+	}
+	r.state = StateIdle
+	if !r.busySkillRefused(loop, cancel, true) {
+		t.Fatal("exiting run accepted a queued skill")
+	}
+	if !r.busySkillRefused(nil, cancel, false) {
+		t.Fatal("missing active loop accepted a queued skill")
+	}
+	if !r.busySkillRefused(loop, nil, false) {
+		t.Fatal("missing cancellation accepted a queued skill")
+	}
+	r.store.FailWritesForTest(fmt.Errorf("blocked for test"))
+	if _, err := r.store.AppendMessage(agentMessageUser("blocked")); err == nil {
+		t.Fatal("expected the injected write failure")
+	}
+	if r.store.WriteError() == nil || !r.busySkillRefused(loop, cancel, false) {
+		t.Fatal("storage-blocked run accepted a queued skill")
+	}
+}
+
 func TestFooterSnapshotIncludesGitBranch(t *testing.T) {
 	fixture := t.TempDir()
 	head := filepath.Join(fixture, ".git", "HEAD")
@@ -508,11 +542,13 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	home, ws := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, ".pi", "agent")
 	requests := make(chan map[string]any, 16)
+	var providerCalls atomic.Int32
 	slowRelease := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/v1/messages" || req.Header.Get("x-api-key") != "file-test-key" {
 			t.Errorf("endpoint/auth not used: %s", req.URL.Path)
 		}
+		providerCalls.Add(1)
 		var body map[string]any
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -621,6 +657,61 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// waitScreen consumes VT output until every expected substring is shown.
+	// The timer is a deadlock guard, not a settle delay.
+	screenView := func() string {
+		rows := append(append([]string{}, screen.Scrollback...), strings.Split(screen.Text(), "\n")...)
+		return strings.Join(rows, "\n")
+	}
+	waitScreen := func(want ...string) string {
+		t.Helper()
+		timer := time.NewTimer(8 * time.Second)
+		defer timer.Stop()
+		for {
+			text := screenView()
+			complete := true
+			for _, part := range want {
+				if !strings.Contains(text, part) {
+					complete = false
+					break
+				}
+			}
+			if complete {
+				return text
+			}
+			select {
+			case chunk, ok := <-chunks:
+				if !ok {
+					t.Fatalf("process exited waiting for screen %q: %q", want, text)
+				}
+				pending += chunk
+				screen.Feed([]byte(chunk))
+			case <-timer.C:
+				t.Fatalf("timeout waiting for screen %q: %q", want, text)
+			}
+		}
+	}
+	lastUserContent := func(body map[string]any) string {
+		t.Helper()
+		messages, _ := body["messages"].([]any)
+		if len(messages) == 0 {
+			t.Fatal("provider request carried no messages")
+		}
+		last, _ := messages[len(messages)-1].(map[string]any)
+		if text, ok := last["content"].(string); ok {
+			return text
+		}
+		blocks, _ := last["content"].([]any)
+		var text strings.Builder
+		for _, raw := range blocks {
+			block, _ := raw.(map[string]any)
+			if block["type"] == "text" {
+				value, _ := block["text"].(string)
+				text.WriteString(value)
+			}
+		}
+		return text.String()
+	}
 	waitEditor := func() { waitForEditorScreen(t, chunks, screen, &pending) }
 	wait("/ commands")
 	waitEditor()
@@ -654,20 +745,71 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	wait("APP_OK")
 	waitEditor()
 	skillRequest := <-requests
-	encoded, _ := json.Marshal(skillRequest["messages"])
-	if !bytes.Contains(encoded, []byte("SKILL_BODY")) || !bytes.Contains(encoded, []byte("run-it")) {
-		t.Fatalf("skill was not submitted: %s", encoded)
+	skillPath := filepath.Join(agentDir, "skills", "doer", "SKILL.md")
+	wantSkill := "<skill name=\"doer\" location=\"" + skillPath + "\">\n" +
+		"References are relative to " + filepath.Dir(skillPath) + ".\n\nSKILL_BODY\n</skill>\n\nrun-it"
+	if got := lastUserContent(skillRequest); got != wantSkill {
+		t.Fatalf("skill provider content = %q, want %q", got, wantSkill)
 	}
+	view := waitScreen("[skill] doer (ctrl+o to expand)", "› run-it")
+	if strings.Contains(view, "SKILL_BODY") {
+		t.Fatalf("collapsed skill was visible by default: %q", view)
+	}
+	// The toggle keeps an in-progress draft and cursor untouched.
+	write("draft-keep")
+	waitScreen("draft-keep")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	settingsBefore, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callsBeforeToggle := providerCalls.Load()
+	write("\x0f")
+	view = waitScreen("Skill blocks: expanded", "SKILL_BODY", "References are relative to")
+	if !strings.Contains(view, "draft-keep") {
+		t.Fatalf("expanding skill blocks lost the draft: %q", view)
+	}
+	write("\x0f")
+	view = waitScreen("Skill blocks: collapsed", "[skill] doer (ctrl+o to expand)")
+	if strings.Contains(view, "SKILL_BODY") {
+		t.Fatalf("collapsing skill blocks left the body visible: %q", view)
+	}
+	if !strings.Contains(view, "draft-keep") {
+		t.Fatalf("collapsing skill blocks lost the draft: %q", view)
+	}
+	if providerCalls.Load() != callsBeforeToggle {
+		t.Fatalf("Ctrl+O invoked the provider: %d calls, want %d", providerCalls.Load(), callsBeforeToggle)
+	}
+	settingsAfter, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(settingsBefore, settingsAfter) {
+		t.Fatalf("Ctrl+O wrote settings:\nbefore %q\nafter  %q", settingsBefore, settingsAfter)
+	}
+	write("\x15")
+	// Idle refusals restore the captured draft instead of submitting text.
+	write("/skill:nope nope-draft\r")
+	wait("skill \"nope\" not found")
+	waitScreen("/skill:nope nope-draft")
+	write("\x15")
+	if err := os.Remove(skillPath); err != nil {
+		t.Fatal(err)
+	}
+	write("/skill:doer gone\r")
+	wait("skill \"doer\" unreadable")
+	waitScreen("/skill:doer gone")
+	write("\x15")
+	writeAppFile(t, skillPath, "---\nname: doer\ndescription: >\n  Do important work.\n---\nSKILL_BODY\n")
 	write("/new\r")
 	wait("New session started")
-	waitEditor()
 	write("fresh-session\r")
 	wait("APP_OK")
 	waitEditor()
 	fresh := <-requests
-	encoded, _ = json.Marshal(fresh["messages"])
-	if bytes.Contains(encoded, []byte("hello")) {
-		t.Fatal("new command retained old history")
+	encoded, _ := json.Marshal(fresh["messages"])
+	if bytes.Contains(encoded, []byte("hello")) || bytes.Contains(encoded, []byte("draft-keep")) {
+		t.Fatal("new command retained old history or the cleared skill draft")
 	}
 	if err := contender.TryLock(); err != nil {
 		t.Fatalf("new leaked the old session lock: %v", err)
@@ -697,6 +839,29 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	if screen.CursorVisible || !strings.Contains(screen.Text(), "Working") || !strings.Contains(screen.Text(), "local-model") || !strings.Contains(screen.Text(), "─") {
 		t.Fatalf("active stream lost its indicator/footer/editor: cursor=%v screen=%q", screen.CursorVisible, screen.Text())
 	}
+	// Toggles in the busy stream keep the assistant output, the draft, and the
+	// hidden busy cursor; Ctrl+T stays independent of the skill flag.
+	write("draft-during-stream")
+	waitScreen("draft-during-stream")
+	write("\x0f")
+	view = waitScreen("Skill blocks: expanded")
+	if !strings.Contains(view, "SLOW_PART") || !strings.Contains(view, "draft-during-stream") || screen.CursorVisible {
+		t.Fatalf("Ctrl+O during a run disturbed output/draft/cursor: cursor=%v %q", screen.CursorVisible, view)
+	}
+	write("\x14")
+	view = waitScreen("Thinking blocks: hidden")
+	if !strings.Contains(view, "SLOW_PART") || !strings.Contains(view, "draft-during-stream") {
+		t.Fatalf("Ctrl+T during a run disturbed output/draft: %q", view)
+	}
+	write("\x14")
+	waitScreen("Thinking blocks: visible")
+	write("\x0f")
+	waitScreen("Skill blocks: collapsed")
+	if !strings.Contains(screenView(), "draft-during-stream") {
+		t.Fatalf("busy skill toggles lost the draft: %q", screen.Text())
+	}
+	write("\x15")
+	waitScreen("local-model")
 	close(slowRelease)
 	wait("SLOW_DONE")
 	waitEditor()
@@ -756,6 +921,43 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 		s, err := session.OpenFile(info.Path, ws, true)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if info.Path == initialSessions[0].Path {
+			provenance := map[string]struct{ invocation, source string }{}
+			for _, entry := range s.Entries() {
+				if entry.Kind != "custom" || entry.Custom == nil || entry.Custom.CustomType != "psi.input" {
+					continue
+				}
+				var p struct {
+					TargetID   string `json:"targetId"`
+					Invocation string `json:"invocation"`
+					Source     string `json:"source"`
+				}
+				if json.Unmarshal(entry.Custom.Data, &p) == nil && p.TargetID != "" {
+					provenance[p.TargetID] = struct{ invocation, source string }{p.Invocation, p.Source}
+				}
+			}
+			skillUsers := 0
+			for _, entry := range s.Entries() {
+				if entry.Kind != "message" || entry.Message == nil || entry.Message.Message.User == nil {
+					continue
+				}
+				content, _ := entry.Message.Message.User.Content.(string)
+				if !strings.HasPrefix(content, "<skill name=\"doer\"") {
+					continue
+				}
+				skillUsers++
+				if content != wantSkill {
+					t.Fatalf("stored skill content = %q, want %q", content, wantSkill)
+				}
+				p, ok := provenance[entry.ID()]
+				if !ok || p.invocation != "/skill:doer run-it" || p.source != "skill" {
+					t.Fatalf("stored skill provenance = %+v, ok=%v", p, ok)
+				}
+			}
+			if skillUsers != 1 {
+				t.Fatalf("stored skill user messages = %d, want 1", skillUsers)
+			}
 		}
 		if err := s.TryLock(); err != nil {
 			t.Fatalf("lock leaked on exit: %v", err)

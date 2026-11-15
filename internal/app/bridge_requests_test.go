@@ -32,6 +32,7 @@ type bridgePhi struct {
 	hellos []*pibridgepb.PiToPhi
 	frames []*pibridgepb.PiToPhi
 	inject chan *pibridgepb.PhiToPi
+	notify chan struct{}
 }
 
 func startBridgePhi(t *testing.T) *bridgePhi {
@@ -45,7 +46,7 @@ func startBridgePhi(t *testing.T) *bridgePhi {
 	if err != nil {
 		t.Skipf("unix listener unavailable: %v", err)
 	}
-	f := &bridgePhi{target: "unix:" + path, inject: make(chan *pibridgepb.PhiToPi, 8)}
+	f := &bridgePhi{target: "unix:" + path, inject: make(chan *pibridgepb.PhiToPi, 8), notify: make(chan struct{}, 1)}
 	server := grpc.NewServer()
 	pibridgepb.RegisterIntegrationServer(server, f)
 	go func() { _ = server.Serve(lis) }()
@@ -102,6 +103,10 @@ func (f *bridgePhi) Connect(stream pibridgepb.Integration_ConnectServer) error {
 			f.mu.Lock()
 			f.frames = append(f.frames, frame)
 			f.mu.Unlock()
+			select {
+			case f.notify <- struct{}{}:
+			default:
+			}
 		case msg := <-f.inject:
 			msg.PaneId, msg.ProcessId = hello.GetPaneId(), hello.GetProcessId()
 			msg.RuntimeGeneration = hello.GetRuntimeGeneration()
@@ -114,8 +119,9 @@ func (f *bridgePhi) Connect(stream pibridgepb.Integration_ConnectServer) error {
 
 func (f *bridgePhi) waitFrame(t *testing.T, what string, pred func(*pibridgepb.PiToPhi) bool) *pibridgepb.PiToPhi {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for {
 		f.mu.Lock()
 		frames := append([]*pibridgepb.PiToPhi(nil), f.frames...)
 		f.mu.Unlock()
@@ -124,10 +130,12 @@ func (f *bridgePhi) waitFrame(t *testing.T, what string, pred func(*pibridgepb.P
 				return frame
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-f.notify:
+		case <-timer.C:
+			t.Fatalf("timed out waiting for %s", what)
+		}
 	}
-	t.Fatalf("timed out waiting for %s", what)
-	return nil
 }
 
 // startBridgeRuntime wires a provisioned client to r, the way Run does.

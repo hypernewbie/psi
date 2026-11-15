@@ -171,7 +171,7 @@ func (r *runtime) takeSteering(loop *agent.Loop) []string {
 			structured = append(structured, input)
 			continue
 		}
-		texts = append(texts, input.Display)
+		texts = append(texts, input.RecoveryText())
 	}
 	r.noteRecovery(structured...)
 	if len(structured) > 0 && r.recoveryNotify != nil {

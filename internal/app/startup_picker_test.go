@@ -61,6 +61,11 @@ func TestInlineProjectTrustPickerOffersPiChoices(t *testing.T) {
 			} else {
 				q.write("/skill:project\r")
 				q.wait("skill \"project\" not found")
+				// A refused idle skill restores the submitted draft; clear it
+				// before quitting so /quit parses as a command.
+				q.waitScreen("/skill:project")
+				q.prompt()
+				q.write("\x03")
 				q.prompt()
 			}
 			if !allow {

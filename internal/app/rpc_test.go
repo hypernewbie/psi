@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,14 +25,22 @@ import (
 // rpcLog captures encoded stdout lines with a lock, since agent events
 // arrive on background goroutines.
 type rpcLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	notify chan struct{}
 }
 
 func (l *rpcLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
+	n, err := l.buf.Write(p)
+	l.mu.Unlock()
+	if l.notify != nil {
+		select {
+		case l.notify <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
 }
 
 func (l *rpcLog) objects(t *testing.T) []map[string]any {
@@ -66,6 +75,25 @@ func (l *rpcLog) waitFor(t *testing.T, what string, match func(map[string]any) b
 	}
 	t.Fatalf("timed out waiting for %s; got %d lines", what, len(l.objects(t)))
 	return nil
+}
+
+// waitObjects waits for a log notification, then evaluates the predicate on a
+// fresh snapshot. The timeout is a deadlock guard, not a settle delay.
+func (l *rpcLog) waitObjects(t *testing.T, what string, match func([]map[string]any) bool) []map[string]any {
+	t.Helper()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for {
+		objects := l.objects(t)
+		if match(objects) {
+			return objects
+		}
+		select {
+		case <-l.notify:
+		case <-timer.C:
+			t.Fatalf("timed out waiting for %s; got %d lines", what, len(objects))
+		}
+	}
 }
 
 func isType(typ string) func(map[string]any) bool {
@@ -654,4 +682,193 @@ func TestRPCSetModelAppliesPerModelThinkingDefault(t *testing.T) {
 	if s.r.ov.Model != "rpc-test-model-2" || s.r.ov.Thinking != "medium" {
 		t.Fatalf("switch selected %s at %q, want medium", s.r.ov.Model, s.r.ov.Thinking)
 	}
+}
+
+func rpcSkill(t *testing.T, name, body string) skills.Skill {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "SKILL.md")
+	content := "---\nname: " + name + "\ndescription: rpc test skill\n---\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return skills.Skill{Name: name, Description: "rpc test skill", FilePath: path, BaseDir: dir}
+}
+
+func rpcLastUserText(t *testing.T, req provider.Request) string {
+	t.Helper()
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != "user" {
+			continue
+		}
+		var text strings.Builder
+		for _, block := range req.Messages[i].Content {
+			if block.Type == "text" {
+				text.WriteString(block.Text)
+			}
+		}
+		return text.String()
+	}
+	return ""
+}
+
+func rpcStoredUserTexts(store *session.Store) []string {
+	var out []string
+	for _, entry := range store.Entries() {
+		if entry.Kind != "message" || entry.Message == nil || entry.Message.Message.User == nil {
+			continue
+		}
+		if text, ok := entry.Message.Message.User.Content.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func TestRPCSkill(t *testing.T) {
+	t.Run("known skill sends the exact block", func(t *testing.T) {
+		skill := rpcSkill(t, "doer", "SKILL_BODY")
+		fake := &provider.Fake{Responses: []*provider.Response{{Text: "done", StopReason: "stop"}}, TextDeltas: [][]string{{"done"}}}
+		s, store, log := newRPCTestRunner(t, fake, []skills.Skill{skill})
+		log.notify = make(chan struct{}, 1)
+		resp := s.handle(rpcCommand{ID: strptr("s1"), Type: "prompt", Message: "/skill:doer run-it"})
+		if resp == nil || !resp.Success || resp.Data.(map[string]any)["disposition"] != "started" {
+			t.Fatalf("prompt response = %+v", resp)
+		}
+		log.waitObjects(t, "agent_settled", func(objs []map[string]any) bool {
+			return len(objs) > 0 && objs[len(objs)-1]["type"] == "agent_settled"
+		})
+		want := "<skill name=\"doer\" location=\"" + skill.FilePath + "\">\n" +
+			"References are relative to " + skill.BaseDir + ".\n\nSKILL_BODY\n</skill>\n\nrun-it"
+		requests := fake.Requests()
+		if len(requests) != 1 {
+			t.Fatalf("provider calls = %d", len(requests))
+		}
+		if got := rpcLastUserText(t, requests[0]); got != want {
+			t.Fatalf("provider content = %q, want %q", got, want)
+		}
+		stored := rpcStoredUserTexts(store)
+		if len(stored) != 1 || stored[0] != want {
+			t.Fatalf("stored user texts = %q", stored)
+		}
+	})
+
+	t.Run("ordinary prompt is unchanged", func(t *testing.T) {
+		fake := &provider.Fake{Responses: []*provider.Response{{Text: "done", StopReason: "stop"}}, TextDeltas: [][]string{{"done"}}}
+		s, store, log := newRPCTestRunner(t, fake, []skills.Skill{rpcSkill(t, "doer", "SKILL_BODY")})
+		log.notify = make(chan struct{}, 1)
+		resp := s.handle(rpcCommand{ID: strptr("o1"), Type: "prompt", Message: "ordinary hello"})
+		if resp == nil || !resp.Success {
+			t.Fatalf("prompt response = %+v", resp)
+		}
+		log.waitObjects(t, "agent_settled", func(objs []map[string]any) bool {
+			return len(objs) > 0 && objs[len(objs)-1]["type"] == "agent_settled"
+		})
+		if got := rpcLastUserText(t, fake.Requests()[0]); got != "ordinary hello" {
+			t.Fatalf("provider content = %q", got)
+		}
+		if stored := rpcStoredUserTexts(store); len(stored) != 1 || stored[0] != "ordinary hello" {
+			t.Fatalf("stored user texts = %q", stored)
+		}
+	})
+
+	refusals := []struct {
+		name  string
+		build func(t *testing.T) ([]skills.Skill, string)
+		cause string
+	}{
+		{
+			name: "empty name",
+			build: func(t *testing.T) ([]skills.Skill, string) {
+				return nil, "/skill:"
+			},
+			cause: "not found",
+		},
+		{
+			name: "unknown name",
+			build: func(t *testing.T) ([]skills.Skill, string) {
+				return []skills.Skill{rpcSkill(t, "doer", "BODY")}, "/skill:missing"
+			},
+			cause: "not found",
+		},
+		{
+			name: "deleted file",
+			build: func(t *testing.T) ([]skills.Skill, string) {
+				skill := rpcSkill(t, "doer", "BODY")
+				if err := os.Remove(skill.FilePath); err != nil {
+					t.Fatal(err)
+				}
+				return []skills.Skill{skill}, "/skill:doer"
+			},
+			cause: "unreadable",
+		},
+		{
+			name: "oversized file",
+			build: func(t *testing.T) ([]skills.Skill, string) {
+				return []skills.Skill{rpcSkill(t, "doer", strings.Repeat("x", 256*1024+1))}, "/skill:doer"
+			},
+			cause: "exceeds 256 KiB",
+		},
+	}
+	for _, tc := range refusals {
+		t.Run("refused: "+tc.name, func(t *testing.T) {
+			list, message := tc.build(t)
+			fake := &provider.Fake{}
+			s, store, log := newRPCTestRunner(t, fake, list)
+			log.notify = make(chan struct{}, 1)
+			before := len(store.Entries())
+			pending := s.pendingCount()
+			resp := s.handle(rpcCommand{ID: strptr("r1"), Type: "prompt", Message: message})
+			if resp == nil || resp.Success || resp.Command != "prompt" || resp.ID == nil || *resp.ID != "r1" {
+				t.Fatalf("refusal response = %+v", resp)
+			}
+			if !strings.Contains(resp.Error, tc.cause) {
+				t.Fatalf("error = %q, want cause %q", resp.Error, tc.cause)
+			}
+			if len(store.Entries()) != before || s.pendingCount() != pending {
+				t.Fatal("refused expansion changed the store or queue count")
+			}
+			if len(s.loop.PendingSteering()) != 0 || len(s.loop.PendingFollowUp()) != 0 {
+				t.Fatal("refused expansion queued a message")
+			}
+			if fake.CallCount() != 0 {
+				t.Fatalf("provider calls = %d, want none", fake.CallCount())
+			}
+			for _, obj := range log.objects(t) {
+				if obj["type"] == "message_start" {
+					t.Fatalf("refused expansion emitted a user message: %v", obj)
+				}
+			}
+		})
+	}
+
+	t.Run("refused while busy", func(t *testing.T) {
+		fake := &provider.Fake{}
+		s, store, log := newRPCTestRunner(t, fake, nil)
+		log.notify = make(chan struct{}, 1)
+		s.mu.Lock()
+		s.running = true
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			s.running = false
+			s.mu.Unlock()
+		}()
+		before := len(store.Entries())
+		resp := s.handle(rpcCommand{ID: strptr("b1"), Type: "prompt", Message: "/skill:missing", StreamingBehavior: "steer"})
+		if resp == nil || resp.Success || !strings.Contains(resp.Error, "not found") {
+			t.Fatalf("busy refusal = %+v", resp)
+		}
+		if len(store.Entries()) != before || len(s.loop.PendingSteering()) != 0 || len(s.loop.PendingFollowUp()) != 0 {
+			t.Fatal("busy refusal changed the store or queues")
+		}
+		if fake.CallCount() != 0 {
+			t.Fatalf("provider calls = %d, want none", fake.CallCount())
+		}
+		for _, obj := range log.objects(t) {
+			if obj["type"] == "message_start" {
+				t.Fatalf("busy refusal emitted a user message: %v", obj)
+			}
+		}
+	})
 }

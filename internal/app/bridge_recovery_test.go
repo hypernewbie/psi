@@ -52,6 +52,27 @@ func TestTakeSteeringSplitsStructuredRecoveryFromText(t *testing.T) {
 	}
 }
 
+// A stopped run's skill steering restores its short invocation, never the
+// expanded body, so editor recovery stays bounded.
+func TestTakeSteeringRecoversSkillInvocation(t *testing.T) {
+	r := testRuntime(t)
+	loop := agent.New(r.store, r.reg, r.prov, nil)
+	block := "<skill name=\"doer\" location=\"/skills/doer/SKILL.md\">\nReferences are relative to /skills/doer.\n\n" +
+		strings.Repeat("BODY", 60_000) + "\n</skill>\n\nrun-it"
+	loop.SteerWithProvenance(block, "/skill:doer run-it", "skill")
+	texts := r.takeSteering(loop)
+	if len(texts) != 1 || texts[0] != "/skill:doer run-it" {
+		t.Fatalf("editor texts = %q, want the skill invocation", texts)
+	}
+	if len(r.recovery) != 0 {
+		t.Fatalf("recovery = %+v, want no structured recovery", r.recovery)
+	}
+	loop.FollowUpWithProvenance(block, "/skill:doer run-it", "skill")
+	if got := loop.ClearFollowUp(); len(got) != 1 || got[0] != "/skill:doer run-it" {
+		t.Fatalf("cleared follow-ups = %q, want the skill invocation", got)
+	}
+}
+
 // Session replacement drops undelivered prompts and says so.
 func TestClearRecoveryNotifiesAndEmptiesTheBatch(t *testing.T) {
 	r := testRuntime(t)

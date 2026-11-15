@@ -259,6 +259,8 @@ type DisplaySettings struct {
 	CodeBlockIndent        string
 	// HideThinking collapses reasoning blocks to Pi's "Thinking..." label.
 	HideThinking bool
+	// ExpandSkills shows skill invocation bodies instead of the collapsed row.
+	ExpandSkills bool
 }
 
 func DefaultDisplaySettings() DisplaySettings {

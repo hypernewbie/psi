@@ -14,6 +14,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+L` opens the model picker; `Shift+Tab` cycles the selected model's supported thinking levels
 - In `/thinking`, `Ctrl+S` saves the highlighted level as the global `defaultThinkingLevel`. `Enter` changes only the current session. The per-model level picker in `/settings` does not use `Ctrl+S`.
 - `Ctrl+T` hides or shows reasoning blocks. The toggle works during a run, repaints the transcript, and is saved as `hideThinkingBlock` in the agent `settings.json`
+- `Ctrl+O` expands or collapses all skill blocks, also during a run. It changes only the transcript display: it does not submit a message or call a provider, and it leaves the draft and cursor position intact. The state is not saved; a restart starts collapsed. psi has no expandable tool-output panels, so this key affects skill blocks only
 - Completion and picker search never scan files or call a provider; picker queries are not conversation messages
 - `Ctrl+C` cancels a picker; during a run it cancels the run. When idle it clears the draft first and exits only when the draft is empty
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
@@ -37,9 +38,9 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 - `/reload` — reload keybindings, extensions, skills, prompts, themes, and context files
 - `/quit` — settle work and restore the terminal
 - `/ac`, `/autocompact`, `/loop`, and `/loop-stop` — embedded adaptive-compaction and loop extensions
-- `/skill:name [args]` — invoke a skill with reproducible input (`psi.input`)
+- `/skill:name [args]` — invoke a skill with reproducible input (`psi.input`). The transcript shows `[skill] name (ctrl+o to expand)` with the arguments in a separate user row; `Ctrl+O` expands or collapses the body. An unknown, unreadable, or oversized skill is refused instead of sent as text
 
-`/help`, `/version`, and `/history` are not slash commands. Use `./psi --help` and `./psi --version` for CLI information. An unknown slash command is ordinary prompt text and is sent to the model, as in Pi.
+`/help`, `/version`, and `/history` are not slash commands. Use `./psi --help` and `./psi --version` for CLI information. An unknown slash command is ordinary prompt text and is sent to the model, as in Pi. `/skill:` is the exception: an unknown skill is always refused, never sent as prompt text.
 
-Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft. `/ac`, `/autocompact`, and `/loop-stop` have busy-run handling; other slash commands return to the draft.
+Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. This includes `/skill:<name> [args]`, which queues the expanded block and keeps its invocation provenance. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft; queued skills restore as `/skill:name args`, not as expanded bodies. `/ac`, `/autocompact`, `/loop-stop`, and `/skill:` have busy-run handling; other slash commands return to the draft.
 Every command works after resume and after cancellation; draft preserved on errors.
