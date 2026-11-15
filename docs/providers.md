@@ -119,6 +119,25 @@ last tool, and the last conversation text part. psi also detects this for
 `openrouter` models whose id starts with `anthropic/`, as Pi does. No cache
 retention (`ttl`) is sent.
 
+## Anthropic beta features
+
+An `anthropic-messages` request that uses a beta feature has to declare it in
+the `anthropic-beta` header, or the endpoint refuses the request. psi computes
+the header from the request body:
+
+- `fine-grained-tool-streaming-2025-05-14` for a request with tools that the
+  model does not stream eagerly.
+- `interleaved-thinking-2025-05-14` for a model with budget-based thinking, so
+  a replayed thinking block stays valid.
+- `server-side-fallback-2026-07-01` for a model with allowed fallback models.
+- `mid-conversation-output-config-2026-07-01` and
+  `thinking-binding-controls-2026-08-01` for a model that uses managed effort.
+
+A configured `anthropic-beta` header replaces the computed set, and an empty
+configured value removes the header. psi does not declare the features that
+need native tool changes or message threads, because it does not send those
+features.
+
 Provider selection precedence matches Pi: command-line flags, then the session's
 recorded model, then `defaultProvider`/`defaultModel` from settings. See
 [Configuration](config.md).
