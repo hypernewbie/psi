@@ -91,6 +91,95 @@ type errorTransport struct{ err error }
 
 func (t *errorTransport) Connect(context.Context) (sdk.Connection, error) { return nil, t.err }
 
+// requestObservation carries HTTP response metadata for one MCP invocation.
+// It is deliberately one-use: detached SDK requests can inherit a parent
+// context, but only the first marked POST may claim the observation.
+type requestObservation struct {
+	method string
+
+	mu       sync.Mutex
+	claimed  bool
+	finished bool
+	class    string
+	status   int
+}
+
+type requestObservationKey struct{}
+type outboundObservationKey struct{}
+
+func withRequestObservation(ctx context.Context, obs *requestObservation) context.Context {
+	return context.WithValue(ctx, requestObservationKey{}, obs)
+}
+
+func requestObservationFrom(ctx context.Context) *requestObservation {
+	obs, _ := ctx.Value(requestObservationKey{}).(*requestObservation)
+	return obs
+}
+
+// withOutboundObservation marks the context passed to the method handler. A
+// detached notification can inherit requestObservation, but not this marker
+// unless it was derived inside the marked call.
+func withOutboundObservation(ctx context.Context, obs *requestObservation) context.Context {
+	return context.WithValue(ctx, outboundObservationKey{}, obs)
+}
+
+func outboundObservationFrom(ctx context.Context) *requestObservation {
+	obs, _ := ctx.Value(outboundObservationKey{}).(*requestObservation)
+	return obs
+}
+
+func newRequestObservation(method string) *requestObservation {
+	return &requestObservation{method: method}
+}
+
+func (o *requestObservation) claim(status int, class string) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.finished || o.claimed {
+		return
+	}
+	o.claimed = true
+	o.status = status
+	if class != "" {
+		o.class = class
+	}
+}
+
+func (o *requestObservation) latch(class string) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.finished {
+		return
+	}
+	if class == "limit" || o.class == "" {
+		o.class = class
+	}
+}
+
+func (o *requestObservation) finish() {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.finished = true
+	o.mu.Unlock()
+}
+
+func (o *requestObservation) snapshot() (string, int) {
+	if o == nil {
+		return "", 0
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.class, o.status
+}
+
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
@@ -103,6 +192,8 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	}
 	clone := req.Clone(req.Context())
 	clone.Header = req.Header.Clone()
+	baseObs := requestObservationFrom(req.Context())
+	claimObs := outboundObservationFrom(req.Context())
 	var stopConn func() bool
 	var cancel context.CancelFunc
 	if t.conn != nil {
@@ -114,6 +205,9 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	for name, value := range t.headers {
 		if _, reserved := reservedHeaders[strings.ToLower(name)]; reserved {
 			return nil, fmt.Errorf("MCP header %q is reserved", name)
+		}
+		if !validHeaderValue(value) {
+			return nil, fmt.Errorf("MCP header %q contains an invalid value", name)
 		}
 		clone.Header.Set(name, value)
 	}
@@ -131,7 +225,7 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		if cancel != nil {
 			cancel()
 		}
-		t.classify(err)
+		t.recordTransportError(baseObs, claimObs, req, err)
 		return nil, err
 	}
 	if resp.Body != nil && cancel != nil {
@@ -142,34 +236,112 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		}
 		cancel()
 	}
-	t.conn.recordRetryAfter(resp.Header.Values("Retry-After"))
 	lower := strings.ToLower(resp.Header.Get("Content-Type"))
 	isSSE := strings.HasPrefix(lower, "text/event-stream")
-	if !isSSE {
-		resp.Body = &boundedReadCloser{body: resp.Body, remaining: maxHTTPBody, onOverflow: func() { t.conn.latchClass("limit") }}
+	if req.Method == http.MethodPost && baseObs != nil {
+		if claimObs != nil {
+			status := classifyHTTPStatus(resp.StatusCode, req.Method, req.Header.Get("Mcp-Session-Id"), isSSE)
+			claimObs.claim(resp.StatusCode, observedClass(resp.StatusCode, status.class))
+		}
+	} else {
+		t.recordConnectionResponse(req, resp, isSSE)
 	}
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		t.conn.latchClass("auth")
-	case resp.StatusCode == http.StatusNotFound && req.Method == http.MethodPost && req.Header.Get("Mcp-Session-Id") != "":
-		t.conn.latchClass("session-lost")
-	case req.Method == http.MethodGet && resp.StatusCode == http.StatusTooManyRequests:
-		t.conn.latchClass("rate-limit")
-	case req.Method == http.MethodGet && resp.StatusCode >= 500:
-		t.conn.latchClass("server")
-	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
-		t.conn.transient.Store(true)
+	if !isSSE {
+		resp.Body = &boundedReadCloser{body: resp.Body, remaining: maxHTTPBody, onOverflow: func() {
+			if baseObs != nil && req.Method == http.MethodPost {
+				if claimObs != nil {
+					claimObs.latch("limit")
+				}
+				return
+			}
+			t.conn.latchClass("limit")
+		}}
 	}
 	return resp, nil
 }
 
-func (t *headerRoundTripper) classify(err error) {
+type httpStatusClass struct {
+	class               string
+	transient           bool
+	listenerUnavailable bool
+}
+
+func classifyHTTPStatus(status int, method, sessionID string, sse bool) httpStatusClass {
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return httpStatusClass{class: "auth"}
+	case method == http.MethodPost && status == http.StatusNotFound && sessionID != "":
+		return httpStatusClass{class: "session-lost"}
+	case method == http.MethodGet && status == http.StatusMethodNotAllowed:
+		return httpStatusClass{listenerUnavailable: true}
+	case method == http.MethodGet && status == http.StatusOK && !sse:
+		return httpStatusClass{listenerUnavailable: true}
+	case method == http.MethodGet && status == http.StatusOK:
+		return httpStatusClass{}
+	case method == http.MethodGet && status == http.StatusTooManyRequests:
+		return httpStatusClass{class: "rate-limit"}
+	case method == http.MethodGet && status >= 500:
+		return httpStatusClass{class: "server"}
+	case method == http.MethodGet:
+		return httpStatusClass{class: "listener"}
+	case status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500:
+		return httpStatusClass{transient: true}
+	default:
+		return httpStatusClass{}
+	}
+}
+
+func observedClass(status int, class string) string {
+	if class != "" {
+		return class
+	}
+	switch {
+	case status == http.StatusRequestTimeout:
+		return "timeout"
+	case status == http.StatusTooManyRequests:
+		return "rate-limit"
+	case status >= 500:
+		return "server"
+	default:
+		return ""
+	}
+}
+
+func (t *headerRoundTripper) recordConnectionResponse(req *http.Request, resp *http.Response, isSSE bool) {
+	t.conn.recordRetryAfter(resp.Header.Values("Retry-After"))
+	status := classifyHTTPStatus(resp.StatusCode, req.Method, req.Header.Get("Mcp-Session-Id"), isSSE)
+	if status.class != "" {
+		t.conn.latchClass(status.class)
+	}
+	if status.transient {
+		t.conn.transient.Store(true)
+	}
+	if status.listenerUnavailable {
+		t.conn.listenerUnavailable.Store(true)
+	}
+}
+
+func (t *headerRoundTripper) recordTransportError(baseObs, claimObs *requestObservation, req *http.Request, err error) {
+	class := classifyTransportError(err)
+	if baseObs != nil && req.Method == http.MethodPost {
+		if claimObs != nil {
+			claimObs.latch(class)
+		}
+		return
+	}
+	if class != "" {
+		t.conn.latchClass(class)
+	}
+}
+
+func classifyTransportError(err error) string {
 	var unknown x509.UnknownAuthorityError
 	var hostname x509.HostnameError
 	var invalid x509.CertificateInvalidError
 	if errors.As(err, &unknown) || errors.As(err, &hostname) || errors.As(err, &invalid) {
-		t.conn.latchClass("certificate")
+		return "certificate"
 	}
+	return ""
 }
 
 var reservedHeaders = map[string]bool{
@@ -272,7 +444,7 @@ func (c *connection) markListenerStarted() {
 
 func (c *connection) terminalClass() string {
 	switch c.latchedClass() {
-	case "auth", "certificate", "rate-limit", "server", "limit", "session-lost":
+	case "auth", "certificate", "rate-limit", "server", "limit", "session-lost", "listener":
 		return c.latchedClass()
 	}
 	return ""

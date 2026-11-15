@@ -229,8 +229,8 @@ func (r *runtime) handleMCPCommand(arg string, out io.Writer) (bool, error) {
 	snapshot := manager.Snapshot()
 	if snapshot == nil || len(snapshot.Servers) == 0 {
 		print("mcp: no servers configured")
-		if snapshot != nil && snapshot.ReloadError != "" {
-			print("mcp: reload error (" + snapshot.ReloadError + ")")
+		if snapshot != nil {
+			printMCPDiagnostics(print, snapshot)
 		}
 		return false, nil
 	}
@@ -243,10 +243,20 @@ func (r *runtime) handleMCPCommand(arg string, out io.Writer) (bool, error) {
 		if server.RefreshWarning != "" {
 			line += " [refresh: " + server.RefreshWarning + "]"
 		}
+		if server.NotificationsUnavailable {
+			line += " [notifications unavailable]"
+		}
 		print(line)
+	}
+	printMCPDiagnostics(print, snapshot)
+	return false, nil
+}
+
+func printMCPDiagnostics(print func(string), snapshot *mcp.Snapshot) {
+	for _, warning := range snapshot.Warnings {
+		print("mcp: " + warning)
 	}
 	if snapshot.ReloadError != "" {
 		print("mcp: reload error (" + snapshot.ReloadError + ")")
 	}
-	return false, nil
 }

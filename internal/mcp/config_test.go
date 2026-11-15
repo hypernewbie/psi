@@ -220,3 +220,42 @@ func TestConfigTimeoutBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigRejectsTrailingData(t *testing.T) {
+	dir := t.TempDir()
+	bad := writeTestFile(t, dir, "bad.json", `{"mcpServers": {}} garbage`)
+	if _, err := LoadConfig(bad, "", false); err == nil {
+		t.Fatal("trailing JSON data was accepted")
+	}
+	good := writeTestFile(t, dir, "good.json", "{\"mcpServers\": {}}\n\t")
+	if _, err := LoadConfig(good, "", false); err != nil {
+		t.Fatalf("trailing whitespace was rejected: %v", err)
+	}
+}
+
+func TestConfigRejectsHeaderCRLF(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestFile(t, dir, "headers.json", `{"mcpServers": {
+		"bad": {"url": "http://127.0.0.1:1/mcp", "headers": {"X-Test": "ok\r\nInjected: yes"}},
+		"good": {"command": "node"}
+	}}`)
+	cfg, err := LoadConfig(path, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Name != "good" {
+		t.Fatalf("header injection entry was not rejected: %+v", cfg.Servers)
+	}
+}
+
+func TestResolveRejectsInterpolatedHeaderCRLF(t *testing.T) {
+	t.Setenv("MCP_HEADER_VALUE", "a\r\nb")
+	server := Server{
+		Name:         "header-env",
+		Headers:      map[string]string{"X-Test": "${MCP_HEADER_VALUE}"},
+		HeaderSource: map[string]string{"X-Test": "user"},
+	}
+	if _, err := Resolve(context.Background(), server, true); err == nil {
+		t.Fatal("interpolated header CRLF was accepted")
+	}
+}

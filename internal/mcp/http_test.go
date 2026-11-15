@@ -609,7 +609,20 @@ func TestManagerHTTPRelistTimeoutRetainsCatalog(t *testing.T) {
 				if result.IsError {
 					t.Fatalf("listener or catalog was lost after re-list timeout: %+v", result)
 				}
-				return
+				manager.mu.Lock()
+				conn := manager.servers["http-fixture"].conn
+				manager.mu.Unlock()
+				stallList.Store(false)
+				if err := conn.refreshCatalog(); err != nil {
+					t.Fatalf("recovery refresh = %v", err)
+				}
+				for time.Now().Before(deadline) {
+					if manager.Snapshot().Servers[0].RefreshWarning == "" {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				t.Fatalf("refresh warning did not clear: %+v", manager.Snapshot().Servers)
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -649,6 +662,9 @@ func TestManagerHTTPUnsupportedListenerForms(t *testing.T) {
 			tool, ok := snapshot.Find("mcp__http_fixture__echo")
 			if !ok {
 				t.Fatalf("tool missing with unsupported listener: %+v", snapshot.Tools)
+			}
+			if !snapshot.Servers[0].NotificationsUnavailable {
+				t.Fatalf("unsupported listener was not reported: %+v", snapshot.Servers)
 			}
 			result := manager.Call(context.Background(), tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "ok"}})
 			if result.IsError {
@@ -1141,6 +1157,9 @@ func TestManagerHTTPConcurrentCallsKeepResultsIsolated(t *testing.T) {
 	for result := range results {
 		if result.IsError {
 			failures++
+			if !strings.Contains(result.Content[0].Text, "server") {
+				t.Fatalf("failure lost its HTTP status class: %+v", result)
+			}
 		} else {
 			successes++
 		}
@@ -1641,7 +1660,13 @@ func TestManagerHTTPLive429RetriesInPlace(t *testing.T) {
 			if listAttempts.Load() < 2 {
 				t.Fatalf("live 429 did not retry tools/list: %d", listAttempts.Load())
 			}
-			if len(delays) == 0 || delays[0] < time.Second {
+			retrySawHeader := false
+			for _, delay := range delays {
+				if delay >= time.Second {
+					retrySawHeader = true
+				}
+			}
+			if !retrySawHeader {
 				t.Fatalf("live 429 Retry-After delays = %v", delays)
 			}
 			return
@@ -1649,4 +1674,301 @@ func TestManagerHTTPLive429RetriesInPlace(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("live 429 did not recover catalog: %+v", manager.Snapshot().Servers)
+}
+
+func TestRequestObservationIsOneUse(t *testing.T) {
+	obs := newRequestObservation("tools/call")
+	obs.claim(http.StatusInternalServerError, "server")
+	obs.claim(http.StatusUnauthorized, "auth")
+	if class, status := obs.snapshot(); class != "server" || status != http.StatusInternalServerError {
+		t.Fatalf("observation = %q %d", class, status)
+	}
+	obs.latch("limit")
+	if class, _ := obs.snapshot(); class != "limit" {
+		t.Fatalf("limit did not take precedence: %q", class)
+	}
+	obs.finish()
+	obs.latch("auth")
+	if class, _ := obs.snapshot(); class != "limit" {
+		t.Fatalf("finished observation changed: %q", class)
+	}
+}
+
+func TestHTTPObservationDoesNotLeakAcrossRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("X-Obs") {
+		case "auth":
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	conn := &connection{ctx: ctx, cancel: cancel, listenerStarted: make(chan struct{})}
+	conn.errClass.Store("")
+	transport := &headerRoundTripper{base: http.DefaultTransport, conn: conn}
+	do := func(obs *requestObservation, header string, mark bool) *http.Response {
+		t.Helper()
+		requestCtx := withRequestObservation(context.Background(), obs)
+		if mark && obs != nil {
+			requestCtx = withOutboundObservation(requestCtx, obs)
+		}
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, server.URL, strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Obs", header)
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp
+	}
+	authObs := newRequestObservation("tools/call")
+	do(authObs, "auth", true)
+	if class, status := authObs.snapshot(); class != "auth" || status != http.StatusUnauthorized {
+		t.Fatalf("auth observation = %q %d", class, status)
+	}
+	okObs := newRequestObservation("tools/call")
+	do(okObs, "ok", true)
+	if class, status := okObs.snapshot(); class != "" || status != http.StatusOK {
+		t.Fatalf("success observation = %q %d", class, status)
+	}
+	cancelObs := newRequestObservation("tools/call")
+	do(cancelObs, "auth", false)
+	if class, status := cancelObs.snapshot(); class != "" || status != 0 {
+		t.Fatalf("unmarked POST claimed observation: %q %d", class, status)
+	}
+	if class := conn.latchedClass(); class != "" {
+		t.Fatalf("observed call latched the connection: %q", class)
+	}
+}
+
+func TestManagerHTTPReloadResolvesEnvironmentValues(t *testing.T) {
+	t.Setenv("MCP_TEST_TOKEN", "one")
+	server := httpFixture(t)
+	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	var lastHeader atomic.Value
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastHeader.Store(r.Header.Get("X-Token"))
+		mcpHandler.ServeHTTP(w, r)
+	})
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+	dir := t.TempDir()
+	path := writeHTTPConfig(t, dir, httpServer.URL, map[string]string{"X-Token": "${MCP_TEST_TOKEN}"})
+	input := Input{UserPath: path, Cwd: dir, ReadAvailable: true}
+	manager := NewManager(Options{Input: input})
+	manager.Start()
+	t.Cleanup(func() {
+		manager.Stop()
+		manager.Wait()
+	})
+	snapshot := waitServerState(t, manager, "http-fixture", serverStateReady)
+	echo, ok := snapshot.Find("mcp__http_fixture__echo")
+	if !ok {
+		t.Fatal("echo tool missing")
+	}
+	if result := manager.Call(context.Background(), echo, tools.Invocation{Name: echo.Name, Arguments: map[string]any{"text": "one"}}); result.IsError {
+		t.Fatalf("initial call = %+v", result)
+	}
+	if got, _ := lastHeader.Load().(string); got != "one" {
+		t.Fatalf("initial header = %q", got)
+	}
+	t.Setenv("MCP_TEST_TOKEN", "two")
+	manager.Reload(input)
+	reloaded := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot = manager.Snapshot()
+		replacement, ok := snapshot.Find("mcp__http_fixture__echo")
+		if ok && replacement.Epoch > echo.Epoch {
+			if status := snapshot.Servers[0]; status.State != serverStateReady {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			echo = replacement
+			reloaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !reloaded {
+		t.Fatalf("reload did not replace the connection: %+v", manager.Snapshot().Servers)
+	}
+	if result := manager.Call(context.Background(), echo, tools.Invocation{Name: echo.Name, Arguments: map[string]any{"text": "two"}}); result.IsError {
+		t.Fatalf("reloaded call = %+v", result)
+	}
+	if got, _ := lastHeader.Load().(string); got != "two" {
+		t.Fatalf("reloaded header = %q, want two", got)
+	}
+}
+
+func TestManagerHTTPRejectsInvalidListenerStatus(t *testing.T) {
+	server := httpFixture(t)
+	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		mcpHandler.ServeHTTP(w, r)
+	})
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+	dir := t.TempDir()
+	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
+	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
+	manager.Start()
+	t.Cleanup(func() {
+		manager.Stop()
+		manager.Wait()
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, status := range manager.Snapshot().Servers {
+			if status.State == serverStateFailed {
+				if status.ErrorClass != "listener" {
+					t.Fatalf("invalid listener class = %q", status.ErrorClass)
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("invalid listener status did not fail: %+v", manager.Snapshot().Servers)
+}
+
+func TestManagerPolicyLossWithdrawsProjectSetup(t *testing.T) {
+	release := make(chan struct{})
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(stalled.Close)
+	dir := t.TempDir()
+	project := filepath.Join(dir, "project.json")
+	data, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"project-fixture": map[string]any{
+		"url": stalled.URL, "timeout": 30, "exposure": "direct",
+	}}})
+	if err := os.WriteFile(project, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	user := filepath.Join(dir, "mcp.json")
+	manager := NewManager(Options{Input: Input{UserPath: user, ProjectPath: project, ProjectTrusted: true, Cwd: dir, ReadAvailable: true}})
+	manager.Start()
+	t.Cleanup(func() {
+		manager.Stop()
+		manager.Wait()
+	})
+	t.Cleanup(unblock)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && len(manager.Snapshot().Servers) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(manager.Snapshot().Servers) == 0 {
+		t.Fatal("project setup did not start")
+	}
+	if err := os.WriteFile(user, []byte(`{"mcpServers":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager.Reload(Input{UserPath: user, ProjectPath: project, ProjectTrusted: false, Cwd: dir, ReadAvailable: true})
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, status := range manager.Snapshot().Servers {
+			if status.ErrorClass == "permission" {
+				if status.State != serverStateFailed {
+					t.Fatalf("permission state = %s", status.State)
+				}
+				if _, ok := manager.Snapshot().Find("mcp__project_fixture__echo"); ok {
+					t.Fatal("revoked project setup published tools")
+				}
+				unblock()
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("policy loss did not withdraw project setup: %+v", manager.Snapshot().Servers)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestHeaderRoundTripperCancelsInFlightRequest(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	base := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		close(started)
+		<-req.Context().Done()
+		close(canceled)
+		return nil, req.Context().Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	conn := &connection{ctx: ctx, cancel: cancel, listenerStarted: make(chan struct{})}
+	conn.errClass.Store("")
+	transport := &headerRoundTripper{base: base, conn: conn}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.test/mcp", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = transport.RoundTrip(req) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("request did not start")
+	}
+	cancel()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("connection cancellation did not abort the request")
+	}
+}
+
+func TestManagerHTTPUnchangedReloadKeepsConnection(t *testing.T) {
+	server := httpFixture(t)
+	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	var initializes atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rpcMethod(r) == "initialize" {
+			initializes.Add(1)
+		}
+		mcpHandler.ServeHTTP(w, r)
+	})
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+	dir := t.TempDir()
+	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
+	input := Input{UserPath: path, Cwd: dir, ReadAvailable: true}
+	manager := NewManager(Options{Input: input})
+	manager.Start()
+	t.Cleanup(func() {
+		manager.Stop()
+		manager.Wait()
+	})
+	waitServerState(t, manager, "http-fixture", serverStateReady)
+	if initializes.Load() != 1 {
+		t.Fatalf("initial session count = %d", initializes.Load())
+	}
+	manager.Reload(input)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := manager.Snapshot()
+		if snapshot.Revision > 1 && len(snapshot.Servers) == 1 && snapshot.Servers[0].State == serverStateReady {
+			if initializes.Load() != 1 {
+				t.Fatalf("unchanged reload created a new session: %d", initializes.Load())
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("reload did not publish: %+v", manager.Snapshot())
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -486,4 +487,43 @@ func TestManagerServerQueueDoesNotStarveAnotherServer(t *testing.T) {
 		t.Fatalf("other server call waited behind the slow queue: %v", elapsed)
 	}
 	wg.Wait()
+}
+
+func TestManagerRouteLiveRechecksExposure(t *testing.T) {
+	manager := NewManager(Options{})
+	conn := &connection{}
+	tool := Tool{Name: "mcp__s__t", RawName: "t", Server: "s", Epoch: 1, Exposure: ExposureDirect}
+	conn.catalog = []Tool{tool}
+	manager.servers["s"] = &serverState{cfg: Server{Name: "s", Enabled: true}, status: serverStateReady, epoch: 1, conn: conn}
+	if !manager.routeLive(tool, conn) {
+		t.Fatal("declared route was rejected")
+	}
+	conn.catalog[0].Exposure = ExposureHidden
+	if manager.routeLive(tool, conn) {
+		t.Fatal("hidden route passed the post-admission check")
+	}
+	conn.catalog[0] = tool
+	conn.catalog[0].RawName = "other"
+	if manager.routeLive(tool, conn) {
+		t.Fatal("replaced raw route passed the post-admission check")
+	}
+}
+
+func TestManagerPublishesConfigWarnings(t *testing.T) {
+	dir := t.TempDir()
+	config := `{"mcpServers": {` + testServerConfig("fixture", "basic", "") + `, "bad": {"command": "node", "exposure": "not-an-exposure"}}}`
+	path := writeTestFile(t, dir, "mcp.json", config)
+	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
+	manager.Start()
+	t.Cleanup(func() {
+		manager.Stop()
+		manager.Wait()
+	})
+	snapshot := waitServerState(t, manager, "fixture", serverStateReady)
+	if len(snapshot.Warnings) == 0 {
+		t.Fatalf("config warning missing: %+v", snapshot)
+	}
+	if !strings.Contains(snapshot.Warnings[0], "bad") {
+		t.Fatalf("config warning did not identify the entry: %v", snapshot.Warnings)
+	}
 }

@@ -86,7 +86,8 @@ Project override rules:
   output. Trailing CR/LF is removed.
 
 `command`, `args`, `url`, and other fields are not interpolated. Safe discovery
-retries reuse resolved values. Only `/reload` runs `!command` again.
+retries reuse resolved values. Only `/reload` re-runs `!command` and
+re-resolves `${NAME}` values.
 
 A project-sourced `!command` is refused unless the user settings file sets:
 
@@ -140,6 +141,7 @@ fragments are rejected. Redirects fail. TLS certificate verification cannot be
 disabled. HTTP headers `Host`, `Content-Length`, `Transfer-Encoding`,
 `Content-Type`, `Accept`, `Mcp-Session-Id`, `MCP-Protocol-Version`,
 `Last-Event-ID`, `Idempotency-Key`, and `X-Idempotency-Key` are reserved.
+Header names and values that contain CR/LF are rejected.
 
 ## Startup and status
 
@@ -147,7 +149,9 @@ MCP work never blocks the terminal loop. psi starts servers in background
 workers. The first model request can proceed without MCP tools; new tools
 appear at a later request boundary. `/mcp` reads a snapshot and shows server
 name, transport, state, discovered and exposed counts, and a safe error class.
-It never shows URLs, headers, environment values, arguments, or raw stderr.
+It reports when a server rejects the standalone listener and cannot push
+tool-list updates, plus bounded config warnings. It never shows URLs, headers,
+environment values, arguments, or raw stderr.
 
 `--no-mcp` skips MCP config reads, interpolation, process start, network
 requests, and tool declarations. `--no-tools` disables only the built-in

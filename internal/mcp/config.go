@@ -284,6 +284,8 @@ func parseJSON(data []byte) (*jsonValue, error) {
 	}
 	if _, err := dec.Token(); err == nil {
 		return nil, errors.New("trailing JSON data")
+	} else if !errors.Is(err, io.EOF) {
+		return nil, err
 	}
 	return value, nil
 }
@@ -520,6 +522,9 @@ func parseTransportEntry(raw *rawServer) (Server, error) {
 			if !validHeaderName(member.key) {
 				return Server{}, configErr("config", "invalid header name")
 			}
+			if !validHeaderValue(member.value.str) {
+				return Server{}, configErr("config", "header %q contains an invalid value", member.key)
+			}
 			if reservedHeaders[strings.ToLower(member.key)] {
 				return Server{}, configErr("config", "header %q is reserved by the MCP transport", member.key)
 			}
@@ -613,6 +618,15 @@ func validHeaderName(name string) bool {
 	for i := 0; i < len(name); i++ {
 		c := name[i]
 		if c <= ' ' || c >= 0x7f || strings.ContainsRune("()<>@,;:\\\"/[]?={}", rune(c)) {
+			return false
+		}
+	}
+	return true
+}
+
+func validHeaderValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] == '\r' || value[i] == '\n' || value[i] == 0 {
 			return false
 		}
 	}
@@ -729,6 +743,9 @@ func Resolve(ctx context.Context, server Server, allowProjectCommands bool) (Ser
 		out, err := resolveValue(ctx, value, server.HeaderSource[key] == "project", allowProjectCommands)
 		if err != nil {
 			return Server{}, fmt.Errorf("header %s: %w", key, err)
+		}
+		if !validHeaderValue(out) {
+			return Server{}, configErr("config", "header %s contains an invalid value", key)
 		}
 		resolved.Headers[key] = out
 	}

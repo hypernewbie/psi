@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"sort"
@@ -34,6 +35,7 @@ const (
 	maxCallsPerManager = 8
 	maxReconnects      = 2
 	maxDiscoveryTries  = 3 // initial attempt plus two retries
+	maxConfigWarnings  = 20
 )
 
 // Input is the immutable policy for one reload generation.
@@ -67,6 +69,9 @@ type ServerStatus struct {
 	Exposed        int
 	ErrorClass     string
 	RefreshWarning string
+	// NotificationsUnavailable reports a standalone listener that the server
+	// rejected or answered with a non-SSE response.
+	NotificationsUnavailable bool
 }
 
 // Snapshot is an immutable per-request view of declarations and routes.
@@ -75,6 +80,7 @@ type Snapshot struct {
 	Servers     []ServerStatus
 	Tools       []Tool
 	ReloadError string
+	Warnings    []string
 }
 
 // Find returns the declared route for a model tool name.
@@ -103,18 +109,19 @@ func (s *Snapshot) Definitions() []provider.ToolDef {
 }
 
 type serverState struct {
-	cfg            Server
-	status         string
-	errClass       string
-	epoch          uint64
-	conn           *connection
-	catalog        []Tool
-	setupCancel    context.CancelFunc
-	setupActive    bool
-	resolved       Server
-	resolvedValid  bool
-	reconnects     int
-	refreshWarning string
+	cfg                 Server
+	status              string
+	errClass            string
+	epoch               uint64
+	conn                *connection
+	catalog             []Tool
+	setupCancel         context.CancelFunc
+	setupActive         bool
+	resolved            Server
+	resolvedValid       bool
+	reconnects          int
+	refreshWarning      string
+	listenerUnavailable bool
 }
 
 type connection struct {
@@ -129,19 +136,20 @@ type connection struct {
 	lastList time.Time
 	catalog  []Tool
 
-	mu              sync.Mutex
-	tokens          map[string]*callState
-	errClass        atomic.Value
-	closed          atomic.Bool
-	closing         atomic.Bool
-	retired         atomic.Bool
-	transient       atomic.Bool
-	setupDisarm     func() bool
-	retryMu         sync.Mutex
-	retryDelay      time.Duration
-	retryStop       bool
-	listenerStarted chan struct{}
-	listenerOnce    sync.Once
+	mu                  sync.Mutex
+	tokens              map[string]*callState
+	errClass            atomic.Value
+	closed              atomic.Bool
+	closing             atomic.Bool
+	retired             atomic.Bool
+	transient           atomic.Bool
+	listenerUnavailable atomic.Bool
+	setupDisarm         func() bool
+	retryMu             sync.Mutex
+	retryDelay          time.Duration
+	retryStop           bool
+	listenerStarted     chan struct{}
+	listenerOnce        sync.Once
 }
 
 type callState struct {
@@ -178,6 +186,11 @@ type reloadRequest struct {
 	input      Input
 }
 
+type reloadResolution struct {
+	resolved Server
+	err      error
+}
+
 // Manager owns SDK sessions, subprocesses, and background work. Every public
 // read returns an immutable snapshot; nothing waits for a server.
 type Manager struct {
@@ -191,6 +204,7 @@ type Manager struct {
 	order      []string
 	generation uint64
 	reloadErr  string
+	warnings   []string
 	input      Input
 	started    bool
 	stopped    bool
@@ -227,13 +241,6 @@ func NewManager(opts Options) *Manager {
 		m.opts.sleep = sleepContext
 	}
 	return m
-}
-
-// SetInput replaces the policy used by later reload requests.
-func (m *Manager) SetInput(input Input) {
-	m.mu.Lock()
-	m.input = input
-	m.mu.Unlock()
 }
 
 // Start begins the background reload worker and schedules initial setup.
@@ -303,16 +310,66 @@ func (m *Manager) applyReload(req reloadRequest) {
 		m.mu.Unlock()
 		return
 	}
+	resolutions := m.prepareReloadResolutions(cfg, req.input)
 	m.mu.Lock()
 	if req.generation != m.generation || m.stopped {
 		m.mu.Unlock()
 		return
 	}
 	m.reloadErr = ""
+	m.warnings = append(m.warnings[:0], cfg.Warnings...)
 	m.input = req.input
-	m.acceptConfigLocked(cfg, req.input)
+	m.acceptConfigLocked(cfg, req.input, resolutions)
 	m.publishLocked()
 	m.mu.Unlock()
+}
+
+// prepareReloadResolutions re-resolves only unchanged connections that use
+// env/header interpolation. Commands stay in setup so an explicit reload
+// still runs them exactly once. This work is outside the manager lock because
+// a command can take its full ten-second budget.
+func (m *Manager) prepareReloadResolutions(cfg *Config, input Input) map[string]reloadResolution {
+	m.mu.Lock()
+	previous := make(map[string]Server, len(cfg.Servers))
+	for _, server := range cfg.Servers {
+		if state := m.servers[server.Name]; state != nil {
+			previous[server.Name] = state.cfg
+		}
+	}
+	m.mu.Unlock()
+	resolutions := make(map[string]reloadResolution)
+	for _, server := range cfg.Servers {
+		old, ok := previous[server.Name]
+		if !ok || !old.Enabled || !server.Enabled || connectionKey(old) != connectionKey(server) {
+			continue
+		}
+		if serverUsesCommand(server) || !serverNeedsInterpolation(server) {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(m.ctx, server.Timeout)
+		resolved, err := Resolve(ctx, server, input.AllowProjectCommands)
+		cancel()
+		resolutions[server.Name] = reloadResolution{resolved: resolved, err: err}
+	}
+	return resolutions
+}
+
+func serverNeedsInterpolation(server Server) bool {
+	for _, value := range server.Env {
+		if variablePattern.MatchString(value) {
+			return true
+		}
+	}
+	for _, value := range server.Headers {
+		if variablePattern.MatchString(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedValuesEqual(a, b Server) bool {
+	return maps.Equal(a.Env, b.Env) && maps.Equal(a.Headers, b.Headers)
 }
 
 // applyPolicyLossLocked withdraws connections that the current policy can no
@@ -326,14 +383,14 @@ func (m *Manager) applyPolicyLossLocked(input Input) {
 		if !input.AllowProjectCommands && state.cfg.ProjectCommand {
 			loss = true
 		}
-		if !loss || state.conn == nil {
+		if !loss {
 			continue
 		}
 		m.withdrawLocked(state, "permission")
 	}
 }
 
-func (m *Manager) acceptConfigLocked(cfg *Config, input Input) {
+func (m *Manager) acceptConfigLocked(cfg *Config, input Input, resolutions map[string]reloadResolution) {
 	newServers := make(map[string]*serverState, len(cfg.Servers))
 	newOrder := make([]string, 0, len(cfg.Servers))
 	for _, server := range cfg.Servers {
@@ -349,6 +406,7 @@ func (m *Manager) acceptConfigLocked(cfg *Config, input Input) {
 			old.cfg = server
 			old.status = serverStateDisabled
 			old.errClass = ""
+			old.listenerUnavailable = false
 			newServers[server.Name] = old
 			continue
 		}
@@ -360,14 +418,44 @@ func (m *Manager) acceptConfigLocked(cfg *Config, input Input) {
 			m.withdrawLocked(old, "")
 			old.cfg = server
 			old.catalog = nil
-			old.epoch++
 			old.reconnects = 0
 			old.resolvedValid = false
 			old.status = serverStateConnecting
 			old.errClass = ""
 			old.refreshWarning = ""
+			old.listenerUnavailable = false
 			newServers[server.Name] = old
 			continue
+		}
+		if resolution, ok := resolutions[server.Name]; ok {
+			if resolution.err != nil {
+				m.withdrawLocked(old, "")
+				old.cfg = server
+				old.catalog = nil
+				old.resolvedValid = false
+				old.resolved = Server{}
+				old.status = serverStateFailed
+				old.errClass = ErrorClass(resolution.err)
+				old.refreshWarning = ""
+				old.listenerUnavailable = false
+				newServers[server.Name] = old
+				continue
+			}
+			if !old.resolvedValid || !resolvedValuesEqual(old.resolved, resolution.resolved) {
+				m.withdrawLocked(old, "")
+				old.cfg = server
+				old.catalog = nil
+				old.reconnects = 0
+				old.resolved = resolution.resolved
+				old.resolvedValid = true
+				old.status = serverStateConnecting
+				old.errClass = ""
+				old.refreshWarning = ""
+				old.listenerUnavailable = false
+				newServers[server.Name] = old
+				continue
+			}
+			old.resolved = resolution.resolved
 		}
 		// Unchanged connection: keep its epoch and notification callbacks,
 		// but apply the newest exposure policy immediately.
@@ -597,6 +685,14 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 			}
 		},
 	})
+	client.AddSendingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+		return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+			if obs := requestObservationFrom(ctx); obs != nil && obs.method == method {
+				ctx = withOutboundObservation(ctx, obs)
+			}
+			return next(ctx, method, req)
+		}
+	})
 	var transport sdk.Transport
 	if server.Transport == TransportHTTP {
 		transport = m.newHTTPTransport(server, conn)
@@ -672,12 +768,6 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 		connCancel()
 		return nil, conn, configErr(class, "MCP discovery failed: %s", class)
 	}
-	if class := conn.terminalClass(); class != "" {
-		stopDisarm()
-		_ = session.Close()
-		connCancel()
-		return nil, conn, configErr(class, "MCP discovery failed: %s", class)
-	}
 	catalog, err := buildCatalog(server, epoch, raw)
 	if err != nil {
 		stopDisarm()
@@ -696,7 +786,7 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 		connCancel()
 		return nil, conn, context.Canceled
 	}
-	conn.lastList = time.Now()
+	conn.lastList = m.opts.now()
 	m.mu.Unlock()
 	return session, conn, nil
 }
@@ -746,7 +836,9 @@ func listAllTools(ctx context.Context, session *sdk.ClientSession) ([]*sdk.Tool,
 
 func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *connection) {
 	m.mu.Lock()
-	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || state.cfg.Enabled == false {
+	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || state.cfg.Enabled == false ||
+		(!m.input.ProjectTrusted && state.cfg.Source == "project") ||
+		(!m.input.AllowProjectCommands && state.cfg.ProjectCommand) {
 		m.mu.Unlock()
 		conn.closeAsync()
 		return
@@ -763,6 +855,7 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 	state.errClass = ""
 	state.refreshWarning = ""
 	state.catalog = conn.catalog
+	state.listenerUnavailable = conn.listenerUnavailable.Load()
 	m.pending += 2
 	m.mu.Unlock()
 	go func() {
@@ -786,6 +879,7 @@ func (m *Manager) setupFailed(state *serverState, epoch uint64, err error) {
 	}
 	state.conn = nil
 	state.catalog = nil
+	state.listenerUnavailable = false
 	state.status = serverStateFailed
 	state.errClass = ErrorClass(err)
 	if state.errClass == "" {
@@ -795,6 +889,7 @@ func (m *Manager) setupFailed(state *serverState, epoch uint64, err error) {
 }
 
 func (m *Manager) withdrawLocked(state *serverState, reason string) {
+	state.epoch++
 	if state.setupCancel != nil {
 		state.setupCancel()
 		state.setupCancel = nil
@@ -813,6 +908,7 @@ func (m *Manager) withdrawLocked(state *serverState, reason string) {
 		conn.closeAsyncLocked()
 	}
 	state.catalog = nil
+	state.listenerUnavailable = false
 	if state.cfg.Enabled {
 		if reason == "permission" {
 			state.status = serverStateFailed
@@ -835,6 +931,7 @@ func (m *Manager) connectionLost(conn *connection, err error) {
 	conn.retired.Store(true)
 	state.conn = nil
 	state.catalog = nil
+	state.listenerUnavailable = false
 	class := ErrorClass(err)
 	if class == "" {
 		class = "connection"
@@ -870,9 +967,9 @@ func (c *connection) runListChanges() {
 	for {
 		select {
 		case <-c.listCh:
-			delay := time.Second - time.Since(c.lastList)
+			delay := time.Second - c.manager.opts.now().Sub(c.lastList)
 			if delay > 0 {
-				if !sleepContext(c.ctx, delay) {
+				if !c.manager.opts.sleep(c.ctx, delay) {
 					return
 				}
 			}
@@ -912,7 +1009,8 @@ func (c *connection) refreshCatalog() error {
 	}
 	state.catalog = catalog
 	c.catalog = catalog
-	c.lastList = time.Now()
+	c.lastList = c.manager.opts.now()
+	state.refreshWarning = ""
 	c.manager.publishLocked()
 	c.manager.mu.Unlock()
 	return nil
@@ -974,6 +1072,16 @@ func (m *Manager) serverTimeout(name string) time.Duration {
 
 func (m *Manager) publishLocked() {
 	snap := &Snapshot{Revision: m.generation, ReloadError: m.reloadErr}
+	if len(m.warnings) > 0 {
+		warnings := m.warnings
+		if len(warnings) > maxConfigWarnings {
+			warnings = warnings[:maxConfigWarnings]
+		}
+		snap.Warnings = append([]string(nil), warnings...)
+		if len(m.warnings) > maxConfigWarnings {
+			snap.Warnings = append(snap.Warnings, fmt.Sprintf("%d more config warnings", len(m.warnings)-maxConfigWarnings))
+		}
+	}
 	names := append([]string(nil), m.order...)
 	for _, name := range names {
 		state := m.servers[name]
@@ -981,12 +1089,13 @@ func (m *Manager) publishLocked() {
 			continue
 		}
 		status := ServerStatus{
-			Name:           state.cfg.Name,
-			Transport:      string(state.cfg.Transport),
-			State:          state.status,
-			Discovered:     len(state.catalog),
-			ErrorClass:     state.errClass,
-			RefreshWarning: state.refreshWarning,
+			Name:                     state.cfg.Name,
+			Transport:                string(state.cfg.Transport),
+			State:                    state.status,
+			Discovered:               len(state.catalog),
+			ErrorClass:               state.errClass,
+			RefreshWarning:           state.refreshWarning,
+			NotificationsUnavailable: state.listenerUnavailable,
 		}
 		if !state.cfg.Enabled {
 			status.State = serverStateDisabled
@@ -1098,6 +1207,10 @@ func (c *connection) call(parent context.Context, tool Tool, inv tools.Invocatio
 	})
 	defer state.retire()
 
+	obs := newRequestObservation("tools/call")
+	callCtx = withRequestObservation(callCtx, obs)
+	defer obs.finish()
+
 	if err := c.acquire(callCtx, tool); err != nil {
 		return admissionError(tool, err)
 	}
@@ -1128,8 +1241,12 @@ func (m *Manager) routeLive(tool Tool, conn *connection) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state := m.servers[tool.Server]
-	return !m.stopped && state != nil && state.conn == conn && state.epoch == tool.Epoch &&
-		state.status == serverStateReady && conn.retired.Load() == false && conn.closing.Load() == false
+	if m.stopped || state == nil || state.conn != conn || state.epoch != tool.Epoch ||
+		state.status != serverStateReady || conn.retired.Load() || conn.closing.Load() {
+		return false
+	}
+	live, ok := findCatalogTool(conn.catalog, tool.Name)
+	return ok && declared(live) && live.RawName == tool.RawName
 }
 
 func admissionError(tool Tool, err error) tools.Result {
@@ -1145,12 +1262,20 @@ func timeoutResult(tool Tool, phase string) tools.Result {
 
 func (c *connection) callFailure(tool Tool, err error, state *callState, ctx context.Context) tools.Result {
 	class := c.latchedClass()
+	if obs := requestObservationFrom(ctx); obs != nil {
+		class, _ = obs.snapshot()
+	}
 	if class == "session-lost" {
 		go c.manager.connectionLost(c, &ConfigError{Class: class, Message: "session lost"})
 		return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s failed (session-lost); the outcome may be unknown", tool.Server, tool.RawName)}}}
 	}
 	if class != "" {
-		return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s failed (%s)", tool.Server, tool.RawName, class)}}}
+		text := fmt.Sprintf("MCP tool %s/%s failed (%s)", tool.Server, tool.RawName, class)
+		switch class {
+		case "server", "timeout", "rate-limit", "limit":
+			text += "; the outcome may be unknown"
+		}
+		return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: text}}}
 	}
 	if state.idle.Load() {
 		return timeoutResult(tool, "waiting for progress")
