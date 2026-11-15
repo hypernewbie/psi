@@ -188,7 +188,9 @@ for example `npx -y`. Use a pinned version when reproducibility matters.
 ## Process cleanup
 
 On Unix, psi starts a stdio server in its own process group and signals the
-owned group. Children that leave that group are not cleaned up.
+owned group. When the launcher exits, psi kills remaining group members before
+marking the connection done, including when the launcher exits during graceful
+shutdown. Children that leave that group are not cleaned up.
 
 On Windows, psi stops only the owned leader process. Descendant processes can
 outlive cancellation. Prefer a native executable such as `node.exe` with
@@ -214,7 +216,9 @@ The default suite covers a launcher that exits before initialization and one
 that stalls initialization. Chat and `/mcp` remain usable. Quit stops the
 stalled process before the fixture releases its gate. A deterministic SDK
 regression also checks that cancellation returns while a handler ignores it,
-and that another call on the same connection succeeds.
+and that another call on the same connection succeeds. Native Unix subprocess
+regressions check that a same-group child cannot survive when its launcher
+exits before cleanup or exits after stdin closes.
 
 The tagged acceptance suite covers a mid-call crash and a handler that ignores
 cancellation. It checks cancellation, continued chat, durable error results,

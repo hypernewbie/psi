@@ -230,6 +230,9 @@ func (c *stdioConnection) abort() {
 
 func (c *stdioConnection) wait() {
 	err := c.cmd.Wait()
+	// Close can return as soon as done closes. Signal remaining owned
+	// descendants before publishing exit, even if the launcher exits first.
+	terminateCommand(c.cmd)
 	c.waitMu.Lock()
 	c.waitErr = err
 	c.waitMu.Unlock()
