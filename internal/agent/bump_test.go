@@ -488,17 +488,19 @@ func TestBumpFailureMarkerUsage(t *testing.T) {
 	cases := []struct {
 		name    string
 		text    string
+		content []provider.Block
 		wantUse bool
 	}{
 		{name: "empty marker", wantUse: false},
 		{name: "whitespace marker", text: " \n", wantUse: false},
+		{name: "empty thinking block", content: []provider.Block{{Type: "thinking", Thinking: " \n"}}, wantUse: false},
 		{name: "visible partial", text: "partial", wantUse: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store, _, fake, loop, _ := bumpSetup(t)
 			fake.Responses = []*provider.Response{{
-				Text: tc.text, StopReason: "error",
+				Text: tc.text, Content: tc.content, StopReason: "error",
 				Usage: provider.Usage{Input: 3, Output: 4, TotalTokens: 7},
 			}}
 			if err := loop.Submit(context.Background(), "hello", bumpConfig()); err == nil {
