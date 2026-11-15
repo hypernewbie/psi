@@ -14,7 +14,7 @@ footer shows the folder, session, model, and context usage.
 
 ## Enter a prompt
 
-Type a request and press `Enter`.
+Type a request and press `Enter`. An empty `Enter` is ignored unless the last turn failed or was interrupted; in that case it retries the turn. `/b` does the same when you want an explicit trigger.
 
 - `Ctrl+J` inserts a newline. psi has no Shift+Enter detection.
 - Bracketed paste inserts up to 256 KiB as one literal edit; pasted newlines
@@ -50,6 +50,27 @@ trusted project `.pi/settings.json` can override it. If the window is unknown or
 the estimate is unavailable, psi omits the caption. A token count above the
 window is shown without text clamping, even though the bar and color use the
 clamped percentage.
+
+## Retry a failed turn
+
+If a model request fails or is interrupted before the turn finishes, psi can
+retry it without adding another prompt. Press `Enter` on an empty editor or use
+`/b`. A successful bump sends the same user content again with the current
+model, thinking level, tools, system prompt, and compaction policy.
+
+Bump is available only while psi is idle, with no run, picker, or compaction
+active. It keeps the normal auth, storage, and continuation checks. The last
+turn must be unfinished: a completed answer or an output-limited response
+(`length`) is not retried. An empty `Enter` stays silent when bump is
+unavailable; `/b` reports the reason or says `Nothing to retry.`
+
+Visible partial output from the failed stream stays in the transcript. The
+saved failure record is hidden and omitted from ordinary continuation
+requests, though existing compaction can summarize visible partial progress.
+A crash can hide whether a tool already ran: the retry sends a synthetic
+missing-result marker for that call and never re-executes the old tool batch.
+A retry can duplicate provider work and billing. Bump is interactive-only; RPC
+and the Phi bridge do not expose it.
 
 ## Change direction while psi works
 

@@ -24,6 +24,10 @@ import (
 
 type InternalToolHandler func(context.Context, tools.Invocation) tools.Result
 
+// ErrNotBumpable reports that the last conversational message is not an
+// unfinished turn. It is a refusal, not a provider failure.
+var ErrNotBumpable = errors.New("nothing to retry")
+
 type Config struct {
 	Model            provider.ModelMeta
 	Thinking         string
@@ -407,6 +411,47 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 	return l.submit(ctx, input, cfg)
 }
 
+// Bump retries the last unfinished turn without appending a user message or
+// provenance entry. It uses the current configuration and the existing run
+// path. Refused admission performs no provider call and no session mutation.
+func (l *Loop) Bump(ctx context.Context, cfg Config) error {
+	if err := l.begin(); err != nil {
+		return err
+	}
+	defer l.end()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := l.store.WriteError(); err != nil {
+		return fmt.Errorf("storage failure, stopping: %w", err)
+	}
+	proj, err := l.store.Projection()
+	if err != nil {
+		return err
+	}
+	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+		return err
+	}
+	if !session.CanBump(proj.Flat) {
+		return ErrNotBumpable
+	}
+	if err := l.store.CheckWritable(); err != nil {
+		return fmt.Errorf("storage failure, stopping: %w", err)
+	}
+	if cfg.Thinking == "" {
+		cfg.Thinking = "off"
+	}
+	refreshDynamicConfig(&cfg)
+	request, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.BuildRequest(request); err != nil {
+		return err
+	}
+	return l.run(ctx, cfg, false)
+}
+
 // submit owns the one admission path every user message shares.
 func (l *Loop) submit(ctx context.Context, input UserInput, cfg Config) error {
 	if err := l.begin(); err != nil {
@@ -521,7 +566,12 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 	// sequential tool calls is unbounded, so psi must not invent a limit.
 	outcome := event.OutcomeDurable
 	l.sink(event.Event{Type: event.RunStart})
-	defer func() { l.sink(event.Event{Type: event.RunEnd, Outcome: outcome, Err: runErr}) }()
+	defer func() {
+		if runErr != nil {
+			l.finalizeFailure(ctx, &cfg, &outcome, &runErr)
+		}
+		l.sink(event.Event{Type: event.RunEnd, Outcome: outcome, Err: runErr})
+	}()
 	recovery := &Recovery{}
 	for {
 		if err := ctx.Err(); err != nil {
@@ -611,30 +661,37 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				}
 				continue // retry the projected request, never the completed tool batch
 			}
+			cause := err
+			if ctx.Err() != nil {
+				cause = ctx.Err()
+			}
 			stop := "error"
 			if ctx.Err() != nil {
 				stop = "aborted"
 			}
 			if perr := l.persistStreamUsage(cfg, err); perr != nil {
 				outcome = event.OutcomeUnsaved
-				return perr
+				return errors.Join(cause, perr)
 			}
-			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cfg); aerr != nil {
+			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
 				outcome = event.OutcomeUnsaved
-				return aerr
+				return errors.Join(cause, aerr)
 			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
+			return cause
 		}
 		if resp == nil {
 			outcome = event.OutcomeInterrupted
-			if err := l.savePartial(streamed.String(), streamedThinking.String(), "error", cfg); err != nil {
-				outcome = event.OutcomeUnsaved
-				return err
+			cause := errors.New("provider returned no completed message")
+			stop := "error"
+			if ctx.Err() != nil {
+				cause = ctx.Err()
+				stop = "aborted"
 			}
-			return fmt.Errorf("provider returned no completed message")
+			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
+				outcome = event.OutcomeUnsaved
+				return errors.Join(cause, aerr)
+			}
+			return cause
 		}
 		// Content is authoritative when supplied; Text and ToolCalls are convenience caches.
 		if len(resp.Content) > 0 {
@@ -652,13 +709,30 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		}
 		if !strings.HasPrefix(resp.Text, streamed.String()) {
 			outcome = event.OutcomeInterrupted
-			if err := l.savePartial(streamed.String(), streamedThinking.String(), "error", cfg); err != nil {
-				outcome = event.OutcomeUnsaved
-				return err
+			cause := errors.New("protocol failure: final text contradicts streamed text; partial response saved, tools not executed")
+			stop := "error"
+			if ctx.Err() != nil {
+				cause = ctx.Err()
+				stop = "aborted"
 			}
-			return fmt.Errorf("protocol failure: final text contradicts streamed text; partial response saved, tools not executed")
+			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
+				outcome = event.OutcomeUnsaved
+				return errors.Join(cause, aerr)
+			}
+			return cause
 		}
-		if _, err := l.store.AppendMessage(toSessionAssistant(resp, cfg)); err != nil {
+		providerFailure := ""
+		if resp.StopReason == "error" || resp.StopReason == "aborted" {
+			providerFailure = fmt.Sprintf("provider stopped: %s", resp.StopReason)
+			if ctx.Err() != nil {
+				providerFailure = ctx.Err().Error()
+			}
+		}
+		assistantMessage := toSessionAssistant(resp, cfg)
+		if providerFailure != "" {
+			assistantMessage = toFailureAssistant(resp, cfg, providerFailure)
+		}
+		if _, err := l.store.AppendMessage(assistantMessage); err != nil {
 			outcome = event.OutcomeUnsaved
 			return fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
 		}
@@ -674,7 +748,10 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		// Settlement barrier: persistence precedes RunEnd and the next prompt.
 		if resp.StopReason == "error" || resp.StopReason == "aborted" {
 			outcome = event.OutcomeInterrupted
-			return fmt.Errorf("provider stopped: %s", resp.StopReason)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return errors.New(providerFailure)
 		}
 		// A length-limited response can contain unfinished tool requests. Never
 		// execute them as if the provider completed a tool-use turn.
@@ -789,16 +866,99 @@ func (l *Loop) emitChunked(text string, typ event.Type, outcome string) {
 
 // savePartial stores the visible part of an interrupted turn. Thinking that
 // arrived before the failure is kept with the text, like Pi's partial message.
-// toSessionAssistant orders the thinking block before the text block.
-func (l *Loop) savePartial(text, thinking, stop string, cfg Config) error {
+// toSessionAssistant orders the thinking block before the text block. The
+// surfaced failure reason is stored on the same assistant record so a resumed
+// session keeps the cause without a visible duplicate marker.
+func (l *Loop) savePartial(text, thinking, stop, reason string, cfg Config) error {
 	if text == "" && thinking == "" {
 		return nil
 	}
 	partial := &provider.Response{Text: text, Thinking: thinking, StopReason: stop}
-	if _, err := l.store.AppendMessage(toSessionAssistant(partial, cfg)); err != nil {
+	if _, err := l.store.AppendMessage(toFailureAssistant(partial, cfg, reason)); err != nil {
 		return fmt.Errorf("storage failure, stopping: %w (unsaved partial output %d bytes)", err, len(text)+len(thinking))
 	}
 	return nil
+}
+
+// toFailureAssistant adds the durable failure reason and Pi's one-empty-text
+// marker shape when the response has no content.
+func toFailureAssistant(resp *provider.Response, cfg Config, reason string) session.AgentMessage {
+	message := toSessionAssistant(resp, cfg)
+	if message.Assistant == nil {
+		return message
+	}
+	if len(message.Assistant.Content) == 0 {
+		message.Assistant.Content = []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: ""}}}
+	}
+	message.Assistant.ErrorMessage = &reason
+	return message
+}
+
+// finalizeFailure records an unfinished turn before RunEnd. It never runs for
+// pre-admission errors. A recorded failure or a completed/length response is
+// left unchanged; a missing marker or a failed write makes the outcome unsaved.
+func (l *Loop) finalizeFailure(ctx context.Context, cfg *Config, outcome *string, runErr *error) {
+	proj, err := l.store.Projection()
+	if err != nil {
+		*outcome = event.OutcomeUnsaved
+		*runErr = errors.Join(*runErr, fmt.Errorf("failure finalization: %w", err))
+		return
+	}
+	last := session.LastConversationalMessage(proj.Flat)
+	if last == nil {
+		return
+	}
+	if last.Role == "assistant" && last.Assistant != nil {
+		switch last.Assistant.StopReason {
+		case "error", "aborted":
+			if *outcome != event.OutcomeUnsaved {
+				*outcome = event.OutcomeInterrupted
+			}
+			return
+		case "toolUse":
+			if !session.CanBump([]session.AgentMessage{*last}) {
+				return
+			}
+		default:
+			return
+		}
+	} else {
+		switch last.Role {
+		case "user":
+			if last.User == nil {
+				return
+			}
+		case "toolResult":
+			if last.ToolResult == nil {
+				return
+			}
+		case "custom":
+			if last.Custom == nil {
+				return
+			}
+		default:
+			return
+		}
+	}
+	if *outcome == event.OutcomeUnsaved {
+		return
+	}
+	if werr := l.store.WriteError(); werr != nil {
+		*outcome = event.OutcomeUnsaved
+		return
+	}
+	stop := "error"
+	reason := (*runErr).Error()
+	if ctx.Err() != nil {
+		stop = "aborted"
+		reason = ctx.Err().Error()
+	}
+	if _, aerr := l.store.AppendMessage(toFailureAssistant(&provider.Response{StopReason: stop}, *cfg, reason)); aerr != nil {
+		*outcome = event.OutcomeUnsaved
+		*runErr = errors.Join(*runErr, aerr)
+		return
+	}
+	*outcome = event.OutcomeInterrupted
 }
 
 // persistStreamUsage records provider-reported counts from a failed stream
