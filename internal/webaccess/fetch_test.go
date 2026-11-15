@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -443,5 +444,34 @@ func TestFetchRejectsPathologicalHTMLNesting(t *testing.T) {
 	result := testClient(testConfig()).Dispatch(context.Background(), toolsInvocation(ToolFetch, map[string]any{"url": server.URL}))
 	if !result.IsError || !strings.Contains(result.Content[0].Text, classInvalid) {
 		t.Fatalf("result = %s", result.Content[0].Text)
+	}
+}
+
+func TestFetchHostNamedTLSStillTransport(t *testing.T) {
+	client := testClient(testConfig())
+	client.page = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: fmt.Errorf("dial failed")}
+	})}
+	_, err := client.fetchPage(context.Background(), "https://tls.example/", "raw")
+	if err == nil || !strings.Contains(err.Error(), classTransport) || strings.Contains(err.Error(), "tls failure") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFetchMetadataRedactsConfiguredSecrets(t *testing.T) {
+	const secret = "sk-live-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "body")
+	}))
+	defer server.Close()
+	cfg := testConfig()
+	cfg.ExaAPIKey = secret
+	page, err := testClient(cfg).fetchPage(context.Background(), server.URL+"/?token="+secret, "raw")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if strings.Contains(page.URL, secret) || strings.Contains(page.FinalURL, secret) {
+		t.Fatalf("url metadata leaked: %q %q", page.URL, page.FinalURL)
 	}
 }

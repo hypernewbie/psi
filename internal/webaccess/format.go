@@ -32,6 +32,22 @@ func boundResult(s string) (string, bool) {
 	return strings.TrimRight(prefix, "\n") + truncatedNotice, true
 }
 
+// runeLimit returns at most max Unicode scalars without allocating the full
+// rune slice. It reports whether the input was cut.
+func runeLimit(s string, max int) (string, bool) {
+	if max <= 0 {
+		return "", s != ""
+	}
+	count := 0
+	for i := range s {
+		if count == max {
+			return s[:i], true
+		}
+		count++
+	}
+	return s, false
+}
+
 func lineCount(s string) int {
 	if s == "" {
 		return 0

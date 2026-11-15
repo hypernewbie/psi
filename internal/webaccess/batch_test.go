@@ -414,6 +414,10 @@ func TestInlineContentStoredAndRetrievable(t *testing.T) {
 		t.Fatalf("partial snapshot not marked incomplete:\n%s", withContent.Content[0].Text)
 	}
 	id := extractResponseID(t, withContent.Content[0].Text)
+	overview := getContent(t, client, map[string]any{"responseId": id})
+	if overview.IsError || strings.Contains(overview.Content[0].Text, "page: 0 of") {
+		t.Fatalf("overview paging metadata: %s", overview.Content[0].Text)
+	}
 	page := getContent(t, client, map[string]any{"responseId": id, "url": server.URL + "/page1"})
 	if page.IsError || !strings.Contains(page.Content[0].Text, "full page one") {
 		t.Fatalf("retrieval: %s", page.Content[0].Text)

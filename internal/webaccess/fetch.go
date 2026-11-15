@@ -176,8 +176,8 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 		final = u
 	}
 	return pageData{
-		URL:       u.String(),
-		FinalURL:  final.String(),
+		URL:       c.redact(u.String(), maxURLBytes),
+		FinalURL:  c.redact(final.String(), maxURLBytes),
 		Title:     title,
 		Mode:      mode,
 		Text:      text,
@@ -226,13 +226,13 @@ func classifyTransport(ctx context.Context, err error) error {
 		}
 		msg := urlErr.Err.Error()
 		switch {
-		case strings.Contains(msg, classBlocked):
+		case hasClass(msg, classBlocked):
 			return fmt.Errorf("%s: destination is not public", classBlocked)
-		case strings.Contains(msg, classValidation):
+		case hasClass(msg, classValidation):
 			return fmt.Errorf("%s: redirect target is invalid", classValidation)
-		case strings.Contains(msg, "x509"), strings.Contains(msg, "tls"):
+		case strings.Contains(msg, "x509: "), strings.Contains(msg, "tls: "):
 			return fmt.Errorf("%s: tls failure", classTransport)
-		case strings.Contains(msg, classDNS):
+		case hasClass(msg, classDNS):
 			return fmt.Errorf("%s: lookup failed", classDNS)
 		case strings.Contains(msg, "unsupported content encoding"):
 			return fmt.Errorf("%s: unsupported content encoding", classInvalid)
@@ -254,11 +254,7 @@ func (c *Client) formatPage(p pageData, responseID string, storeErr error) (stri
 	previewTruncated := false
 	preview := p.Text
 	if limit := c.cfg.MaxInlineChars; limit > 0 {
-		runes := []rune(preview)
-		if len(runes) > limit {
-			preview = string(runes[:limit])
-			previewTruncated = true
-		}
+		preview, previewTruncated = runeLimit(preview, limit)
 	}
 	var b strings.Builder
 	if responseID != "" {

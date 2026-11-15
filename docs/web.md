@@ -114,7 +114,8 @@ Supported keys:
 | `cache.maxEntries`, `cache.maxBytes` | In-memory store limits (default 64 and 64 MiB) |
 
 Unknown keys are ignored. A key for a provider psi does not support is ignored
-without a diagnostic, and its value is never reported.
+without a diagnostic, and its value is never reported. A configuration file
+larger than 1 MiB is rejected before it is read.
 
 Environment overrides:
 
@@ -185,8 +186,8 @@ network requests.
 Errors use fixed classes: validation, blocked target, DNS, TLS/transport,
 timeout, cancellation, HTTP status, invalid response, and rate limit. Responses
 never include raw transport errors, provider bodies, headers, or configured
-values. Configured Exa keys and SearXNG header values are redacted from fetched
-text.
+values. Configured Exa keys and SearXNG header values are redacted from fetched text,
+titles, and URLs.
 
 ## Not supported
 

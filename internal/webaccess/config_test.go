@@ -374,3 +374,21 @@ func TestAllowRangesRejectBroadMappedIPv4(t *testing.T) {
 		t.Fatalf("invalid range retained: %v", cfg.AllowRanges)
 	}
 }
+
+type oversizedInfo struct{ fakeInfo }
+
+func (o oversizedInfo) Size() int64 { return maxConfigBytes + 1 }
+
+func TestLoadRejectsOversizedConfigBeforeRead(t *testing.T) {
+	env, _ := newEnv(t, nil, map[string]string{"/home/tester/.pi/agent/web-search.json": "{}"})
+	env.Stat = func(string) (os.FileInfo, error) { return oversizedInfo{}, nil }
+	read := false
+	env.ReadFile = func(string) ([]byte, error) {
+		read = true
+		return []byte("{}"), nil
+	}
+	cfg, diags := Load(env)
+	if read || cfg.FetchEnabled || cfg.SearchEnabled || len(diags) == 0 {
+		t.Fatalf("oversized config read or enabled: read=%v cfg=%+v diags=%v", read, cfg, diags)
+	}
+}

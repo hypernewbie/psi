@@ -299,7 +299,7 @@ func (c *Client) contentMetadata(meta contentMeta, more bool, next int) string {
 	if meta.title != "" {
 		b.WriteString("title: " + clipMeta(meta.title, 300) + "\n")
 	}
-	if meta.pages > 1 {
+	if meta.page > 0 && meta.pages > 1 {
 		b.WriteString(fmt.Sprintf("page: %d of %d\n", meta.page, meta.pages))
 	}
 	b.WriteString(fmt.Sprintf("offset: %d\n", meta.start))

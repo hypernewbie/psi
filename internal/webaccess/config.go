@@ -134,6 +134,11 @@ func Load(env Env) (Config, []string) {
 	if env.ReadFile == nil {
 		return disableAll(cfg, "web access: cannot read web-search.json")
 	}
+	if env.Stat != nil {
+		if info, err := env.Stat(path); err == nil && info.Size() > maxConfigBytes {
+			return disableAll(cfg, "web access: web-search.json exceeds 1 MiB")
+		}
+	}
 	data, err := env.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {

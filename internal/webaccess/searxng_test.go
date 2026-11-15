@@ -349,3 +349,25 @@ func TestSearchRedactsUnresponsiveEngineDetails(t *testing.T) {
 		t.Fatalf("redaction marker missing:\n%s", result.Content[0].Text)
 	}
 }
+
+func TestProviderDNSClassification(t *testing.T) {
+	client := testClient(searxConfig(t, "https://searx.example"))
+	client.provider = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("%s: lookup failed", classDNS)
+	})}
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q"}))
+	if !result.IsError || !strings.Contains(result.Content[0].Text, classDNS) {
+		t.Fatalf("result = %s", result.Content[0].Text)
+	}
+}
+
+func TestProviderHostNamedDNSStillTransport(t *testing.T) {
+	client := testClient(searxConfig(t, "https://dns.example"))
+	client.provider = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: fmt.Errorf("dial failed")}
+	})}
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q"}))
+	if !result.IsError || !strings.Contains(result.Content[0].Text, classTransport) || strings.Contains(result.Content[0].Text, classDNS) {
+		t.Fatalf("result = %s", result.Content[0].Text)
+	}
+}

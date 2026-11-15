@@ -163,6 +163,12 @@ func (d *guardedDialer) permits(addr netip.Addr, address string) bool {
 	return addressPermitted(addr, d.allow)
 }
 
+// hasClass recognizes our fixed class prefixes without matching a hostname
+// such as dns.example inside a wrapped transport error.
+func hasClass(message, class string) bool {
+	return strings.HasPrefix(message, class+":") || strings.Contains(message, ": "+class+":")
+}
+
 func wrapClass(ctx context.Context, class, message string) error {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return fmt.Errorf("%s: cancelled", classCancelled)

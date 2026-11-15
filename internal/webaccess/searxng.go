@@ -218,8 +218,12 @@ func classifyProviderError(ctx context.Context, err error) error {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return fmt.Errorf("%s: provider request timed out", classTimeout)
 	}
-	if strings.Contains(err.Error(), classBlocked) {
+	message := err.Error()
+	if hasClass(message, classBlocked) {
 		return fmt.Errorf("%s: destination is not public", classBlocked)
+	}
+	if hasClass(message, classDNS) {
+		return fmt.Errorf("%s: lookup failed", classDNS)
 	}
 	return fmt.Errorf("%s: provider request failed", classTransport)
 }

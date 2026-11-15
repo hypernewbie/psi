@@ -227,7 +227,7 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 	entry := &storedEntry{Kind: "fetch"}
 	for i := range urls {
 		if errs[i] != nil {
-			entry.Pages = append(entry.Pages, storedPage{URL: clipMeta(urls[i], 2048), Error: errs[i].Error()})
+			entry.Pages = append(entry.Pages, storedPage{URL: clipMeta(c.redact(urls[i], maxURLBytes), 2048), Error: errs[i].Error()})
 			continue
 		}
 		page := pages[i]
@@ -252,7 +252,7 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 	b.WriteString("content:\n")
 	for i := range urls {
 		if errs[i] != nil {
-			b.WriteString(fmt.Sprintf("%d. url: %s\n   error: %s\n", i+1, clipMeta(urls[i], 2048), errs[i].Error()))
+			b.WriteString(fmt.Sprintf("%d. url: %s\n   error: %s\n", i+1, clipMeta(c.redact(urls[i], maxURLBytes), 2048), errs[i].Error()))
 			continue
 		}
 		page := pages[i]
@@ -282,11 +282,8 @@ func pagedPreview(text string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	return string(runes[:limit])
+	preview, _ := runeLimit(text, limit)
+	return preview
 }
 
 func fetchError(err error) tools.Result {
