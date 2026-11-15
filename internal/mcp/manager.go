@@ -1253,7 +1253,7 @@ func (c *connection) call(parent context.Context, tool Tool, inv tools.Invocatio
 	params.SetProgressToken(state.token)
 	result, err := c.session.CallTool(callCtx, params)
 	if err != nil {
-		return c.callFailure(tool, err, state, callCtx)
+		return c.callFailure(tool, err, state, callCtx, parent)
 	}
 	return Convert(result, ConvertOptions{Server: tool.Server, Tool: tool.RawName, ReadAvailable: readAvailable})
 }
@@ -1281,7 +1281,7 @@ func timeoutResult(tool Tool, phase string) tools.Result {
 	return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s timed out (%s)", tool.Server, tool.RawName, phase)}}}
 }
 
-func (c *connection) callFailure(tool Tool, err error, state *callState, ctx context.Context) tools.Result {
+func (c *connection) callFailure(tool Tool, err error, state *callState, ctx, parent context.Context) tools.Result {
 	class := c.latchedClass()
 	if obs := requestObservationFrom(ctx); obs != nil {
 		class, _ = obs.snapshot()
@@ -1304,7 +1304,9 @@ func (c *connection) callFailure(tool Tool, err error, state *callState, ctx con
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return timeoutResult(tool, "hard deadline")
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+	// Connection loss also cancels ctx. Only cancellation of the calling
+	// turn means the user or run cancelled this tool rather than losing it.
+	if errors.Is(parent.Err(), context.Canceled) {
 		return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s was cancelled", tool.Server, tool.RawName)}}}
 	}
 	return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s failed: %s; the outcome may be unknown", tool.Server, tool.RawName, safeErrorText(err))}}}

@@ -25,11 +25,6 @@ func TestMCPHelperProcess(t *testing.T) {
 	if marker := os.Getenv("PSI_MCP_MARKER"); marker != "" {
 		_ = os.WriteFile(marker, []byte("started"), 0o600)
 	}
-	if delay := os.Getenv("PSI_MCP_DELAY_MS"); delay != "" {
-		if ms, err := time.ParseDuration(delay + "ms"); err == nil {
-			time.Sleep(ms)
-		}
-	}
 	server := sdk.NewServer(&sdk.Implementation{Name: "fixture", Version: "1"}, &sdk.ServerOptions{PageSize: envInt("PSI_MCP_PAGE_SIZE")})
 	server.AddTool(&sdk.Tool{
 		Name:        "echo",
@@ -168,25 +163,68 @@ func TestManagerStdioEndToEnd(t *testing.T) {
 	}
 }
 
-func TestManagerSnapshotDoesNotBlockSetup(t *testing.T) {
-	dir := t.TempDir()
-	config := `{"mcpServers": {"fixture": {"command": ` + jsonQuote(os.Args[0]) + `, "args": ["-test.run=^TestMCPHelperProcess$"], "env": {"PSI_MCP_HELPER": "1", "PSI_MCP_DELAY_MS": "1500"}, "timeout": 5}}}`
-	user := writeTestFile(t, dir, "mcp.json", config)
-	manager := NewManager(Options{Input: Input{UserPath: user, Cwd: dir, ReadAvailable: true}})
-	manager.Start()
+func TestCallCancellationDoesNotWaitForUncooperativeServer(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	server := sdk.NewServer(&sdk.Implementation{Name: "fixture", Version: "1"}, nil)
+	server.AddTool(sdkTool("hang", "Ignore cancellation", map[string]any{"type": "object"}), func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		close(entered)
+		<-release
+		return &sdk.CallToolResult{}, nil
+	})
+	server.AddTool(sdkTool("echo", "Still responsive", map[string]any{"type": "object"}), func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "responsive"}}}, nil
+	})
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	client := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "1"}, nil)
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	manager := NewManager(Options{})
 	t.Cleanup(func() {
 		manager.Stop()
 		manager.Wait()
 	})
-	start := time.Now()
-	snapshot := manager.Snapshot()
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Fatalf("snapshot blocked for %v", elapsed)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serverConfig := Server{Name: "fixture", Enabled: true, Exposure: ExposureDirect, Timeout: time.Hour}
+	hang := Tool{Name: "mcp__fixture__hang", RawName: "hang", Server: "fixture", Epoch: 1, Exposure: ExposureDirect}
+	echo := Tool{Name: "mcp__fixture__echo", RawName: "echo", Server: "fixture", Epoch: 1, Exposure: ExposureDirect}
+	conn := &connection{manager: manager, server: "fixture", epoch: 1, ctx: ctx, cancel: cancel, session: session,
+		catalog: []Tool{hang, echo}, permits: make(chan struct{}, maxCallsPerServer), tokens: map[string]*callState{}}
+	manager.servers["fixture"] = &serverState{cfg: serverConfig, epoch: 1, status: serverStateReady, conn: conn}
+	caller, cancelCall := context.WithCancel(context.Background())
+	t.Cleanup(cancelCall)
+	done := make(chan tools.Result, 1)
+	go func() { done <- manager.Call(caller, hang, tools.Invocation{Name: hang.Name}) }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("server never entered the hanging handler")
 	}
-	if len(snapshot.Servers) != 0 && snapshot.Servers[0].State == serverStateReady {
-		t.Fatal("gated server became ready before its gate")
+	cancelCall()
+	select {
+	case result := <-done:
+		if !result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, "was cancelled") {
+			t.Fatalf("cancelled call = %+v", result)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("call waited for the server to honor cancellation")
 	}
-	waitServerState(t, manager, "fixture", serverStateReady)
+	// The hanging handler remains gated. Another call must still succeed.
+	probeCtx, cancelProbe := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancelProbe()
+	result := manager.Call(probeCtx, echo, tools.Invocation{Name: echo.Name})
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "responsive" {
+		t.Fatalf("call after cancellation = %+v", result)
+	}
 }
 
 func TestManagerStaleRouteRejectedAfterReplacement(t *testing.T) {
@@ -404,21 +442,27 @@ func TestManagerReconnectReusesResolvedCommand(t *testing.T) {
 	if !ok {
 		t.Fatal("crash tool missing")
 	}
-	_ = manager.Call(context.Background(), crash, tools.Invocation{Name: crash.Name})
+	result := manager.Call(context.Background(), crash, tools.Invocation{Name: crash.Name})
+	if !result.IsError {
+		t.Fatalf("crashed call reported success: %+v", result)
+	}
 	deadline := time.Now().Add(10 * time.Second)
+	var replacement Tool
 	for time.Now().Before(deadline) {
 		snapshot = manager.Snapshot()
-		if _, ok := snapshot.Find("mcp__fixture__echo"); ok {
-			for _, status := range snapshot.Servers {
-				if status.Name == "fixture" && status.State == serverStateReady {
-					goto recovered
-				}
-			}
+		if tool, ok := snapshot.Find("mcp__fixture__echo"); ok && tool.Epoch != crash.Epoch {
+			replacement = tool
+			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("connection did not recover after crash")
-recovered:
+	if replacement.Name == "" {
+		t.Fatal("connection did not recover with a new epoch after crash")
+	}
+	result = manager.Call(context.Background(), replacement, tools.Invocation{Name: replacement.Name, Arguments: map[string]any{"text": "recovered"}})
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "recovered" {
+		t.Fatalf("call after reconnect = %+v", result)
+	}
 	if data, _ := os.ReadFile(marker); string(data) != "x" {
 		t.Fatalf("automatic reconnect re-ran !command: %q", data)
 	}
@@ -543,6 +587,32 @@ func TestManagerAcceptedReloadRefillsReconnectAllowance(t *testing.T) {
 	manager.acceptConfigLocked(&Config{Servers: []Server{server}}, Input{}, nil)
 	if state.reconnects != 0 {
 		t.Fatalf("reconnect allowance after reload = %d", state.reconnects)
+	}
+}
+
+func TestCallFailureDistinguishesConnectionLossFromCallerCancellation(t *testing.T) {
+	for _, callerCancelled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("caller_cancelled=%t", callerCancelled), func(t *testing.T) {
+			parent, cancelParent := context.WithCancel(context.Background())
+			defer cancelParent()
+			callCtx, cancelCall := context.WithCancel(parent)
+			defer cancelCall()
+			if callerCancelled {
+				cancelParent()
+			}
+			// Reproduce cleanup winning the race with the call result. The
+			// derived context alone cannot identify who cancelled the call.
+			cancelCall()
+			conn := &connection{}
+			result := conn.callFailure(Tool{Server: "fixture", RawName: "crash"}, sdk.ErrConnectionClosed, &callState{}, callCtx, parent)
+			want := "outcome may be unknown"
+			if callerCancelled {
+				want = "was cancelled"
+			}
+			if !result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, want) {
+				t.Fatalf("call failure = %+v; want %q", result, want)
+			}
+		})
 	}
 }
 

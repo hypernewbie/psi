@@ -166,6 +166,11 @@ reports a refresh warning. A lost connection withdraws its tools and may use at
 most two reconnect cycles. A successful `/reload` accepts the config and starts
 a fresh reconnect allowance.
 
+A server exit during a tool call produces an error. The result warns that the
+outcome can be unknown. Connection cleanup does not turn a crash into caller
+cancellation. A stalled call waits for its timeout or caller cancellation.
+The editor remains usable while that turn waits.
+
 ## Security
 
 MCP servers are not sandboxed. A stdio server inherits the psi process
@@ -199,3 +204,32 @@ explicit arguments.
 - Duplicate JSON keys are strict errors instead of last-value-wins.
 - psi never replays an interrupted tool call. After an ambiguous side effect,
   inspect the external state.
+
+## Failure regression checks
+
+Unix tests use controlled launcher processes and loopback providers. They do
+not run `npx`, download packages, or use real provider credentials.
+
+The default suite covers a launcher that exits before initialization and one
+that stalls initialization. Chat and `/mcp` remain usable. Quit stops the
+stalled process before the fixture releases its gate. A deterministic SDK
+regression also checks that cancellation returns while a handler ignores it,
+and that another call on the same connection succeeds.
+
+The tagged acceptance suite covers a mid-call crash and a handler that ignores
+cancellation. It checks cancellation, continued chat, durable error results,
+no replay during a gated reconnect, and process cleanup. This check polls
+`/mcp` for initial catalog readiness. It runs in `stress.yml`, not routine CI.
+
+Run both checks against a built executable:
+
+```sh
+mkdir -p .mcp-work
+go build -o .mcp-work/psi ./cmd/psi
+go test ./internal/app \
+  -run '^TestActualAppMCPLauncherFailureDoesNotBlockChat$' -count=1 \
+  -args -psi-test-binary="$PWD/.mcp-work/psi"
+go test -tags acceptance ./internal/app \
+  -run '^TestActualAppMCPCallFailureKeepsSessionUsable$' -count=1 \
+  -args -psi-test-binary="$PWD/.mcp-work/psi"
+```
