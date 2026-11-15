@@ -129,13 +129,13 @@ func TestStoreIDGenerationFailure(t *testing.T) {
 
 func TestStoredMetadataIsCapped(t *testing.T) {
 	entry := entryWith("body")
-	entry.Pages[0].Title = strings.Repeat("t", metaFieldCap*2) + "\nforged: line"
+	entry.Pages[0].Title = strings.Repeat("t", metaFieldCap*2) + "\nforged: line\u0085end"
 	entry.Queries = []string{strings.Repeat("q", metaFieldCap*2)}
 	entry.clip()
 	if len(entry.Pages[0].Title) > metaFieldCap {
 		t.Fatalf("title len = %d", len(entry.Pages[0].Title))
 	}
-	if strings.Contains(entry.Pages[0].Title, "\n") {
+	if strings.ContainsAny(entry.Pages[0].Title, "\n\u0085") {
 		t.Fatal("metadata control character survived")
 	}
 }

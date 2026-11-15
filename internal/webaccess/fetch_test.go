@@ -50,7 +50,7 @@ func TestFetchReadableMarkdown(t *testing.T) {
 	defer server.Close()
 
 	client := testClient(testConfig())
-	page, err := client.fetchPage(context.Background(), server.URL+"/doc", "readable")
+	page, err := client.fetchPage(context.Background(), " "+server.URL+"/doc ", "readable")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -67,8 +67,8 @@ func TestFetchReadableMarkdown(t *testing.T) {
 			t.Errorf("markdown kept %q:\n%s", bad, page.Text)
 		}
 	}
-	if !strings.Contains(page.Text, page.FinalURL) {
-		// The final URL is a formatting concern, checked separately.
+	if page.URL != server.URL+"/doc" || page.FinalURL != server.URL+"/doc" {
+		t.Fatalf("urls = %q %q", page.URL, page.FinalURL)
 	}
 }
 
@@ -254,6 +254,17 @@ func TestFetchRedirectToDeniedTarget(t *testing.T) {
 	defer server.Close()
 	_, err := testClient(testConfig()).fetchPage(context.Background(), server.URL, "raw")
 	if err == nil || !strings.Contains(err.Error(), classBlocked) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFetchRedirectToInvalidTargetClass(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "ftp://example.com/other", http.StatusFound)
+	}))
+	defer server.Close()
+	_, err := testClient(testConfig()).fetchPage(context.Background(), server.URL, "raw")
+	if err == nil || !strings.Contains(err.Error(), classValidation) {
 		t.Fatalf("err = %v", err)
 	}
 }

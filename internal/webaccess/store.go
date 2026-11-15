@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -233,29 +234,27 @@ func clipOverview(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
 	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
+	for _, r := range s {
 		switch {
-		case c == '\n':
-			b.WriteByte(c)
-		case c < 0x20 || c == 0x7f:
+		case r == '\n':
+			b.WriteRune(r)
+		case unicode.IsControl(r):
 			b.WriteByte(' ')
 		default:
-			b.WriteByte(c)
+			b.WriteRune(r)
 		}
 	}
 	return runePrefix(b.String(), overviewCap)
 }
 
 func censorControl(s string) string {
-	var b []byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 || c == 0x7f {
-			b = append(b, ' ')
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			b.WriteByte(' ')
 			continue
 		}
-		b = append(b, c)
+		b.WriteRune(r)
 	}
-	return string(b)
+	return b.String()
 }

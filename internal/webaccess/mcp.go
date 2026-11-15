@@ -14,7 +14,10 @@ import (
 // response whose id matches. It stops after a complete event and never waits
 // for stream EOF.
 func readSSEEnvelope(body io.Reader, requestID string, limit int) ([]byte, error) {
-	reader := bufio.NewReaderSize(body, 64*1024)
+	if limit < 1 {
+		return nil, fmt.Errorf("%s: invalid provider response limit", classInvalid)
+	}
+	reader := bufio.NewReaderSize(io.LimitReader(body, int64(limit)+1), 64*1024)
 	total := 0
 	var data []string
 

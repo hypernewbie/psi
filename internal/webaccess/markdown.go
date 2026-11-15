@@ -40,7 +40,13 @@ func htmlToMarkdown(data []byte, base *url.URL, limit int) (title, markdown stri
 	return title, text, truncated, nil
 }
 
-const maxHTMLDepth = 512
+const (
+	maxHTMLDepth = 512
+	// Inline formatting creates a temporary renderer at each level. Bound the
+	// depth so deeply nested markup cannot duplicate a large text buffer 512
+	// times. Levels below the cap keep their formatting; deeper ones flatten.
+	maxInlineRenderDepth = 16
+)
 
 // htmlTooDeep rejects pathological nesting before recursive projection so a
 // hostile page cannot exhaust the goroutine stack.
@@ -64,10 +70,11 @@ func htmlTooDeep(root *html.Node, limit int) bool {
 }
 
 type renderer struct {
-	base      *url.URL
-	out       strings.Builder
-	limit     int
-	truncated bool
+	base        *url.URL
+	out         strings.Builder
+	limit       int
+	inlineDepth int
+	truncated   bool
 }
 
 func (r *renderer) write(s string) {
@@ -82,18 +89,30 @@ func (r *renderer) write(s string) {
 	r.truncated = true
 }
 
+func (r *renderer) inlineRenderer() *renderer {
+	depth := r.inlineDepth + 1
+	if depth > maxInlineRenderDepth {
+		depth = maxInlineRenderDepth
+	}
+	return &renderer{base: r.base, limit: r.limit, inlineDepth: depth}
+}
+
 func (r *renderer) inlineText(n *html.Node) string {
-	sub := &renderer{base: r.base, limit: r.limit}
+	sub := r.inlineRenderer()
 	sub.inline(n)
 	return sub.out.String()
 }
 
 func (r *renderer) inlineChildren(n *html.Node) string {
-	sub := &renderer{base: r.base, limit: r.limit}
-	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		sub.inline(child)
-	}
+	sub := r.inlineRenderer()
+	sub.inlineChildrenInPlace(n)
 	return sub.out.String()
+}
+
+func (r *renderer) inlineChildrenInPlace(n *html.Node) {
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		r.inline(child)
+	}
 }
 
 func (r *renderer) inline(n *html.Node) {
@@ -119,6 +138,10 @@ func (r *renderer) inline(n *html.Node) {
 			r.write(escapeMarkdown(alt))
 		}
 	case "a":
+		if r.inlineDepth >= maxInlineRenderDepth {
+			r.inlineChildrenInPlace(n)
+			return
+		}
 		text := strings.TrimSpace(r.inlineChildren(n))
 		href := r.resolveLink(attr(n, "href"))
 		if href != "" && text != "" {
@@ -127,16 +150,28 @@ func (r *renderer) inline(n *html.Node) {
 			r.write(text)
 		}
 	case "code":
+		if r.inlineDepth >= maxInlineRenderDepth {
+			r.inlineChildrenInPlace(n)
+			return
+		}
 		text := r.inlineChildren(n)
 		if text != "" {
 			r.write("`" + strings.ReplaceAll(text, "`", "'") + "`")
 		}
 	case "strong", "b":
+		if r.inlineDepth >= maxInlineRenderDepth {
+			r.inlineChildrenInPlace(n)
+			return
+		}
 		text := r.inlineChildren(n)
 		if text = strings.TrimSpace(text); text != "" {
 			r.write("**" + text + "**")
 		}
 	case "em", "i":
+		if r.inlineDepth >= maxInlineRenderDepth {
+			r.inlineChildrenInPlace(n)
+			return
+		}
 		text := r.inlineChildren(n)
 		if text = strings.TrimSpace(text); text != "" {
 			r.write("*" + text + "*")

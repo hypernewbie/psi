@@ -131,6 +131,9 @@ func ResolvePath(env Env) string {
 func Load(env Env) (Config, []string) {
 	path := ResolvePath(env)
 	cfg, diags := defaultConfig()
+	if env.ReadFile == nil {
+		return disableAll(cfg, "web access: cannot read web-search.json")
+	}
 	data, err := env.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -432,6 +435,9 @@ func applySSRF(cfg *Config, raw json.RawMessage) error {
 		if err != nil {
 			return err
 		}
+		if prefix.Addr().Is4In6() && prefix.Bits() < 96 {
+			return errors.New("mapped IPv4 range is too broad")
+		}
 		out = append(out, normalizePrefix(prefix))
 	}
 	cfg.AllowRanges = out
@@ -443,7 +449,7 @@ func normalizePrefix(prefix netip.Prefix) netip.Prefix {
 	if addr.Is4In6() {
 		bits := prefix.Bits() - 96
 		if bits < 0 {
-			bits = 0
+			return netip.Prefix{}
 		}
 		return netip.PrefixFrom(addr.Unmap(), bits)
 	}

@@ -176,7 +176,7 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 		final = u
 	}
 	return pageData{
-		URL:       rawURL,
+		URL:       u.String(),
 		FinalURL:  final.String(),
 		Title:     title,
 		Mode:      mode,
@@ -228,6 +228,8 @@ func classifyTransport(ctx context.Context, err error) error {
 		switch {
 		case strings.Contains(msg, classBlocked):
 			return fmt.Errorf("%s: destination is not public", classBlocked)
+		case strings.Contains(msg, classValidation):
+			return fmt.Errorf("%s: redirect target is invalid", classValidation)
 		case strings.Contains(msg, "x509"), strings.Contains(msg, "tls"):
 			return fmt.Errorf("%s: tls failure", classTransport)
 		case strings.Contains(msg, classDNS):

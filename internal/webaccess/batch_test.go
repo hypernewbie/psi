@@ -61,7 +61,9 @@ func TestBatchArgumentValidation(t *testing.T) {
 		})
 	}
 
+	var validHits int64
 	valid := batchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&validHits, 1)
 		fmt.Fprint(w, "<html><body><p>ok</p></body></html>")
 	})
 	client := testClient(testConfig())
@@ -69,9 +71,13 @@ func TestBatchArgumentValidation(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("valid batch rejected: %s", result.Content[0].Text)
 	}
+	hitsBefore := atomic.LoadInt64(&validHits)
 	result = client.Dispatch(context.Background(), toolsInvocation(ToolFetch, map[string]any{"urls": []string{valid.URL, "ftp://a.example/"}}))
-	if result.IsError || !strings.Contains(result.Content[0].Text, "url must use http or https") {
-		t.Fatalf("ftp URL not rejected as an item error:\n%s", result.Content[0].Text)
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "urls[2]") || !strings.Contains(result.Content[0].Text, "url must use http or https") {
+		t.Fatalf("invalid batch target not rejected before HTTP:\n%s", result.Content[0].Text)
+	}
+	if got := atomic.LoadInt64(&validHits); got != hitsBefore {
+		t.Fatalf("valid target was fetched before the batch was rejected: %d -> %d", hitsBefore, got)
 	}
 	result = client.Dispatch(context.Background(), toolsInvocation(ToolFetch, map[string]any{"urls": []string{valid.URL, ""}}))
 	if !result.IsError {

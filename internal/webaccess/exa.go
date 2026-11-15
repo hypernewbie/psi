@@ -228,13 +228,17 @@ func formatOverview(provider, query string, results []searchHit, unresponsive []
 	b.WriteString("provider: " + provider + "\n")
 	b.WriteString(fmt.Sprintf("results: %d\n", len(results)))
 	if len(unresponsive) > 0 {
-		b.WriteString("unresponsive engines: " + strings.Join(unresponsive, "; ") + "\n")
+		safe := make([]string, 0, len(unresponsive))
+		for _, item := range unresponsive {
+			safe = append(safe, clipMeta(item, 200))
+		}
+		b.WriteString("unresponsive engines: " + strings.Join(safe, "; ") + "\n")
 	}
 	for i, result := range results {
-		b.WriteString(fmt.Sprintf("\n%d. %s\n", i+1, result.Title))
+		b.WriteString(fmt.Sprintf("\n%d. %s\n", i+1, clipMeta(result.Title, 300)))
 		b.WriteString("   " + clipMeta(result.URL, 2048) + "\n")
 		if result.Snippet != "" {
-			snippet := strings.Join(strings.Fields(result.Snippet), " ")
+			snippet := clipMeta(result.Snippet, 2000)
 			if runes := []rune(snippet); len(runes) > 500 {
 				snippet = string(runes[:500]) + "..."
 			}
@@ -242,10 +246,10 @@ func formatOverview(provider, query string, results []searchHit, unresponsive []
 		}
 		var meta []string
 		if result.Engines != "" {
-			meta = append(meta, "engines: "+result.Engines)
+			meta = append(meta, "engines: "+clipMeta(result.Engines, 200))
 		}
 		if result.Date != "" {
-			meta = append(meta, "date: "+result.Date)
+			meta = append(meta, "date: "+clipMeta(result.Date, 64))
 		}
 		if result.Error != "" {
 			b.WriteString("   fetch-error: " + clipMeta(result.Error, 200) + "\n")

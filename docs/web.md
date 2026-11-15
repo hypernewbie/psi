@@ -21,9 +21,11 @@ Web tools are internal calls: they serialize with `loop_control` and
 them.
 
 Batches use at most three workers and return sections in input order, with a
-per-URL error for each failure. A batch that has some successes is not an error.
-A batch where every URL fails returns an error and stores nothing. Content is
-stored in the same order and one `responseId` covers the batch.
+per-URL error for each failure. All URL targets are validated before any
+request; one syntactically invalid entry fails the batch without fetching the
+others. A batch that has some successes is not an error. A batch where every
+URL fails returns an error and stores nothing. Content is stored in the same
+order and one `responseId` covers the batch.
 
 ### Search
 

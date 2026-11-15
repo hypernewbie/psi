@@ -363,3 +363,14 @@ func TestInvalidBaseURLRules(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowRangesRejectBroadMappedIPv4(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"ssrf":{"allowRanges":["::ffff:0.0.0.0/32"]}}`), env)
+	if len(diags) == 0 || cfg.SearchEnabled || cfg.FetchEnabled || cfg.ContentEnabled {
+		t.Fatalf("broad mapped range must disable all tools: %+v %v", cfg, diags)
+	}
+	if len(cfg.AllowRanges) != 0 {
+		t.Fatalf("invalid range retained: %v", cfg.AllowRanges)
+	}
+}

@@ -66,7 +66,7 @@ type redactor struct {
 func newRedactor(cfg Config) redactor {
 	var values []string
 	add := func(v string) {
-		if v == "" {
+		if strings.TrimSpace(v) == "" {
 			return
 		}
 		trimmed := strings.Trim(v, " \t")

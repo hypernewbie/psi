@@ -174,6 +174,13 @@ func (c *Client) handleSingleFetch(ctx context.Context, target, mode string) too
 }
 
 func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode string) tools.Result {
+	// Validate every target before starting any request, so an invalid entry
+	// cannot produce a partially executed batch.
+	for i, target := range urls {
+		if _, err := validateTarget(target); err != nil {
+			return fetchError(fmt.Errorf("urls[%d]: %w", i+1, err))
+		}
+	}
 	pages := make([]pageData, len(urls))
 	errs := make([]error, len(urls))
 	var wg sync.WaitGroup
