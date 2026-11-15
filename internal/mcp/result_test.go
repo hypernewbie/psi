@@ -199,3 +199,36 @@ func TestResultFullOutputIsReadableByReadTool(t *testing.T) {
 		t.Fatalf("read tool could not reach the saved output: %q", text)
 	}
 }
+
+func TestEmbeddedBinaryResourceFileIsPrivate(t *testing.T) {
+	block, notice, err := convertResource(&sdk.ResourceContents{
+		URI:      "file:///tmp/example.bin",
+		MIMEType: "application/octet-stream",
+		Blob:     []byte("resource-bytes"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block == nil || block.Text != notice {
+		t.Fatalf("resource block = %+v notice=%q", block, notice)
+	}
+	path := strings.TrimPrefix(notice, "MCP binary resource saved to ")
+	if path == notice || path == "" {
+		t.Fatalf("resource path notice = %q", notice)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("resource mode = %o", info.Mode().Perm())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "resource-bytes" {
+		t.Fatalf("resource bytes = %q", data)
+	}
+}

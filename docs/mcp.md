@@ -123,7 +123,9 @@ offset and limit. The file stays on disk for later reads and session history.
 If the write fails, the result says so and does not show a false path.
 
 Resource links are text only. psi never fetches a URI or renders MCP Apps
-content. Audio and unsupported blocks become text placeholders.
+content. Embedded binary resources are written to mode-0600
+`psi-mcp-resource-*` files and are not cleaned automatically. Audio and
+unsupported blocks become text placeholders.
 
 Limits:
 
