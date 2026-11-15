@@ -2602,16 +2602,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 				pendingInputs = pendingInputs[1:]
 				pendingInputBytes -= len(input.Key)
 			}
-			if ok && r.login == nil && !input.Paste && r.loops != nil && r.loops.Snapshot().Active {
-				key := string(input.Key)
-				if key == "\x18" || key == "\x1b[88;6u" {
-					stopLoopCommand()
-					if busy {
-						cancelActive()
-					}
-					continue
-				}
-			}
 			if !ok {
 				inputs = nil
 				if r.login != nil {
@@ -2623,6 +2613,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				return nil
+			}
+			if r.login == nil && !input.Paste && r.loops != nil && r.loops.Snapshot().Active {
+				key := string(input.Key)
+				if key == "\x18" || key == "\x1b[88;6u" {
+					stopLoopCommand()
+					if busy {
+						cancelActive()
+					}
+					continue
+				}
 			}
 			if input.Err != nil && r.login != nil {
 				r.cancelLogin(console)

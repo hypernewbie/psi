@@ -174,8 +174,12 @@ func StoredAPIKeyProviders(authPath string) ([]string, error) {
 		if credentialType != "" && credentialType != "api_key" {
 			continue
 		}
+		rawKey, present := entry["key"]
+		if !present {
+			continue
+		}
 		var key string
-		if rawKey, present := entry["key"]; present && json.Unmarshal(rawKey, &key) != nil {
+		if err := json.Unmarshal(rawKey, &key); err != nil {
 			return nil, fmt.Errorf("malformed auth.json credential for %s", providerID)
 		}
 		if key != "" {
@@ -283,8 +287,12 @@ func decodeStoredEntry(raw json.RawMessage, providerID string) (map[string]json.
 }
 
 func storedEntryType(entry map[string]json.RawMessage, providerID string) (string, error) {
+	raw, ok := entry["type"]
+	if !ok {
+		return "", nil
+	}
 	var credentialType string
-	if raw, ok := entry["type"]; ok && json.Unmarshal(raw, &credentialType) != nil {
+	if err := json.Unmarshal(raw, &credentialType); err != nil {
 		return "", fmt.Errorf("malformed auth.json credential for %s", providerID)
 	}
 	return credentialType, nil

@@ -25,9 +25,13 @@ func loginProviderIDs() []string {
 	ids := make([]string, 0, len(providerregistry.IDs()))
 	for _, id := range providerregistry.IDs() {
 		spec, ok := providerregistry.Lookup(id)
-		if ok && spec.Auth == providerregistry.AuthAPIKey && id != "anthropic" {
-			ids = append(ids, id)
+		if !ok {
+			continue
 		}
+		if spec.Auth != providerregistry.AuthAPIKey || id == "anthropic" {
+			continue
+		}
+		ids = append(ids, id)
 	}
 	return ids
 }
@@ -36,7 +40,10 @@ func loginSelector(r *runtime) *Selector {
 	ids := loginProviderIDs()
 	items := make([]session.SessionInfo, 0, len(ids))
 	for _, id := range ids {
-		spec, _ := providerregistry.Lookup(id)
+		spec, ok := providerregistry.Lookup(id)
+		if !ok {
+			continue
+		}
 		parts := []string{spec.Name, spec.Environment}
 		if r.models != nil {
 			if model, err := r.models.SelectModel(id, ""); err == nil {
@@ -112,7 +119,10 @@ func (r *runtime) loginCommand(arg string, console *terminal.Console) error {
 		return fmt.Errorf("OpenAI Codex login is not available in psi; log in through Pi with /login openai-codex.")
 	}
 	spec, ok := providerregistry.Lookup(providerID)
-	if !ok || spec.Auth != providerregistry.AuthAPIKey || providerID == "anthropic" {
+	if !ok {
+		return fmt.Errorf("unknown provider %q; supported: %s", providerID, strings.Join(loginProviderIDs(), ", "))
+	}
+	if spec.Auth != providerregistry.AuthAPIKey {
 		return fmt.Errorf("unknown provider %q; supported: %s", providerID, strings.Join(loginProviderIDs(), ", "))
 	}
 	r.startLogin(providerID, spec.Name, console)
@@ -135,11 +145,13 @@ func (r *runtime) startLogin(providerID, providerName string, console *terminal.
 func (r *runtime) restoreAuthState() {
 	if r.store != nil && r.store.WriteError() != nil {
 		r.state = StateStorageBlocked
-	} else if r.authErr != nil {
-		r.state = StateOffline
-	} else {
-		r.state = StateIdle
+		return
 	}
+	if r.authErr != nil {
+		r.state = StateOffline
+		return
+	}
+	r.state = StateIdle
 }
 
 func (r *runtime) cancelLogin(console *terminal.Console) {
