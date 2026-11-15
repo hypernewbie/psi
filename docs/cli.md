@@ -64,6 +64,32 @@ psi --list-models sonnet
 Provider credentials come from `auth.json`, `models.json`, or the provider's
 environment variable. See [Providers](providers.md).
 
+## Interactive API-key login
+
+Use `/login [provider]` in an interactive session. With no provider argument,
+psi opens a searchable provider picker. The prompt masks the key; do not put
+keys in command arguments. Login supports `deepseek`, `google`, `groq`,
+`kimi-coding`, `minimax`, `mistral`, `moonshotai`, `opencode-go`, `openrouter`,
+`qwen-token-plan`, `xai`, `xiaomi`, `xiaomi-token-plan-ams`,
+`xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, and `zai`. It does not support
+Anthropic API-key login or OpenAI Codex OAuth. Use an environment variable or
+`models.json` for Anthropic; use Pi's `/login openai-codex` for Codex OAuth.
+
+Login stores the key in `<agentDir>/auth.json`. The agent directory is
+`PSI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR`, then
+`~/.pi/agent`. A stored key takes precedence over a `models.json` key and the
+provider's environment variable. psi does not validate the key during login;
+the first provider request can still fail. If the session is offline and the
+provider has a default model, login selects it and saves the default provider
+and model. Otherwise, the key is saved without changing the current model.
+
+Use `/logout` to select and remove a stored built-in API key from
+`auth.json`. This includes Anthropic API keys. It does not remove OAuth
+credentials, environment variables, or `models.json` credentials. If the key
+belongs to the active provider, psi reloads that provider from the remaining
+credential sources. If none is available, psi goes offline until you configure
+a credential again. `/logout` does not accept an argument.
+
 ## Sessions
 
 ```sh

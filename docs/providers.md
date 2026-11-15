@@ -50,13 +50,31 @@ psi resolves a credential in this order:
 expired Codex token, preserves unrelated fields, and never substitutes a billed
 OpenAI API key for Codex OAuth. Run `/login openai-codex` in Pi to sign in.
 
-Each acquisition of the shared credential lock waits as long as Pi waits for
-it, thirty seconds, and respects cancellation. A lease that stops reporting
-its owner is reclaimed after the stale timeout. On Windows, access-denied
-errors during lock creation use the same bounded wait.
+By default, Codex credential checks and refreshes wait up to thirty seconds for
+each shared lock, matching Pi. API-key writes from `/login` and `/logout` wait
+up to five seconds. Both paths respect cancellation. psi reclaims a stale
+lease after its heartbeat stops. On Windows, access-denied errors during lock
+creation use the same bounded wait.
 
 Credential values in `models.json` accept `$VAR`, `${VAR}`, `$$`, and `$!`
 escapes. `!command` values are rejected without being executed.
+
+Interactive `/login [provider]` supports the 16 built-in API-key providers
+listed in [the CLI guide](cli.md#interactive-api-key-login). With no provider
+argument, it opens a searchable picker. The prompt masks the key and writes a
+Pi-compatible `api_key` entry to `auth.json`; key values are not accepted as
+command arguments. The login flow does not validate the key against the
+provider. If an offline session has a default model for the provider, psi
+selects that model and saves the new defaults. Otherwise, it keeps the current
+model. Anthropic API-key login and OpenAI Codex OAuth login are not available
+in psi. Use the matching environment variable or `models.json` for Anthropic,
+and Pi's `/login openai-codex` for Codex OAuth.
+
+Use `/logout` to select and remove a stored built-in API key. It includes
+Anthropic API keys, but does not remove OAuth credentials, environment
+variables, or credentials from `models.json`. Removing the active provider key
+reloads that provider from the remaining credential sources; if none exists,
+psi goes offline until you configure a credential again.
 
 ## Choose a model
 

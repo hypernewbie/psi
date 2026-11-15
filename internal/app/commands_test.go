@@ -15,10 +15,23 @@ import (
 	"psi/internal/testutil/leakcheck"
 )
 
+func TestCommandMetadataDescribesAuthenticationCommands(t *testing.T) {
+	commands := make(map[string]terminal.CommandSpec)
+	for _, command := range terminal.CommandMetadata() {
+		commands[command.Name] = command
+	}
+	if got := commands["login"]; got.ArgumentHint != "[provider]" || !strings.Contains(got.Description, "authentication") {
+		t.Fatalf("login metadata=%+v", got)
+	}
+	if got := commands["logout"]; got.ArgumentHint != "" || !strings.Contains(got.Description, "stored API key") {
+		t.Fatalf("logout metadata=%+v", got)
+	}
+}
+
 // The command table mirrors Pi's BUILTIN_SLASH_COMMANDS. Unknown commands
 // remain ordinary prompt text.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"settings", "model", "thinking", "name", "session", "hotkeys", "clone", "trust", "new", "compact", "resume", "reload", "quit", "ac", "autocompact", "loop", "loop-stop"}
+	cmds := []string{"settings", "model", "thinking", "name", "session", "hotkeys", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "quit", "ac", "autocompact", "loop", "loop-stop"}
 	for _, c := range cmds {
 		if _, ok := terminal.ParseCommand("/" + c); !ok {
 			t.Errorf("parser rejects /%s", c)
@@ -41,6 +54,9 @@ func TestCommandTable(t *testing.T) {
 	}
 	if cmd, ok := terminal.ParseCommand("/nope"); ok || cmd != nil {
 		t.Errorf("unknown must be ordinary text, got %v %v", cmd, ok)
+	}
+	if _, ok := terminal.ParseCommand("/logout x"); ok {
+		t.Error("/logout with an argument must be ordinary text")
 	}
 	if _, ok := terminal.ParseCommand("/trust yes"); ok {
 		t.Error("/trust with an argument must be ordinary text")

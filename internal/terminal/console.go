@@ -60,6 +60,10 @@ type Console struct {
 	writer  *Writer
 	decoder *Decoder
 
+	secret              *Editor
+	secretPaste         bytes.Buffer
+	secretPasteActive   bool
+	secretPasteRejected bool
 	pasteActive         bool
 	pasteBuf            strings.Builder
 	pasteNotice         bool
@@ -803,7 +807,8 @@ func (c *Console) RequestFullRedraw() {
 
 // drawIfChanged draws only when visible state changes.
 func (c *Console) drawIfChanged(force bool) {
-	draft, pos := c.Editor.Text(), c.Editor.Pos()
+	editor := c.activeEditor()
+	draft, pos := string(editor.DisplayBuffer()), editor.DisplayPos()
 	w, h := c.size()
 	if !force && draft == c.lastDraft && pos == c.lastCursor && w == c.lastW && h == c.lastH {
 		return
@@ -1215,14 +1220,16 @@ func (c *Console) emitComposed(appendText string) error {
 		fragmentRows = append(append([]string(nil), fragmentRows...), c.toolRow)
 	}
 	var view EditorView
+	editor := c.activeEditor()
+	buf, pos := editor.DisplayBuffer(), editor.DisplayPos()
 	switch {
 	case c.picker != nil:
-		view = ComposeConsoleViewPicker(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.picker.rows, c.picker.mode)
+		view = ComposeConsoleViewPicker(width, height, buf, pos, c.presentation, c.activity, fragmentRows, c.picker.rows, c.picker.mode)
 	default:
 		if !hasStream && len(c.streamFragment) > 0 && width > 3 {
 			fragmentRows = wrapAssistantFragment(string(c.streamFragment), width)
 		}
-		view = ComposeConsoleViewComponents(width, height, c.Editor.buf, c.Editor.pos, c.presentation, c.activity, fragmentRows, c.completionRows)
+		view = ComposeConsoleViewComponents(width, height, buf, pos, c.presentation, c.activity, fragmentRows, c.completionRows)
 	}
 	if len(c.thinkingRows) > 0 && !c.fullDocumentRedraw && c.thinkingStream.canCommitRows() {
 		// The layout can have less space than the usual four-row tail. Commit
@@ -1232,7 +1239,7 @@ func (c *Console) emitComposed(appendText string) error {
 		appendText += markdownRowsAppend(c.thinkingRows[:clipped])
 		c.thinkingRows = c.thinkingRows[clipped:]
 	}
-	hideCursor := c.activity != "" || (c.picker != nil && c.picker.mode == PickerChoice)
+	hideCursor := (c.activity != "" && c.secret == nil) || (c.picker != nil && c.picker.mode == PickerChoice)
 	fullRedraw := c.fullDocumentRedraw
 	if fullRedraw {
 		appendText = ""
@@ -1258,7 +1265,8 @@ func (c *Console) emitComposed(appendText string) error {
 	}
 	c.hidden = hideCursor
 	c.visibleTail = view.Rows
-	c.lastDraft, c.lastCursor = c.Editor.Text(), c.Editor.Pos()
+	visibleDraft := string(editor.DisplayBuffer())
+	c.lastDraft, c.lastCursor = visibleDraft, editor.DisplayPos()
 	return err
 }
 

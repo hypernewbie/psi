@@ -260,12 +260,42 @@ func TestPickerTailGeometryRetainsSelectionAcrossPlanSizes(t *testing.T) {
 	}
 }
 
+func TestAuthSelectorsSearchAndRenderModeSpecificRows(t *testing.T) {
+	login := NewSelector([]session.SessionInfo{
+		{ID: "deepseek", FirstMessage: "DeepSeek · DEEPSEEK_API_KEY · deepseek-v4-pro"},
+		{ID: "kimi-coding", FirstMessage: "Kimi Coding · KIMI_CODING_API_KEY · kimi-for-coding"},
+	}, "deepseek")
+	login.AuthMode = AuthLogin
+	rows := strings.Join(login.RenderPickerRows(80, 19, true), "\n")
+	if !strings.Contains(rows, "Providers · 2 matches") || !strings.Contains(rows, "→ ✓ deepseek") || !strings.Contains(rows, "DEEPSEEK_API_KEY") {
+		t.Fatalf("login selector rows missing provider details: %q", rows)
+	}
+	login.SetFilter("kimi")
+	if item := login.SelectedItem(); item == nil || item.ID != "kimi-coding" {
+		t.Fatalf("provider search did not select Kimi Coding: %v", item)
+	}
+
+	logout := NewSelector([]session.SessionInfo{
+		{ID: "anthropic", FirstMessage: "Anthropic · ANTHROPIC_API_KEY"},
+		{ID: "deepseek", FirstMessage: "DeepSeek · DEEPSEEK_API_KEY"},
+	}, "deepseek")
+	logout.AuthMode = AuthLogout
+	rows = strings.Join(logout.RenderPickerRows(80, 19, true), "\n")
+	if !strings.Contains(rows, "Stored API keys · 2 matches") || !strings.Contains(rows, "→ ✓ deepseek") || !strings.Contains(rows, "DEEPSEEK_API_KEY") {
+		t.Fatalf("logout selector rows missing stored-key details: %q", rows)
+	}
+	logout.Move(1)
+	if item := logout.SelectedItem(); item == nil || item.ID != "anthropic" {
+		t.Fatalf("logout selector did not move to the next stored key: %v", item)
+	}
+}
+
 // Pi's no-match treatment and selection pointer are component-specific.
 func TestPickerNoMatchTreatmentAndPointerFollowPiComponents(t *testing.T) {
 	models := NewSelector(nil, "")
 	models.Models = true
-	if !strings.Contains(strings.Join(models.RenderPickerRows(80, 19, true), "\n"), "No matching models") {
-		t.Fatalf("model picker lost Pi's no-match treatment")
+	if !strings.Contains(strings.Join(models.RenderPickerRows(80, 19, true), "\n"), "No credentialed models. Run /login or set a provider API key.") {
+		t.Fatalf("empty model picker lost credential recovery guidance")
 	}
 	sessions := NewSelector(nil, "")
 	if !strings.Contains(strings.Join(sessions.RenderPickerRows(80, 19, true), "\n"), "No sessions found") {

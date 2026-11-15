@@ -75,6 +75,23 @@ func TestP6BundledCatalogUsesPiProviderAPIsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestEveryBuiltinAPIKeyProviderHasABundledDefault(t *testing.T) {
+	for _, providerID := range providerregistry.IDs() {
+		spec, ok := providerregistry.Lookup(providerID)
+		if !ok || spec.Auth != providerregistry.AuthAPIKey {
+			continue
+		}
+		model, err := (&ModelsFile{}).SelectModel(providerID, "")
+		if err != nil {
+			t.Errorf("%s has no default model: %v", providerID, err)
+			continue
+		}
+		if _, ok := bundledModel(providerID, model.ID); !ok {
+			t.Errorf("%s default model %q is not in its bundled catalog", providerID, model.ID)
+		}
+	}
+}
+
 func TestXiaomiTokenPlanRegionalProvidersResolveLikePi(t *testing.T) {
 	mf := &ModelsFile{Providers: map[string]ProviderMeta{}}
 	for providerID, endpoint := range map[string]string{

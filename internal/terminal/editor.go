@@ -20,6 +20,7 @@ const (
 
 type Editor struct {
 	buf            []rune
+	Masked         bool
 	pos            int // rune index (always on grapheme boundary)
 	history        []string
 	histIdx        int // -1 = current draft
@@ -136,6 +137,21 @@ func nextGraphemeBoundary(s string, boff int) int {
 
 func (e *Editor) Text() string { return string(e.buf) }
 func (e *Editor) Pos() int     { return e.pos }
+
+// DisplayBuffer returns the editor text for rendering without exposing a masked draft.
+func (e *Editor) DisplayBuffer() []rune {
+	if !e.Masked {
+		return e.buf
+	}
+	buf := make([]rune, len(e.buf))
+	for i := range buf {
+		buf[i] = '*'
+	}
+	return buf
+}
+
+// DisplayPos returns the cursor index used with DisplayBuffer.
+func (e *Editor) DisplayPos() int { return e.pos }
 
 // RestoreDraft restores a submitted draft after application preflight rejects
 // the operation. It does not add the text to recall history.

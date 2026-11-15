@@ -4,25 +4,26 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"psi/internal/lockfile"
 )
 
 const codexTokenURL = "https://auth.openai.com/oauth/token"
 const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
 // CodexAuth reuses Pi's existing subscription login. Refresh updates only that
-// provider and uses the same auth.json.lock directory protocol as proper-lockfile.
-// There is deliberately no API-key fallback and no interactive login flow.
+// provider and uses the shared lease in internal/lockfile. There is deliberately
+// no API-key fallback and no interactive login flow.
 type CodexAuth struct {
 	Path     string
 	HTTP     *http.Client
@@ -60,6 +61,7 @@ func (a *CodexAuth) loadLocked() (map[string]json.RawMessage, codexCredential, e
 	if err != nil || len(data) > 4*1024*1024 {
 		return nil, codexCredential{}, fmt.Errorf("cannot read bounded auth.json")
 	}
+	data = stripAuthBOM(data)
 	var all map[string]json.RawMessage
 	if json.Unmarshal(data, &all) != nil || all == nil {
 		return nil, codexCredential{}, fmt.Errorf("auth.json is malformed")
@@ -295,125 +297,24 @@ func authLockWaitLimit(waitAfter time.Duration) time.Duration {
 	return waitAfter
 }
 
-// acquireAuthLock implements the shared Pi-compatible lease: atomic mkdir,
-// heartbeat ownership, and bounded stale recovery. staleAfter <= 0 selects the
-// Pi async policy (30 seconds). A fresh lease is never stolen and a replaced
-// lease is never deleted by a former owner.
+// acquireAuthLock preserves auth.json-specific errors around the shared Pi lease.
 func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat, waitAfter time.Duration) (func(), func() bool, error) {
-	if staleAfter <= 0 {
-		staleAfter = 30 * time.Second
+	unlock, valid, err := lockfile.Acquire(ctx, path, lockfile.Options{
+		StaleAfter: staleAfter,
+		Heartbeat:  heartbeat,
+		Wait:       authLockWaitLimit(waitAfter),
+	})
+	if err == nil {
+		return unlock, valid, nil
 	}
-	if heartbeat <= 0 {
-		heartbeat = 2 * time.Second
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, authLockWaitLimit(waitAfter))
-	defer cancel()
-	for {
-		if err := waitCtx.Err(); err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
-			}
-			return nil, nil, fmt.Errorf("auth.json is busy; retry or refresh the login in Pi")
-		}
-		err := os.Mkdir(path, 0700)
-		if err == nil {
-			break
-		}
-		// Windows can report access denied during a directory handoff.
-		// Retry within the same deadline; ownership still requires mkdir success.
-		if !os.IsExist(err) && !(runtime.GOOS == "windows" && os.IsPermission(err)) {
-			return nil, nil, fmt.Errorf("cannot lock auth.json: %w", err)
-		}
-		// Another holder may own the lease. Reclaim only a provably stale,
-		// unchanged lease; never steal a fresh or replaced one.
-		before, statErr := os.Stat(path)
-		if statErr == nil {
-			if time.Since(before.ModTime()) > staleAfter {
-				// Re-check identity before removal so a fresh replacement
-				// created between stat and remove is never deleted.
-				if after, err := os.Stat(path); err == nil && os.SameFile(before, after) &&
-					time.Since(after.ModTime()) > staleAfter {
-					// Older psi builds left an owner file in the directory.
-					// Remove only that known entry, never arbitrary contents.
-					_ = os.Remove(filepath.Join(path, "owner"))
-					_ = os.Remove(path)
-				}
-			}
-		}
-		timer := time.NewTimer(50 * time.Millisecond)
-		select {
-		case <-waitCtx.Done():
-			timer.Stop()
-		case <-timer.C:
-		}
+	if errors.Is(err, lockfile.ErrBusy) {
+		return nil, nil, fmt.Errorf("auth.json is busy; retry or refresh the login in Pi")
 	}
-	// Keep the directory empty for proper-lockfile's rmdir-based recovery.
-	// An open descriptor pins its inode, preventing identity reuse while a
-	// former owner is still alive, without adding a non-Pi owner file.
-	dir, err := os.Open(path)
-	if err != nil {
+	if errors.Is(err, lockfile.ErrInspect) {
 		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")
 	}
-	owner, err := dir.Stat()
-	if err != nil {
-		dir.Close()
-		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")
-	}
-	var compromised atomic.Bool
-	var leaseMu sync.Mutex
-	mtime := owner.ModTime()
-	validLocked := func() bool {
-		st, err := os.Stat(path)
-		return !compromised.Load() && err == nil && os.SameFile(owner, st) && st.ModTime().Equal(mtime)
-	}
-	valid := func() bool {
-		leaseMu.Lock()
-		defer leaseMu.Unlock()
-		return validLocked()
-	}
-	stop, done := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(heartbeat)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case now := <-ticker.C:
-				leaseMu.Lock()
-				ok := validLocked()
-				if ok {
-					ok = os.Chtimes(path, now, now) == nil
-				}
-				if ok {
-					st, err := os.Stat(path)
-					ok = err == nil && os.SameFile(owner, st)
-					if ok {
-						mtime = st.ModTime() // retain filesystem timestamp precision
-					}
-				}
-				leaseMu.Unlock()
-				if !ok {
-					compromised.Store(true)
-					return
-				}
-			}
-		}
-	}()
-	var once sync.Once
-	unlock := func() {
-		once.Do(func() {
-			close(stop)
-			<-done
-			stillValid := valid()
-			// Windows cannot remove a directory with an open handle in
-			// it, so release the descriptor before removing the lease.
-			dir.Close()
-			if stillValid {
-				_ = os.Remove(path)
-			}
-		})
-	}
-	return unlock, valid, nil
+	return nil, nil, fmt.Errorf("cannot lock auth.json: %w", err)
 }

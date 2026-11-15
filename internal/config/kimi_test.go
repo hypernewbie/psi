@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strings"
 	"testing"
 
 	"psi/internal/providerregistry"
@@ -33,27 +32,22 @@ func TestKimiCodingCatalogMatchesPiMetadata(t *testing.T) {
 			t.Fatalf("Kimi model %s does not disable thinking: %+v", model.ID, model.ThinkingLevelMap)
 		}
 	}
-	model, err := (&ModelsFile{}).SelectModel("kimi-coding", "k3")
+	model, err := (&ModelsFile{}).SelectModel("kimi-coding", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.API != "openai-completions" || model.BaseURL != "https://api.kimi.com/coding/v1" {
-		t.Fatalf("Kimi model selection = %+v", model)
+	if model.ID != "kimi-for-coding" || model.API != "openai-completions" || model.BaseURL != "https://api.kimi.com/coding/v1" {
+		t.Fatalf("Kimi default model = %+v", model)
+	}
+	if !model.Reasoning || model.ThinkingLevelMap["off"] != nil {
+		t.Fatalf("Kimi default thinking metadata = %+v", model)
 	}
 	effort, hasEffort, present := model.Compat.Bool("supportsReasoningEffort")
 	if !present || !hasEffort || !effort {
-		t.Fatalf("Kimi reasoning effort metadata lost: %t %t %t", effort, hasEffort, present)
+		t.Fatalf("Kimi default reasoning effort = %t %t %t", effort, hasEffort, present)
 	}
 	format, hasFormat, present := model.Compat.String("thinkingFormat")
 	if !present || !hasFormat || format != "openai" {
-		t.Fatalf("Kimi thinking format = %q %t %t", format, hasFormat, present)
-	}
-}
-
-// Kimi For Coding needs an explicit model, the way the other providers
-// without a catalog default do.
-func TestKimiCodingNeedsAnExplicitModel(t *testing.T) {
-	if _, err := (&ModelsFile{}).SelectModel("kimi-coding", ""); err == nil || !strings.Contains(err.Error(), "explicit model") {
-		t.Fatalf("an empty Kimi model was accepted: %v", err)
+		t.Fatalf("Kimi default thinking format = %q %t %t", format, hasFormat, present)
 	}
 }

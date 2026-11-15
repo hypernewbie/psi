@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -47,7 +48,10 @@ func resolveAuthPath(env map[string]string, authPath string) string {
 	if authPath != "" {
 		return authPath
 	}
-	agentDir := env["PI_CODING_AGENT_DIR"]
+	agentDir := env["PSI_CODING_AGENT_DIR"]
+	if agentDir == "" {
+		agentDir = env["PI_CODING_AGENT_DIR"]
+	}
 	if agentDir == "" {
 		home, _ := os.UserHomeDir()
 		agentDir = filepath.Join(home, ".pi", "agent")
@@ -71,8 +75,9 @@ func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
 		}
 		return nil, fmt.Errorf("cannot read auth.json: %w", readErr)
 	}
+	data = stripAuthBOM(data)
 	var entries map[string]json.RawMessage
-	if err := json.Unmarshal(data, &entries); err != nil {
+	if err := json.Unmarshal(data, &entries); err != nil || entries == nil {
 		return nil, fmt.Errorf("auth.json is malformed")
 	}
 	return entries, nil
@@ -238,5 +243,31 @@ func readAuthShared(authPath string) ([]byte, error) {
 		return nil, err
 	}
 	defer unlock()
-	return os.ReadFile(authPath)
+	fileInfo, err := os.Stat(authPath)
+	if err != nil {
+		return nil, err
+	}
+	if !fileInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("auth.json must be a regular file")
+	}
+	file, err := os.Open(authPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(fileInfo, opened) {
+		return nil, fmt.Errorf("auth.json changed while being read")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxAuthJSONSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxAuthJSONSize {
+		return nil, fmt.Errorf("auth.json exceeds size limit")
+	}
+	return data, nil
 }

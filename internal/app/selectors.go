@@ -13,6 +13,14 @@ import (
 // Selector owns a stable, searchable collection. The regular-mode picker uses
 // keyboard selection in the picker region. The page fields remain only for
 // bounded legacy metadata discovery, not as an alternate selection UI.
+type AuthMode uint8
+
+const (
+	AuthNone AuthMode = iota
+	AuthLogin
+	AuthLogout
+)
+
 type Selector struct {
 	Items    []session.SessionInfo
 	Filtered []session.SessionInfo
@@ -26,6 +34,7 @@ type Selector struct {
 	ModelThinking bool
 	// ModelThinkingLevel marks the level picker in that flow.
 	ModelThinkingLevel bool
+	AuthMode           AuthMode
 
 	Selected     int
 	SelectedID   string
@@ -101,7 +110,7 @@ func (s *Selector) Move(delta int) {
 		return
 	}
 	next := s.Selected + delta
-	if s.Models || s.Thinking {
+	if s.Models || s.Thinking || s.AuthMode != AuthNone {
 		next = (next%len(s.Filtered) + len(s.Filtered)) % len(s.Filtered)
 	} else {
 		next = min(max(next, 0), len(s.Filtered)-1)
@@ -166,8 +175,15 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 	noMatch := "  No sessions found"
 	if s.Models {
 		label, noMatch = "Models", "  No matching models"
+		if len(s.Items) == 0 {
+			noMatch = "  No credentialed models. Run /login or set a provider API key."
+		}
 	} else if s.Thinking {
 		label, noMatch = "Thinking levels", "  No matching commands"
+	} else if s.AuthMode == AuthLogin {
+		label, noMatch = "Providers", "  No matching providers"
+	} else if s.AuthMode == AuthLogout {
+		label, noMatch = "Stored API keys", "  No matching providers"
 	}
 	var rows []string
 	appendRow := func(text string, token terminal.ThemeToken) {
@@ -219,7 +235,7 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		marker, markerToken := "  ", terminal.TokenMuted
 		if selected {
 			marker, markerToken = "› ", terminal.TokenAccent
-			if s.Models || s.Thinking {
+			if s.Models || s.Thinking || s.AuthMode != AuthNone {
 				// Pi's model selector and its shared SelectList use →; only the
 				// session list uses ›.
 				marker = "→ "
@@ -241,10 +257,10 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		if selected {
 			nameToken = terminal.TokenAccent
 		}
-		if width < 48 && !s.Models {
+		if width < 48 && !s.Models && s.AuthMode == AuthNone {
 			metadata = ""
 		}
-		if metadata != "" && !s.Models && !s.Thinking {
+		if metadata != "" && !s.Models && !s.Thinking && s.AuthMode == AuthNone {
 			// Like Pi's session list, keep compact age/identity at the right
 			// rather than letting a long prompt push it out of view.
 			metadata = terminal.TruncateToWidth(metadata, max(0, (width-7)/2))
@@ -309,6 +325,9 @@ func pickerHelpText(width int) string {
 }
 
 func (s *Selector) pickerText(item session.SessionInfo, now time.Time) (string, string) {
+	if s.AuthMode != AuthNone {
+		return item.ID, item.FirstMessage
+	}
 	if s.Thinking {
 		return item.ID, item.FirstMessage
 	}

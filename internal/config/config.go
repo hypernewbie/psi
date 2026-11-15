@@ -806,6 +806,24 @@ func ResolveThinkingLevel(settings Settings, providerID, modelID, carried string
 	return carried
 }
 
+// EscapeCredentialLiteral returns a credential string that
+// ResolveCredentialWithEnv resolves back to raw.
+func EscapeCredentialLiteral(raw string) string {
+	var escaped strings.Builder
+	escaped.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		switch {
+		case raw[i] == '$':
+			escaped.WriteString("$$")
+		case raw[i] == '!' && i == 0:
+			escaped.WriteString("$!")
+		default:
+			escaped.WriteByte(raw[i])
+		}
+	}
+	return escaped.String()
+}
+
 // ResolveCredential supports literal and environment-reference forms.
 // Supported: "text", "$VAR", "${VAR}", mixed "prefix-$VAR-suffix" with $$
 // escaping. Rejects command values ("!cmd") unless explicitly enabled (never
@@ -1017,6 +1035,18 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 		switch providerID {
 		case "anthropic":
 			id = "claude-sonnet-4-5"
+		case "deepseek":
+			id = "deepseek-v4-pro"
+		case "google":
+			id = "gemini-3.1-pro-preview"
+		case "kimi-coding":
+			id = "kimi-for-coding"
+		case "minimax":
+			id = "MiniMax-M2.7"
+		case "opencode-go":
+			id = "kimi-k3"
+		case "zai":
+			id = "glm-5.3"
 		case "openai-codex":
 			id = "gpt-5.6-luna"
 		case "xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp":

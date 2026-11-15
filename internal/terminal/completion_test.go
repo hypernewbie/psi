@@ -31,7 +31,10 @@ func TestSlashCompletionLivesInFiveRowEditorTail(t *testing.T) {
 		t.Fatalf("completion or footer absent from tail: %q", vt.Text())
 	}
 	if _, _, _, _ = c.Handle(Input{Key: []byte("\x1b[B")}, false); c.completionSelected != 1 {
-		t.Fatalf("Down did not select second completion: %d", c.completionSelected)
+		t.Fatalf("Down did not select the model completion: %d", c.completionSelected)
+	}
+	if c.completionItems[c.completionSelected] != "/model" {
+		t.Fatalf("selected completion=%q want /model", c.completionItems[c.completionSelected])
 	}
 	c.Handle(Input{Key: []byte{9}}, false)
 	if c.Editor.Text() != "/model" || len(c.completionRows) != 0 {

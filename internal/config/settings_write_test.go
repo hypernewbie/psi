@@ -243,14 +243,113 @@ func TestUpdateUserSettingsRejectsBadInput(t *testing.T) {
 func TestUpdateUserSettingsLockConflict(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	writeSettingsFileForTest(t, path, `{"theme":"dark"}`, 0o600)
-	release, err := lockSettings(path)
+	lockPath := path + ".lock"
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
 	err = updateSettings(t, path, []string{"theme"}, `"light"`)
 	if err == nil || !strings.Contains(err.Error(), "locked") {
 		t.Fatalf("error = %v, want lock conflict", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("settings changed under Pi-shaped lock: %q", after)
+	}
+	if _, err := os.Stat(path + ".psi.lock"); !os.IsNotExist(err) {
+		t.Fatalf("legacy sidecar lock exists: %v", err)
+	}
+}
+
+func TestUpdateUserSettingsRecoversStalePiLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeSettingsFileForTest(t, path, `{"theme":"dark"}`, 0o600)
+	lockPath := path + ".lock"
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-11 * time.Second)
+	if err := os.Chtimes(lockPath, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateSettings(t, path, []string{"theme"}, `"light"`); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"light"`) {
+		t.Fatalf("stale lock prevented update: %s", data)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("lock remains after successful write: %v", err)
+	}
+}
+
+func TestUpdateUserSettingsLocksUserVisibleSymlinkPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink lock-path regression is POSIX-only")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	link := filepath.Join(dir, "settings-link.json")
+	writeSettingsFileForTest(t, target, `{"theme":"dark"}`, 0o600)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	lockPath := link + ".lock"
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = updateSettings(t, link, []string{"theme"}, `"light"`)
+	if err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("error = %v, want symlink-path lock conflict", err)
+	}
+	after, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("symlink target changed under user-visible lock: %s", after)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("settings symlink disappeared: %v", err)
+	}
+	if _, err := os.Stat(link + ".psi.lock"); !os.IsNotExist(err) {
+		t.Fatalf("legacy sidecar lock exists: %v", err)
+	}
+}
+
+func TestWriteSettingsFileLostLease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeSettingsFileForTest(t, path, `{"theme":"dark"}`, 0o600)
+	if err := writeSettingsFile(path, []byte(`{"theme":"light"}`), func() bool { return false }); err == nil || !strings.Contains(err.Error(), "settings lock changed; refusing to write") {
+		t.Fatalf("error = %v, want lost-lease refusal", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"theme":"dark"}` {
+		t.Fatalf("file changed after lease loss: %s", data)
+	}
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".psi-settings-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Fatalf("temporary files remain after lease loss: %v", temps)
 	}
 }
 
