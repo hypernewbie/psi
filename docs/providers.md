@@ -153,9 +153,9 @@ the header from the request body:
   `thinking-binding-controls-2026-08-01` for a model that uses managed effort.
 
 A configured `anthropic-beta` header replaces the computed set, and an empty
-configured value removes the header instead of sending an empty feature list. psi does not declare the features that
-need native tool changes or message threads, because it does not send those
-features.
+configured value removes the header instead of sending an empty feature list.
+psi does not declare the features that need native tool changes or message
+threads, because it does not send those features.
 
 An `anthropic-messages` request declares eager tool input streaming on every
 tool, unless the model does not support it. A model without that support gets
