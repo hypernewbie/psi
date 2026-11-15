@@ -161,6 +161,12 @@ func (c *Client) doOnce(ctx context.Context, raw []byte, onDelta func(Delta), re
 		httpReq.Header.Set("x-opencode-session", c.SessionID)
 	}
 	for name, value := range c.Headers {
+		// An empty configured value removes the header, so the endpoint does
+		// not see an empty feature list.
+		if strings.EqualFold(name, "anthropic-beta") && strings.TrimSpace(value) == "" {
+			httpReq.Header.Del("anthropic-beta")
+			continue
+		}
 		httpReq.Header.Set(name, value)
 	}
 	resp, err := c.HTTP.Do(httpReq)

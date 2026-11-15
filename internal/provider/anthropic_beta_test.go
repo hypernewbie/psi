@@ -24,9 +24,12 @@ const betaTestStream = "event: message_start\ndata: {\"message\":{\"id\":\"synth
 func TestAnthropicBetaHeaderDeclaresTheFeaturesTheBodyUses(t *testing.T) {
 	var mu sync.Mutex
 	var betas []string
+	var present []bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		betas = append(betas, r.Header.Get("anthropic-beta"))
+		_, sent := r.Header["Anthropic-Beta"]
+		present = append(present, sent)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, betaTestStream)
@@ -74,9 +77,12 @@ func TestAnthropicBetaHeaderDeclaresTheFeaturesTheBodyUses(t *testing.T) {
 func TestAnthropicConfiguredBetaHeaderReplacesTheComputedSet(t *testing.T) {
 	var mu sync.Mutex
 	var betas []string
+	var present []bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		betas = append(betas, r.Header.Get("anthropic-beta"))
+		_, sent := r.Header["Anthropic-Beta"]
+		present = append(present, sent)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, betaTestStream)
@@ -100,6 +106,9 @@ func TestAnthropicConfiguredBetaHeaderReplacesTheComputedSet(t *testing.T) {
 	}
 	if betas[0] != "synthetic-feature" {
 		t.Fatalf("configured beta = %q, want the configured value", betas[0])
+	}
+	if present[1] {
+		t.Fatalf("empty configured value still sent the header: %q", betas[1])
 	}
 	if betas[1] != "" {
 		t.Fatalf("disabled beta = %q, want an empty header", betas[1])
