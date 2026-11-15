@@ -23,7 +23,7 @@ You are psi, a minimal Go coding agent. Use the declared tools to inspect and ch
 Psi documentation, read only when the user asks about psi itself, its CLI, settings, skills, sessions, or compaction:
 - Run `psi --docs` to list topics.
 - Run `psi --docs <topic>` to print one topic.
-- Topics: index, quickstart, usage, cli, config, providers, sessions, compaction, skills, security, env, how-psi-works, keyboard, limitations, recovery, bridge
+- Topics: index, quickstart, usage, cli, config, mcp, providers, sessions, compaction, skills, security, env, how-psi-works, keyboard, limitations, recovery, bridge
 - Read the whole topic before answering.
 </docs>
 

@@ -25,6 +25,7 @@ var Topics = []Topic{
 	{Name: "usage", Summary: "Use psi in the terminal: prompts, steering, commands"},
 	{Name: "cli", Summary: "Every command-line flag and what psi rejects"},
 	{Name: "config", Summary: "settings.json, models.json, and precedence"},
+	{Name: "mcp", Summary: "MCP servers, tools, exposure, limits, and security"},
 	{Name: "providers", Summary: "Supported providers, credentials, and models"},
 	{Name: "sessions", Summary: "Session files, resume, clone, and storage"},
 	{Name: "compaction", Summary: "Automatic and manual context compaction"},

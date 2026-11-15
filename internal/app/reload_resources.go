@@ -40,9 +40,11 @@ func (r *runtime) reloadResources() error {
 	// newLoop applies these to every loop built after the reload.
 	r.settings.SteeringMode = loaded.Settings.SteeringMode
 	r.settings.FollowUpMode = loaded.Settings.FollowUpMode
+	r.settings.MCPAllowProjectCommands = loaded.Settings.MCPAllowProjectCommands
 	r.cfg.System = prompt
 	r.cfg.Sections = sections
 	r.syncBridge()
+	r.reloadMCP()
 	return nil
 }
 

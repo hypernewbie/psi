@@ -117,6 +117,9 @@ type Settings struct {
 	// DefaultProjectTrust is the global trust default: "ask", "always", or
 	// "never". It matches pi's defaultProjectTrust setting.
 	DefaultProjectTrust string
+	// MCPAllowProjectCommands permits whole-value !command interpolation in a
+	// trusted project's .pi/mcp.json. It is user-only.
+	MCPAllowProjectCommands bool
 	// Diagnostics for skipped unsupported resources.
 	Warnings []string
 }
@@ -182,8 +185,11 @@ type rawSettings struct {
 	HTTPIdleTimeoutMs   any     `json:"httpIdleTimeoutMs"`
 	QuietStartup        any     `json:"quietStartup"`
 	DefaultProjectTrust *string `json:"defaultProjectTrust"`
-	MaxRetries          *int    `json:"maxRetries"`
-	Retry               *struct {
+	MCP                 *struct {
+		AllowProjectCommands *bool `json:"allowProjectCommands"`
+	} `json:"mcp"`
+	MaxRetries *int `json:"maxRetries"`
+	Retry      *struct {
 		Enabled         *bool `json:"enabled"`
 		MaxRetries      *int  `json:"maxRetries"`
 		BaseDelayMs     *int  `json:"baseDelayMs"`
@@ -597,6 +603,15 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 			return fmt.Errorf("defaultProjectTrust must be \"ask\", \"always\", or \"never\"")
 		}
 		set("defaultProjectTrust", "set")
+	}
+	if raw.MCP != nil && raw.MCP.AllowProjectCommands != nil {
+		if strings.HasPrefix(src, "user:") {
+			out.MCPAllowProjectCommands = *raw.MCP.AllowProjectCommands
+			set("mcp.allowProjectCommands", "set")
+		} else {
+			out.Warnings = append(out.Warnings, "mcp.allowProjectCommands is user-only and was ignored")
+			set("mcp.allowProjectCommands", "ignored")
+		}
 	}
 	if raw.Retry != nil {
 		if raw.Retry.MaxRetries != nil {

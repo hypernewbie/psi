@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -155,18 +156,27 @@ func runRPC(o Options, version string) error {
 		projectTrusted: consent,
 	}
 	cleanup := func() {
+		r.stopMCP()
 		if r.prov != nil {
 			r.prov.CloseIdle()
 		}
 		r.store.Unlock()
 	}
+	var cleanupOnce sync.Once
+	cleanupAll := func() {
+		cleanupOnce.Do(func() {
+			r.stopMCP()
+			r.waitMCP(30 * time.Second)
+			cleanup()
+		})
+	}
 	if err := r.restore(); err != nil {
-		cleanup()
+		cleanupAll()
 		return err
 	}
 	if o.Name != "" {
 		if _, err := r.store.AppendSessionInfo(o.Name); err != nil {
-			cleanup()
+			cleanupAll()
 			return fmt.Errorf("set session name: %w", err)
 		}
 	}
@@ -178,9 +188,10 @@ func runRPC(o Options, version string) error {
 	if proj, err := store.Projection(); err == nil {
 		s.emitted = len(proj.Flat)
 	} else {
-		cleanup()
+		cleanupAll()
 		return err
 	}
+	r.startMCP()
 	// The RPC child runs without bridge environment variables, so the
 	// syncboard tool stays hidden by the same availability predicate the
 	// terminal loop uses.
@@ -192,14 +203,16 @@ func runRPC(o Options, version string) error {
 	go func() {
 		<-sigs
 		s.cancelActive()
-		cleanup()
+		r.stopMCP()
+		cleanupAll()
 		os.Exit(143)
 	}()
 
 	s.runLoop(os.Stdin)
 	s.cancelActive()
+	r.stopMCP()
 	s.waitIdle(10 * time.Second)
-	cleanup()
+	cleanupAll()
 	return nil
 }
 

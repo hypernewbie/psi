@@ -123,6 +123,14 @@ environment and returns the last 2000 lines or 50 KiB. If a timeout occurs
 after the shell has exited while a background process keeps writing output,
 the timeout message includes the shell's exit code and elapsed time.
 
+## Use MCP tools
+
+MCP servers are configured in `<agentDir>/mcp.json` and, for a trusted
+project, `.pi/mcp.json`. psi starts them in the background, so the first
+request can proceed before they are ready. Use `/mcp` to check server state and
+discovered or exposed tool counts. `/reload` re-reads the configuration.
+`--no-mcp` disables the client for one run. See [MCP servers](mcp.md).
+
 ## Adjust the terminal
 
 psi is inline in the terminal by default. `--tui-mode regular` and `--mode text`

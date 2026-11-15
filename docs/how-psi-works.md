@@ -33,6 +33,12 @@ Tool calls in one assistant response run concurrently. `write` and `edit` share
 one per-file queue so mutations serialize; `read` and `bash` do not queue.
 Results settle in call order behind a barrier the next request cannot cross.
 
+MCP tools join the same request and batch path. A background manager publishes
+an immutable snapshot; each model request captures that snapshot for both its
+tool declarations and its routing records. A tool call from an older request
+cannot reach a replacement connection. MCP servers never run on the terminal
+loop, and startup does not wait for them.
+
 Steering messages enter at the next turn boundary. Follow-up messages enter
 after the current run ends. Cancelling stops the run, records unstarted calls as
 `not_started`, and returns queued text to the editor; a queued skill returns as
@@ -57,6 +63,7 @@ The system prompt is assembled from ordered sections:
 | `skills` | skill names, descriptions, and paths |
 | `cwd` | the working folder |
 | `loop` | active loop guidance, omitted when no loop is active |
+| `mcp` | MCP data-handling guidance, only when MCP tools are declared |
 
 A custom preamble (`SYSTEM.md` or `--system-prompt`) suppresses `tools`,
 `rules`, and `docs`. The other sections still apply. Skill bodies are not in

@@ -18,7 +18,7 @@ import (
 // The command table mirrors Pi's BUILTIN_SLASH_COMMANDS. Unknown commands
 // remain ordinary prompt text.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"settings", "model", "thinking", "name", "session", "hotkeys", "clone", "trust", "new", "compact", "resume", "reload", "quit", "ac", "autocompact", "loop", "loop-stop"}
+	cmds := []string{"settings", "model", "thinking", "name", "session", "hotkeys", "clone", "trust", "new", "compact", "resume", "reload", "mcp", "quit", "ac", "autocompact", "loop", "loop-stop"}
 	for _, c := range cmds {
 		if _, ok := terminal.ParseCommand("/" + c); !ok {
 			t.Errorf("parser rejects /%s", c)

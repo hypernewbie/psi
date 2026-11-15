@@ -11,6 +11,7 @@ trust the working folder. The prompt lists what it would load.
 Trust gates:
 
 - `.pi/settings.json`
+- `.pi/mcp.json`
 - `.pi/skills` and `.pi/SYSTEM.md` / `.pi/APPEND_SYSTEM.md`
 - `.pi/themes` and project theme paths
 - `.pi/packages`, if configured
@@ -35,6 +36,25 @@ Trust controls which resources load. It does not limit what a tool can do. The
 There is no per-tool approval, no permission-policy language, and no automatic
 Git checkpoint. Use a container, a dedicated user, or a throwaway checkout for
 untrusted or unattended work.
+
+## MCP servers
+
+MCP servers are separate programs or network endpoints. psi does not sandbox
+them. A stdio server inherits the psi process environment, then overlays its
+configured `env` values. A trusted project can therefore start a server that
+sees the same files and credentials as psi.
+
+Project MCP command interpolation (`!command` in `env` or `headers`) stays
+disabled unless the user settings file sets `mcp.allowProjectCommands` to
+`true`. A project file cannot enable this opt-in. Trust alone does not permit
+it.
+
+MCP output is untrusted. It can contain secrets, misleading text, or
+instructions. psi keeps it out of the system prompt and treats result text as
+data. psi does not write an MCP log; only a bounded in-memory stderr tail is
+kept. Header and environment values are not shown by `/mcp`.
+
+See [MCP servers](mcp.md) for limits, process cleanup, and the exact subset.
 
 ## Shell and environment
 

@@ -29,6 +29,7 @@ import (
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/loop"
+	"psi/internal/mcp"
 	"psi/internal/pibridge"
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
@@ -49,7 +50,7 @@ type Options struct {
 	Docs                                                                 bool
 	DocsTopic                                                            string
 	NoTools, NoSession, AllowProj, DenyProj                              bool
-	NoThemes, NoSkills, NoContextFiles, Offline                          bool
+	NoMCP, NoThemes, NoSkills, NoContextFiles, Offline                   bool
 	UseTheme                                                             string
 	ThemePaths                                                           []string
 	Messages                                                             []string
@@ -68,6 +69,7 @@ var cliBoolFlags = map[string]bool{
 	"continue": true, "c": true, "resume": true, "r": true,
 	"no-session": true, "no-tools": true, "nt": true,
 	"no-builtin-tools": true, "nbt": true,
+	"no-mcp":        true,
 	"allow-project": true, "approve": true, "a": true,
 	"deny-project": true, "no-approve": true, "na": true,
 	"no-themes": true, "no-skills": true, "ns": true,
@@ -219,6 +221,7 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.NoTools, "nt", false, "disable read,bash,edit,write (Pi alias)")
 	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable read,bash,edit,write (alias for --no-tools)")
 	fs.BoolVar(&o.NoTools, "nbt", false, "disable read,bash,edit,write (Pi alias)")
+	fs.BoolVar(&o.NoMCP, "no-mcp", false, "disable MCP config reads, processes, and network requests")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -436,6 +439,7 @@ Pi-compatible options:
   --exclude-tools, -xt <list> Disable selected tools
   --no-tools, -nt            Disable read,bash,edit,write
   --no-builtin-tools, -nbt   Alias for --no-tools
+  --no-mcp                   Disable MCP config reads, processes, and network requests
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
   --theme <path>             Load a theme (repeatable)
@@ -457,7 +461,8 @@ Tool-selection flags affect read,bash,edit,write only.
 loop_control and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
-Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
+MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; --no-mcp disables them.
+Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, and prompt templates.
 `, version)
 }
 
@@ -490,6 +495,12 @@ func Run(args []string, version string) error {
 	if err != nil {
 		return err
 	}
+	var waitMCPRuntime *runtime
+	defer func() {
+		if waitMCPRuntime != nil {
+			waitMCPRuntime.waitMCP(30 * time.Second)
+		}
+	}()
 	defer tty.Restore()
 	console := terminal.NewConsole(os.Stdin, os.Stdout)
 	defer console.Close()
@@ -598,6 +609,8 @@ func Run(args []string, version string) error {
 			return fmt.Errorf("set session name: %w", err)
 		}
 	}
+	r.startMCP()
+	waitMCPRuntime = r
 	r.tty, r.lifecycle, r.signals = tty, lifecycle, signals
 	r.queryTerminalColors(console, 100*time.Millisecond)
 	console.SetDeferDraw(true)
@@ -705,6 +718,8 @@ type runtime struct {
 	themeFallback       string
 	themeDiagnostics    []pitheme.Diagnostic
 	projectTrusted      bool
+	mcpAccount          *mcpAccount
+	mcpEnabled          bool
 	loops               *loop.Controller
 	ac                  *ac.Controller
 	cancelACEndTurn     func()
@@ -1305,6 +1320,7 @@ func (r *runtime) replace(next *session.Store) error {
 	}
 	r.installConfiguration(&candidate)
 	r.store = next
+	r.restartMCP()
 	// Undelivered prompts belonged to the replaced session; keeping them
 	// would let a later attachment send content the user has moved away from.
 	r.clearRecovery()
@@ -1425,6 +1441,7 @@ func (r *runtime) newLoop(sink func(event.Event)) *agent.Loop {
 }
 
 func (r *runtime) repl(console *terminal.Console) error {
+	defer r.stopMCP()
 	// Some embedded callers construct runtime directly instead of going through
 	// Run. Keep the loop feature safe for those callers as well.
 	if r.ac == nil {
@@ -1947,6 +1964,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
 			return r.compactionProvider(r.ac.Snapshot().CompactorModel)
 		}
+		mcpManager := r.mcpManager()
+		var mcpToolsAtRequest []mcp.Tool
 		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
 			definitions := tools.Definitions(r.settings.DefaultTools)
@@ -1956,11 +1975,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if r.syncboardAvailable() {
 				definitions = append(definitions, syncboardToolDefinition())
 			}
+			var mcpDefinitions []provider.ToolDef
+			mcpToolsAtRequest, mcpDefinitions = requestMCPSnapshot(mcpManager)
+			definitions = append(definitions, mcpDefinitions...)
 			sections := r.sections
+			sections = r.mcpSections(sections, mcpToolsAtRequest)
 			if addition := strings.TrimSpace(loop.SystemPromptAddition(state)); addition != "" {
 				sections = append(append([]config.PromptSection(nil), sections...), config.PromptSection{Name: "loop", Body: "<loop>\n" + addition + "\n</loop>"})
 			}
 			return config.RenderSections(sections), sections, definitions
+		}
+		cfg.ConcurrentTools = func(name string) (agent.InternalToolHandler, bool) {
+			return concurrentMCPTool(mcpManager, mcpToolsAtRequest, name)
 		}
 		cfg.InternalTools = map[string]agent.InternalToolHandler{
 			loop.ControlToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {
@@ -3037,6 +3063,8 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return r.handleSettingsCommand(cmd.Arg, out)
 	case "reload":
 		return r.handleReloadCommand(cmd.Arg, out)
+	case "mcp":
+		return r.handleMCPCommand(cmd.Arg, out)
 	case "new":
 		return r.handleNewCommand(cmd.Arg, out)
 	case "name":

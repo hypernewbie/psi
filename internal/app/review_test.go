@@ -219,6 +219,11 @@ func startReviewPTY(t *testing.T, home, work, agentDir string, args ...string) *
 
 func startReviewProcess(t *testing.T, home, work, agentDir, binary, searchPath string, args ...string) *reviewPTY {
 	t.Helper()
+	return startReviewProcessEnv(t, home, work, agentDir, binary, searchPath, nil, args...)
+}
+
+func startReviewProcessEnv(t *testing.T, home, work, agentDir, binary, searchPath string, extraEnv []string, args ...string) *reviewPTY {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReviewAppProcess$")
 	if binary != "" {
 		executable, err := filepath.Abs(binary)
@@ -230,6 +235,7 @@ func startReviewProcess(t *testing.T, home, work, agentDir, binary, searchPath s
 	cmd.Dir = work
 	encoded, _ := json.Marshal(args)
 	cmd.Env = append(appTestEnv(home, agentDir), "PSI_APP_TEST_PROCESS=", "PSI_REVIEW_PROCESS=1", "PSI_REVIEW_ARGS="+string(encoded))
+	cmd.Env = append(cmd.Env, extraEnv...)
 	if searchPath != "" {
 		for i, value := range cmd.Env {
 			if strings.HasPrefix(value, "PATH=") {

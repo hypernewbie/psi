@@ -1,6 +1,6 @@
 # psi
 
-Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`. See [Providers](docs/providers.md) for supported providers and protocols. Sessions use Pi-compatible v3 JSONL.
+Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`. MCP tools over stdio and streamable HTTP from `mcp.json`. See [Providers](docs/providers.md) for supported providers and protocols, and [MCP servers](docs/mcp.md) for tool setup and limits. Sessions use Pi-compatible v3 JSONL.
 
 ## Build
 

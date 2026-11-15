@@ -37,10 +37,14 @@ type Config struct {
 	// DynamicConfig returns the system prompt, its sections, and the tool set
 	// for each model request.
 	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
-	InternalTools map[string]InternalToolHandler
-	AfterToolCall func(context.Context, tools.Invocation, tools.Result) error
-	ContinueOnEnd func() (messageType, content string, ok bool)
-	ACPolicy      *ac.Controller
+	// ConcurrentTools returns a captured handler for one enabled external tool.
+	// The handler is prepared during batch preflight and runs through the
+	// existing parallel worker path. It must not be used for control tools.
+	ConcurrentTools func(string) (InternalToolHandler, bool)
+	InternalTools   map[string]InternalToolHandler
+	AfterToolCall   func(context.Context, tools.Invocation, tools.Result) error
+	ContinueOnEnd   func() (messageType, content string, ok bool)
+	ACPolicy        *ac.Controller
 	// CompactionProvider optionally supplies a separate model/provider for the
 	// summary call. The normal provider remains active for resumed user work.
 	CompactionProvider func() (provider.Provider, provider.ModelMeta, func(), error)

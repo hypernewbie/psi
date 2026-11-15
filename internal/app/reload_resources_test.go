@@ -62,6 +62,34 @@ func TestReloadResourcesHonorsDisabledOptions(t *testing.T) {
 	}
 }
 
+func TestReloadResourcesInstallsMCPOptInTransactionally(t *testing.T) {
+	cwd, agentDir := t.TempDir(), t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &runtime{store: store, agentDir: agentDir, projectTrusted: true, settings: config.Settings{DefaultTools: []string{"read"}}}
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"mcp":{"allowProjectCommands":true}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	if !r.settings.MCPAllowProjectCommands {
+		t.Fatal("MCP opt-in was not installed")
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"mcp":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err == nil {
+		t.Fatal("malformed settings must fail the reload")
+	}
+	if !r.settings.MCPAllowProjectCommands {
+		t.Fatal("failed reload changed the MCP opt-in")
+	}
+}
+
 func TestReloadResourcesAppliesQueueModes(t *testing.T) {
 	cwd, agentDir := t.TempDir(), t.TempDir()
 	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir})

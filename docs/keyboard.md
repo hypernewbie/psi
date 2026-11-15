@@ -35,7 +35,8 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 - `/new` — start a session (keeps scrollback, resets recall)
 - `/compact [focus]` — create a cancellable compact summary
 - `/resume` — search workspace sessions; same-session selection is a no-op
-- `/reload` — reload keybindings, extensions, skills, prompts, themes, and context files
+- `/reload` — reload keybindings, extensions, skills, prompts, themes, context files, and MCP servers
+- `/mcp` — show MCP server and tool status
 - `/quit` — settle work and restore the terminal
 - `/ac`, `/autocompact`, `/loop`, and `/loop-stop` — embedded adaptive-compaction and loop extensions
 - `/skill:name [args]` — invoke a skill with reproducible input (`psi.input`). The transcript shows `[skill] name (ctrl+o to expand)` with the arguments in a separate user row; `Ctrl+O` expands or collapses the body. An unknown, unreadable, or oversized skill is refused instead of sent as text

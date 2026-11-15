@@ -127,6 +127,6 @@ Go-specific regressions remain in scope.
 Existing psi safeguards include bounded input, strict session reads, and refusal after uncertain storage writes.
 Atomic tool rollback, hostile-filesystem snapshots, and concurrent Pi/psi session writers remain outside scope.
 
-The product retains four tools, two provider families, and an inline main-screen terminal.
-It excludes extensions, MCP, RPC, sandboxing, login, telemetry, and updates.
+The product retains four built-in tools, two provider families, and an inline main-screen terminal.
+It includes an MCP tool-call client and excludes extensions, MCP Apps, RPC, sandboxing, login, telemetry, and updates.
 Live provider tests require explicit operator approval and the `liveprovider` build tag.

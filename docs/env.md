@@ -75,7 +75,8 @@ SGR color is withheld.
 ## Not supported
 
 Pi reads variables psi does not: `PI_OFFLINE`, `PI_PACKAGE_DIR`,
-`PI_SELF_UPDATE_COMMAND`, `PI_EXTENSION_*`, and MCP-related settings. The
+`PI_SELF_UPDATE_COMMAND`, and `PI_EXTENSION_*`. `PSI_SHELL` selects the shell
+for MCP `!command` interpolation and defaults to `bash`. The
 `--offline` flag exists only for one-run compatibility and changes nothing,
 because psi never fetches catalogs. There is no variable that enables print
 mode, extensions, or fullscreen mode; `--mode rpc` is a flag, not a variable.
