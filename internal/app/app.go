@@ -769,7 +769,7 @@ func (r *runtime) checkBump(unavailable bool) error {
 	if r.state == StateStorageBlocked {
 		return errors.New("storage is blocked; open a checked copy or /new")
 	}
-	if unavailable || r.selector != nil || r.settingsPicker != nil || r.state != StateIdle {
+	if unavailable || r.selector != nil || r.settingsPicker != nil || r.compactActive || r.compactPending || r.state != StateIdle {
 		return agent.ErrNotBumpable
 	}
 	proj, err := r.store.Projection()

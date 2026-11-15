@@ -491,6 +491,7 @@ func TestBumpFailureMarkerUsage(t *testing.T) {
 		wantUse bool
 	}{
 		{name: "empty marker", wantUse: false},
+		{name: "whitespace marker", text: " \n", wantUse: false},
 		{name: "visible partial", text: "partial", wantUse: true},
 	}
 	for _, tc := range cases {

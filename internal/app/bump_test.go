@@ -65,6 +65,22 @@ func TestBumpAdmission(t *testing.T) {
 			want: agent.ErrNotBumpable,
 		},
 		{
+			name: "pending compaction",
+			prepare: func(t *testing.T, r *runtime) {
+				appendBumpUser(t, r.store, "hello")
+				r.compactPending = true
+			},
+			want: agent.ErrNotBumpable,
+		},
+		{
+			name: "active compaction mirror",
+			prepare: func(t *testing.T, r *runtime) {
+				appendBumpUser(t, r.store, "hello")
+				r.compactActive = true
+			},
+			want: agent.ErrNotBumpable,
+		},
+		{
 			name: "busy run",
 			prepare: func(t *testing.T, r *runtime) {
 				appendBumpUser(t, r.store, "hello")
