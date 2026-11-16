@@ -24,8 +24,8 @@ import (
 
 type InternalToolHandler func(context.Context, tools.Invocation) tools.Result
 
-// ErrNotBumpable reports that the last conversational message is not an
-// unfinished turn. It is a refusal, not a provider failure.
+// ErrNotBumpable reports that interactive bump admission is unavailable or
+// an empty submission has no unfinished turn. It is not a provider failure.
 var ErrNotBumpable = errors.New("nothing to retry")
 
 type Config struct {
@@ -411,9 +411,10 @@ func (l *Loop) SubmitWithProvenance(ctx context.Context, text, invocation, sourc
 	return l.submit(ctx, input, cfg)
 }
 
-// Bump retries the last unfinished turn without appending a user message or
-// provenance entry. It uses the current configuration and the existing run
-// path. Refused admission performs no provider call and no session mutation.
+// Bump requests another response from the current context without appending a
+// user message or provenance entry. It uses the current configuration and the
+// existing run path. Refused admission performs no provider call and no
+// session mutation.
 func (l *Loop) Bump(ctx context.Context, cfg Config) error {
 	if err := l.begin(); err != nil {
 		return err
@@ -428,9 +429,6 @@ func (l *Loop) Bump(ctx context.Context, cfg Config) error {
 	proj, err := l.store.Projection()
 	if err != nil {
 		return err
-	}
-	if !session.CanBump(proj.Flat) {
-		return ErrNotBumpable
 	}
 	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
 		return err
@@ -564,7 +562,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 	// Pi's agent loop has no turn cap: it runs until the model stops calling
 	// tools, the provider errors, or the user cancels. A legitimate chain of
 	// sequential tool calls is unbounded, so psi must not invent a limit.
-	outcome := event.OutcomeDurable
+	// Cancellation at RunStart is an interrupted response even if a prior
+	// answer is complete. Persistence below restores durable settlement.
+	outcome := event.OutcomeInterrupted
 	l.sink(event.Event{Type: event.RunStart})
 	defer func() {
 		if runErr != nil {
@@ -574,10 +574,12 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 	}()
 	recovery := &Recovery{}
 	for {
+		// A new response starts unfinished. A later authoritative append
+		// restores durable; a failure before that append stays interrupted.
+		outcome = event.OutcomeInterrupted
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Turn boundary: deliver steering queued while the previous turn ran,
 		// Turn boundary: deliver steering queued while the previous turn ran,
 		// before the next model request (Pi's getSteeringMessages poll). Pi skips
 		// this poll when the previous iteration already delivered a batch, so
@@ -741,6 +743,15 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		}
 		keepExistingFailure := false
 		if providerFailure != "" && !hasVisibleAssistantContent(assistantMessage.Assistant) {
+			// Empty markers carry zero usage, including when a retry keeps an
+			// existing marker. Preserve reported counts once in a usage record.
+			u := resp.Usage
+			if u.Input != 0 || u.Output != 0 || u.CacheRead != 0 || u.CacheWrite != 0 || u.TotalTokens != 0 || (u.CacheWrite1h != nil && *u.CacheWrite1h != 0) || (u.Reasoning != nil && *u.Reasoning != 0) {
+				if _, err := l.store.AppendUsage("provider-failure", cfg.Model.ProviderID(), cfg.Model.ID, sessionUsage(u), "outputless provider failure"); err != nil {
+					outcome = event.OutcomeUnsaved
+					return errors.Join(providerErr, fmt.Errorf("storage failure, stopping: %w", err))
+				}
+			}
 			if last := session.LastConversationalMessage(proj.Flat); last != nil && session.IsFailureAssistant(*last) {
 				// A failed retry with no output must not stack another empty marker.
 				keepExistingFailure = true
@@ -756,6 +767,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				return storageFailure
 			}
 		}
+		// Persistence precedes bookkeeping: a later failure must not make a
+		// saved answer unsaved. Provider failures remain interrupted below.
+		outcome = event.OutcomeDurable
 		// A provider may return reasoning only in the final response. Show the
 		// part that never arrived as a delta, before the text tail, so the
 		// transcript keeps the content order. A mismatch never fails the turn.
@@ -937,9 +951,9 @@ func hasVisibleAssistantContent(message *session.AssistantMessage) bool {
 }
 
 // finalizeFailure records an unfinished turn before RunEnd. It never runs for
-// pre-admission errors. It uses the same eligibility rule as Bump so marker
-// creation and retry admission cannot disagree. A recorded failure is left in
-// place; a sticky write error makes the outcome unsaved.
+// pre-admission errors. An unfinished tip or an interrupted response permits a
+// marker; a durably settled completed tip does not. A recorded failure is left
+// in place; a sticky write error makes the outcome unsaved.
 func (l *Loop) finalizeFailure(ctx context.Context, cfg *Config, outcome *string, runErr *error) {
 	proj, err := l.store.Projection()
 	if err != nil {
@@ -948,7 +962,7 @@ func (l *Loop) finalizeFailure(ctx context.Context, cfg *Config, outcome *string
 		return
 	}
 	last := session.LastConversationalMessage(proj.Flat)
-	if last == nil || !session.CanBump(proj.Flat) {
+	if !session.CanBump(proj.Flat) && *outcome != event.OutcomeInterrupted {
 		return
 	}
 	if *outcome == event.OutcomeUnsaved {
@@ -965,7 +979,7 @@ func (l *Loop) finalizeFailure(ctx context.Context, cfg *Config, outcome *string
 		// session that Bump must refuse, so leave the existing failure untouched.
 		return
 	}
-	if session.IsFailureAssistant(*last) {
+	if last != nil && session.IsFailureAssistant(*last) {
 		*outcome = event.OutcomeInterrupted
 		return
 	}

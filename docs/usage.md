@@ -14,7 +14,7 @@ footer shows the folder, session, model, and context usage.
 
 ## Enter a prompt
 
-Type a request and press `Enter`. An empty `Enter` is ignored unless the last turn is unfinished (failed, interrupted, or recovered from a crash); in that case it retries the turn. `/b` does the same when you want an explicit trigger.
+Type a request and press `Enter`. An empty `Enter` retries an unfinished turn (failed, interrupted, or recovered from a crash) and is ignored otherwise. `/b` and `/bump` request another response from the current context, including after a completed or output-limited answer, without adding a prompt.
 
 - `Ctrl+J` inserts a newline. psi has no Shift+Enter detection.
 - Bracketed paste inserts up to 256 KiB as one literal edit; pasted newlines
@@ -51,18 +51,22 @@ the estimate is unavailable, psi omits the caption. A token count above the
 window is shown without text clamping, even though the bar and color use the
 clamped percentage.
 
-## Retry a failed turn
+## Retry a failed turn or ask for another response
 
 If a model request fails or is interrupted before the turn finishes, psi can
 retry it without adding another prompt. Press `Enter` on an empty editor or use
-`/b`. A successful bump retries the same unfinished turn with the current
-model, thinking level, tools, system prompt, and compaction policy.
+`/b` or `/bump`. Explicit commands can also request another response after a
+completed or output-limited answer. A successful bump uses the current
+model, thinking level, tools, system prompt, and compaction policy, and keeps
+saved answers in the transcript.
 
 Bump is available only while psi is idle, with no run, picker, or compaction
-active. It keeps the normal auth, storage, and continuation checks. The last
-turn must be unfinished: a completed answer or an output-limited response
-(`length`) is not retried. An empty `Enter` stays silent when bump is
-unavailable; `/b` reports the reason or says `Nothing to retry.`
+active. It keeps the normal auth, storage, and continuation checks. Empty
+`Enter` works only for an unfinished turn; explicit commands bypass that gate
+but keep all safety checks. All admission refusals stay silent, and refused
+busy commands are discarded without a queue entry or restored draft. Once a
+run starts, failures, cancellation, partial output, and unsaved output use the
+normal message behavior.
 
 Visible partial output from the failed stream stays in the transcript. The
 saved failure record is hidden and omitted from ordinary continuation

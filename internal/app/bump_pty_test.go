@@ -365,3 +365,145 @@ func TestActualBumpInterruptedStream(t *testing.T) {
 		t.Fatalf("stored partials=%d answers=%d; want 1/1", partials, answers)
 	}
 }
+
+func TestActualBumpExplicitCommandsAfterCompletion(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	sessionDir := filepath.Join(home, "sessions")
+	var mu sync.Mutex
+	var bodies []map[string]any
+	answers := []string{"FIRST-ANSWER", "SECOND-ANSWER", "THIRD-ANSWER"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		bodies = append(bodies, body)
+		requestNumber := len(bodies)
+		mu.Unlock()
+		if requestNumber > len(answers) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"type":"error","error":{"type":"api_error","message":"unexpected-request"}}`)
+			return
+		}
+		text := answers[requestNumber-1]
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "event: message_start\ndata: {\"message\":{\"id\":\"synthetic\",\"model\":\"m\",\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"%s\"}}\n\nevent: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {}\n\n", text)
+	}))
+	defer server.Close()
+	bumpReviewSettings(t, agentDir, server.URL)
+
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session-dir", sessionDir)
+	q.prompt()
+	q.write("hello\r")
+	q.wait("FIRST-ANSWER")
+	q.prompt()
+	q.write("\r/hotkeys\r")
+	q.wait("Keys (fixed, no Kitty required):")
+	q.prompt()
+	mu.Lock()
+	requestsAfterEmptyEnter := len(bodies)
+	mu.Unlock()
+	if requestsAfterEmptyEnter != 1 {
+		t.Fatalf("HTTP requests after empty Enter=%d; want 1", requestsAfterEmptyEnter)
+	}
+	q.write("/b\r")
+	q.wait("SECOND-ANSWER")
+	q.prompt()
+	q.write("/bump\r")
+	q.wait("THIRD-ANSWER")
+	q.prompt()
+	if count := strings.Count(q.screen.Text(), "  › hello"); count != 1 {
+		t.Fatalf("user row count=%d; want 1\n%s", count, q.screen.Text())
+	}
+	q.write("/quit\r")
+	q.finish()
+
+	mu.Lock()
+	captured := append([]map[string]any(nil), bodies...)
+	mu.Unlock()
+	if len(captured) != 3 {
+		t.Fatalf("HTTP requests=%d; want 3", len(captured))
+	}
+	firstUsers := bumpRequestUsers(captured[0])
+	for i, body := range captured[1:] {
+		users := bumpRequestUsers(body)
+		if !reflect.DeepEqual(firstUsers, users) {
+			t.Fatalf("request %d changed user content: %#v -> %#v", i+2, firstUsers, users)
+		}
+	}
+	if len(firstUsers) != 1 {
+		t.Fatalf("user messages=%d; want 1", len(firstUsers))
+	}
+	secondBody, err := json.Marshal(captured[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(secondBody, []byte("FIRST-ANSWER")) {
+		t.Fatalf("second request lost the first answer: %s", secondBody)
+	}
+	thirdBody, err := json.Marshal(captured[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(thirdBody, []byte("FIRST-ANSWER")) || !bytes.Contains(thirdBody, []byte("SECOND-ANSWER")) {
+		t.Fatalf("third request lost previous answers: %s", thirdBody)
+	}
+
+	infos, err := session.Discover(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("sessions=%d; want 1", len(infos))
+	}
+	store, err := session.OpenFile(infos[0].Path, work, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, stops, customs := 0, 0, 0
+	var texts []string
+	for _, entry := range mustActivePath(t, store) {
+		if entry.Kind == "custom" {
+			customs++
+			continue
+		}
+		if entry.Kind != "message" || entry.Message == nil {
+			continue
+		}
+		message := entry.Message.Message
+		if message.User != nil {
+			users++
+			continue
+		}
+		if message.Assistant != nil && message.Assistant.StopReason == "stop" {
+			stops++
+			for _, block := range message.Assistant.Content {
+				if block.Text != nil {
+					texts = append(texts, block.Text.Text)
+				}
+			}
+		}
+	}
+	if users != 1 || stops != 3 || customs != 0 {
+		t.Fatalf("session users=%d stops=%d customs=%d; want 1/3/0", users, stops, customs)
+	}
+	if !reflect.DeepEqual(texts, answers) {
+		t.Fatalf("saved answers=%v; want %v", texts, answers)
+	}
+	visibleUsers, visibleAnswers := 0, 0
+	for _, item := range session.CurrentView(mustActivePath(t, store)) {
+		switch item.Kind {
+		case session.KindUser:
+			visibleUsers++
+		case session.KindAssistant:
+			visibleAnswers++
+		}
+	}
+	if visibleUsers != 1 || visibleAnswers != 3 {
+		t.Fatalf("visible users=%d answers=%d; want 1/3", visibleUsers, visibleAnswers)
+	}
+}

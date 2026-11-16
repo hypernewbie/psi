@@ -1,16 +1,22 @@
 # Recovery
 
 Retry a failed turn: when a request fails or is interrupted before the turn
-finishes, one empty `Enter` or `/b` retries it without adding a prompt. Bump is
-available only while idle, with no run, picker, or compaction active, and only
-for an unfinished turn. It uses the current model, thinking level, tools,
-system prompt, and compaction policy. Auth, storage, and continuation checks
-still apply. A completed answer or an output-limited response (`length`) is not
-retried. Empty `Enter` stays silent when bump is unavailable; `/b` reports the
-reason. A retry can bill the provider again.
+finishes, one empty `Enter`, `/b`, or `/bump` retries it without adding a prompt.
+Explicit commands can also request another response after a completed or
+output-limited answer. Bump is available only while idle, with no run, picker,
+or compaction active. Empty `Enter` works only for an unfinished turn;
+explicit commands bypass that gate but keep auth, storage, and continuation
+checks. It uses the current model, thinking level, tools,
+system prompt, and compaction policy, and keeps saved answers. All admission
+refusals stay silent, and refused busy commands are discarded without a queue
+entry or restored draft. Once a run starts, failures, cancellation,
+partial output, and unsaved output use the normal message behavior. A retry can
+bill the provider again.
 
 When a failed turn produced no visible output, its assistant stays in the
 session as a hidden record and is omitted from ordinary continuation requests.
+Known provider usage is saved separately from empty failure records, including
+when a failed bump keeps an existing record instead of adding another one.
 Visible partial text remains in the transcript. Existing compaction can
 summarize that visible progress. A crash can hide whether a tool already ran;
 the retry sends synthetic missing-tool results in request context, does not

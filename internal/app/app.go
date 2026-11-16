@@ -452,7 +452,7 @@ Pi-compatible options:
   --version, -v              Show version
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
-Interactive Enter submits; an empty Enter or /b retries the last unfinished turn when idle.
+Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect read,bash,edit,write only.
 loop_control and syncboard remain available when their separate availability checks pass.
@@ -755,10 +755,12 @@ const (
 )
 
 // checkBump reports whether an interactive bump may start. Sticky storage and
-// auth errors take precedence over a generic non-idle refusal. The durable file
-// is checked only after the transcript is eligible, so an empty Enter on a
-// completed session never reads the whole file.
-func (r *runtime) checkBump(unavailable bool) error {
+// auth errors take precedence over a generic non-idle refusal. When
+// requireUnfinished is true the unfinished-turn eligibility check applies;
+// explicit commands bypass only that check and keep all safety checks. The
+// durable file is checked only after eligibility when required, so an empty
+// Enter on a completed session never reads the whole file.
+func (r *runtime) checkBump(unavailable bool, requireUnfinished bool) error {
 	if err := r.store.WriteError(); err != nil {
 		r.state = StateStorageBlocked
 		return fmt.Errorf("storage blocked: %w", err)
@@ -776,7 +778,7 @@ func (r *runtime) checkBump(unavailable bool) error {
 	if err != nil {
 		return err
 	}
-	if !session.CanBump(proj.Flat) {
+	if requireUnfinished && !session.CanBump(proj.Flat) {
 		return agent.ErrNotBumpable
 	}
 	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
@@ -1521,6 +1523,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
+	var bumpAwaitingStart bool
 	var toolSpacing toolBatchSpacing
 	finishTools := func() {
 		if toolSpacing.pending {
@@ -1834,6 +1837,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
+			bumpAwaitingStart = false
 			r.clearInFlight()
 			r.bridgeRunStarted()
 		case event.SteeringDelivered, event.FollowUpDelivered:
@@ -1969,6 +1973,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			return false, "unavailable"
 		}
+		// A bump that never reaches RunStart is a silent admission refusal.
+		// Track it here, in the REPL goroutine; RunStart clears it.
+		bumpAwaitingStart = bump
 		// Every submitted message and every compaction boundary moves the
 		// reload fence, so a moved-on session reads stale. Bump adds no user
 		// message and must not move that fence.
@@ -2390,6 +2397,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				ev := <-events
 				recordEventFrames(func() { applyEvent(ev) })
 			}
+			// A bump that never reached RunStart failed admission asynchronously.
+			// Suppress only its refusal notice; the original error still drives
+			// queue, bridge, and scheduling decisions below.
+			bumpBeforeStart := bumpAwaitingStart
+			bumpAwaitingStart = false
 			cancel()
 			busy = false
 			bridge.resolveCompactRun(err)
@@ -2447,7 +2459,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			} else {
 				activityText = ""
 			}
-			if errors.Is(err, context.Canceled) {
+			if bumpBeforeStart {
+				// Silent admission refusal before RunStart. Preserve the
+				// storage block without a notice; normal runs keep their
+				// failure, cancellation, and unsaved-output reports.
+				if runOutcome == event.OutcomeUnsaved {
+					r.state = StateStorageBlocked
+				}
+			} else if errors.Is(err, context.Canceled) {
 				if runOutcome == event.OutcomeUnsaved {
 					r.state = StateStorageBlocked
 					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new.")
@@ -2884,7 +2903,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if strings.TrimSpace(text) == "" {
 				// An empty Enter is silent unless it starts a real bump. Admission
 				// refusals (busy, picker, auth, storage, ineligible) stay invisible.
-				if err := r.checkBump(busy || compacting || exiting); err == nil {
+				if err := r.checkBump(busy || compacting || exiting, true); err == nil {
+					startInputMode(agent.UserInput{}, "", inputBump, true)
+				}
+				r.draw(console)
+				continue
+			}
+			if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "b" || cmd.Name == "bump") {
+				// Explicit bumps are silent on admission refusal. A refused
+				// command is discarded without a notice, queue entry, or
+				// restored draft. Started runs keep normal failure reports.
+				if err := r.checkBump(busy || compacting || exiting, false); err == nil {
 					startInputMode(agent.UserInput{}, "", inputBump, true)
 				}
 				r.draw(console)
@@ -2955,19 +2984,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if cmd, ok := terminal.ParseCommand(text); ok {
-				if cmd.Name == "b" {
-					if err := r.checkBump(busy || compacting || exiting); err != nil {
-						if errors.Is(err, agent.ErrNotBumpable) {
-							notice(terminal.NoticeInfo, "Nothing to retry.")
-						} else {
-							notice(terminal.NoticeError, err.Error())
-						}
-					} else {
-						startInputMode(agent.UserInput{}, "", inputBump, false)
-					}
-					r.draw(console)
-					continue
-				}
 				if cmd.Name == "loop" {
 					if err := r.store.WriteError(); err != nil {
 						notice(terminal.NoticeError, "Storage is blocked: "+err.Error())
