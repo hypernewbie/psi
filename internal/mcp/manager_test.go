@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,36 +46,9 @@ func TestMCPHelperProcess(t *testing.T) {
 	}, func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "hidden"}}}, nil
 	})
-	server.AddTool(&sdk.Tool{Name: "progress", Description: "Progress", InputSchema: map[string]any{"type": "object"}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-		token := req.Params.GetProgressToken()
-		for i := 0; i < 10; i++ {
-			if err := req.Session.NotifyProgress(ctx, &sdk.ProgressNotificationParams{ProgressToken: token, Progress: float64(i)}); err != nil {
-				return nil, err
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "progress done"}}}, nil
-	})
-	server.AddTool(&sdk.Tool{Name: "hang", Description: "Hang", InputSchema: map[string]any{"type": "object"}}, func(ctx context.Context, _ *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(time.Second):
-		}
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "hang done"}}}, nil
-	})
 	server.AddTool(&sdk.Tool{Name: "crash", Description: "Crash", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		os.Exit(0)
 		return nil, nil
-	})
-	server.AddTool(&sdk.Tool{Name: "slow", Description: "Slow", InputSchema: map[string]any{"type": "object"}}, func(ctx context.Context, _ *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-		delay := time.Duration(envInt("PSI_MCP_SLOW_MS")) * time.Millisecond
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(delay):
-		}
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "slow done"}}}, nil
 	})
 	for i := 0; i < envInt("PSI_MCP_TOOLS"); i++ {
 		name := "bulk_" + strconv.Itoa(i)
@@ -143,6 +116,46 @@ func waitServerState(t *testing.T, manager *Manager, name, want string) *Snapsho
 	return nil
 }
 
+// connectInMemoryServer exercises SDK calls and notifications without OS I/O,
+// so synctest can control deadlines and wait for queued calls deterministically.
+func connectInMemoryServer(t *testing.T, manager *Manager, name string, server *sdk.Server, timeout time.Duration) *Snapshot {
+	t.Helper()
+	ctx, cancel := context.WithCancel(manager.ctx)
+	conn := &connection{manager: manager, server: name, epoch: 1, ctx: ctx, cancel: cancel,
+		permits: make(chan struct{}, maxCallsPerServer), tokens: map[string]*callState{}}
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	client := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "1"}, &sdk.ClientOptions{
+		ProgressNotificationHandler: func(_ context.Context, req *sdk.ProgressNotificationClientRequest) {
+			conn.noteProgress(req.Params.ProgressToken, req.Params.Progress)
+		},
+	})
+	conn.session, err = client.Connect(t.Context(), clientTransport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.session.Close(); cancel() })
+	raw, err := listAllTools(t.Context(), conn.session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Server{Name: name, Enabled: true, Exposure: ExposureDirect, Timeout: timeout}
+	conn.catalog, err = buildCatalog(cfg, conn.epoch, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.servers[name] = &serverState{cfg: cfg, epoch: conn.epoch, status: serverStateReady, conn: conn, catalog: conn.catalog}
+	manager.order = append(manager.order, name)
+	manager.publishLocked()
+	manager.mu.Unlock()
+	return manager.Snapshot()
+}
+
 func TestManagerStdioEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	user := writeTestFile(t, dir, "mcp.json", `{"mcpServers": {`+testServerConfig("fixture", "basic", "")+`}}`)
@@ -175,31 +188,20 @@ func TestCallCancellationDoesNotWaitForUncooperativeServer(t *testing.T) {
 	server.AddTool(sdkTool("echo", "Still responsive", map[string]any{"type": "object"}), func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "responsive"}}}, nil
 	})
-	clientTransport, serverTransport := sdk.NewInMemoryTransports()
-	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = serverSession.Close() })
-	client := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "1"}, nil)
-	session, err := client.Connect(t.Context(), clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = session.Close() })
 	manager := NewManager(Options{})
 	t.Cleanup(func() {
 		manager.Stop()
 		manager.Wait()
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	serverConfig := Server{Name: "fixture", Enabled: true, Exposure: ExposureDirect, Timeout: time.Hour}
-	hang := Tool{Name: "mcp__fixture__hang", RawName: "hang", Server: "fixture", Epoch: 1, Exposure: ExposureDirect}
-	echo := Tool{Name: "mcp__fixture__echo", RawName: "echo", Server: "fixture", Epoch: 1, Exposure: ExposureDirect}
-	conn := &connection{manager: manager, server: "fixture", epoch: 1, ctx: ctx, cancel: cancel, session: session,
-		catalog: []Tool{hang, echo}, permits: make(chan struct{}, maxCallsPerServer), tokens: map[string]*callState{}}
-	manager.servers["fixture"] = &serverState{cfg: serverConfig, epoch: 1, status: serverStateReady, conn: conn}
+	snapshot := connectInMemoryServer(t, manager, "fixture", server, time.Hour)
+	hang, ok := snapshot.Find("mcp__fixture__hang")
+	if !ok {
+		t.Fatal("hanging tool missing")
+	}
+	echo, ok := snapshot.Find("mcp__fixture__echo")
+	if !ok {
+		t.Fatal("echo tool missing")
+	}
 	caller, cancelCall := context.WithCancel(context.Background())
 	t.Cleanup(cancelCall)
 	done := make(chan tools.Result, 1)
@@ -310,8 +312,13 @@ func TestManagerPaginationAndListChanged(t *testing.T) {
 		manager.Wait()
 	})
 	snapshot := waitServerState(t, manager, "fixture", serverStateReady)
-	if len(snapshot.Tools) != 12 {
-		t.Fatalf("paged tools = %d, want 12", len(snapshot.Tools))
+	// echo, hidden, crash, refresh, and five bulk tools span five pages.
+	const wantTools = 4 + 5
+	if len(snapshot.Tools) != wantTools {
+		t.Fatalf("paged tools = %d, want %d", len(snapshot.Tools), wantTools)
+	}
+	if _, ok := snapshot.Find("mcp__fixture__dynamic_tool"); ok {
+		t.Fatal("dynamic tool was present before the server changed its catalog")
 	}
 	refresh, ok := snapshot.Find("mcp__fixture__refresh")
 	if !ok {
@@ -390,36 +397,53 @@ func TestManagerReloadNullRootKeepsAcceptedConfig(t *testing.T) {
 	}
 }
 
-func TestManagerProgressRenewsIdleTimeout(t *testing.T) {
-	dir := t.TempDir()
-	config := `{"mcpServers": {"fixture": {"command": ` + jsonQuote(os.Args[0]) + `, "args": ["-test.run=^TestMCPHelperProcess$"], "env": {"PSI_MCP_HELPER": "1"}, "timeout": 0.2, "exposure": "direct"}}}`
-	user := writeTestFile(t, dir, "mcp.json", config)
-	manager := NewManager(Options{Input: Input{UserPath: user, Cwd: dir, ReadAvailable: true}})
-	manager.Start()
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
-	})
-	snapshot := waitServerState(t, manager, "fixture", serverStateReady)
-	progress, ok := snapshot.Find("mcp__fixture__progress")
-	if !ok {
-		t.Fatal("progress tool missing")
-	}
-	result := manager.Call(context.Background(), progress, tools.Invocation{Name: progress.Name})
-	if result.IsError {
-		t.Fatalf("progress call timed out despite renewal: %+v", result)
-	}
-	hang, ok := snapshot.Find("mcp__fixture__hang")
-	if !ok {
-		t.Fatal("hang tool missing")
-	}
-	start := time.Now()
-	result = manager.Call(context.Background(), hang, tools.Invocation{Name: hang.Name})
-	if !result.IsError {
-		t.Fatal("non-progressing call did not time out")
-	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("idle timeout took %v", elapsed)
+func TestManagerProgressAndDeadlines(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		progress  int
+		wantError bool
+		want      string
+	}{
+		{name: "renewed-idle", progress: 3, want: "progress done"},
+		{name: "stalled", wantError: true, want: "timed out (waiting for progress)"},
+		{name: "hard-limit", progress: 20, wantError: true, want: "timed out (hard deadline)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				server := sdk.NewServer(&sdk.Implementation{Name: "fixture", Version: "1"}, nil)
+				server.AddTool(sdkTool("progress", "Report progress", map[string]any{"type": "object"}), func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+					for i := 0; i < test.progress; i++ {
+						select {
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						case <-time.After(750 * time.Millisecond):
+						}
+						if err := req.Session.NotifyProgress(ctx, &sdk.ProgressNotificationParams{ProgressToken: req.Params.GetProgressToken(), Progress: float64(i)}); err != nil {
+							return nil, err
+						}
+					}
+					if test.progress == 0 {
+						<-ctx.Done()
+						return nil, ctx.Err()
+					}
+					return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "progress done"}}}, nil
+				})
+				manager := NewManager(Options{})
+				t.Cleanup(func() { manager.Stop(); manager.Wait() })
+				// Fake time advances only when all SDK and manager goroutines are
+				// blocked. Progress arrives before each one-second idle deadline;
+				// it must not extend the ten-second hard deadline.
+				snapshot := connectInMemoryServer(t, manager, "fixture", server, time.Second)
+				tool, ok := snapshot.Find("mcp__fixture__progress")
+				if !ok {
+					t.Fatal("progress tool missing")
+				}
+				result := manager.Call(t.Context(), tool, tools.Invocation{Name: tool.Name})
+				if result.IsError != test.wantError || len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, test.want) {
+					t.Fatalf("progress call = %+v; want %q", result, test.want)
+				}
+			})
+		})
 	}
 }
 
@@ -500,44 +524,56 @@ func TestManagerStderrFloodDoesNotContaminateStdout(t *testing.T) {
 }
 
 func TestManagerServerQueueDoesNotStarveAnotherServer(t *testing.T) {
-	dir := t.TempDir()
-	a := `"a": {"command": ` + jsonQuote(os.Args[0]) + `, "args": ["-test.run=^TestMCPHelperProcess$"], "env": {"PSI_MCP_HELPER": "1", "PSI_MCP_SLOW_MS": "400"}, "timeout": 5, "exposure": "direct"}`
-	b := `"b": {"command": ` + jsonQuote(os.Args[0]) + `, "args": ["-test.run=^TestMCPHelperProcess$"], "env": {"PSI_MCP_HELPER": "1"}, "timeout": 5, "exposure": "direct"}`
-	user := writeTestFile(t, dir, "mcp.json", `{"mcpServers": {`+a+`,`+b+`}}`)
-	manager := NewManager(Options{Input: Input{UserPath: user, Cwd: dir, ReadAvailable: true}})
-	manager.Start()
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
+	synctest.Test(t, func(t *testing.T) {
+		entered, release := make(chan struct{}, maxCallsPerServer), make(chan struct{})
+		defer close(release)
+		busy := sdk.NewServer(&sdk.Implementation{Name: "busy", Version: "1"}, nil)
+		busy.AddTool(sdkTool("wait", "Wait for release", map[string]any{"type": "object"}), func(ctx context.Context, _ *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return &sdk.CallToolResult{}, nil
+		})
+		responsive := sdk.NewServer(&sdk.Implementation{Name: "responsive", Version: "1"}, nil)
+		responsive.AddTool(sdkTool("echo", "Echo", map[string]any{"type": "object"}), func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "responsive"}}}, nil
+		})
+		manager := NewManager(Options{})
+		t.Cleanup(func() { manager.Stop(); manager.Wait() })
+		connectInMemoryServer(t, manager, "busy", busy, time.Hour)
+		snapshot := connectInMemoryServer(t, manager, "responsive", responsive, time.Hour)
+		wait, ok := snapshot.Find("mcp__busy__wait")
+		if !ok {
+			t.Fatal("waiting tool missing")
+		}
+		echo, ok := snapshot.Find("mcp__responsive__echo")
+		if !ok {
+			t.Fatal("echo tool missing")
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		// More queued work than the entire manager has capacity for must not
+		// take global permits while waiting for the busy server's permits.
+		const calls = maxCallsPerManager + 1
+		done := make(chan tools.Result, calls)
+		for i := 0; i < calls; i++ {
+			go func() { done <- manager.Call(ctx, wait, tools.Invocation{Name: wait.Name}) }()
+		}
+		for i := 0; i < maxCallsPerServer; i++ {
+			<-entered
+		}
+		synctest.Wait()
+		result := manager.Call(t.Context(), echo, tools.Invocation{Name: echo.Name})
+		if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "responsive" {
+			t.Fatalf("sibling call while the busy server remains gated = %+v", result)
+		}
+		cancel()
+		for i := 0; i < calls; i++ {
+			<-done
+		}
 	})
-	snapshot := waitServerState(t, manager, "a", serverStateReady)
-	snapshot = waitServerState(t, manager, "b", serverStateReady)
-	slow, ok := snapshot.Find("mcp__a__slow")
-	if !ok {
-		t.Fatal("slow tool missing")
-	}
-	echo, ok := snapshot.Find("mcp__b__echo")
-	if !ok {
-		t.Fatal("echo tool missing")
-	}
-	var wg sync.WaitGroup
-	for i := 0; i < 6; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = manager.Call(context.Background(), slow, tools.Invocation{Name: slow.Name})
-		}()
-	}
-	time.Sleep(50 * time.Millisecond)
-	start := time.Now()
-	result := manager.Call(context.Background(), echo, tools.Invocation{Name: echo.Name, Arguments: map[string]any{"text": "fast"}})
-	if result.IsError || result.Content[0].Text != "fast" {
-		t.Fatalf("other server call = %+v", result)
-	}
-	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
-		t.Fatalf("other server call waited behind the slow queue: %v", elapsed)
-	}
-	wg.Wait()
 }
 
 func TestManagerRouteLiveRechecksExposure(t *testing.T) {

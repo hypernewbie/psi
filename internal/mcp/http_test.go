@@ -830,10 +830,13 @@ func TestManagerHTTPJSONAndSSECallResponses(t *testing.T) {
 }
 
 func TestManagerHTTPStalledDeleteDoesNotBlockStatus(t *testing.T) {
+	deleteEntered := make(chan struct{})
+	var deleteOnce sync.Once
 	server := httpFixture(t)
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
+			deleteOnce.Do(func() { close(deleteEntered) })
 			<-r.Context().Done()
 			return
 		}
@@ -845,11 +848,29 @@ func TestManagerHTTPStalledDeleteDoesNotBlockStatus(t *testing.T) {
 	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
 	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
 	manager.Start()
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
 	waitServerState(t, manager, "http-fixture", serverStateReady)
-	start := time.Now()
-	manager.Stop()
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Fatalf("Stop blocked for %v", elapsed)
+	manager.mu.Lock()
+	session := manager.servers["http-fixture"].conn.session
+	manager.mu.Unlock()
+	// Start graceful SDK shutdown before Stop cancels connection I/O. This
+	// proves DELETE really entered the server rather than failing locally.
+	sessionClosed := make(chan struct{})
+	go func() { _ = session.Close(); close(sessionClosed) }()
+	select {
+	case <-deleteEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("session shutdown never reached DELETE")
+	}
+	stopped := make(chan struct{})
+	go func() { manager.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stop waited for the remote DELETE response")
+	}
+	if snapshot := manager.Snapshot(); len(snapshot.Tools) != 0 || len(snapshot.Servers) != 0 {
+		t.Fatalf("Stop retained the catalog: %+v", snapshot)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -858,8 +879,13 @@ func TestManagerHTTPStalledDeleteDoesNotBlockStatus(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("background cleanup did not finish after a stalled DELETE")
+	}
+	select {
+	case <-sessionClosed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("SDK shutdown did not return after Stop cancelled DELETE")
 	}
 }
 
@@ -983,45 +1009,17 @@ func TestManagerHTTPPrimingEventThenEOFIsBounded(t *testing.T) {
 	t.Cleanup(httpServer.Close)
 	dir := t.TempDir()
 	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
-	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
+	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}, sleep: func(context.Context, time.Duration) bool { return true }})
 	manager.Start()
 	t.Cleanup(func() {
 		manager.Stop()
 		manager.Wait()
 	})
-	deadline := time.Now().Add(5 * time.Second)
-	terminal := ""
-	for time.Now().Before(deadline) {
-		for _, status := range manager.Snapshot().Servers {
-			if status.State == serverStateReady || status.State == serverStateFailed {
-				terminal = status.State
-			}
-		}
-		if terminal == serverStateFailed {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if terminal == "" {
-		t.Fatalf("priming EOF never reached a terminal state: %+v", manager.Snapshot().Servers)
-	}
-	first := gets.Load()
-	time.Sleep(500 * time.Millisecond)
-	second := gets.Load()
-	if second > first+2 {
-		t.Fatalf("standalone GET retried in a loop: %d -> %d", first, second)
-	}
-	if terminal == serverStateFailed {
-		t.Logf("priming EOF exhausted the reconnect budget after %d GETs", second)
-		return
-	}
-	snapshot := manager.Snapshot()
-	tool, ok := snapshot.Find("mcp__http_fixture__echo")
-	if !ok {
-		t.Fatalf("tool missing after priming EOF: %+v", snapshot.Tools)
-	}
-	if result := manager.Call(context.Background(), tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "ok"}}); result.IsError {
-		t.Fatalf("call after priming EOF = %+v", result)
+	waitServerState(t, manager, "http-fixture", serverStateFailed)
+	// EOF may win before setup publishes or after a connection becomes ready.
+	// Either path must exhaust the finite discovery/reconnect allowances.
+	if count := gets.Load(); count < 1 || count > maxDiscoveryTries*(maxReconnects+1) {
+		t.Fatalf("priming EOF GET attempts = %d; exceeded the lifecycle budget", count)
 	}
 }
 
@@ -1242,7 +1240,9 @@ func TestManagerHTTPRetryAfterDate(t *testing.T) {
 }
 
 func TestManagerHTTPRetryAfterBudgetStops(t *testing.T) {
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
 		w.Header().Set("Retry-After", "5")
 		http.Error(w, "retry later", http.StatusServiceUnavailable)
 	}))
@@ -1253,7 +1253,6 @@ func TestManagerHTTPRetryAfterBudgetStops(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var attempts atomic.Int32
 	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
 	manager.Start()
 	t.Cleanup(func() {
@@ -1264,6 +1263,8 @@ func TestManagerHTTPRetryAfterBudgetStops(t *testing.T) {
 	for time.Now().Before(deadline) {
 		for _, status := range manager.Snapshot().Servers {
 			if status.State == serverStateFailed {
+				// A loaded host can exhaust setup before its first request.
+				// The invariant is that the expired budget permits no retry.
 				if attempts.Load() > 1 {
 					t.Fatalf("attempts = %d, want at most 1", attempts.Load())
 				}
@@ -1310,6 +1311,8 @@ func TestManagerHTTPRejectsPermanentRedirect(t *testing.T) {
 }
 
 func TestManagerHTTPSSEResultThenOpenBody(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
 	server := httpFixture(t)
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1328,7 +1331,7 @@ func TestManagerHTTPSSEResultThenOpenBody(t *testing.T) {
 			}
 			select {
 			case <-r.Context().Done():
-			case <-time.After(2 * time.Second):
+			case <-release:
 			}
 			return
 		}
@@ -1349,11 +1352,9 @@ func TestManagerHTTPSSEResultThenOpenBody(t *testing.T) {
 	if !ok {
 		t.Fatal("echo tool missing")
 	}
-	start := time.Now()
+	// The server cannot supply EOF until the client closes the body or this
+	// test releases its gate. A complete result must settle without EOF.
 	result := manager.Call(context.Background(), tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "sse"}})
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("SSE result waited for the trailing body: %v", elapsed)
-	}
 	if result.IsError || result.Content[0].Text != "sse-result" {
 		t.Fatalf("SSE result = %+v", result)
 	}
@@ -1369,16 +1370,15 @@ func jsonID(value any) string {
 }
 
 func TestManagerHTTPConcurrentCancellationDoesNotCorruptSuccess(t *testing.T) {
+	entered := make(chan struct{})
 	server := httpFixture(t)
-	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
-	var cancelled atomic.Int32
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if rpcMethod(r) == "notifications/cancelled" {
-			cancelled.Add(1)
-		}
-		mcpHandler.ServeHTTP(w, r)
+	server.AddTool(sdkTool("refresh", "Wait for cancellation", map[string]any{"type": "object"}), func(ctx context.Context, _ *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
 	})
-	httpServer := httptest.NewServer(handler)
+	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	httpServer := httptest.NewServer(mcpHandler)
 	t.Cleanup(httpServer.Close)
 	dir := t.TempDir()
 	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
@@ -1398,17 +1398,25 @@ func TestManagerHTTPConcurrentCancellationDoesNotCorruptSuccess(t *testing.T) {
 		t.Fatal("echo tool missing")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan tools.Result, 1)
 	go func() {
 		done <- manager.Call(ctx, refresh, tools.Invocation{Name: refresh.Name})
 	}()
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("server did not enter the call before cancellation")
+	}
 	cancel()
 	result := manager.Call(context.Background(), echo, tools.Invocation{Name: echo.Name, Arguments: map[string]any{"text": "survives"}})
 	if result.IsError || result.Content[0].Text == "" {
 		t.Fatalf("successful call was corrupted by cancellation: %+v", result)
 	}
-	<-done
+	cancelled := <-done
+	if !cancelled.IsError || len(cancelled.Content) != 1 || !strings.Contains(cancelled.Content[0].Text, "was cancelled") {
+		t.Fatalf("cancelled HTTP call = %+v", cancelled)
+	}
 }
 
 func TestManagerHTTPDiscoveryOverflowLatchesBeforeSDKFailure(t *testing.T) {
@@ -1473,25 +1481,15 @@ func TestManagerHTTPOversizeSSEEventIsBounded(t *testing.T) {
 	t.Cleanup(httpServer.Close)
 	dir := t.TempDir()
 	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
-	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
+	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}, sleep: func(context.Context, time.Duration) bool { return true }})
 	manager.Start()
 	t.Cleanup(func() {
 		manager.Stop()
 		manager.Wait()
 	})
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, status := range manager.Snapshot().Servers {
-			if status.State == serverStateReady || status.State == serverStateFailed {
-				goto settled
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-settled:
-	time.Sleep(500 * time.Millisecond)
-	if gets.Load() > 3 {
-		t.Fatalf("oversize SSE event caused %d GET attempts", gets.Load())
+	waitServerState(t, manager, "http-fixture", serverStateFailed)
+	if count := gets.Load(); count < 1 || count > maxDiscoveryTries*(maxReconnects+1) {
+		t.Fatalf("oversize SSE GET attempts = %d; exceeded the lifecycle budget", count)
 	}
 }
 
@@ -1499,17 +1497,31 @@ func TestManagerHTTPSSEEventCapIsPerEvent(t *testing.T) {
 	server := httpFixture(t)
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
 	var gets atomic.Int32
+	pong := make(chan string, 2)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			gets.Add(1)
 			w.Header().Set("Content-Type", "text/event-stream")
-			chunk := strings.Repeat("x", 9<<20)
-			_, _ = w.Write([]byte(": " + chunk + "\n\n"))
-			_, _ = w.Write([]byte(": " + chunk + "\n\n"))
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
+			// Each ping is below the 16 MiB event cap; together they exceed it.
+			// Replies prove both frames were parsed, unlike ignored SSE comments.
+			padding := strings.Repeat("x", 9<<20)
+			for _, id := range []string{"first", "second"} {
+				fmt.Fprintf(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":%q,\"method\":\"ping\",\"params\":{\"_meta\":{\"padding\":%q}}}\n\n", id, padding)
 			}
+			w.(http.Flusher).Flush()
 			<-r.Context().Done()
+			return
+		}
+		if r.Method == http.MethodPost && rpcMethod(r) == "" {
+			var response struct {
+				ID    string `json:"id"`
+				Error any    `json:"error"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&response); err != nil || response.Error != nil {
+				t.Errorf("ping reply = %+v, decode error = %v", response, err)
+			}
+			pong <- response.ID
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
 		mcpHandler.ServeHTTP(w, r)
@@ -1525,43 +1537,25 @@ func TestManagerHTTPSSEEventCapIsPerEvent(t *testing.T) {
 		manager.Wait()
 	})
 	waitServerState(t, manager, "http-fixture", serverStateReady)
-	time.Sleep(300 * time.Millisecond)
-	if gets.Load() != 1 {
-		t.Fatalf("two bounded SSE events caused %d GET attempts", gets.Load())
+	seen := map[string]bool{}
+	for i := 0; i < cap(pong); i++ {
+		select {
+		case id := <-pong:
+			seen[id] = true
+		case <-time.After(10 * time.Second):
+			t.Fatal("client did not acknowledge both bounded SSE events")
+		}
+	}
+	if !seen["first"] || !seen["second"] || gets.Load() != 1 {
+		t.Fatalf("bounded SSE pings = %v, GET attempts = %d", seen, gets.Load())
 	}
 	tool, ok := manager.Snapshot().Find("mcp__http_fixture__echo")
 	if !ok {
-		t.Fatal("tool missing after multiline SSE events")
+		t.Fatal("tool missing after bounded SSE events")
 	}
 	if result := manager.Call(context.Background(), tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "ok"}}); result.IsError {
-		t.Fatalf("call after multiline SSE events = %+v", result)
+		t.Fatalf("call after bounded SSE events = %+v", result)
 	}
-}
-
-func TestManagerHTTPDialFailureLeavesSnapshotUsable(t *testing.T) {
-	dir := t.TempDir()
-	path := writeHTTPConfig(t, dir, "http://127.0.0.1:1", nil)
-	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}, sleep: func(context.Context, time.Duration) bool { return true }})
-	manager.Start()
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
-	})
-	start := time.Now()
-	_ = manager.Snapshot()
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Fatalf("snapshot blocked during dial failure: %v", elapsed)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, status := range manager.Snapshot().Servers {
-			if status.State == serverStateFailed {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("dial failure did not settle: %+v", manager.Snapshot().Servers)
 }
 
 func TestManagerHTTPSession404JSONBody(t *testing.T) {

@@ -166,6 +166,10 @@ reports a refresh warning. A lost connection withdraws its tools and may use at
 most two reconnect cycles. A successful `/reload` accepts the config and starts
 a fresh reconnect allowance.
 
+A queued call that has not reached the server reports caller cancellation,
+connection withdrawal, or admission timeout separately. It does not claim an
+unknown server outcome. Cancellation releases the admission capacity for that call.
+
 A server exit during a tool call produces an error. The result warns that the
 outcome can be unknown. Connection cleanup does not turn a crash into caller
 cancellation. A stalled call waits for its timeout or caller cancellation.
@@ -225,6 +229,13 @@ regressions check that a same-group child cannot survive when its launcher
 exits before cleanup or exits after stdin closes. A subprocess regression also
 checks that final replies can be read after process exit, followed by EOF or
 an error for an incomplete trailing frame.
+
+Fake-time SDK checks cover progress-renewed idle deadlines, the hard deadline,
+and admission fairness between servers. Queued-call checks cover cancellation,
+caller deadlines, idle deadlines, and connection withdrawal at both admission
+stages. HTTP checks use request-entry events for cancellation and stalled DELETE.
+They require terminal failure after the finite allowance for invalid SSE streams.
+SSE ping replies prove that the size cap applies per event, not per connection.
 
 The tagged acceptance suite covers a mid-call crash and a handler that ignores
 cancellation. It checks cancellation, continued chat, durable error results,

@@ -1232,15 +1232,12 @@ func (c *connection) call(parent context.Context, tool Tool, inv tools.Invocatio
 	callCtx = withRequestObservation(callCtx, obs)
 	defer obs.finish()
 
-	if err := c.acquire(callCtx, tool); err != nil {
-		return admissionError(tool, err)
+	if err := c.acquire(callCtx); err != nil {
+		return c.admissionFailure(tool, parent)
 	}
 	defer c.release()
-	if state.idle.Load() {
-		return timeoutResult(tool, "waiting for progress")
-	}
-	if err := callCtx.Err(); err != nil {
-		return timeoutResult(tool, "admission")
+	if state.idle.Load() || callCtx.Err() != nil {
+		return c.admissionFailure(tool, parent)
 	}
 	// Recheck the live route after admission so a queued call cannot reach a
 	// replacement connection or a newly hidden tool.
@@ -1270,11 +1267,20 @@ func (m *Manager) routeLive(tool Tool, conn *connection) bool {
 	return ok && declared(live) && live.RawName == tool.RawName
 }
 
-func admissionError(tool Tool, err error) tools.Result {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return timeoutResult(tool, "admission")
+// Admission can end because of the caller, a timeout, or connection withdrawal.
+// None of these paths has sent a request to the server.
+func (c *connection) admissionFailure(tool Tool, parent context.Context) tools.Result {
+	if errors.Is(parent.Err(), context.Canceled) {
+		return cancelledResult(tool)
 	}
-	return callError("busy", tool)
+	if parent.Err() == nil && c.ctx.Err() != nil {
+		return callError("stale", tool)
+	}
+	return timeoutResult(tool, "admission")
+}
+
+func cancelledResult(tool Tool) tools.Result {
+	return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s was cancelled", tool.Server, tool.RawName)}}}
 }
 
 func timeoutResult(tool Tool, phase string) tools.Result {
@@ -1307,7 +1313,7 @@ func (c *connection) callFailure(tool Tool, err error, state *callState, ctx, pa
 	// Connection loss also cancels ctx. Only cancellation of the calling
 	// turn means the user or run cancelled this tool rather than losing it.
 	if errors.Is(parent.Err(), context.Canceled) {
-		return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s was cancelled", tool.Server, tool.RawName)}}}
+		return cancelledResult(tool)
 	}
 	return tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: fmt.Sprintf("MCP tool %s/%s failed: %s; the outcome may be unknown", tool.Server, tool.RawName, safeErrorText(err))}}}
 }
@@ -1330,7 +1336,7 @@ func safeErrorText(err error) string {
 	return "request failed"
 }
 
-func (c *connection) acquire(ctx context.Context, tool Tool) error {
+func (c *connection) acquire(ctx context.Context) error {
 	select {
 	case c.permits <- struct{}{}:
 	case <-ctx.Done():
