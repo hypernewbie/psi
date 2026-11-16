@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -229,33 +230,65 @@ func TestRedactionAppliesBeforeStorage(t *testing.T) {
 }
 
 func TestContentByteAndLineCaps(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		io.WriteString(w, strings.Repeat("z", resultMaxBytes+1000))
-	}))
-	defer server.Close()
-	cfg := testConfig()
-	cfg.MaxInlineChars = maxInlineChars
-	client := testClient(cfg)
-	id := fetchContentID(t, client, server.URL)
+	for name, body := range map[string]string{
+		"long line":  strings.Repeat("z", resultMaxBytes+1000),
+		"unicode":    strings.Repeat("界🚀", 12000),
+		"many lines": strings.Repeat("line\n", resultMaxLines+500),
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				io.WriteString(w, body)
+			}))
+			defer server.Close()
+			cfg := testConfig()
+			cfg.MaxInlineChars = maxInlineChars
+			client := testClient(cfg)
+			defer client.CloseIdle()
+			id := fetchContentID(t, client, server.URL)
 
-	result := getContent(t, client, map[string]any{"responseId": id})
-	if result.IsError {
-		t.Fatalf("content: %s", result.Content[0].Text)
-	}
-	text := result.Content[0].Text
-	if len(text) > resultMaxBytes {
-		t.Fatalf("page bytes = %d", len(text))
-	}
-	if !strings.Contains(text, "next-offset:") {
-		t.Fatalf("missing continuation:\n%.300s", text)
-	}
-	payload := extractPayload(t, text)
-	if len(payload) == 0 {
-		t.Fatal("no progress on a long single line")
-	}
-	if !strings.HasPrefix(strings.Repeat("z", len(payload)), payload) {
-		t.Fatal("payload is not the stored prefix")
+			var rebuilt strings.Builder
+			offset := 0
+			for page := 0; page < 10; page++ {
+				result := getContent(t, client, map[string]any{"responseId": id, "offset": offset})
+				if result.IsError {
+					t.Fatalf("content: %s", result.Content[0].Text)
+				}
+				text := result.Content[0].Text
+				if len(text) > resultMaxBytes || lineCount(text) > resultMaxLines {
+					t.Fatalf("page exceeds output cap: bytes=%d lines=%d", len(text), lineCount(text))
+				}
+				metadata, payload, ok := strings.Cut(text, "\ncontent:\n")
+				if !ok || payload == "" {
+					t.Fatal("missing payload or no paging progress")
+				}
+				rebuilt.WriteString(payload)
+				expectedNext := offset + len([]rune(payload))
+				details := result.Details.(map[string]any)
+				if expectedNext == len([]rune(body)) {
+					if _, more := details["nextOffset"]; more || strings.Contains(metadata, "next-offset:") {
+						t.Fatal("final page advertises continuation")
+					}
+					break
+				}
+				advertised := -1
+				for _, line := range strings.Split(metadata, "\n") {
+					if raw, ok := strings.CutPrefix(line, "next-offset: "); ok {
+						advertised, _ = strconv.Atoi(raw)
+					}
+				}
+				if advertised != expectedNext || details["nextOffset"] != expectedNext {
+					t.Fatalf("next offset: text=%d details=%v actual=%d", advertised, details["nextOffset"], expectedNext)
+				}
+				if !strings.Contains(metadata, fmt.Sprintf("continue: call get_search_content with offset %d\n", advertised)) {
+					t.Fatal("continuation instruction disagrees with next offset")
+				}
+				offset = advertised
+			}
+			if rebuilt.String() != body {
+				t.Fatal("following advertised continuation offsets did not reconstruct the stored text")
+			}
+		})
 	}
 }
 

@@ -176,6 +176,9 @@ func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
 		"web_search: Search the web with one to three queries",
 		"fetch_content: Fetch one or up to 20 public HTTP(S) URLs",
 		"Batch up to three queries",
+		"requires selected and enabled fetch_content and uses the configured fetch mode",
+		"Use the returned next-offset for continuation",
+		"offsets count Unicode scalar values after output limits",
 		"Batch up to 20 URLs",
 		"Search snapshots keep per-query order",
 	} {

@@ -89,17 +89,17 @@ func (c *Client) searchExaDirect(ctx context.Context, query string, limit int, f
 	if err := json.Unmarshal(resultsRaw, &items); err != nil {
 		return searchResponse{}, fmt.Errorf("%s: provider results is not an array", classInvalid)
 	}
-	results := projectExaItems(items, limit)
+	results := c.projectExaItems(items, limit)
 	return searchResponse{results: results}, nil
 }
 
-func projectExaItems(items []exaItem, limit int) []searchHit {
+func (c *Client) projectExaItems(items []exaItem, limit int) []searchHit {
 	if limit < 1 {
 		return nil
 	}
 	var out []searchHit
 	for _, item := range items {
-		hit, ok := projectExaHit(item)
+		hit, ok := c.projectExaHit(item)
 		if !ok {
 			continue
 		}
@@ -111,7 +111,7 @@ func projectExaItems(items []exaItem, limit int) []searchHit {
 	return out
 }
 
-func projectExaHit(item exaItem) (searchHit, bool) {
+func (c *Client) projectExaHit(item exaItem) (searchHit, bool) {
 	target := strings.TrimSpace(item.URL)
 	if target == "" || len(target) > maxURLBytes {
 		return searchHit{}, false
@@ -124,11 +124,11 @@ func projectExaHit(item exaItem) (searchHit, bool) {
 		snippet = item.Text
 	}
 	return searchHit{
-		Title:   clipMeta(item.Title, 300),
-		URL:     clipMeta(target, maxURLBytes),
-		Snippet: clipMeta(snippet, 2000),
+		Title:   clipMeta(c.redact(item.Title, 300), 300),
+		URL:     target,
+		Snippet: clipMeta(c.redact(snippet, 2000), 2000),
 		Engines: "exa",
-		Date:    clipMeta(item.PublishedDate, 64),
+		Date:    clipMeta(c.redact(item.PublishedDate, 64), 64),
 	}, true
 }
 
@@ -194,7 +194,7 @@ func (c *Client) searchExaMCP(ctx context.Context, query string, limit int, filt
 	if err != nil {
 		return searchResponse{}, err
 	}
-	results := parseExaProse(text, limit)
+	results := c.parseExaProse(text, limit)
 	if len(results) == 0 {
 		return searchResponse{}, fmt.Errorf("%s: provider prose has no results", classInvalid)
 	}

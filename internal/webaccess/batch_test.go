@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -430,6 +431,73 @@ func TestInlineContentStoredAndRetrievable(t *testing.T) {
 	failed := getContent(t, client, map[string]any{"responseId": id, "url": server.URL + "/page2"})
 	if !failed.IsError || !strings.Contains(failed.Content[0].Text, "http status: 500") {
 		t.Fatalf("failed-page retrieval: %s", failed.Content[0].Text)
+	}
+}
+
+func TestInlineContentUsesConfiguredRawMode(t *testing.T) {
+	const body = "<p>keep   raw markup</p>\n"
+	for _, modes := range [][]string{{"raw"}, {"readable", "raw"}} {
+		t.Run(strings.Join(modes, ","), func(t *testing.T) {
+			var server *httptest.Server
+			server = batchServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/search" {
+					fmt.Fprintf(w, `{"results":[{"url":%q}]}`, server.URL+"/page")
+					return
+				}
+				w.Header().Set("Content-Type", "text/html")
+				io.WriteString(w, body)
+			})
+			cfg := searxConfig(t, server.URL)
+			cfg.FetchModes = modes
+			cfg.FetchMode = "raw"
+			client := testClient(cfg)
+			defer client.CloseIdle()
+			result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q", "includeContent": true}))
+			if result.IsError {
+				t.Fatalf("search: %s", result.Content[0].Text)
+			}
+			page := getContent(t, client, map[string]any{"responseId": extractResponseID(t, result.Content[0].Text), "urlIndex": 0})
+			if page.IsError {
+				t.Fatalf("stored content: %s", page.Content[0].Text)
+			}
+			if got := extractPayload(t, page.Content[0].Text); got != body {
+				t.Fatalf("configured raw mode changed page text: %q", got)
+			}
+		})
+	}
+}
+
+func TestInlineContentRedactsEachFieldOnce(t *testing.T) {
+	const secret = "redacted" // A second pass would match inside the formatter's own marker.
+	for _, title := range []string{"", secret} {
+		t.Run("provider title="+title, func(t *testing.T) {
+			var server *httptest.Server
+			server = batchServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/search" {
+					fmt.Fprintf(w, `{"results":[{"title":%q,"url":%q,"content":%q,"engines":[%q],"publishedDate":%q}]}`,
+						title, server.URL+"/page", secret, secret, secret)
+					return
+				}
+				w.Header().Set("Content-Type", "text/html")
+				io.WriteString(w, "<html><head><title>"+secret+"</title></head><body><p>"+secret+"</p></body></html>")
+			})
+			cfg := searxConfig(t, server.URL)
+			cfg.SearXNGHeaders = http.Header{"X-Test-Key": []string{secret}}
+			client := testClient(cfg)
+			defer client.CloseIdle()
+			result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q", "includeContent": true}))
+			if result.IsError || strings.Contains(result.Content[0].Text, "[[redacted]]") {
+				t.Fatalf("search redacted a marker again: %s", result.Content[0].Text)
+			}
+			page := getContent(t, client, map[string]any{"responseId": extractResponseID(t, result.Content[0].Text), "urlIndex": 0})
+			if page.IsError {
+				t.Fatalf("stored content: %s", page.Content[0].Text)
+			}
+			text := page.Content[0].Text
+			if extractPayload(t, text) != "[redacted]" || !strings.Contains(text, "\ntitle: [redacted]\n") {
+				t.Fatalf("stored page title/content were not redacted exactly once: %s", text)
+			}
+		})
 	}
 }
 

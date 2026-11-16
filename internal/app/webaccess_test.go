@@ -1,10 +1,18 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"psi/internal/config"
+	"psi/internal/tools"
 	"psi/internal/webaccess"
 )
 
@@ -63,6 +71,60 @@ func TestWebHandlersMatchAdvertisedTools(t *testing.T) {
 	handlers := r.webHandlers()
 	if len(handlers) != 1 || handlers[webaccess.ToolFetch] == nil {
 		t.Fatalf("handlers = %v", handlers)
+	}
+}
+
+func TestWebSearchInlineContentRespectsCLISelection(t *testing.T) {
+	for _, fetchSelected := range []bool{false, true} {
+		name := "fetch excluded"
+		if fetchSelected {
+			name = "fetch selected"
+		}
+		t.Run(name, func(t *testing.T) {
+			var searches, pages atomic.Int32
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/search" {
+					searches.Add(1)
+					json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{{"url": server.URL + "/page"}}})
+					return
+				}
+				pages.Add(1)
+				w.Header().Set("Content-Type", "text/plain")
+				io.WriteString(w, "page text")
+			}))
+			defer server.Close()
+			cfg := testWebConfig()
+			cfg.SearXNGBaseURL = server.URL
+			cfg.SearXNGAvailable = true
+			cfg.AllowRanges = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+			client := webaccess.New(cfg)
+			defer client.CloseIdle()
+			selected := []string{webaccess.ToolSearch}
+			if fetchSelected {
+				selected = append(selected, webaccess.ToolFetch)
+			}
+			r := &runtime{web: client, settings: config.Settings{DefaultTools: selected}}
+			handler := r.webHandlers()[webaccess.ToolSearch]
+			result := handler(context.Background(), tools.Invocation{
+				Name: webaccess.ToolSearch, Arguments: map[string]any{"query": "q", "includeContent": true},
+			})
+			wantRequests := int32(0)
+			if fetchSelected {
+				wantRequests = 1
+			}
+			wantError := !fetchSelected
+			if result.IsError != wantError || searches.Load() != wantRequests || pages.Load() != wantRequests {
+				t.Fatalf("inline search: error=%t search requests=%d page requests=%d", result.IsError, searches.Load(), pages.Load())
+			}
+			if !fetchSelected && !strings.Contains(result.Content[0].Text, "includeContent requires fetch_content") {
+				t.Fatalf("missing actionable permission error: %s", result.Content[0].Text)
+			}
+			plain := handler(context.Background(), tools.Invocation{Name: webaccess.ToolSearch, Arguments: map[string]any{"query": "q"}})
+			if plain.IsError || searches.Load() != wantRequests+1 || pages.Load() != wantRequests {
+				t.Fatal("fetch selection changed ordinary search behavior")
+			}
+		})
 	}
 }
 

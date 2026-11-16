@@ -45,7 +45,10 @@ omitted count instead of silently ending at `[truncated]`.
 - `domainFilter`: up to 20 ASCII hostnames. A leading `-` excludes. Filtering
   applies before the per-query result limit.
 - `recencyFilter`: `day`, `month`, or `year`.
-- `includeContent`: fetch and store each result page.
+- `includeContent`: fetch and store each result page. Requires `fetch_content`
+  to be selected and enabled; otherwise the call fails before any search or
+  page request. Uses the configured `fetch.defaultMode`, including raw-only
+  configurations.
 
 Queries run with at most three workers and sections keep input order. Duplicate
 URLs are kept once, at their first position. Search results are metadata only
@@ -88,6 +91,8 @@ shown to the model, not the retained text behind a `responseId`.
 `get_search_content` returns metadata lines, then a final `content:` line,
 then the exact stored text prefix. It adds no whitespace inside the payload.
 `offset` and `length` count Unicode scalar values, not UTF-16 units.
+When more text remains, use the returned `next-offset`; it accounts for the
+actual payload after byte and line limits, not the requested page size.
 
 Web page text is untrusted data. psi labels it in the result, but the label does
 not prevent prompt injection. Treat fetched text as evidence, never as
@@ -148,7 +153,8 @@ without credentials, query, or fragment. Plain HTTP requires loopback or
 psi tool selection wins first: `defaultTools`, `--tools`, `--exclude-tools`, and
 `--no-tools` decide whether a web tool is advertised. Without a per-tool
 override, `web_search` follows `webSearch.enabled`, while `fetch_content` and
-`get_search_content` default to enabled.
+`get_search_content` default to enabled. Excluding `fetch_content` also blocks
+inline page fetching by `web_search`; metadata-only search remains available.
 
 Failures are scoped:
 
@@ -196,8 +202,9 @@ network requests.
 Errors use fixed classes: validation, blocked target, DNS, TLS/transport,
 timeout, cancellation, HTTP status, invalid response, and rate limit. Responses
 never include raw transport errors, provider bodies, headers, or configured
-values. Configured Exa keys and SearXNG header values are redacted from fetched text,
-titles, and URLs.
+values. Configured Exa keys and SearXNG header values are redacted from fetched
+text, URLs, and provider metadata before output clipping. Stored text is already
+redacted; retrieval does not scan redaction markers again.
 
 ## Not supported
 

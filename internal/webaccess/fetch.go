@@ -157,12 +157,16 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 	}
 	decoded = runePrefix(decoded, maxBodyBytes)
 
+	final := resp.Request.URL
+	if final == nil {
+		final = u
+	}
 	title := ""
 	text := decoded
 	if mode == "readable" && isHTMLMediaType(mediaType, body) {
 		var converted string
 		var conversionTruncated bool
-		title, converted, conversionTruncated, err = htmlToMarkdown([]byte(decoded), u, maxBodyBytes)
+		title, converted, conversionTruncated, err = htmlToMarkdown([]byte(decoded), final, maxBodyBytes)
 		if err != nil {
 			return pageData{}, fmt.Errorf("%s: html conversion failed", classInvalid)
 		}
@@ -177,10 +181,6 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 		title = c.redact(title, 512)
 	}
 
-	final := resp.Request.URL
-	if final == nil {
-		final = u
-	}
 	return pageData{
 		URL:       c.redact(u.String(), maxURLBytes),
 		FinalURL:  c.redact(final.String(), maxURLBytes),

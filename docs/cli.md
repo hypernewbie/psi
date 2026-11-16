@@ -99,7 +99,9 @@ psi --no-tools
 - `-nbt`, `--no-builtin-tools` behaves like `--no-tools`.
 
 These flags affect the seven built-in tools only. Web tools also honor the
-`web-search.json` switches described in [Web access](web.md). `loop_control`
+`web-search.json` switches described in [Web access](web.md). Excluding
+`fetch_content` also blocks `web_search` with `includeContent: true` before any
+network request; metadata-only search remains available. `loop_control`
 remains available during an active goal or exact-count loop. `syncboard`
 remains available while the connected Phi bridge accepts that capability.
 

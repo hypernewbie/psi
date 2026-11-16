@@ -29,7 +29,7 @@ func (c *Client) searchDefinition() provider.ToolDef {
 				"query":          map[string]any{"type": "string", "description": "Search query, at most 4 KiB"},
 				"queries":        map[string]any{"type": "array", "minItems": 1, "maxItems": maxBatchQueries, "items": map[string]any{"type": "string"}, "description": "One to three queries"},
 				"numResults":     map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "description": "Results per query (default 5)"},
-				"includeContent": map[string]any{"type": "boolean", "description": "Fetch and store each result page"},
+				"includeContent": map[string]any{"type": "boolean", "description": "Fetch and store each result page using the configured fetch mode; requires selected and enabled fetch_content"},
 				"recencyFilter":  map[string]any{"type": "string", "enum": []string{"day", "month", "year"}, "description": "Restrict to recent results"},
 				"domainFilter":   map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "string"}, "description": "Hostnames to include; a leading - excludes"},
 				"provider":       map[string]any{"type": "string", "enum": []string{"auto", "searxng", "exa"}, "description": "Search provider"},
@@ -379,7 +379,7 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 			go func(i int, target string) {
 				defer fetchWG.Done()
 				defer func() { <-fetchSem }()
-				page, err := c.fetchPage(searchCtx, target, "readable")
+				page, err := c.fetchPage(searchCtx, target, c.cfg.FetchMode)
 				if err != nil {
 					childErrs[i] = err
 					return
@@ -399,16 +399,17 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 			outcomes[ref.q].results[ref.r].Content = children[i].Content
 			outcomes[ref.q].results[ref.r].Truncated = children[i].Truncated
 			if outcomes[ref.q].results[ref.r].Title == "" {
-				outcomes[ref.q].results[ref.r].Title = children[i].Title
+				outcomes[ref.q].results[ref.r].Title = clipMeta(children[i].Title, 300)
 			}
 		}
 	}
 
-	// Provider-supplied fields can echo configured credentials. Redact before
-	// formatting or storage; fetched pages were already redacted on arrival.
+	// Metadata and fetched pages are already redacted. Keep original URLs for
+	// filtering and fetching, then redact them once before formatting/storage.
 	for q := range outcomes {
 		for i := range outcomes[q].results {
-			c.sanitizeHit(&outcomes[q].results[i])
+			hit := &outcomes[q].results[i]
+			hit.URL = clipMeta(c.redact(hit.URL, maxURLBytes), maxURLBytes)
 		}
 	}
 
@@ -421,9 +422,6 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 			continue
 		}
 		response := outcomes[q]
-		for i := range response.unresponsive {
-			response.unresponsive[i] = c.redact(response.unresponsive[i], 200)
-		}
 		overviewParts = append(overviewParts, formatOverview(providerName, query, response.results, response.unresponsive))
 		resultCount += len(response.results)
 		for _, hit := range response.results {
@@ -498,16 +496,6 @@ func (c *Client) runSearch(ctx context.Context, providerName, query string, args
 
 type hitRef struct {
 	q, r int
-}
-
-func (c *Client) sanitizeHit(hit *searchHit) {
-	hit.Title = c.redact(hit.Title, 300)
-	hit.URL = c.redact(hit.URL, maxURLBytes)
-	hit.Snippet = c.redact(hit.Snippet, 2000)
-	hit.Content = c.redact(hit.Content, maxBodyBytes)
-	hit.Engines = c.redact(hit.Engines, 200)
-	hit.Date = c.redact(hit.Date, 64)
-	hit.Error = c.redact(hit.Error, 512)
 }
 
 func filterHits(hits []searchHit, filter domainFilter) []searchHit {

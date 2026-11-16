@@ -335,22 +335,31 @@ func TestProviderTimeoutClassification(t *testing.T) {
 }
 
 func TestSearchRedactsUnresponsiveEngineDetails(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"results":[],"unresponsive_engines":[["google","header-secret"]]}`)
-	}))
-	defer server.Close()
-	cfg := searxConfig(t, server.URL)
-	cfg.SearXNGHeaders = map[string][]string{"X-Token": {"header-secret"}}
-	client := testClient(cfg)
-	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q"}))
-	if result.IsError {
-		t.Fatalf("search: %s", result.Content[0].Text)
-	}
-	if strings.Contains(result.Content[0].Text, "header-secret") {
-		t.Fatalf("unresponsive detail leaked:\n%s", result.Content[0].Text)
-	}
-	if !strings.Contains(result.Content[0].Text, "[redacted]") {
-		t.Fatalf("redaction marker missing:\n%s", result.Content[0].Text)
+	for _, tc := range []struct {
+		name, secret, reason string
+	}{
+		{"whole secret", "header-secret", "header-secret"},
+		{"clipping boundary", "header-secret", strings.Repeat("r", 200-len("google: ")-len("[redacted]")) + "header-secret"},
+		{"marker substring", "redacted", "redacted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"results":[],"unresponsive_engines":[["google",%q]]}`, tc.reason)
+			}))
+			defer server.Close()
+			cfg := searxConfig(t, server.URL)
+			cfg.SearXNGHeaders = map[string][]string{"X-Token": {tc.secret}}
+			client := testClient(cfg)
+			defer client.CloseIdle()
+			result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q"}))
+			if result.IsError {
+				t.Fatalf("search: %s", result.Content[0].Text)
+			}
+			text := result.Content[0].Text
+			if strings.Contains(text, "header-sec") || strings.Contains(text, "[[redacted]]") || strings.Count(text, "[redacted]") != 1 {
+				t.Fatalf("unresponsive detail was not redacted exactly once before clipping: %s", text)
+			}
+		})
 	}
 }
 

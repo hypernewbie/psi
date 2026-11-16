@@ -74,6 +74,32 @@ func TestFetchReadableMarkdown(t *testing.T) {
 	}
 }
 
+func TestFetchRedirectResolvesLinksAgainstFinalURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, "/docs/index.html", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `<p><a href="next.html">Next</a><a href="../up.html">Up</a></p>`)
+	}))
+	defer server.Close()
+	client := testClient(testConfig())
+	defer client.CloseIdle()
+	page, err := client.fetchPage(context.Background(), server.URL+"/start", "readable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.URL != server.URL+"/start" || page.FinalURL != server.URL+"/docs/index.html" {
+		t.Fatalf("redirect metadata: original=%q final=%q", page.URL, page.FinalURL)
+	}
+	for _, want := range []string{"[Next](" + server.URL + "/docs/next.html)", "[Up](" + server.URL + "/up.html)"} {
+		if !strings.Contains(page.Text, want) {
+			t.Fatalf("link did not use the final page URL; want %q in %q", want, page.Text)
+		}
+	}
+}
+
 func TestFetchRawPreservesMarkup(t *testing.T) {
 	const body = "<html><body>\n  <p>keep   spaces</p>\n</body></html>\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

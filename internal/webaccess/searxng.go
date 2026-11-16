@@ -16,7 +16,9 @@ import (
 
 const maxProviderBody = 5 << 20
 
-// searxngResult is the projected subset retained from one SearXNG item.
+// searchHit holds projected provider metadata, redacted before clipping.
+// URLs stay verbatim until filtering and optional inline fetching finish;
+// handleSearch redacts them before formatting or storage.
 type searchHit struct {
 	Title     string
 	URL       string
@@ -107,7 +109,7 @@ func (c *Client) searchSearXNG(ctx context.Context, query string, limit int, fil
 
 	var results []searchHit
 	for _, item := range items {
-		result, ok := projectSearXNGItem(item)
+		result, ok := c.projectSearXNGItem(item)
 		if !ok {
 			continue
 		}
@@ -119,12 +121,12 @@ func (c *Client) searchSearXNG(ctx context.Context, query string, limit int, fil
 
 	out := searchResponse{results: results}
 	if unresponsive, ok := raw["unresponsive_engines"]; ok && len(results) == 0 {
-		out.unresponsive = projectUnresponsive(unresponsive)
+		out.unresponsive = c.projectUnresponsive(unresponsive)
 	}
 	return out, nil
 }
 
-func projectSearXNGItem(raw json.RawMessage) (searchHit, bool) {
+func (c *Client) projectSearXNGItem(raw json.RawMessage) (searchHit, bool) {
 	var item map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &item); err != nil || item == nil {
 		return searchHit{}, false
@@ -154,25 +156,23 @@ func projectSearXNGItem(raw json.RawMessage) (searchHit, bool) {
 	if value, ok := item["engines"]; ok && string(value) != "null" {
 		var names []string
 		if json.Unmarshal(value, &names) == nil {
-			bounded := names[:min(len(names), 8)]
-			for i, name := range bounded {
-				bounded[i] = clipMeta(name, 64)
-			}
-			engines = strings.Join(bounded, ", ")
+			// Redact the complete displayed field before clipping. A header
+			// value can span the separator between two engine names.
+			engines = clipMeta(c.redact(strings.Join(names[:min(len(names), 8)], ", "), 200), 200)
 		} else {
-			engines = clipMeta(str("engine"), 64)
+			engines = clipMeta(c.redact(str("engine"), 64), 64)
 		}
 	}
 	return searchHit{
-		Title:   clipMeta(str("title"), 300),
-		URL:     clipMeta(target, maxURLBytes),
-		Snippet: clipMeta(str("content"), 2000),
+		Title:   clipMeta(c.redact(str("title"), 300), 300),
+		URL:     target,
+		Snippet: clipMeta(c.redact(str("content"), 2000), 2000),
 		Engines: engines,
-		Date:    clipMeta(str("publishedDate"), 64),
+		Date:    clipMeta(c.redact(str("publishedDate"), 64), 64),
 	}, true
 }
 
-func projectUnresponsive(raw json.RawMessage) []string {
+func (c *Client) projectUnresponsive(raw json.RawMessage) []string {
 	var pairs [][]json.RawMessage
 	if err := json.Unmarshal(raw, &pairs); err != nil {
 		return nil
@@ -189,7 +189,7 @@ func projectUnresponsive(raw json.RawMessage) []string {
 		if engine == "" {
 			continue
 		}
-		out = append(out, clipMeta(engine+": "+reason, 200))
+		out = append(out, clipMeta(c.redact(engine+": "+reason, 200), 200))
 		if len(out) == 5 {
 			break
 		}

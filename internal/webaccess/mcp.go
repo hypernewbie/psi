@@ -153,7 +153,7 @@ func validResultURL(raw string) bool {
 }
 
 // parseExaProse projects the basic Title:/URL: result format into bounded hits.
-func parseExaProse(text string, limit int) []searchHit {
+func (c *Client) parseExaProse(text string, limit int) []searchHit {
 	if limit < 1 {
 		return nil
 	}
@@ -162,7 +162,7 @@ func parseExaProse(text string, limit int) []searchHit {
 	var snippet []string
 	flush := func() {
 		if current.URL != "" {
-			current.Snippet = clipMeta(strings.Join(snippet, " "), 2000)
+			current.Snippet = clipMeta(c.redact(strings.Join(snippet, " "), 2000), 2000)
 			hits = append(hits, current)
 		}
 		current = searchHit{}
@@ -173,18 +173,18 @@ func parseExaProse(text string, limit int) []searchHit {
 		switch {
 		case strings.HasPrefix(trimmed, "Title:"):
 			flush()
-			current.Title = clipMeta(strings.TrimSpace(strings.TrimPrefix(trimmed, "Title:")), 300)
+			current.Title = clipMeta(c.redact(strings.TrimSpace(strings.TrimPrefix(trimmed, "Title:")), 300), 300)
 		case strings.HasPrefix(trimmed, "URL:"):
 			target := strings.TrimSpace(strings.TrimPrefix(trimmed, "URL:"))
 			if current.URL != "" {
 				flush()
 			}
 			if validResultURL(target) {
-				current.URL = clipMeta(target, maxURLBytes)
+				current.URL = target
 				current.Engines = "exa"
 			}
 		case strings.HasPrefix(trimmed, "Published:"):
-			current.Date = clipMeta(strings.TrimSpace(strings.TrimPrefix(trimmed, "Published:")), 64)
+			current.Date = clipMeta(c.redact(strings.TrimSpace(strings.TrimPrefix(trimmed, "Published:")), 64), 64)
 		case strings.HasPrefix(trimmed, "Author:"):
 			// Author is not retained.
 		case strings.HasPrefix(trimmed, "Highlights:"),

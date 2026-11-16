@@ -456,6 +456,7 @@ Positional messages are sent in order after the terminal starts. Options can app
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect read,bash,edit,write,web_search,fetch_content,get_search_content only.
+Inline search content requires selected and enabled fetch_content.
 loop_control and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.

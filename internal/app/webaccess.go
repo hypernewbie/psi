@@ -63,9 +63,24 @@ func (r *runtime) webHandlers() map[string]agent.InternalToolHandler {
 		return nil
 	}
 	client := r.web
+	definitions := r.webDefinitions()
+	fetchEnabled := false
+	for _, def := range definitions {
+		if def.Name == webaccess.ToolFetch {
+			fetchEnabled = true
+			break
+		}
+	}
 	out := map[string]agent.InternalToolHandler{}
-	for _, def := range r.webDefinitions() {
+	for _, def := range definitions {
 		out[def.Name] = func(ctx context.Context, invocation tools.Invocation) tools.Result {
+			// Plugin enablement is checked by the client. CLI selection must
+			// also apply to page requests made indirectly through web_search.
+			if invocation.Name == webaccess.ToolSearch && invocation.Arguments["includeContent"] == true && !fetchEnabled {
+				return tools.Result{IsError: true, Content: []tools.Block{{
+					Type: "text", Text: "web_search failed: validation: includeContent requires fetch_content to be enabled",
+				}}}
+			}
 			return client.Dispatch(ctx, invocation)
 		}
 	}

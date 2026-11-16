@@ -178,12 +178,11 @@ func (r redactor) redact(s string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	if len(s) > limit {
-		s = runePrefix(s, limit)
-	}
 	if len(r.secrets) == 0 {
-		return s
+		return runePrefix(s, limit)
 	}
+	// Match against the complete input. Clipping first could cut a secret
+	// across the output boundary and expose its unmatched prefix.
 	const marker = "[redacted]"
 	var b strings.Builder
 	b.Grow(min(len(s), limit))

@@ -307,6 +307,9 @@ func (c *Client) formatContent(meta contentMeta) (string, int) {
 	if next < meta.length {
 		base = c.contentMetadata(meta, true, next)
 		payload, next = fitPayload(meta.payload, meta.start, meta.limit, base)
+		// Continuation metadata reduces the payload budget. Refresh its offset
+		// after fitting; the smaller offset cannot make the metadata longer.
+		base = c.contentMetadata(meta, true, next)
 	}
 	return base + payload, next
 }
