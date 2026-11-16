@@ -2,12 +2,15 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"psi/internal/agent"
 	"psi/internal/config"
 	"psi/internal/provider"
 	"psi/internal/terminal"
@@ -23,6 +26,35 @@ func testSettingsRuntime(t *testing.T) *runtime {
 	r.settings.MarkdownCodeBlockIndent = "  "
 	r.settings.Compaction.Enabled = true
 	return r
+}
+
+// testContextUsageRuntime primes one completed 79k/1k provider response on a
+// 200k window so the footer has an exact 80k context anchor to display.
+func testContextUsageRuntime(t *testing.T, mode string) (*runtime, *terminal.Console) {
+	t.Helper()
+	r := testRuntime(t)
+	r.settings.ContextUsageDisplay = mode
+	r.cfg.Model.ContextWindow = 200000
+	r.cfg.AutoCompact = false
+	fake := &provider.Fake{Responses: []*provider.Response{{
+		Text:       "context usage answer",
+		Usage:      provider.Usage{Input: 79000, Output: 1000, TotalTokens: 80000},
+		StopReason: "end_turn",
+	}}}
+	if err := agent.New(r.store, r.reg, fake, nil).Submit(context.Background(), "show context usage", r.cfg); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	console := terminal.NewConsole(input, io.Discard)
+	t.Cleanup(func() {
+		console.Close()
+		input.Close()
+	})
+	r.refreshPresentation(console)
+	return r, console
 }
 
 func TestSettingsCommandListsCurrentValues(t *testing.T) {
@@ -42,6 +74,7 @@ func TestSettingsCommandListsCurrentValues(t *testing.T) {
 		"Quiet startup: off",
 		"Theme: system",
 		"Color mode: auto",
+		"Context usage: percent",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
@@ -56,14 +89,14 @@ func TestSettingsCommandRejectsArguments(t *testing.T) {
 	}
 }
 
-func TestSettingsPickerHasTenRows(t *testing.T) {
+func TestSettingsPickerRows(t *testing.T) {
 	r := testSettingsRuntime(t)
 	picker := r.newSettingsPicker()
 	labels := make([]string, len(picker.Items))
 	for i, item := range picker.Items {
 		labels[i] = item.Label
 	}
-	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode", "Default thinking level per model"}
+	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode", "Context usage", "Default thinking level per model"}
 	if strings.Join(labels, "|") != strings.Join(want, "|") {
 		t.Fatalf("labels = %v", labels)
 	}
@@ -95,6 +128,7 @@ func TestApplySettingRows(t *testing.T) {
 		{id: "quiet-startup", value: terminal.SettingsValue{Label: "on", Value: true}, path: []string{"quietStartup"}, want: "true"},
 		{id: "theme", value: terminal.SettingsValue{Label: "light", Value: "light"}, path: []string{"theme"}, want: `"light"`},
 		{id: "color-mode", value: terminal.SettingsValue{Label: "false", Value: false}, path: []string{"terminal", "trueColor"}, want: "false"},
+		{id: "context-usage", value: terminal.SettingsValue{Label: "tokens", Value: "tokens"}, path: []string{"contextUsageDisplay"}, want: `"tokens"`},
 	}
 	for _, c := range cases {
 		path, err := r.applySetting(c.id, c.value, nil)
@@ -111,7 +145,7 @@ func TestApplySettingRows(t *testing.T) {
 
 	if r.settings.EditorPaddingX != 2 || r.settings.OutputPad != 1 || r.settings.AutocompleteMaxVisible != 7 ||
 		r.settings.MarkdownCodeBlockIndent != "    " || !r.settings.QuietStartup || r.settings.Theme != "light" ||
-		r.settings.TerminalTrueColor != "false" {
+		r.settings.TerminalTrueColor != "false" || r.settings.ContextUsageDisplay != "tokens" {
 		t.Fatalf("settings = %+v", r.settings)
 	}
 	if r.themeMode != pitheme.ColorMode256 {
@@ -205,6 +239,76 @@ func TestApplySettingOutputPadding(t *testing.T) {
 	}
 	if _, err := r.applySetting("missing", terminal.SettingsValue{Value: 1}, nil); err == nil {
 		t.Fatal("unknown setting accepted")
+	}
+}
+
+func TestApplyContextUsageRejectsInvalidPickerValues(t *testing.T) {
+	r := testSettingsRuntime(t)
+	settingsPath := filepath.Join(r.agentDir, "settings.json")
+	original := []byte(`{"unknown":{"keep":true},"outputPad":0}`)
+	if err := os.WriteFile(settingsPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []terminal.SettingsValue{
+		{Label: "", Value: ""},
+		{Label: "bogus", Value: "bogus"},
+		{Label: "tokens", Value: 1},
+	} {
+		path, err := r.applySetting("context-usage", value, nil)
+		if err == nil {
+			t.Errorf("accepted invalid context usage value %#v", value)
+			continue
+		}
+		if path != nil {
+			t.Errorf("invalid context usage value %#v returned persistence path %v", value, path)
+		}
+		if r.settings.ContextUsageDisplay != "" {
+			t.Errorf("invalid context usage value %#v changed memory to %q", value, r.settings.ContextUsageDisplay)
+		}
+		data, readErr := os.ReadFile(settingsPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(data, original) {
+			t.Errorf("invalid context usage value %#v changed the settings file: %s", value, data)
+		}
+	}
+}
+
+func TestContextUsageDisplaySaveFailureKeepsSessionChange(t *testing.T) {
+	r, console := testContextUsageRuntime(t, "")
+	settingsPath := filepath.Join(r.agentDir, "settings.json")
+	malformed := []byte(`{"broken":`)
+	if err := os.WriteFile(settingsPath, malformed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.applySetting("context-usage", terminal.SettingsValue{Label: "tokens", Value: "tokens"}, console)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.settings.ContextUsageDisplay != "tokens" {
+		t.Fatalf("session display = %q, want tokens", r.settings.ContextUsageDisplay)
+	}
+	if err := r.persistSettingsValue(path, "tokens"); err == nil {
+		t.Fatal("malformed settings file accepted a save")
+	}
+	r.refreshPresentation(console)
+	if got := r.footerSnapshot.ContextUsageLabel; got != "80k" {
+		t.Fatalf("session caption after save failure = %q, want 80k", got)
+	}
+	if got := r.footerSnapshot.ContextEstimate; got != "~80k/200k" {
+		t.Fatalf("session estimate after save failure = %q, want ~80k/200k", got)
+	}
+	if r.footerSnapshot.ContextPercent != 40 || r.contextTokens != 80000 || r.contextWindow != 200000 {
+		t.Fatalf("save failure changed context telemetry: percent=%v tokens=%v window=%v",
+			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, malformed) {
+		t.Fatalf("failed save changed the malformed file: %q", data)
 	}
 }
 

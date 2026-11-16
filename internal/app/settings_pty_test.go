@@ -348,7 +348,7 @@ func TestActualAppModelThinkingDefaults(t *testing.T) {
 	openLastSettingsRow := func(session *settingsAppSession) {
 		session.write("/settings\r")
 		session.wait("Auto-compact")
-		session.write(strings.Repeat("\x1b[B", 9))
+		session.write(strings.Repeat("\x1b[B", 10))
 		session.waitScreen("→ Default thinking level per model")
 		session.write("\r")
 	}
@@ -364,6 +364,9 @@ func TestActualAppModelThinkingDefaults(t *testing.T) {
 	// Down once from the first supported level.
 	session.waitScreen("minimal")
 	session.write("\x1b[B\r")
+	// Saving reopens settings at the first row; return to the last row to read
+	// its updated summary.
+	session.write(strings.Repeat("\x1b[B", 10))
 	session.waitScreen("1 configured")
 	session.write("\x03")
 	session.waitEditor()
@@ -481,13 +484,14 @@ func TestActualAppSaveThinkingDefault(t *testing.T) {
 	// not honor Ctrl+S. Cancel returns to settings.
 	session.write("/settings\r")
 	session.wait("Auto-compact")
-	session.write(strings.Repeat("\x1b[B", 9))
+	session.write(strings.Repeat("\x1b[B", 10))
 	session.waitScreen("→ Default thinking level per model")
 	session.write("\r")
 	session.waitScreen("local-model")
 	session.write("\r")
 	session.waitScreen("Thinking levels")
 	session.write("\x13\x03")
+	session.write(strings.Repeat("\x1b[B", 10))
 	session.waitScreen("Default thinking level per model")
 	session.write("\x03")
 	session.waitEditor()

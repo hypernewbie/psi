@@ -60,6 +60,10 @@ func (r *runtime) settingsEntries() []settingsEntry {
 	if r.settings.HideThinkingBlock {
 		hideThinkingSelected = 1
 	}
+	contextUsageSelected := 0
+	if r.settings.ContextUsageDisplay == "tokens" {
+		contextUsageSelected = 1
+	}
 	themeValues, themeSelected := r.themeSettingValues()
 	colorMode := r.settings.TerminalTrueColor
 	if colorMode == "" {
@@ -257,6 +261,27 @@ func (r *runtime) settingsEntries() []settingsEntry {
 					return fmt.Errorf("invalid color mode")
 				}
 				return r.applyColorMode(console, setting)
+			},
+		},
+		{
+			item: terminal.SettingsItem{
+				ID:          "context-usage",
+				Label:       "Context usage",
+				Description: "Footer context caption: percent or compact tokens.",
+				Values: []terminal.SettingsValue{
+					{Label: "percent", Value: "percent"},
+					{Label: "tokens", Value: "tokens"},
+				},
+				Selected: contextUsageSelected,
+			},
+			persist: []string{"contextUsageDisplay"},
+			apply: func(r *runtime, _ *terminal.Console, value terminal.SettingsValue) error {
+				display, ok := value.Value.(string)
+				if !ok || (display != "percent" && display != "tokens") {
+					return fmt.Errorf("invalid context usage value")
+				}
+				r.settings.ContextUsageDisplay = display
+				return nil
 			},
 		},
 		{

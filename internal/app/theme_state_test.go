@@ -69,6 +69,12 @@ func TestThemeStateReloadIsTransactionalAndRetainsLastGoodSnapshot(t *testing.T)
 	if good == initial || good.Name != "selected" {
 		t.Fatalf("successful reload did not install a resolved snapshot: %p %p %q", initial, good, good.Name)
 	}
+	// A valid display value must not install when theme resolution fails later
+	// in the same reload.
+	r.settings.ContextUsageDisplay = "tokens"
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"theme":"selected","contextUsageDisplay":"percent"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(`{"name":"selected","colors":{"accent":"not-a-color"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +83,84 @@ func TestThemeStateReloadIsTransactionalAndRetainsLastGoodSnapshot(t *testing.T)
 	}
 	if r.theme != good {
 		t.Fatal("failed reload replaced the last good immutable theme")
+	}
+	if r.settings.ContextUsageDisplay != "tokens" {
+		t.Fatalf("failed theme reload installed a new display value: %q", r.settings.ContextUsageDisplay)
+	}
+}
+
+func TestContextUsageDisplayReloadIsTransactional(t *testing.T) {
+	r, console := testContextUsageRuntime(t, "tokens")
+	settingsPath := filepath.Join(r.agentDir, "settings.json")
+	reload := func() {
+		t.Helper()
+		if err := r.reloadTheme(); err != nil {
+			t.Fatal(err)
+		}
+		r.refreshPresentation(console)
+	}
+
+	writeAppFile(t, settingsPath, `{"theme":"dark","contextUsageDisplay":"tokens"}`)
+	reload()
+	if got := r.footerSnapshot.ContextUsageLabel; got != "80k" {
+		t.Fatalf("valid token reload caption = %q, want 80k", got)
+	}
+
+	writeAppFile(t, settingsPath, `{"theme":"dark","contextUsageDisplay":"percent"}`)
+	reload()
+	if r.settings.ContextUsageDisplay != "percent" {
+		t.Fatalf("valid percent reload setting = %q", r.settings.ContextUsageDisplay)
+	}
+	if got := r.footerSnapshot.ContextUsageLabel; got != "40.0%" {
+		t.Fatalf("valid percent reload caption = %q, want 40.0%%", got)
+	}
+
+	writeAppFile(t, settingsPath, `{"theme":"dark","contextUsageDisplay":"tokens"}`)
+	reload()
+	if got := r.footerSnapshot.ContextUsageLabel; got != "80k" {
+		t.Fatalf("token reload before key removal = %q, want 80k", got)
+	}
+	writeAppFile(t, settingsPath, `{"theme":"dark"}`)
+	reload()
+	if r.settings.ContextUsageDisplay != "percent" {
+		t.Fatalf("removed key did not restore the default: %q", r.settings.ContextUsageDisplay)
+	}
+	if got := r.footerSnapshot.ContextUsageLabel; got != "40.0%" {
+		t.Fatalf("removed key caption = %q, want 40.0%%", got)
+	}
+
+	writeAppFile(t, settingsPath, `{"theme":"dark","contextUsageDisplay":"tokens"}`)
+	reload()
+	baselinePercent := r.footerSnapshot.ContextPercent
+	baselineTokens := r.contextTokens
+	baselineWindow := r.contextWindow
+	baselineLeaf := r.store.LeafID()
+	for _, invalid := range []struct {
+		name string
+		doc  string
+	}{
+		{name: "malformed", doc: `{"theme":"dark"`},
+		{name: "invalid enum", doc: `{"theme":"dark","contextUsageDisplay":"bogus"}`},
+		{name: "null", doc: `{"theme":"dark","contextUsageDisplay":null}`},
+	} {
+		t.Run(invalid.name, func(t *testing.T) {
+			writeAppFile(t, settingsPath, invalid.doc)
+			if err := r.reloadTheme(); err == nil {
+				t.Fatal("invalid reload succeeded")
+			}
+			r.refreshPresentation(console)
+			if r.settings.ContextUsageDisplay != "tokens" {
+				t.Fatalf("rejected reload changed the setting to %q", r.settings.ContextUsageDisplay)
+			}
+			if got := r.footerSnapshot.ContextUsageLabel; got != "80k" {
+				t.Fatalf("rejected reload caption = %q, want 80k", got)
+			}
+			if r.footerSnapshot.ContextPercent != baselinePercent || r.contextTokens != baselineTokens ||
+				r.contextWindow != baselineWindow || r.store.LeafID() != baselineLeaf {
+				t.Fatalf("rejected reload changed context telemetry: percent=%v tokens=%v/%v leaf=%q",
+					r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, r.store.LeafID())
+			}
+		})
 	}
 }
 

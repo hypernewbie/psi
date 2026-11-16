@@ -164,7 +164,7 @@ func TestFooterSanitizesGitBranch(t *testing.T) {
 func TestFooterDrawsInlineContextBar(t *testing.T) {
 	rows, widths := formatFooter(PresentationSnapshot{
 		Usage: "↑27k ↓5.1k", ContextEstimate: "~2.4%/1.0M",
-		ContextPercent: 2.4, ContextPercentLabel: "2.4%", ContextWindowLabel: "1.0M",
+		ContextPercent: 2.4, ContextUsageLabel: "2.4%", ContextWindowLabel: "1.0M",
 		AutoCompact: true, Model: "m", NoColor: true,
 	}, 80, 3, true)
 	line := Sanitize(rows[1])
@@ -244,7 +244,7 @@ func TestFooterClampsInvalidContextPercent(t *testing.T) {
 		{math.Inf(1), "\x1b[31m"},
 	} {
 		rows, _ := formatFooter(PresentationSnapshot{
-			ContextPercent: tc.percent, ContextPercentLabel: "x%", ContextWindowLabel: "1M", Model: "m",
+			ContextPercent: tc.percent, ContextUsageLabel: "x%", ContextWindowLabel: "1M", Model: "m",
 		}, 80, 3, false)
 		if !strings.Contains(rows[1], tc.color+" ~x% / 1M") {
 			t.Errorf("percent %v colored the label without %q: %q", tc.percent, tc.color, rows[1])
@@ -276,7 +276,7 @@ func TestFooterContextBarColorBands(t *testing.T) {
 		{100, []string{green, yellow, red}, nil},
 	} {
 		rows, _ := formatFooter(PresentationSnapshot{
-			ContextPercent: tc.percent, ContextPercentLabel: "x%", ContextWindowLabel: "1M", Model: "m",
+			ContextPercent: tc.percent, ContextUsageLabel: "x%", ContextWindowLabel: "1M", Model: "m",
 		}, 80, 3, false)
 		for _, want := range tc.want {
 			if !strings.Contains(rows[1], want) {
@@ -291,6 +291,71 @@ func TestFooterContextBarColorBands(t *testing.T) {
 	}
 }
 
+func TestFooterDrawsTokenContextCaption(t *testing.T) {
+	rows, widths := formatFooter(PresentationSnapshot{
+		Usage: "↑79k ↓1.0k", ContextEstimate: "~80k/200k",
+		ContextPercent: 40, ContextUsageLabel: "80k", ContextWindowLabel: "200k",
+		Model: "m", NoColor: true,
+	}, 80, 3, true)
+	line := Sanitize(rows[1])
+	for _, want := range []string{"↑79k ↓1.0k [", "] ~80k / 200k", "░"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("token context bar missing %q: %q", want, line)
+		}
+	}
+	if width := widths[1]; width > 79 {
+		t.Fatalf("token footer exceeded its wrap-safe width: %d", width)
+	}
+}
+
+func TestFooterFallsBackToTokenTextOnNarrowTerminal(t *testing.T) {
+	rows, widths := formatFooter(PresentationSnapshot{
+		Usage: "↑79k ↓1.0k", ContextEstimate: "~80k/200k",
+		ContextPercent: 40, ContextUsageLabel: "80k", ContextWindowLabel: "200k",
+		Model: "m", NoColor: true,
+	}, 24, 3, true)
+	line := Sanitize(rows[1])
+	if strings.Contains(line, "[") || !strings.Contains(line, "~80k/200k") {
+		t.Fatalf("narrow footer did not fall back to the token estimate: %q", line)
+	}
+	if width := widths[1]; width > 23 {
+		t.Fatalf("narrow token footer exceeded its wrap-safe width: %d", width)
+	}
+}
+
+func TestFooterTokenCaptionFitsOneColumnViewport(t *testing.T) {
+	rows, widths := formatFooter(PresentationSnapshot{
+		Usage: "↑79k ↓1.0k", ContextEstimate: "~80k/200k",
+		ContextPercent: 40, ContextUsageLabel: "80k", ContextWindowLabel: "200k",
+		Model: "m", NoColor: true,
+	}, 1, 3, true)
+	if len(rows) != len(widths) {
+		t.Fatalf("rows=%d widths=%d", len(rows), len(widths))
+	}
+	for i, width := range widths {
+		if width > max(1, 1-1) {
+			t.Fatalf("one-column viewport row %d width=%d", i, width)
+		}
+	}
+}
+
+func TestFooterTokenCaptionPreservesCountOutsideBarRange(t *testing.T) {
+	zero, _ := formatFooter(PresentationSnapshot{
+		ContextPercent: 0, ContextUsageLabel: "0", ContextWindowLabel: "200k", Model: "m", NoColor: true,
+	}, 80, 3, true)
+	if line := Sanitize(zero[1]); !strings.Contains(line, "] ~0 / 200k") {
+		t.Fatalf("zero token label missing: %q", line)
+	}
+
+	above, _ := formatFooter(PresentationSnapshot{
+		ContextPercent: 150, ContextUsageLabel: "250k", ContextWindowLabel: "200k", Model: "m",
+	}, 80, 3, false)
+	line := above[1]
+	if !strings.Contains(line, "\x1b[31m ~250k / 200k") {
+		t.Fatalf("usage above the window did not keep the token count with a red label: %q", line)
+	}
+}
+
 func TestFooterColorsContextLabelByBand(t *testing.T) {
 	for _, tc := range []struct {
 		percent float64
@@ -300,9 +365,12 @@ func TestFooterColorsContextLabelByBand(t *testing.T) {
 		{12, "12.0%", "\x1b[32m"},
 		{55, "55.0%", "\x1b[33m"},
 		{99.9, "99.9%", "\x1b[31m"},
+		{12, "80k", "\x1b[32m"},
+		{55, "80k", "\x1b[33m"},
+		{99.9, "80k", "\x1b[31m"},
 	} {
 		rows, _ := formatFooter(PresentationSnapshot{
-			ContextPercent: tc.percent, ContextPercentLabel: tc.label, ContextWindowLabel: "1.0M", Model: "m",
+			ContextPercent: tc.percent, ContextUsageLabel: tc.label, ContextWindowLabel: "1.0M", Model: "m",
 		}, 80, 3, false)
 		want := tc.color + " ~" + tc.label + " / 1.0M"
 		if !strings.Contains(rows[1], want) {
@@ -314,7 +382,7 @@ func TestFooterColorsContextLabelByBand(t *testing.T) {
 func TestFooterFallsBackToTextOnNarrowTerminal(t *testing.T) {
 	rows, widths := formatFooter(PresentationSnapshot{
 		Usage: "↑27k ↓5.1k", ContextEstimate: "~2.4%/1.0M",
-		ContextPercent: 2.4, ContextPercentLabel: "2.4%", ContextWindowLabel: "1.0M",
+		ContextPercent: 2.4, ContextUsageLabel: "2.4%", ContextWindowLabel: "1.0M",
 		Model: "m", NoColor: true,
 	}, 24, 3, true)
 	line := Sanitize(rows[1])

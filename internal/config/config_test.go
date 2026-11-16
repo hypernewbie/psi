@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"psi/internal/testutil/leakcheck"
@@ -106,6 +107,84 @@ func TestThemeSettingDefaultsAndRejectsInvalidShapes(t *testing.T) {
 		writeJSON(t, path, value)
 		if _, err := LoadSettings(path, "", false); err == nil {
 			t.Errorf("accepted invalid theme settings %s", value)
+		}
+	}
+}
+
+func TestContextUsageDisplaySettings(t *testing.T) {
+	dir := t.TempDir()
+	defaultUser := filepath.Join(dir, "default.json")
+	writeJSON(t, defaultUser, `{}`)
+	defaults, err := LoadSettings(defaultUser, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.Settings.ContextUsageDisplay != "percent" {
+		t.Fatalf("missing key default = %q, want percent", defaults.Settings.ContextUsageDisplay)
+	}
+	if _, recorded := defaults.Sources["contextUsageDisplay"]; recorded {
+		t.Fatalf("missing key recorded a source: %v", defaults.Sources)
+	}
+
+	user := filepath.Join(dir, "user.json")
+	project := filepath.Join(dir, "workspace", ".pi", "settings.json")
+	writeJSON(t, user, `{"contextUsageDisplay":"tokens"}`)
+	writeJSON(t, project, `{"contextUsageDisplay":"percent"}`)
+	trusted, err := LoadSettings(user, project, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted.Settings.ContextUsageDisplay != "percent" {
+		t.Fatalf("trusted project value = %q, want percent", trusted.Settings.ContextUsageDisplay)
+	}
+	if got := trusted.Sources["contextUsageDisplay"]; got != "project:"+project {
+		t.Fatalf("trusted source = %q, want project file", got)
+	}
+
+	writeJSON(t, project, `{"theme":"dark"}`)
+	inherited, err := LoadSettings(user, project, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inherited.Settings.ContextUsageDisplay != "tokens" {
+		t.Fatalf("project without the key changed the user value: %q", inherited.Settings.ContextUsageDisplay)
+	}
+	if got := inherited.Sources["contextUsageDisplay"]; got != "user:"+user {
+		t.Fatalf("inherited source = %q, want user file", got)
+	}
+
+	writeJSON(t, project, `{"contextUsageDisplay":"bogus"}`)
+	denied, err := LoadSettings(user, project, false)
+	if err != nil {
+		t.Fatalf("denied invalid project setting caused a load error: %v", err)
+	}
+	if denied.Settings.ContextUsageDisplay != "tokens" {
+		t.Fatalf("denied project changed the user value: %q", denied.Settings.ContextUsageDisplay)
+	}
+	if got := denied.Sources["contextUsageDisplay"]; got != "user:"+user {
+		t.Fatalf("denied source = %q, want user file", got)
+	}
+}
+
+func TestContextUsageDisplayRejectsInvalidValues(t *testing.T) {
+	for _, value := range []string{
+		`""`,
+		`"bogus"`,
+		`"Percent"`,
+		`" tokens"`,
+		`"tokens "`,
+		`null`,
+		`1`,
+	} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		writeJSON(t, path, `{"contextUsageDisplay":`+value+`}`)
+		_, err := LoadSettings(path, "", false)
+		if err == nil {
+			t.Errorf("accepted invalid contextUsageDisplay %s", value)
+			continue
+		}
+		if !strings.Contains(err.Error(), "contextUsageDisplay") || !strings.Contains(err.Error(), path) {
+			t.Errorf("error for %s does not name the setting and source file: %v", value, err)
 		}
 	}
 }

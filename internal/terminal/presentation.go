@@ -288,23 +288,23 @@ func (s DisplaySettings) transcriptIndent() string {
 }
 
 type PresentationSnapshot struct {
-	Display             DisplaySettings
-	WorkingDirectory    string
-	HomeDirectory       string
-	SessionName         string
-	GitBranch           string
-	Usage               string  // only locally stored counters; empty means unavailable
-	ContextEstimate     string  // explicitly marked approximation, e.g. ~8%/100k
-	ContextPercent      float64 // numeric estimate used to fill the inline bar
-	ContextPercentLabel string  // preformatted percentage, e.g. 2.4%
-	ContextWindowLabel  string  // preformatted context window, e.g. 1.0M
-	AutoCompact         bool
-	Provider            string
-	ProviderCount       int
-	Model               string
-	Thinking            string
-	NoColor             bool
-	Theme               *pitheme.Theme
+	Display            DisplaySettings
+	WorkingDirectory   string
+	HomeDirectory      string
+	SessionName        string
+	GitBranch          string
+	Usage              string  // only locally stored counters; empty means unavailable
+	ContextEstimate    string  // explicitly marked approximation, e.g. ~8%/100k
+	ContextPercent     float64 // numeric estimate used to fill the inline bar
+	ContextUsageLabel  string  // preformatted percentage (2.4%) or compact token count (80k)
+	ContextWindowLabel string  // preformatted context window, e.g. 1.0M
+	AutoCompact        bool
+	Provider           string
+	ProviderCount      int
+	Model              string
+	Thinking           string
+	NoColor            bool
+	Theme              *pitheme.Theme
 }
 
 type EditorView struct {
@@ -452,8 +452,8 @@ func footerStatsRow(snapshot PresentationSnapshot, width int) StyledRow {
 	if snapshot.AutoCompact && snapshot.ContextEstimate != "" {
 		auto = " (auto)"
 	}
-	if snapshot.ContextPercentLabel != "" && snapshot.ContextWindowLabel != "" {
-		label := "~" + SanitizeStatusRow(snapshot.ContextPercentLabel) + " / " + SanitizeStatusRow(snapshot.ContextWindowLabel)
+	if snapshot.ContextUsageLabel != "" && snapshot.ContextWindowLabel != "" {
+		label := "~" + SanitizeStatusRow(snapshot.ContextUsageLabel) + " / " + SanitizeStatusRow(snapshot.ContextWindowLabel)
 		avail := width - CellWidth(label) - CellWidth(auto) - 1
 		if usage != "" {
 			avail -= CellWidth(usage) + 1
