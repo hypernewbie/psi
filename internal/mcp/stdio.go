@@ -51,29 +51,41 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 		}
 		cmd.Dir = cwd
 	}
-	stdin, err := cmd.StdinPipe()
+	// Own the pipes instead of using Cmd's pipe helpers: Wait closes their
+	// readers on exit and can discard final frames the SDK has not read yet.
+	stdinReader, stdin, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	defer stdinReader.Close()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, err
 	}
-	stderr, err := cmd.StderrPipe()
+	defer stdoutWriter.Close()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, err
+	}
+	defer stderrWriter.Close()
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinReader, stdoutWriter, stderrWriter
+	c := &stdioConnection{
+		cmd:        cmd,
+		stdin:      stdin,
+		stdout:     bufio.NewReaderSize(stdout, 64<<10),
+		stdoutPipe: stdout,
+		stderrPipe: stderr,
+		writeCh:    make(chan struct{}, 1),
+		done:       make(chan struct{}),
+		stderr:     &ringBuffer{limit: maxStderrRetain},
 	}
 	prepareCommand(cmd)
 	if err := cmd.Start(); err != nil {
+		c.closePipes()
 		return nil, err
-	}
-	c := &stdioConnection{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  bufio.NewReaderSize(stdout, 64<<10),
-		writeCh: make(chan struct{}, 1),
-		done:    make(chan struct{}),
-		stderr:  &ringBuffer{limit: maxStderrRetain},
 	}
 	c.writeCh <- struct{}{}
 	go c.drainStderr(stderr)
@@ -82,12 +94,14 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 }
 
 type stdioConnection struct {
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  *bufio.Reader
-	writeCh chan struct{}
-	done    chan struct{}
-	stderr  *ringBuffer
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     *bufio.Reader
+	stdoutPipe *os.File
+	stderrPipe *os.File
+	writeCh    chan struct{}
+	done       chan struct{}
+	stderr     *ringBuffer
 
 	writeMu   sync.Mutex
 	stderrMu  sync.Mutex
@@ -195,6 +209,7 @@ func (c *stdioConnection) Write(ctx context.Context, msg jsonrpc.Message) error 
 func (c *stdioConnection) Close() error {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
+		defer c.closePipes()
 		_ = c.stdin.Close()
 		select {
 		case <-c.done:
@@ -223,13 +238,21 @@ func (c *stdioConnection) Close() error {
 func (c *stdioConnection) abort() {
 	c.closed.Store(true)
 	c.closeOnce.Do(func() {
-		_ = c.stdin.Close()
+		c.closePipes()
 		signalCommand(c.cmd, true)
 	})
 }
 
+func (c *stdioConnection) closePipes() {
+	_ = c.stdin.Close()
+	_ = c.stdoutPipe.Close()
+	_ = c.stderrPipe.Close()
+}
+
 func (c *stdioConnection) wait() {
 	err := c.cmd.Wait()
+	c.closed.Store(true)
+	_ = c.stdin.Close()
 	// Close can return as soon as done closes. Signal remaining owned
 	// descendants before publishing exit, even if the launcher exits first.
 	terminateCommand(c.cmd)
