@@ -19,7 +19,7 @@ import (
 // This delivered-app acceptance check observes asynchronous catalog publication
 // through /mcp. Unlike the default-suite startup tests, it needs readiness polling.
 func TestActualAppMCPCallFailureKeepsSessionUsable(t *testing.T) {
-	for _, mode := range []string{"crash", "hang"} {
+	for _, mode := range []string{"crash", "hang", "reply-exit"} {
 		t.Run(mode, func(t *testing.T) {
 			home, work := t.TempDir(), t.TempDir()
 			agentDir := filepath.Join(home, "agent")
@@ -78,8 +78,8 @@ func TestActualAppMCPCallFailureKeepsSessionUsable(t *testing.T) {
 			} else {
 				child.exited(t)
 				replacement = acceptMCPFailureChild(t, listener)
-				// Reconnect initialization remains gated. No failed call can be
-				// replayed to the replacement while the original turn settles.
+				// Reconnect initialization remains gated. No completed call can
+				// be replayed while the original turn settles.
 				q.wait("MCP_CHAT_2")
 				q.prompt()
 				lastReply = 3
@@ -100,7 +100,7 @@ func TestActualAppMCPCallFailureKeepsSessionUsable(t *testing.T) {
 			if calls.Load() != int32(lastReply) {
 				t.Fatalf("provider requests = %d; want %d", calls.Load(), lastReply)
 			}
-			assertMCPFailureSettled(t, sessions, mode)
+			assertMCPCallSettled(t, sessions, mode)
 		})
 	}
 }
@@ -127,7 +127,7 @@ func waitMCPFailureReady(t *testing.T, q *reviewPTY) {
 	}
 }
 
-func assertMCPFailureSettled(t *testing.T, sessions, mode string) {
+func assertMCPCallSettled(t *testing.T, sessions, mode string) {
 	t.Helper()
 	store, err := session.OpenFile(findSessionFile(t, sessions), "", false)
 	if err != nil {
@@ -142,18 +142,21 @@ func assertMCPFailureSettled(t *testing.T, sessions, mode string) {
 		if message.Role != "toolResult" || result == nil || result.ToolCallID != "failure-call" {
 			continue
 		}
-		if !result.IsError {
-			t.Fatalf("failed tool persisted as success: %+v", result)
-		}
-		want := "cancelled"
-		if mode == "crash" {
+		want, wantError := "cancelled", true
+		switch mode {
+		case "crash":
 			want = "outcome may be unknown"
+		case "reply-exit":
+			want, wantError = "MCP_FINAL_REPLY", false
+		}
+		if result.IsError != wantError {
+			t.Fatalf("tool result error = %v; want %v: %+v", result.IsError, wantError, result)
 		}
 		encoded, _ := json.Marshal(result.Content)
 		if !strings.Contains(string(encoded), want) {
-			t.Fatalf("failed tool result lacks %q: %s", want, encoded)
+			t.Fatalf("tool result lacks %q: %s", want, encoded)
 		}
 		return
 	}
-	t.Fatal("failed tool never settled in durable history")
+	t.Fatal("MCP tool never settled in durable history")
 }

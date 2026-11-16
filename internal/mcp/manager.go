@@ -141,6 +141,7 @@ type connection struct {
 	closed              atomic.Bool
 	closing             atomic.Bool
 	retired             atomic.Bool
+	sessionEnded        atomic.Bool
 	transient           atomic.Bool
 	listenerUnavailable atomic.Bool
 	setupDisarm         func() bool
@@ -974,6 +975,9 @@ func (m *Manager) connectionLost(conn *connection, err error) {
 
 func (c *connection) watch() {
 	err := c.session.Wait()
+	// Wait settles every pending SDK call. Preserve those results instead of
+	// racing their consumers with cancellation during connection retirement.
+	c.sessionEnded.Store(true)
 	if c.closing.Load() || c.closed.Load() {
 		return
 	}
@@ -1218,7 +1222,11 @@ func (c *connection) call(parent context.Context, tool Tool, inv tools.Invocatio
 	hard := timeout * 10
 	callCtx, cancel := context.WithTimeout(parent, hard)
 	defer cancel()
-	stopConn := context.AfterFunc(c.ctx, cancel)
+	stopConn := context.AfterFunc(c.ctx, func() {
+		if !c.sessionEnded.Load() {
+			cancel()
+		}
+	})
 	defer stopConn()
 
 	state := &callState{token: fmt.Sprintf("psi-%d-%d", c.epoch, c.manager.callSeq.Add(1)), timeout: timeout}

@@ -4,6 +4,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -73,14 +74,33 @@ func TestMCPFailureProcess(t *testing.T) {
 		if mode == "crash" {
 			os.Exit(23)
 		}
+		if mode == "reply-exit" {
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "MCP_FINAL_REPLY"}}}, nil
+		}
 		// Deliberately ignore the request context and cancellation notification.
 		<-make(chan struct{})
 		return nil, nil
 	})
-	if err := server.Run(context.Background(), &sdk.StdioTransport{}); err != nil {
+	var transport sdk.Transport = &sdk.StdioTransport{}
+	if mode == "reply-exit" {
+		transport = &sdk.IOTransport{Reader: os.Stdin, Writer: mcpReplyExitWriter{os.Stdout}}
+	}
+	if err := server.Run(context.Background(), transport); err != nil {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// Exit only after the complete newline-delimited reply reaches the OS pipe.
+// Exiting in the handler would stop the SDK before it writes the response.
+type mcpReplyExitWriter struct{ *os.File }
+
+func (w mcpReplyExitWriter) Write(data []byte) (int, error) {
+	n, err := w.File.Write(data)
+	if err == nil && n == len(data) && bytes.HasSuffix(data, []byte("\n")) && bytes.Contains(data, []byte(`"MCP_FINAL_REPLY"`)) {
+		os.Exit(0)
+	}
+	return n, err
 }
 
 type mcpFailureChild struct {

@@ -170,9 +170,11 @@ A queued call that has not reached the server reports caller cancellation,
 connection withdrawal, or admission timeout separately. It does not claim an
 unknown server outcome. Cancellation releases the admission capacity for that call.
 
-A server exit during a tool call produces an error. The result warns that the
-outcome can be unknown. Connection cleanup does not turn a crash into caller
-cancellation. A stalled call waits for its timeout or caller cancellation.
+If a server exits before its tool reply is complete, the call produces an error
+and warns that the outcome can be unknown. Once the SDK has settled its pending
+replies, session shutdown does not discard them. Connection cleanup
+does not turn a crash into caller cancellation. Stop still cancels unfinished
+calls. A stalled call waits for its timeout or caller cancellation.
 The editor remains usable while that turn waits.
 
 ## Security
@@ -233,12 +235,16 @@ an error for an incomplete trailing frame.
 Fake-time SDK checks cover progress-renewed idle deadlines, the hard deadline,
 and admission fairness between servers. Queued-call checks cover cancellation,
 caller deadlines, idle deadlines, and connection withdrawal at both admission
-stages. HTTP checks use request-entry events for cancellation and stalled DELETE.
+stages. A gated SDK check retires a connection before callers consume their
+completed replies. A separate check requires Stop to release an unfinished call
+while its handler ignores cancellation. HTTP checks use request-entry events
+for cancellation and stalled DELETE.
 They require terminal failure after the finite allowance for invalid SSE streams.
 SSE ping replies prove that the size cap applies per event, not per connection.
 
-The tagged acceptance suite covers a mid-call crash and a handler that ignores
-cancellation. It checks cancellation, continued chat, durable error results,
+The tagged acceptance suite covers a mid-call crash, a handler that ignores
+cancellation, and a server that exits immediately after its complete reply.
+It checks cancellation, continued chat, durable error or success results,
 no replay during a gated reconnect, and process cleanup. This check polls
 `/mcp` for initial catalog readiness. It runs in `stress.yml`, not routine CI.
 
