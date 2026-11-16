@@ -466,6 +466,9 @@ func (m *Manager) acceptConfigLocked(cfg *Config, input Input, resolutions map[s
 		old.cfg = server
 		old.reconnects = 0
 		old.catalog = recomputeExposure(old.catalog, server)
+		if old.conn != nil {
+			old.conn.catalog = old.catalog
+		}
 		if old.status == serverStateDisabled {
 			old.status = serverStateConnecting
 		}
@@ -871,6 +874,8 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 	state.status = serverStateReady
 	state.errClass = ""
 	state.refreshWarning = ""
+	// Setup may predate an exposure-only reload that preserves this epoch.
+	conn.catalog = recomputeExposure(conn.catalog, state.cfg)
 	state.catalog = conn.catalog
 	state.listenerUnavailable = conn.listenerUnavailable.Load()
 	m.pending += 2

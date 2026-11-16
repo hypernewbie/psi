@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -576,7 +578,173 @@ func TestManagerServerQueueDoesNotStarveAnotherServer(t *testing.T) {
 	})
 }
 
-func TestManagerRouteLiveRechecksExposure(t *testing.T) {
+func TestManagerReloadAppliesExposureToLiveCalls(t *testing.T) {
+	for _, policy := range []struct {
+		name     string
+		exposure Exposure
+		perTool  bool
+	}{
+		{name: "server-hidden", exposure: ExposureHidden},
+		{name: "tool-deferred", exposure: ExposureDeferred, perTool: true},
+	} {
+		for _, phase := range []string{"server", "manager"} {
+			t.Run(policy.name+"/"+phase, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					dir := t.TempDir()
+					writeConfig := func(exposure Exposure) string {
+						entry := map[string]any{"command": filepath.Join(dir, "must-not-start"), "timeout": time.Hour.Seconds(), "exposure": ExposureDirect}
+						if policy.perTool {
+							entry["toolExposure"] = map[string]Exposure{"echo": exposure}
+						} else {
+							entry["exposure"] = exposure
+						}
+						data, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"fixture": entry}})
+						if err != nil {
+							t.Fatal(err)
+						}
+						return writeTestFile(t, dir, "mcp.json", string(data))
+					}
+					input := Input{UserPath: writeConfig(ExposureDirect), Cwd: dir}
+					cfg, err := LoadConfig(input.UserPath, "", false)
+					if err != nil || len(cfg.Servers) != 1 {
+						t.Fatalf("initial config = %+v, %v", cfg, err)
+					}
+					var dispatched atomic.Int32
+					server := sdk.NewServer(&sdk.Implementation{Name: "fixture", Version: "1"}, nil)
+					server.AddTool(sdkTool("echo", "Count dispatches", map[string]any{"type": "object"}), func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+						dispatched.Add(1)
+						return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "echo"}}}, nil
+					})
+					manager := NewManager(Options{Input: input})
+					t.Cleanup(func() { manager.Stop(); manager.Wait() })
+					before := connectInMemoryServer(t, manager, "fixture", server, time.Hour)
+					tool, ok := before.Find("mcp__fixture__echo")
+					if !ok {
+						t.Fatal("echo tool missing")
+					}
+					// Install the accepted connection's file identity. Public reloads
+					// must reuse this SDK session, never start the sentinel command.
+					manager.servers["fixture"].cfg = cfg.Servers[0]
+					conn := manager.servers["fixture"].conn
+					manager.Start()
+					synctest.Wait()
+					gate := conn.permits
+					if phase == "manager" {
+						gate = manager.callSlot
+					}
+					for range cap(gate) {
+						gate <- struct{}{}
+					}
+					releaseGate := sync.OnceFunc(func() {
+						for range cap(gate) {
+							<-gate
+						}
+					})
+					defer releaseGate()
+					done := make(chan tools.Result, 1)
+					go func() { done <- manager.Call(t.Context(), tool, tools.Invocation{Name: tool.Name}) }()
+					synctest.Wait()
+					select {
+					case result := <-done:
+						t.Fatalf("call bypassed admission gate: %+v", result)
+					default:
+					}
+					writeConfig(policy.exposure)
+					manager.Reload(input)
+					synctest.Wait()
+					if _, ok := manager.Snapshot().Find(tool.Name); ok {
+						t.Fatal("reload still declares the withdrawn tool")
+					}
+					if old, ok := before.Find(tool.Name); !ok || old.Exposure != ExposureDirect {
+						t.Fatal("reload mutated the old request snapshot")
+					}
+					releaseGate()
+					queued := <-done
+					captured := manager.Call(t.Context(), tool, tools.Invocation{Name: tool.Name})
+					for name, result := range map[string]tools.Result{"queued": queued, "captured": captured} {
+						if !result.IsError || len(result.Content) != 1 || result.Content[0].Text != "MCP tool fixture/echo is unavailable (stale)" {
+							t.Errorf("%s call after exposure withdrawal = %+v", name, result)
+						}
+					}
+					if got := dispatched.Load(); got != 0 {
+						t.Errorf("withdrawn tool reached the server %d times", got)
+					}
+					writeConfig(ExposureDirect)
+					manager.Reload(input)
+					synctest.Wait()
+					fresh, ok := manager.Snapshot().Find(tool.Name)
+					if !ok || fresh.Epoch != tool.Epoch || manager.servers["fixture"].conn != conn {
+						t.Fatal("exposure reload replaced the connection or lost the tool")
+					}
+					result := manager.Call(t.Context(), fresh, tools.Invocation{Name: fresh.Name})
+					if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "echo" || dispatched.Load() != 1 {
+						t.Fatalf("re-enabled tool call = %+v; dispatches = %d", result, dispatched.Load())
+					}
+					if len(conn.permits) != 0 || len(manager.callSlot) != 0 {
+						t.Fatal("exposure withdrawal retained admission capacity")
+					}
+				})
+			})
+		}
+	}
+}
+
+func TestManagerPublicationUsesReloadedExposure(t *testing.T) {
+	for _, policy := range []struct{ before, after Exposure }{
+		{before: ExposureDirect, after: ExposureHidden},
+		{before: ExposureHidden, after: ExposureDirect},
+	} {
+		t.Run(string(policy.before)+"-to-"+string(policy.after), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var dispatched atomic.Int32
+				server := sdk.NewServer(&sdk.Implementation{Name: "fixture", Version: "1"}, nil)
+				server.AddTool(sdkTool("echo", "Count dispatches", map[string]any{"type": "object"}), func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+					dispatched.Add(1)
+					return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "echo"}}}, nil
+				})
+				manager := NewManager(Options{})
+				t.Cleanup(func() { manager.Stop(); manager.Wait() })
+				snapshot := connectInMemoryServer(t, manager, "fixture", server, time.Hour)
+				tool, ok := snapshot.Find("mcp__fixture__echo")
+				if !ok {
+					t.Fatal("echo tool missing")
+				}
+				state := manager.servers["fixture"]
+				conn := state.conn
+				// Model setup paused after discovery but before publication. An
+				// exposure-only reload keeps that setup's epoch, so publication
+				// must apply the accepted policy rather than its captured policy.
+				manager.mu.Lock()
+				state.cfg.Exposure = policy.before
+				conn.catalog = recomputeExposure(conn.catalog, state.cfg)
+				state.conn, state.catalog = nil, nil
+				state.status, state.setupActive = serverStateConnecting, true
+				reloaded := state.cfg
+				reloaded.Exposure = policy.after
+				manager.acceptConfigLocked(&Config{Servers: []Server{reloaded}}, Input{}, nil)
+				manager.mu.Unlock()
+				manager.publishConnection(state, tool.Epoch, conn)
+				synctest.Wait()
+				_, declared := manager.Snapshot().Find(tool.Name)
+				wantDeclared := policy.after == ExposureDirect
+				if declared != wantDeclared {
+					t.Errorf("publication declares tool = %v; want %v", declared, wantDeclared)
+				}
+				result := manager.Call(t.Context(), tool, tools.Invocation{Name: tool.Name})
+				wantText, wantCalls := "MCP tool fixture/echo is unavailable (stale)", int32(0)
+				if wantDeclared {
+					wantText, wantCalls = "echo", 1
+				}
+				wantError := !wantDeclared
+				if result.IsError != wantError || len(result.Content) != 1 || result.Content[0].Text != wantText || dispatched.Load() != wantCalls {
+					t.Fatalf("call after publication = %+v; dispatches = %d", result, dispatched.Load())
+				}
+			})
+		})
+	}
+}
+
+func TestManagerRouteLiveRechecksRawName(t *testing.T) {
 	manager := NewManager(Options{})
 	conn := &connection{}
 	tool := Tool{Name: "mcp__s__t", RawName: "t", Server: "s", Epoch: 1, Exposure: ExposureDirect}
@@ -585,11 +753,6 @@ func TestManagerRouteLiveRechecksExposure(t *testing.T) {
 	if !manager.routeLive(tool, conn) {
 		t.Fatal("declared route was rejected")
 	}
-	conn.catalog[0].Exposure = ExposureHidden
-	if manager.routeLive(tool, conn) {
-		t.Fatal("hidden route passed the post-admission check")
-	}
-	conn.catalog[0] = tool
 	conn.catalog[0].RawName = "other"
 	if manager.routeLive(tool, conn) {
 		t.Fatal("replaced raw route passed the post-admission check")

@@ -164,7 +164,9 @@ the previous accepted config. An invalid entry is withdrawn, not silently run
 with its old definition. A failed re-list keeps the last good catalog and
 reports a refresh warning. A lost connection withdraws its tools and may use at
 most two reconnect cycles. A successful `/reload` accepts the config and starts
-a fresh reconnect allowance.
+a fresh reconnect allowance. An exposure-only reload updates declarations and
+live routes without reconnecting. Calls recheck exposure after admission, and
+setup that finishes after the reload uses the latest accepted exposure policy.
 
 A queued call that has not reached the server reports caller cancellation,
 connection withdrawal, or admission timeout separately. It does not claim an
@@ -235,9 +237,11 @@ an error for an incomplete trailing frame.
 Fake-time SDK checks cover progress-renewed idle deadlines, the hard deadline,
 and admission fairness between servers. Queued-call checks cover cancellation,
 caller deadlines, idle deadlines, and connection withdrawal at both admission
-stages. A gated SDK check retires a connection before callers consume their
-completed replies. A separate check requires Stop to release an unfinished call
-while its handler ignores cancellation. HTTP checks use request-entry events
+stages. Exposure-reload checks require withdrawn tools to send no request,
+re-enabled tools to work on the same connection, and pending setup to publish
+the latest policy. A gated SDK check retires a connection before callers consume
+their completed replies. A separate check requires Stop to release an unfinished
+call while its handler ignores cancellation. HTTP checks use request-entry events
 for cancellation and stalled DELETE.
 They require terminal failure after the finite allowance for invalid SSE streams.
 SSE ping replies prove that the size cap applies per event, not per connection.
