@@ -389,7 +389,7 @@ func TestFooterContextUsageDisplay(t *testing.T) {
 		}
 	}
 
-	r.refreshPresentation(console)
+	r.draw(console)
 	assertCaption("zero-value", "40.0%", "~40.0%/200k")
 	firstPercent := r.footerSnapshot.ContextPercent
 	firstTokens, firstWindow := r.contextTokens, r.contextWindow
@@ -404,11 +404,14 @@ func TestFooterContextUsageDisplay(t *testing.T) {
 	}
 
 	r.settings.ContextUsageDisplay = "tokens"
-	r.refreshPresentation(console)
+	r.draw(console)
 	assertCaption("tokens", "80k", "~80k/200k")
+	if !strings.Contains(terminal.Sanitize(output.String()), "~80k / 200k") {
+		t.Fatal("token caption was not drawn")
+	}
 	key, snapshot := r.footerKey, r.footerSnapshot
 	bytesBeforeRedraw := output.Len()
-	r.refreshPresentation(console)
+	r.draw(console)
 	if r.footerKey != key || r.footerSnapshot != snapshot || output.Len() != bytesBeforeRedraw {
 		t.Fatalf("identical token redraw was not cached: key changed=%t bytes=%d", r.footerKey != key, output.Len()-bytesBeforeRedraw)
 	}
@@ -423,7 +426,7 @@ func TestFooterContextUsageDisplay(t *testing.T) {
 	}
 
 	r.settings.ContextUsageDisplay = "percent"
-	r.refreshPresentation(console)
+	r.draw(console)
 	assertCaption("explicit percent", "40.0%", "~40.0%/200k")
 	accounting, err = r.store.Accounting()
 	if err != nil {
@@ -437,6 +440,7 @@ func TestFooterContextUsageDisplay(t *testing.T) {
 }
 
 func TestFooterContextUsageAfterInterruptedTurn(t *testing.T) {
+	const interruptedInputTokens = 180000
 	r := testRuntime(t)
 	r.cfg.Model.ContextWindow = 200000
 	r.cfg.AutoCompact = false
@@ -456,7 +460,7 @@ func TestFooterContextUsageAfterInterruptedTurn(t *testing.T) {
 			StopReason: "end_turn",
 		}},
 		Errors: []error{nil, &provider.StreamInterrupt{
-			Partial: &provider.Response{Usage: provider.Usage{Input: 180000}},
+			Partial: &provider.Response{Usage: provider.Usage{Input: interruptedInputTokens}},
 			Err:     errors.New("synthetic stream interrupted"),
 		}},
 		TextDeltas: [][]string{nil, {"partial"}},
@@ -482,6 +486,14 @@ func TestFooterContextUsageAfterInterruptedTurn(t *testing.T) {
 	beforeTokens := r.contextTokens
 	beforeWindow := r.contextWindow
 	beforeCalls := fake.CallCount()
+	// The completed usage plus short trailing messages must remain below the
+	// interrupted stream's input count; partial accounting is not an anchor.
+	if beforeTokens <= float64(usage) || beforeTokens >= interruptedInputTokens || beforeWindow != 200000 {
+		t.Fatalf("footer lost the completed usage anchor: tokens=%v window=%v", beforeTokens, beforeWindow)
+	}
+	if beforePercent != 40 || r.footerSnapshot.ContextUsageLabel != "40.0%" {
+		t.Fatalf("interrupted-turn percent caption = %q (%v), want 40.0%%", r.footerSnapshot.ContextUsageLabel, beforePercent)
+	}
 	if beforeCalls != 2 {
 		t.Fatalf("provider calls before display toggle = %d, want 2", beforeCalls)
 	}
@@ -493,12 +505,18 @@ func TestFooterContextUsageAfterInterruptedTurn(t *testing.T) {
 		t.Fatalf("token toggle changed context telemetry: percent=%v tokens=%v/%v calls=%d",
 			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, fake.CallCount())
 	}
+	if r.footerSnapshot.ContextUsageLabel != "80k" || r.footerSnapshot.ContextEstimate != "~80k/200k" {
+		t.Fatalf("interrupted-turn token caption = %q, estimate = %q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextEstimate)
+	}
 	r.settings.ContextUsageDisplay = "percent"
 	r.refreshPresentation(console)
 	if r.footerSnapshot.ContextPercent != beforePercent || r.contextTokens != beforeTokens ||
 		r.contextWindow != beforeWindow || fake.CallCount() != beforeCalls {
 		t.Fatalf("percent toggle changed context telemetry: percent=%v tokens=%v/%v calls=%d",
 			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, fake.CallCount())
+	}
+	if r.footerSnapshot.ContextUsageLabel != "40.0%" || r.footerSnapshot.ContextEstimate != "~40.0%/200k" {
+		t.Fatalf("interrupted-turn percent caption = %q, estimate = %q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextEstimate)
 	}
 }
 

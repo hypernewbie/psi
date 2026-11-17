@@ -329,12 +329,14 @@ func TestFooterTokenCaptionFitsOneColumnViewport(t *testing.T) {
 		ContextPercent: 40, ContextUsageLabel: "80k", ContextWindowLabel: "200k",
 		Model: "m", NoColor: true,
 	}, 1, 3, true)
-	if len(rows) != len(widths) {
-		t.Fatalf("rows=%d widths=%d", len(rows), len(widths))
+	if len(rows) != 2 || len(widths) != len(rows) {
+		t.Fatalf("rows=%d widths=%d; want two footer rows with widths", len(rows), len(widths))
 	}
-	for i, width := range widths {
-		if width > max(1, 1-1) {
-			t.Fatalf("one-column viewport row %d width=%d", i, width)
+	for i, row := range rows {
+		width := CellWidth(Sanitize(row))
+		// A one-column viewport cannot reserve the usual wrap-safe column.
+		if width > 1 || widths[i] != width {
+			t.Fatalf("one-column viewport row %d width=%d reported=%d", i, width, widths[i])
 		}
 	}
 }
