@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,15 +25,39 @@ func ParseCursorPositionReport(data []byte) (row, col int, ok bool) {
 	return row, col, true
 }
 
+// resizeState records the viewport size the app has drawn or already queued a
+// redraw for. A Windows size poll can miss a size that appears and disappears
+// between ticks. If another frame draws at that transient size, comparing only
+// against the previous sample would treat the older sampled size as already
+// handled and never redraw the final size.
+type resizeState struct {
+	mu            sync.Mutex
+	width, height int
+}
+
+func (s *resizeState) setApplied(width, height int) {
+	s.mu.Lock()
+	s.width, s.height = width, height
+	s.mu.Unlock()
+}
+
+func (s *resizeState) needsRedraw(width, height int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return width != s.width || height != s.height
+}
+
 // watchConsoleResize supplies the resize notifications that Pi receives from
 // stdout's resize event. Windows has no SIGWINCH, and a pending console ReadFile
 // can block across a resize, so it cannot share the key-reader's polling loop.
-// Only a changed valid size posts an event; output stays on the app event loop.
-func watchConsoleResize(ctx context.Context, size func() (int, int, error), inputs chan<- Input, interval time.Duration) {
+// Only a size that differs from the drawn or queued size posts an event; output
+// stays on the app event loop.
+func watchConsoleResize(ctx context.Context, size func() (int, int, error), applied *resizeState, inputs chan<- Input, interval time.Duration) {
 	width, height, err := size()
 	if err != nil || width <= 0 || height <= 0 {
 		return // Not a console (for example, an isolated pipe-based test).
 	}
+	applied.setApplied(width, height)
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -41,12 +66,12 @@ func watchConsoleResize(ctx context.Context, size func() (int, int, error), inpu
 			return
 		case <-tick.C:
 			nextWidth, nextHeight, err := size()
-			if err != nil || nextWidth <= 0 || nextHeight <= 0 || (nextWidth == width && nextHeight == height) {
+			if err != nil || nextWidth <= 0 || nextHeight <= 0 || !applied.needsRedraw(nextWidth, nextHeight) {
 				continue
 			}
 			select {
 			case inputs <- Input{Resize: true}:
-				width, height = nextWidth, nextHeight
+				applied.setApplied(nextWidth, nextHeight)
 			case <-ctx.Done():
 				return
 			}
