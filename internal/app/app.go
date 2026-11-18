@@ -1278,7 +1278,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 				snapshot.ContextPercent = displayPercent
 				snapshot.ContextUsageLabel = usageLabel
 				snapshot.ContextWindowLabel = windowLabel
-				snapshot.ContextEstimate = "~" + usageLabel + "/" + windowLabel
+				snapshot.ContextEstimate = usageLabel + "/" + windowLabel
 			}
 		}
 		r.footerKey, r.footerSnapshot = key, snapshot

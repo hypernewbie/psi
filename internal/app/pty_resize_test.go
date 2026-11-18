@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
+	"psi/internal/terminal"
 	"psi/internal/testutil"
 )
 
@@ -172,14 +174,17 @@ func TestActualAppPTYResize(t *testing.T) {
 	write("resize-stream\r")
 	wait("STREAM_START")
 
-	// Phase 2: Resize during streaming
-	for _, size := range [][2]int{{120, 40}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
+	// Phase 2: Resize during streaming. The provider stays paused on streamHold,
+	// so every footer below is produced without new provider data.
+	referenceText, referenceCaption := "", ""
+	for index, size := range [][2]int{{120, 40}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
 		width, height := size[0], size[1]
+		writesBefore := screen.WriteCalls
+		erasesBefore := len(screen.EraseOps)
 		if err := pty.Setsize(master, &pty.Winsize{Rows: uint16(height), Cols: uint16(width)}); err != nil {
 			t.Fatal(err)
 		}
 		screen.Resize(width, height)
-		beforeResize := screen.WriteCalls
 		timer := time.NewTimer(4 * time.Second)
 		redrawDetected := false
 		for !redrawDetected {
@@ -190,9 +195,107 @@ func TestActualAppPTYResize(t *testing.T) {
 				}
 				pending += chunk
 				screen.Feed([]byte(chunk))
-				if screen.WriteCalls > beforeResize && (strings.Contains(screen.Text(), "Working") || strings.Contains(screen.Text(), "Esc/Ctrl+C") || strings.Contains(screen.Text(), "STREAM_START")) {
-					redrawDetected = true
+				// ED3 records the resize rebuild's scrollback erase. Terminal
+				// mode 2026 stays set until its synchronized redraw ends.
+				if screen.WriteCalls <= writesBefore || !slices.Contains(screen.EraseOps[erasesBefore:], "ED3") || screen.Modes["?2026"] {
+					continue
 				}
+				rows := strings.Split(screen.Text(), "\n")
+				bottom := -1
+				for i, row := range rows {
+					if terminal.CellWidth(row) == width-1 && strings.Trim(row, "─") == "" {
+						bottom = i
+					}
+				}
+				if bottom < 0 {
+					continue
+				}
+				top := -1
+				for i := bottom - 1; i >= 0; i-- {
+					if strings.Contains(rows[i], "─") {
+						top = i
+						break
+					}
+				}
+				if top < 0 || !strings.Contains(rows[top], "Working") {
+					continue
+				}
+				if screen.CursorRow <= top || screen.CursorRow >= bottom {
+					continue
+				}
+				statsIndex := bottom + 2
+				// Tiny layouts omit the folder row and keep only stats.
+				if height < 8 {
+					statsIndex = bottom + 1
+				}
+				if statsIndex >= len(rows) {
+					continue
+				}
+				stats := rows[statsIndex]
+				if terminal.CellWidth(stats) != width-1 {
+					continue
+				}
+				if index == 0 {
+					track, ok := contextBarTrackCells(stats)
+					if !ok || track != 16 {
+						continue
+					}
+					open := strings.IndexByte(stats, '[')
+					closeAt := strings.IndexByte(stats[open:], ']')
+					if closeAt < 0 {
+						continue
+					}
+					usage := strings.TrimSpace(stats[:open])
+					fields := strings.Fields(strings.TrimSpace(stats[open+closeAt+1:]))
+					if len(fields) == 0 {
+						continue
+					}
+					caption := fields[0]
+					if len(fields) > 1 && fields[1] == "(auto)" {
+						caption += " (auto)"
+					}
+					if !strings.Contains(caption, "%/8.2k") || strings.HasPrefix(caption, "~") || strings.Contains(caption, "...") {
+						continue
+					}
+					referenceText, referenceCaption = strings.TrimSpace(usage+" "+caption), caption
+					t.Logf("streaming footer reference %dx%d: %q", width, height, referenceText)
+					redrawDetected = true
+					continue
+				}
+				// A bar adds two brackets and one separator to the track,
+				// compared with the text-only reference.
+				availableTrack := width/2 - terminal.CellWidth(referenceText) - 3
+				if availableTrack >= 4 {
+					track, ok := contextBarTrackCells(stats)
+					if !ok || track != min(16, availableTrack) {
+						continue
+					}
+					usage := strings.TrimSpace(stats[:strings.IndexByte(stats, '[')])
+					if strings.TrimSpace(usage+" "+referenceCaption) != referenceText {
+						continue
+					}
+					captionAt := strings.Index(stats, referenceCaption)
+					if captionAt < 0 || terminal.CellWidth(stats[:captionAt+len(referenceCaption)]) > width/2 {
+						continue
+					}
+				} else {
+					if strings.ContainsAny(stats, "[]") {
+						continue
+					}
+					wrapSafe := max(1, width-1)
+					if terminal.CellWidth(referenceText) <= wrapSafe {
+						if !strings.HasPrefix(stats, referenceText) {
+							continue
+						}
+					} else {
+						firstCounter := strings.Fields(referenceText)[0]
+						if !strings.HasPrefix(stats, firstCounter) || !strings.Contains(stats, "...") {
+							continue
+						}
+					}
+				}
+				t.Logf("streaming footer %dx%d: %q", width, height, stats)
+				redrawDetected = true
 			case <-timer.C:
 				t.Fatalf("stream resize to %dx%d did not redraw within timeout: screen=%q", width, height, screen.Text())
 			}
