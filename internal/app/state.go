@@ -15,6 +15,7 @@ const (
 	StateRunningTool    State = "running_tool"
 	StateCompacting     State = "compacting"
 	StateCancelling     State = "cancelling"
+	StateAuthenticating State = "authenticating"
 	StateOffline        State = "offline"
 	StateStorageBlocked State = "storage_blocked"
 	StateExiting        State = "exiting"
@@ -25,10 +26,11 @@ const (
 // steering messages through the dedicated queue.
 func (s State) CanSubmit() bool { return s == StateIdle || s == StateOffline }
 
-// CanCancel reports whether Ctrl+C cancels an owned operation.
+// CanCancel reports whether Ctrl+C cancels an owned operation. Login is
+// not an agent run, but Esc and Ctrl+C still cancel the owned attempt.
 func (s State) CanCancel() bool {
 	switch s {
-	case StateWaiting, StateStreaming, StateRunningTool, StateCompacting, StateReplaying, StateSelecting:
+	case StateWaiting, StateStreaming, StateRunningTool, StateCompacting, StateReplaying, StateSelecting, StateAuthenticating:
 		return true
 	}
 	return false

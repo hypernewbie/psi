@@ -13,6 +13,7 @@ Each provider has exactly one variable. A stored `auth.json` entry or a
 | `ANTHROPIC_API_KEY` | `anthropic` |
 | `MINIMAX_API_KEY` | `minimax` |
 | `OPENCODE_API_KEY` | `opencode-go` |
+| `OPENAI_API_KEY` | `openai` |
 | `DEEPSEEK_API_KEY` | `deepseek` |
 | `ZAI_API_KEY` | `zai` |
 | `XIAOMI_API_KEY` | `xiaomi` |
@@ -30,6 +31,11 @@ Each provider has exactly one variable. A stored `auth.json` entry or a
 
 `openai-codex` has no environment variable. It uses the ChatGPT OAuth entry in
 `auth.json`. See [Providers](providers.md).
+
+`openai` also accepts a ChatGPT OAuth login from `/login openai`. A stored
+`openai` entry, including an invalid or expired OAuth login, never falls back
+to `OPENAI_API_KEY`; only a missing entry permits `models.json`, then the
+variable.
 
 A provider that `models.json` declares has no environment variable. Its key
 comes from `auth.json` or from its `apiKey` entry in `models.json`, in that

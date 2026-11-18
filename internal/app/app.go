@@ -11,6 +11,8 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -453,7 +455,7 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
-Interactive credential setup: use /login [provider] for a masked API-key prompt or provider picker. Use /logout to remove a stored API key. Existing auth.json symlinks are preserved; see docs/security.md for target-race and memory limits.
+Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in and other supported providers use a masked API-key prompt. /logout removes a stored API key. See docs/security.md for credential handling.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
@@ -464,6 +466,7 @@ Inline search content requires selected and enabled fetch_content.
 loop_control and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
+OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }
@@ -657,20 +660,30 @@ func Run(args []string, version string) error {
 var newlineRun = regexp.MustCompile(`[\r\n]+`)
 
 type runtime struct {
-	store                    *session.Store
-	version                  string
-	reg                      *tools.Registry
-	options                  Options
-	settings                 config.Settings
-	models                   *config.ModelsFile
-	skills                   []skills.Skill
-	prompt, agentDir         string
-	sections                 []config.PromptSection
-	ov                       config.StartupOverrides
-	cfg                      agent.Config
-	prov                     provider.Provider
-	web                      *webaccess.Client
-	authErr                  error
+	store            *session.Store
+	version          string
+	reg              *tools.Registry
+	options          Options
+	settings         config.Settings
+	models           *config.ModelsFile
+	skills           []skills.Skill
+	prompt, agentDir string
+	sections         []config.PromptSection
+	ov               config.StartupOverrides
+	cfg              agent.Config
+	prov             provider.Provider
+	web              *webaccess.Client
+	authErr          error
+	// openAITransport, openAIBind, and openAIBrowser are test seams for the
+	// interactive ChatGPT sign-in. All three stay nil in production: the
+	// default HTTP client, the fixed loopback listener, and the platform
+	// browser launcher. Tests supply fakes so the full sign-in path runs
+	// without a browser or network access.
+	openAITransport http.RoundTripper
+	openAIBind      func() (net.Listener, error)
+	openAIBrowser   func(context.Context, string) error
+	// openAIRename pauses the credential commit in tests. Nil in production.
+	openAIRename             func(string, string) error
 	generation               int64
 	state                    State
 	bridge                   *pibridge.Client
@@ -923,6 +936,32 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		google.SessionID = r.store.Header().ID
 		client = google
 	case "openai-responses":
+		if ov.Provider == "openai" && !meta.Custom {
+			// Built-in OpenAI resolves its bearer per attempt so a
+			// subscription login can refresh at submit. The dynamic
+			// bearer is never frozen through applyAuthHeader. Redirects
+			// are refused on a local client copy so a subscription token
+			// can never follow a redirect off the official endpoint.
+			responses := provider.NewResponsesClient(meta.BaseURL, "", r.settings.MaxRetries, idle)
+			unredirected := *responses.HTTP
+			unredirected.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			if r.openAITransport != nil {
+				unredirected.Transport = r.openAITransport
+			}
+			responses.HTTP = &unredirected
+			responses.Headers = headers
+			responses.SessionID = r.store.Header().ID
+			openAI := &provider.OpenAIAuth{Path: authPath, HTTP: responses.HTTP, Env: envMap(), ConfiguredKey: meta.APIKey}
+			authErr = openAI.CheckForEndpoint(responses.BaseURL)
+			// The endpoint is pinned at configuration: an earlier Check
+			// is never authority to send after the entry changes.
+			base := responses.BaseURL
+			responses.ResolveAuth = func(ctx context.Context) (string, error) {
+				return openAI.GetForEndpoint(ctx, base)
+			}
+			client = responses
+			break
+		}
 		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
 		authErr = err
 		applyAuthHeader(key, err)
@@ -1544,6 +1583,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
 	var activeLoop *agent.Loop
+	// login owns one interactive ChatGPT sign-in. The done and updates
+	// channels are nil while no attempt owns the REPL, which disables
+	// their select cases. suppressPaste discards a paste transaction that
+	// started under login mode through its PasteEnd, even when the login
+	// settles first.
+	var login *openAILoginSession
+	var loginDone <-chan openAILoginResult
+	var loginUpdates <-chan openAILoginUpdate
+	var suppressPaste bool
 	var pendingACCompactFocus *string
 	var outputErr error
 	var runOutcome string
@@ -1613,6 +1661,51 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.state = StateCancelling
 		console.SetThinking(false)
 		cancel()
+	}
+	// cancelLogin asks the owned sign-in to stop. Ownership clears only
+	// when the worker's terminal result arrives and settles.
+	cancelLogin := func() {
+		if login == nil || login.cancelled {
+			return
+		}
+		login.cancelled = true
+		login.cancel()
+	}
+	// settleLogin consumes one terminal sign-in result on the REPL
+	// goroutine. A save that settled after cancellation is reported
+	// accurately but never activates a model; late results cannot reach
+	// a later attempt because each attempt owns fresh channels.
+	settleLogin := func(result openAILoginResult) {
+		owned := login
+		login, loginDone, loginUpdates = nil, nil, nil
+		if owned == nil {
+			return
+		}
+		switch {
+		case owned.cancelled && result.err == nil:
+			notice(terminal.NoticeWarning, "ChatGPT sign-in saved, but model activation was skipped after cancel. Use /model to select a model.")
+		case owned.cancelled && errors.Is(result.err, context.Canceled):
+			notice(terminal.NoticeInfo, "ChatGPT sign-in cancelled.")
+		case owned.cancelled:
+			// A real failure raced the cancel; report it accurately.
+			notice(terminal.NoticeError, result.err.Error())
+		case result.err == nil:
+			if r.store != owned.store {
+				notice(terminal.NoticeWarning, "ChatGPT sign-in saved, but the session changed. Use /model to select a model.")
+			} else {
+				kind, text := r.activateOpenAILogin()
+				notice(kind, text)
+			}
+		case errors.Is(result.err, context.Canceled):
+			notice(terminal.NoticeInfo, "ChatGPT sign-in cancelled.")
+		default:
+			notice(terminal.NoticeError, result.err.Error())
+		}
+		r.restoreAuthState()
+		r.footerKey = ""
+		console.Status("")
+		r.syncBridge()
+		r.draw(console)
 	}
 	openSelector := func(selector *Selector, draft string, cursor int, query string, restoreOnSuccess bool) {
 		r.selector = selector
@@ -1983,10 +2076,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cancelACEndTurn()
 		r.cancelACEndTurn = nil
 	}()
+	// Safety net for unexpected returns: ordinary exits settle the login
+	// through its result channel first, so this only joins a stray worker.
+	// The worker always sends exactly one terminal result, and every send
+	// selects on cancellation, so the join cannot wedge on an abandoned
+	// receiver.
+	defer func() {
+		if login != nil {
+			login.cancel()
+			<-login.done
+		}
+	}()
 	var compactionCountAtStart uint64
 	var resumeAfterCompaction bool
 	var activeConfig agent.Config
 	startInputMode := func(input agent.UserInput, focus string, mode inputMode, silent bool) (bool, string) {
+		if login != nil {
+			if !silent {
+				notice(terminal.NoticeError, "Finish or cancel the ChatGPT sign-in before submitting.")
+			}
+			return false, "login"
+		}
 		compact := mode == inputCompact
 		bump := mode == inputBump
 		resumeThisCompaction := compact && resumeAfterCompaction
@@ -2149,6 +2259,37 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.RefreshCompletion()
 		r.draw(console)
 	}
+	// startOpenAILogin admits one interactive ChatGPT sign-in from the idle
+	// dispatch. No active loop, run, queued input, compaction, bridge
+	// preparation, or queued post-run compaction may own the runtime. The
+	// worker reports through channels; only the REPL goroutine mutates
+	// runtime state.
+	startOpenAILogin := func() error {
+		if err := r.authCommandAvailable(console, "login"); err != nil {
+			return err
+		}
+		if r.loops != nil && r.loops.Snapshot().Active {
+			return fmt.Errorf("stop the active loop before signing in")
+		}
+		if r.queuedInputs != nil && r.queuedInputs() > 0 {
+			return fmt.Errorf("finish the queued input before signing in")
+		}
+		if pendingACCompactFocus != nil {
+			return fmt.Errorf("wait for the queued compaction before signing in")
+		}
+		cancelACEndTurn()
+		ctx, stop := context.WithCancel(context.Background())
+		updates := make(chan openAILoginUpdate)
+		done := make(chan openAILoginResult, 1)
+		login = &openAILoginSession{cancel: stop, done: done, updates: updates, store: r.store}
+		loginDone, loginUpdates = done, updates
+		r.state = StateAuthenticating
+		r.syncBridge()
+		req := openAILoginRequest{agentDir: r.agentDir, transport: r.openAITransport, bind: r.openAIBind, browser: r.openAIBrowser, rename: r.openAIRename}
+		go func() { done <- runOpenAILogin(ctx, req, updates) }()
+		r.draw(console)
+		return nil
+	}
 	// submitNativeSkill is the one expansion path for idle and busy /skill:
 	// submissions. Busy Enter steers, busy Alt+Enter queues a follow-up, and
 	// any refusal restores the captured draft without starting or queueing.
@@ -2309,24 +2450,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	for {
 		lastInput.Release()
-		if exiting && !busy {
+		if exiting && !busy && login == nil {
 			if count := len(r.recovery); count > 0 {
 				fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("%d undelivered attachment prompt(s) were not sent; Phi keeps a saved copy.", count)))
 			}
 			return console.Err()
 		}
-		if suspendPending && !busy {
+		if suspendPending && !busy && login == nil {
 			suspendPending = false
 			if err := suspend(); err != nil {
 				return err
 			}
 		}
 		if err := console.Err(); err != nil {
-			if !busy {
+			if !busy && login == nil {
 				return err
 			}
 			outputErr, exiting = err, true
-			cancel()
+			if busy {
+				cancel()
+			}
+			cancelLogin()
 		}
 		inputSource := inputs
 		fromPendingInput := len(pendingInputs) > 0
@@ -2390,6 +2534,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if busy {
 					suspendPending = true
 					cancelActive()
+				} else if login != nil {
+					suspendPending = true
+					cancelLogin()
 				} else if err := suspend(); err != nil {
 					return err
 				}
@@ -2407,21 +2554,33 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if busy {
 				cancelActive()
+			} else if login != nil {
+				cancelLogin()
 			} else {
 				return nil
 			}
 		case req := <-bridge.requests():
 			bridge.start, bridge.startInput, bridge.activeLoop = start, startInput, activeLoop
-			bridge.handle(req, busy)
+			bridge.handle(req, busy || login != nil)
 		case <-bridge.completed():
 			bridge.start, bridge.startInput, bridge.activeLoop = start, startInput, activeLoop
-			bridge.finishPreparation(busy)
+			bridge.finishPreparation(busy || login != nil)
 			r.draw(console)
 		case <-bridge.timeout():
 			bridge.expireAttachment()
 			r.draw(console)
 		case job := <-bridge.searchResults():
 			bridge.finishSearch(job)
+		case update := <-loginUpdates:
+			if update.link != "" {
+				notice(terminal.NoticeInfo, "Complete ChatGPT sign-in in your browser: "+update.link)
+			}
+			if update.manualOpen {
+				notice(terminal.NoticeInfo, "The browser did not open automatically. Open the sign-in link above on this machine.")
+			}
+			r.draw(console)
+		case result := <-loginDone:
+			settleLogin(result)
 		case ev := <-events:
 			recordEventFrames(func() { applyEvent(ev) })
 		case err := <-done:
@@ -2627,6 +2786,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 					cancelActive()
 					continue
 				}
+				if login != nil {
+					exiting = true
+					cancelLogin()
+					continue
+				}
 				return nil
 			}
 			if r.login == nil && !input.Paste && r.loops != nil && r.loops.Snapshot().Active {
@@ -2680,6 +2844,42 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				r.draw(console)
+				continue
+			}
+			if login != nil && input.PasteStart {
+				suppressPaste = true
+			}
+			if suppressPaste {
+				if input.PasteEnd {
+					suppressPaste = false
+				}
+				continue
+			}
+			if login != nil {
+				// Login mode never reaches the editor: Esc and Ctrl+C
+				// cancel, Ctrl+D cancels and exits, Ctrl+Z cancels,
+				// settles, then suspends. Every other key is ignored
+				// without echo; the user cancels first, then runs /quit.
+				if !input.Paste {
+					switch key := string(input.Key); {
+					case key == "\x1b" || key == "\x03":
+						if !login.cancelled {
+							cancelLogin()
+							console.Status("Cancelling ChatGPT sign-in…")
+							r.draw(console)
+						}
+					case key == "\x04":
+						cancelLogin()
+						exiting = true
+					case len(input.Key) == 1 && input.Key[0] == 26:
+						cancelLogin()
+						result := <-login.done
+						settleLogin(result)
+						if err := suspend(); err != nil {
+							return err
+						}
+					}
+				}
 				continue
 			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
@@ -2861,6 +3061,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 							continue
 						}
 						if r.selector.AuthMode == AuthLogin {
+							if selected.ID == "openai" {
+								closeSelector(false)
+								if err := startOpenAILogin(); err != nil {
+									notice(terminal.NoticeError, err.Error())
+									r.draw(console)
+								}
+								continue
+							}
 							spec, ok := providerregistry.Lookup(selected.ID)
 							if !ok || spec.Auth != providerregistry.AuthAPIKey {
 								notice(terminal.NoticeError, "unsupported login provider: "+selected.ID)
@@ -3074,7 +3282,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if cmd, ok := terminal.ParseCommand(text); ok {
 				if cmd.Name == "login" {
-					if err := r.loginCommand(cmd.Arg, console); err != nil {
+					var err error
+					if strings.EqualFold(strings.TrimSpace(cmd.Arg), "openai") {
+						err = startOpenAILogin()
+					} else {
+						err = r.loginCommand(cmd.Arg, console)
+					}
+					if err != nil {
 						notice(terminal.NoticeError, err.Error())
 						r.draw(console)
 					}

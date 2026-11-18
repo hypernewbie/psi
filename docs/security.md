@@ -49,13 +49,18 @@ process permissions.
 
 Credentials live in `<agentDir>/auth.json` and `models.json`. psi never prints
 them in `/session`, and refuses `!command` credential values without running
-them. Codex OAuth tokens are refreshed in place with a Pi-compatible directory
-lock.
+them. Codex and OpenAI OAuth tokens refresh in place with a Pi-compatible
+directory lock. OpenAI refresh can update the shared `auth.json` through that
+lock and atomic replacement. ChatGPT sign-in stores a stable installation UUID
+as `deviceId` in the user `settings.json`; it identifies the installation to
+OpenAI and is not a token. The authorization link, codes, and tokens never
+enter session files or chat; only the harmless `/login openai` command itself
+can remain in editor recall.
 
-Interactive `/login` masks the key and excludes it from conversation history
+Interactive API-key login masks the key and excludes it from conversation history
 and prompt recall. It does not check the key with the provider. Keys remain
 unencrypted in `auth.json`. New auth files use mode `0600`, and new parent
-directories use mode `0700` on Unix. `/login` and `/logout` preserve an existing
+directories use mode `0700` on Unix. API-key login and `/logout` preserve an existing
 `auth.json` symlink. They resolve the link under the shared Pi lock, atomically
 replace its regular-file target, and preserve the link text, target mode,
 unrelated entries, and unknown fields. Broken, cyclic, and nonregular targets
@@ -64,7 +69,8 @@ and immediately before replacement. It refuses a change observed by those
 checks; a retarget after the final check remains a filesystem race and is not
 made atomic. Codex OAuth refresh uses the same logical-lock and resolved-target
 rule. `/logout` removes only the selected stored API key, not OAuth credentials,
-environment variables, or `models.json` credentials.
+environment variables, or `models.json` credentials. OpenAI ChatGPT sign-in
+and refresh require a regular `auth.json` and refuse symlink writes.
 
 Windows identity checks use an open handle to capture the file ID before a
 replacement can affect a later comparison. The file must allow read access.
@@ -93,9 +99,9 @@ modes stay unchanged.
 ## What leaves the process
 
 Model requests contain the system prompt, the active branch, and the tool
-definitions. Codex OAuth token refresh is the other built-in outbound request.
-The web tools contact the configured SearXNG or Exa endpoint and fetch requested
-pages directly; credentials stay in headers or request bodies. See
+definitions. Codex OAuth refresh, OpenAI code exchange, and OpenAI OAuth
+refresh contact their providers. The web tools contact the configured SearXNG
+or Exa endpoint and fetch requested pages directly. See
 [Web access](web.md#network-guard) for address checks. Commands run by the
 `bash` tool can make their own network connections. The
 native Phi bridge is a local Unix socket that publishes lifecycle and state.

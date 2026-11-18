@@ -303,15 +303,15 @@ func TestResponsesProviderErrorsAndMalformedStreamsDoNotLeakSecrets(t *testing.T
 
 func TestResponsesSessionAffinityHeaders(t *testing.T) {
 	for _, tc := range []struct {
-		format, session, client, router string
+		format, hyphen, underscore, client, router string
 	}{
-		{"openai", "session-default", "session-default", ""},
-		{"openai-nosession", "", "session-default", ""},
-		{"openrouter", "", "", "session-default"},
+		{"openai", "session-default", "", "session-default", ""},
+		{"openai-nosession", "", "", "session-default", ""},
+		{"openrouter", "", "", "", "session-default"},
 	} {
 		t.Run(tc.format, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("session-id") != tc.session || r.Header.Get("session_id") != "" || r.Header.Get("x-client-request-id") != tc.client || r.Header.Get("x-session-id") != tc.router {
+				if r.Header.Get("session-id") != tc.hyphen || r.Header.Get("session_id") != tc.underscore || r.Header.Get("x-client-request-id") != tc.client || r.Header.Get("x-session-id") != tc.router {
 					t.Errorf("affinity headers = %#v", r.Header)
 				}
 				_, _ = io.WriteString(w, responsesEvent("response.completed", map[string]any{"response": map[string]any{"id": "r", "status": "completed", "output": []any{}}}))
@@ -429,6 +429,31 @@ func TestResponsesInterruptedStreamIsNeverRetried(t *testing.T) {
 		t.Fatal("cancelled Responses stream did not return")
 	}
 	server.Close()
+}
+
+func TestOpenAIStreamFailureKeepsProviderTextPrivate(t *testing.T) {
+	const private = "synthetic provider detail"
+	stream := responsesEvent("response.created", map[string]any{"response": map[string]any{"id": "resp_test"}}) +
+		responsesEvent("response.output_item.added", map[string]any{"output_index": 0, "item": map[string]any{"id": "item_test", "type": private + "\x1b[31m"}})
+	client := NewResponsesClient(openAIResource, "", 2, time.Second)
+	client.ResolveAuth = func(context.Context) (string, error) { return "synthetic-access-token", nil }
+	var attempts int
+	client.HTTP.Transport = tokenTransportFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if r.URL.String() != openAIResource+"/responses" {
+			t.Error("unexpected request destination")
+		}
+		return openAITokenResponse(http.StatusOK, stream), nil
+	})
+	model := ModelMeta{ID: "gpt-6.1-sol", Provider: "openai", API: "openai-responses"}
+	partial, err := client.Send(context.Background(), Request{Model: model, Thinking: "off"}, nil)
+	var interrupted *StreamInterrupt
+	if !errors.As(err, &interrupted) || partial == nil || partial.ResponseID != "resp_test" || attempts != 1 {
+		t.Fatalf("expected one interrupted attempt with the partial response ID; attempts=%d, error type=%T", attempts, err)
+	}
+	if strings.Contains(err.Error(), private) || strings.Contains(err.Error(), "\x1b") {
+		t.Fatal("stream error exposed arbitrary provider text")
+	}
 }
 
 func responsesInputMap(t *testing.T, raw any) map[string]any {

@@ -11,6 +11,11 @@ psi [options] [messages...]
 Positional arguments are prompts. They are sent in order after the terminal
 starts. Use `--` before a prompt that begins with `-`.
 
+ChatGPT sign-in is interactive-only: select OpenAI from `/login` or enter
+`/login openai` directly.
+Positional messages and RPC `prompt` commands never sign in; they keep their
+existing prompt-data contract.
+
 ## Invocation
 
 ```sh
@@ -64,22 +69,24 @@ psi --list-models sonnet
 Provider credentials come from `auth.json`, `models.json`, or the provider's
 environment variable. See [Providers](providers.md).
 
-## Interactive API-key login
+## Interactive login
 
 Login and logout require an interactive terminal and a writable active session.
 They are unavailable during a run, picker, compaction, or reload. RPC and
 noninteractive clients must use environment variables or pre-written credentials.
 
 Use `/login [provider]` in an interactive session. With no provider argument,
-psi opens a searchable provider picker. The prompt masks the key; do not put
-keys in command arguments. Login supports `deepseek`, `google`, `groq`,
+psi opens a searchable provider picker. Select OpenAI (or enter `/login openai`)
+to sign in with a ChatGPT subscription in your browser. For other supported
+providers, the prompt masks the API key; do not put keys in command arguments.
+API-key login supports `deepseek`, `google`, `groq`,
 `kimi-coding`, `minimax`, `mistral`, `moonshotai`, `opencode-go`, `openrouter`,
 `qwen-token-plan`, `xai`, `xiaomi`, `xiaomi-token-plan-ams`,
 `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, and `zai`. It does not support
 Anthropic API-key login or OpenAI Codex OAuth. Use an environment variable or
 `models.json` for Anthropic; use Pi's `/login openai-codex` for Codex OAuth.
 
-Login stores the key in `<agentDir>/auth.json`. The agent directory is
+API-key login stores the key in `<agentDir>/auth.json`. The agent directory is
 `PSI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR`, then
 `~/.pi/agent`. A stored key takes precedence over a `models.json` key and the
 provider's environment variable. An existing `auth.json` symlink is preserved:

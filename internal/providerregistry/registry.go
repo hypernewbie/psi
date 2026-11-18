@@ -11,8 +11,9 @@ import (
 type AuthKind string
 
 const (
-	AuthAPIKey     AuthKind = "api-key"
-	AuthCodexOAuth AuthKind = "codex-oauth"
+	AuthAPIKey        AuthKind = "api-key"
+	AuthCodexOAuth    AuthKind = "codex-oauth"
+	AuthAPIKeyOrOAuth AuthKind = "api-key-or-oauth"
 )
 
 type Spec struct {
@@ -34,6 +35,11 @@ var registry = map[string]Spec{
 		ID: "openai-codex", Name: "OpenAI Codex", Auth: AuthCodexOAuth,
 		DefaultAPI: "openai-codex-responses",
 		Endpoints:  map[string]string{"openai-codex-responses": "https://chatgpt.com/backend-api"},
+	},
+	"openai": {
+		ID: "openai", Name: "OpenAI", Auth: AuthAPIKeyOrOAuth,
+		Environment: "OPENAI_API_KEY", DefaultAPI: "openai-responses",
+		Endpoints: map[string]string{"openai-responses": "https://api.openai.com/v1"},
 	},
 	"minimax": {
 		ID: "minimax", Name: "MiniMax", Auth: AuthAPIKey,

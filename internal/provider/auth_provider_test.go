@@ -113,13 +113,16 @@ func TestCredentialsResolveEveryProviderFromOneSnapshot(t *testing.T) {
 	}
 
 	// A malformed file is an error for every provider, not a partial view.
-	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	states = Credentials(env, path, configured, providerregistry.IDs())
-	for _, providerID := range []string{"anthropic", "minimax", "zai", "openai-codex"} {
-		if state := states[providerID]; state.Usable || state.Err == nil || !strings.Contains(state.Err.Error(), "malformed") {
-			t.Fatalf("%s with a malformed auth.json = %+v", providerID, state)
+	// A JSON-null document is malformed too; only a missing file permits fallback.
+	for _, doc := range []string{"{", "null"} {
+		if err := os.WriteFile(path, []byte(doc), 0600); err != nil {
+			t.Fatal(err)
+		}
+		states = Credentials(env, path, configured, providerregistry.IDs())
+		for _, providerID := range []string{"anthropic", "minimax", "zai", "openai-codex"} {
+			if state := states[providerID]; state.Usable || state.Err == nil || !strings.Contains(state.Err.Error(), "malformed") {
+				t.Fatalf("%s with a malformed auth.json = %+v", providerID, state)
+			}
 		}
 	}
 }
@@ -148,10 +151,12 @@ func TestProviderUnsupportedStoredCredentialsNeverFallback(t *testing.T) {
 	if _, _, err := SelectProviderAPIKey(env, path, "google", "!print secret"); err == nil || !strings.Contains(err.Error(), "commands are not supported") {
 		t.Fatalf("credential command was accepted: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := SelectProviderAPIKey(env, path, "google", "configured-secret"); err == nil || !strings.Contains(err.Error(), "malformed") {
-		t.Fatalf("malformed auth.json fell back: %v", err)
+	for _, doc := range []string{"{", "null"} {
+		if err := os.WriteFile(path, []byte(doc), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := SelectProviderAPIKey(env, path, "google", "configured-secret"); err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("malformed auth.json fell back: %v", err)
+		}
 	}
 }

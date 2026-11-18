@@ -89,7 +89,10 @@ func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
 	compat := responsesCompat{supportsDeveloperRole: true, supportsMaxOutputTokens: true, sessionAffinityFormat: "openai"}
 	for field := range model.Compat {
 		switch field {
-		case "supportsDeveloperRole", "supportsMidConvoSystemMessages", "supportsAdditionalTools", "supportsMaxOutputTokens", "supportsStrictMode", "sessionAffinityFormat", "supportsLongCacheRetention":
+		case "supportsDeveloperRole", "supportsMidConvoSystemMessages", "supportsAdditionalTools", "supportsMaxOutputTokens", "supportsStrictMode", "sessionAffinityFormat", "supportsLongCacheRetention", "supportsOpenAIGrammarTools", "supportsToolSearch", "supportsExplicitPromptCacheMode", "supportsMidConvoEffort":
+			// The last four are known OpenAI catalog metadata. psi accepts them
+			// but does not send grammar tools, tool search, explicit cache
+			// modes, or mid-conversation effort updates.
 		default:
 			return responsesCompat{}, fmt.Errorf("model %q uses unsupported openai-responses compatibility field %q", model.ID, field)
 		}

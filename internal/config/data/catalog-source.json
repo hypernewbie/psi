@@ -42,7 +42,16 @@
     "openrouter",
     "xai",
     "groq",
-    "mistral"
+    "mistral",
+    "openai"
   ],
-  "scope": "chat model IDs, APIs, public endpoints, input/reasoning metadata, thinking maps, and compatibility metadata only; no credentials or headers"
+  "scope": "chat model IDs, APIs, public endpoints, input/reasoning metadata, thinking maps, and compatibility metadata only; no credentials or headers",
+  "providerSources": {
+    "openai": {
+      "url": "https://models.dev/experimental/v2.0/api.json",
+      "fetchedAt": "2026-11-18T08:15:35Z",
+      "sha256": "0b4912a578f53bdafb9f4c7ac27d75f10e97e8a359a4ae8f4bcfccf545f9a49f",
+      "piRevision": "b4afdddf44e059c67ccf5097e5317d913521b470"
+    }
+  }
 }

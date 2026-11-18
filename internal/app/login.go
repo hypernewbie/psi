@@ -29,7 +29,7 @@ func loginProviderIDs() []string {
 		if !ok {
 			continue
 		}
-		if spec.Auth != providerregistry.AuthAPIKey || id == "anthropic" {
+		if id != "openai" && (spec.Auth != providerregistry.AuthAPIKey || id == "anthropic") {
 			continue
 		}
 		ids = append(ids, id)
@@ -45,7 +45,11 @@ func loginSelector(r *runtime) *Selector {
 		if !ok {
 			continue
 		}
-		parts := []string{spec.Name, spec.Environment}
+		method := spec.Environment
+		if id == "openai" {
+			method = "ChatGPT browser sign-in"
+		}
+		parts := []string{spec.Name, method}
 		if r.models != nil {
 			if model, err := r.models.SelectModel(id, ""); err == nil {
 				parts = append(parts, model.ID)

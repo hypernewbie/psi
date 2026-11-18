@@ -349,7 +349,7 @@ func contains(s, sub string) bool {
 func TestUnsupportedProviderRejected(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "s.json")
-	writeJSON(t, p, `{"defaultProvider":"openai"}`)
+	writeJSON(t, p, `{"defaultProvider":"not-a-provider"}`)
 	loaded, err := LoadSettings(p, "", true)
 	if err != nil {
 		t.Fatal(err)
