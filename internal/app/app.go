@@ -1605,7 +1605,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	if r.lifecycle == nil {
 		r.lifecycle = &terminalLifecycle{tty: r.tty, console: console, signals: signals}
 	}
-	busy, exiting, compacting := false, false, false
+	busy, exiting, compacting, released := false, false, false, false
 	var cancel context.CancelFunc
 	var activeLoop *agent.Loop
 	// One deferred FIFO for /ac compact and /loop, executed in order at
@@ -1694,6 +1694,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.state = StateCancelling
 		console.SetThinking(false)
 		cancel()
+	}
+	// releaseTerminal hands the terminal back for process exit before the
+	// run settles: input stops, cursor/paste modes and the visible UI
+	// restore, raw mode ends, and the console drops every later write.
+	// Settlement continues behind the release with no new work until the
+	// run drains. Console and tty cleanup stay idempotent with the Run
+	// defers, which still run on the normal return path.
+	releaseTerminal := func() {
+		if released {
+			return
+		}
+		released = true
+		suspendPending = false
+		console.Release()
+		r.tty.Restore()
+		inputs = nil
+		pendingInputs = nil
 	}
 	openSelector := func(selector *Selector, draft string, cursor int, query string, restoreOnSuccess bool) {
 		r.selector = selector
@@ -2431,7 +2448,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			return console.Err()
 		}
-		if suspendPending && !busy {
+		if suspendPending && !busy && !released {
 			suspendPending = false
 			if err := suspend(); err != nil {
 				return err
@@ -2466,7 +2483,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.draw(console)
 		case <-acEndTurnTimeout:
 			acEndTurnTimeout = nil
-			if endTurnReady() {
+			if !released && endTurnReady() {
 				checkAndStartCompact("", false, false)
 			}
 		case <-themeChanges:
@@ -2503,6 +2520,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if isSuspend(sig) {
+				if released {
+					continue
+				}
 				if busy {
 					suspendPending = true
 					cancelActive()
@@ -3377,12 +3397,19 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 						continue
 					}
-					// Known operations that need cancellation or are unsafe stay
-					// refused (restored) until their interrupt path lands. Unknown
-					// slash text falls through to ordinary steering below.
+					// /quit releases the terminal first and settles behind
+					// it. The remaining unsafe operations stay refused
+					// (restored). Unknown slash text falls through to
+					// ordinary steering below.
 					if cmd, ok := terminal.ParseCommand(text); ok {
+						if cmd.Name == "quit" {
+							releaseTerminal()
+							exiting = true
+							cancelActive()
+							continue
+						}
 						switch cmd.Name {
-						case "quit", "new", "clone", "resume", "trust":
+						case "new", "clone", "resume", "trust":
 							console.Editor.RestoreDraft(text, len([]rune(text)))
 							console.RefreshCompletion()
 							r.draw(console)
