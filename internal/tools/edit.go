@@ -125,18 +125,28 @@ func (t *EditTool) editChecked(ctx context.Context, path string, edits []editIte
 			// Nested is a subset of overlap (same check covers it).
 		}
 	}
-	// Apply from end to start so offsets stay valid.
-	out := norm
-	// Sort descending by start.
-	for i := 0; i < len(matches); i++ {
-		for j := i + 1; j < len(matches); j++ {
-			if matches[j].start > matches[i].start {
-				matches[i], matches[j] = matches[j], matches[i]
+	var out string
+	if len(matches) == 1 {
+		m := matches[0]
+		out = norm[:m.start] + normalizeLF(m.edit.New) + norm[m.end:]
+	} else {
+		// Assemble in original file order without copying the whole file per edit.
+		for i := 0; i < len(matches); i++ {
+			for j := i + 1; j < len(matches); j++ {
+				if matches[j].start < matches[i].start {
+					matches[i], matches[j] = matches[j], matches[i]
+				}
 			}
 		}
-	}
-	for _, m := range matches {
-		out = out[:m.start] + normalizeLF(m.edit.New) + out[m.end:]
+		var assembled strings.Builder
+		cursor := 0
+		for _, m := range matches {
+			assembled.WriteString(norm[cursor:m.start])
+			assembled.WriteString(normalizeLF(m.edit.New))
+			cursor = m.end
+		}
+		assembled.WriteString(norm[cursor:])
+		out = assembled.String()
 	}
 	out = restoreEnding(out, ending)
 	if bom {

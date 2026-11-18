@@ -8,8 +8,7 @@ import (
 	"testing"
 )
 
-// TestEditMultipleReplacements: multiple disjoint edits applied in reverse
-// start-offset order so earlier modifications do not corrupt subsequent coordinates.
+// TestEditMultipleReplacements checks that disjoint edits use original file coordinates.
 func TestEditMultipleReplacements(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "multi.txt")
@@ -49,45 +48,58 @@ func TestEditMultipleReplacements(t *testing.T) {
 
 // TestEditCRLFAndBOMPreservation: preserving Windows line endings and UTF-8 BOM.
 func TestEditCRLFAndBOMPreservation(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "crlf_bom.txt")
-	const bom = "\xef\xbb\xbf"
-	initial := bom + "line1\r\nline2\r\nline3\r\n"
-	if err := os.WriteFile(p, []byte(initial), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := &EditTool{Cwd: dir}
-	res := tool.ExecuteCtx(context.Background(), Invocation{
-		ID:   "e-bom",
-		Name: Edit,
-		Arguments: map[string]any{
-			"path": "crlf_bom.txt",
-			"edits": []any{
+	const bom = "\xef\xbb\xbf" // UTF-8 byte order mark.
+	initial := bom + "line1 日本語\r\nline2\r\nline3\r\n"
+	for _, tc := range []struct {
+		name  string
+		edits []any
+		want  string
+	}{
+		{
+			name: "single replacement",
+			edits: []any{
 				map[string]any{"oldText": "line2", "newText": "EDITED_LINE_2"},
 			},
+			want: bom + "line1 日本語\r\nEDITED_LINE_2\r\nline3\r\n",
 		},
-	})
-
-	if res.IsError {
-		t.Fatalf("edit failed: %+v", res)
-	}
-
-	data, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	content := string(data)
-	if !strings.HasPrefix(content, bom) {
-		t.Fatalf("UTF-8 BOM was lost: %q", content[:10])
-	}
-	if !strings.Contains(content, "EDITED_LINE_2\r\n") {
-		t.Fatalf("CRLF line endings lost: %q", content)
-	}
-	expected := bom + "line1\r\nEDITED_LINE_2\r\nline3\r\n"
-	if content != expected {
-		t.Fatalf("mismatch:\ngot:  %q\nwant: %q", content, expected)
+		{
+			name: "reversed adjacent replacements",
+			// The middle replacement introduces another span's oldText. Matches
+			// must still refer to the original file, not to replacement text.
+			edits: []any{
+				map[string]any{"oldText": "line3\r\n", "newText": ""},
+				map[string]any{"oldText": "line2\n", "newText": "line1 日本語\nEXTRA\r\n"},
+				map[string]any{"oldText": "line1 日本語\r\n", "newText": "header 🌍\n"},
+			},
+			want: bom + "header 🌍\r\nline1 日本語\r\nEXTRA\r\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "crlf_bom.txt")
+			if err := os.WriteFile(p, []byte(initial), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tool := &EditTool{Cwd: dir}
+			res := tool.ExecuteCtx(context.Background(), Invocation{
+				ID:   "e-bom",
+				Name: Edit,
+				Arguments: map[string]any{
+					"path":  "crlf_bom.txt",
+					"edits": tc.edits,
+				},
+			})
+			if res.IsError {
+				t.Fatalf("edit failed: %+v", res)
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != tc.want {
+				t.Fatalf("mismatch:\ngot:  %q\nwant: %q", data, tc.want)
+			}
+		})
 	}
 }
 
@@ -247,27 +259,50 @@ func TestEditOldTextEqualsNewText(t *testing.T) {
 
 // TestEditMakesFileEmpty: replacement makes the entire file empty.
 func TestEditMakesFileEmpty(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "to_empty.txt")
-	_ = os.WriteFile(p, []byte("delete everything"), 0o644)
-
-	tool := &EditTool{Cwd: dir}
-	res := tool.ExecuteCtx(context.Background(), Invocation{
-		ID:   "e-empty",
-		Name: Edit,
-		Arguments: map[string]any{
-			"path": "to_empty.txt",
-			"edits": []any{
+	for _, tc := range []struct {
+		name  string
+		edits []any
+	}{
+		{
+			name: "single replacement",
+			edits: []any{
 				map[string]any{"oldText": "delete everything", "newText": ""},
 			},
 		},
-	})
-	if res.IsError {
-		t.Fatalf("edit to empty failed: %+v", res)
-	}
-	data, _ := os.ReadFile(p)
-	if len(data) != 0 {
-		t.Fatalf("expected 0 bytes, got %d: %q", len(data), string(data))
+		{
+			name: "all spans deleted",
+			edits: []any{
+				map[string]any{"oldText": "everything", "newText": ""},
+				map[string]any{"oldText": "delete ", "newText": ""},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "to_empty.txt")
+			if err := os.WriteFile(p, []byte("delete everything"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tool := &EditTool{Cwd: dir}
+			res := tool.ExecuteCtx(context.Background(), Invocation{
+				ID:   "e-empty",
+				Name: Edit,
+				Arguments: map[string]any{
+					"path":  "to_empty.txt",
+					"edits": tc.edits,
+				},
+			})
+			if res.IsError {
+				t.Fatalf("edit to empty failed: %+v", res)
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) != 0 {
+				t.Fatalf("expected 0 bytes, got %d: %q", len(data), data)
+			}
+		})
 	}
 }
 
