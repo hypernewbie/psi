@@ -816,6 +816,31 @@ const (
 	inputBump
 )
 
+// reloadDescriptor captures the active operation for /reload replay.
+type reloadDescriptor struct {
+	sessionID  string
+	generation int64
+	mode       inputMode
+	input      agent.UserInput
+	focus      string
+	resume     bool
+	explicit   bool
+	// op is the local worker token that owns this interruption. It never
+	// travels on the wire.
+	op uint64
+	// noReplay marks a resumed worker: it can be interrupted and reloaded,
+	// but it has no original prompt to replay.
+	noReplay bool
+}
+
+// reloadRetryAllowed reports whether a settled worker may replay its original
+// input after a reload. recovered counts only the settled run's own preserved
+// input; an older recovery batch never blocks the retry.
+func reloadRetryAllowed(desc *reloadDescriptor, op uint64, err error, recovered int) bool {
+	return desc != nil && !desc.noReplay && desc.op != 0 && desc.op == op &&
+		recovered == 0 && errors.Is(err, context.Canceled)
+}
+
 // checkBump reports whether an interactive bump may start. Sticky storage and
 // auth errors take precedence over a generic non-idle refusal. When
 // requireUnfinished is true the unfinished-turn eligibility check applies;
@@ -1642,22 +1667,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		focus string
 	}
 	var pendingInterrupt *interruptAction
-	// Reload descriptor captures the active operation for /reload replay.
-	type reloadDescriptor struct {
-		sessionID  string
-		generation int64
-		mode       inputMode
-		input      agent.UserInput
-		focus      string
-		resume     bool
-		explicit   bool
-		// op is the local worker token that owns this interruption. It never
-		// travels on the wire.
-		op uint64
-		// noReplay marks a resumed worker: it can be interrupted and
-		// reloaded, but it has no original prompt to replay.
-		noReplay bool
-	}
 	var activeReloadDesc *reloadDescriptor
 	// workerToken identifies one launched worker. A new worker always takes
 	// a new token, so a descriptor cannot outlive the run that created it.
@@ -2870,7 +2879,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 						break
 					}
-					if desc == nil || desc.noReplay || desc.op != activeWorkerToken || recoveredInFlight > 0 || !errors.Is(err, context.Canceled) {
+					if !reloadRetryAllowed(desc, activeWorkerToken, err, recoveredInFlight) {
 						r.draw(console)
 						break
 					}

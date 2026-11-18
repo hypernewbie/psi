@@ -3,6 +3,9 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -308,5 +311,35 @@ func TestBridgeReloadBusyOwnershipAndRetirement(t *testing.T) {
 	h.retireReload(owned)
 	if h.reload != nil || r.reloadPending {
 		t.Fatal("owning retirement did not release the latch")
+	}
+}
+
+// The retry decision belongs to one settled worker: a preserving recovery,
+// a resumed worker, a foreign token, a clean finish, or an unrelated error
+// all suppress the replay.
+func TestBridgeReloadRetryDecision(t *testing.T) {
+	owned := &reloadDescriptor{op: 9}
+	cases := []struct {
+		name      string
+		desc      *reloadDescriptor
+		op        uint64
+		err       error
+		recovered int
+		want      bool
+	}{
+		{"owned cancellation", owned, 9, fmt.Errorf("run: %w", context.Canceled), 0, true},
+		{"structured original preserved", owned, 9, context.Canceled, 1, false},
+		{"resumed worker", &reloadDescriptor{op: 9, noReplay: true}, 9, context.Canceled, 0, false},
+		{"another worker", owned, 10, context.Canceled, 0, false},
+		{"clean completion", owned, 9, nil, 0, false},
+		{"unrelated failure", owned, 9, errors.New("provider failed"), 0, false},
+		{"no descriptor", nil, 9, context.Canceled, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reloadRetryAllowed(tc.desc, tc.op, tc.err, tc.recovered); got != tc.want {
+				t.Fatalf("allowed = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

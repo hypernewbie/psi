@@ -725,3 +725,92 @@ func TestBridgeProcessReloadRetryPrecedesStartupMessages(t *testing.T) {
 	q.write("/quit\r")
 	q.finish()
 }
+
+// A deferred /loop waits behind a reload retry and starts only after the
+// retry settles.
+func TestBridgeProcessReloadRetryPrecedesDeferredFIFO(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("busy reload needs a Unix PTY")
+	}
+	bodies := make(chan map[string]any, 4)
+	releaseRetry := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		n := requests.Add(1)
+		bodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		switch n {
+		case 1:
+			<-req.Context().Done()
+			return
+		case 2:
+			select {
+			case <-releaseRetry:
+			case <-req.Context().Done():
+				return
+			}
+		}
+		fmt.Fprint(w, liveTextTurn("TURN_DONE"))
+	}))
+	t.Cleanup(server.Close)
+
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","defaultTools":[],"compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"models":[{"id":"local-model","api":"anthropic-messages","baseUrl":"`+server.URL+`","contextWindow":65536,"maxTokens":16384,"input":["text"]}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+
+	f := startBridgePhi(t)
+	q := startReviewProcessEnv(t, home, ws, agentDir, *reviewBinary, "", bridgeChildEnv(t, f), "--deny-project", "--no-tools")
+	t.Cleanup(func() {
+		if output := q.raw.String(); strings.Contains(output, "WARNING: DATA RACE") {
+			t.Errorf("race detector report in app subprocess:\n%s", output)
+		}
+	})
+
+	q.prompt()
+	q.write("original work\r")
+	liveWaitBody(t, bodies)
+	f.waitFrame(t, "active run", func(frame *pibridgepb.PiToPhi) bool {
+		return bridgeRunID(frame) != 0
+	})
+	q.write("/loop goal LOOP_GOAL_MARKER\r")
+	q.wait("Loop queued until the active run settles.")
+
+	held := bridgeState(t, f, "fifo-held")
+	runID := held.GetReloadReadiness().GetRunId()
+	f.inject <- reloadRequest("91", held.GetSessionId(), held.GetLeafId(), held.GetModel().GetProvider(), held.GetModel().GetModel(), &runID, nil)
+	cursor := 0
+	if ack := nextBridgeReload(t, f, &cursor); ack.GetOutcome() != pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED {
+		t.Fatalf("fifo reload = %+v, want DISPATCHED", ack)
+	}
+	retry := liveWaitBody(t, bodies)
+	if !strings.Contains(requestText(t, retry), "original work") {
+		t.Fatalf("retry request = %q", requestText(t, retry))
+	}
+	select {
+	case body := <-bodies:
+		t.Fatalf("deferred loop ran beside the retry: %q", requestText(t, body))
+	default:
+	}
+	releaseRetry <- struct{}{}
+	var next map[string]any
+	select {
+	case next = <-bodies:
+	case <-time.After(8 * time.Second):
+		after := bridgeState(t, f, "fifo-after")
+		t.Fatalf("deferred loop never started; requests=%d state=%v", requests.Load(), after.GetState())
+	}
+	if !strings.Contains(requestText(t, next), "LOOP_GOAL_MARKER") {
+		t.Fatalf("after the retry = %q, want the loop goal", requestText(t, next))
+	}
+	// The loop keeps running; quitting stops it.
+	q.write("/quit\r")
+	q.finish()
+}
