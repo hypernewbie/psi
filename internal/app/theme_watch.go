@@ -46,6 +46,12 @@ func newThemeWatch(agentDir, selectedPath string) (*themeWatch, error) {
 }
 
 func (w *themeWatch) run(agentDir, themeDir string) {
+	w.runEvents(agentDir, themeDir, w.watcher.Events, w.watcher.Errors)
+}
+
+// runEvents owns the debounce loop. run supplies the real fsnotify channels;
+// tests supply synthetic ones so timing does not depend on the host clock.
+func (w *themeWatch) runEvents(agentDir, themeDir string, events <-chan fsnotify.Event, watchErrors <-chan error) {
 	defer close(w.done)
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -67,7 +73,7 @@ func (w *themeWatch) run(agentDir, themeDir string) {
 		changed := false
 		for {
 			select {
-			case event, ok := <-w.watcher.Events:
+			case event, ok := <-events:
 				if !ok {
 					return changed
 				}
@@ -96,14 +102,14 @@ func (w *themeWatch) run(agentDir, themeDir string) {
 			case w.changes <- struct{}{}:
 			default:
 			}
-		case event, ok := <-w.watcher.Events:
+		case event, ok := <-events:
 			if !ok {
 				return
 			}
 			if w.handleEvent(event, agentDir, themeDir) {
 				reset()
 			}
-		case _, ok := <-w.watcher.Errors:
+		case _, ok := <-watchErrors:
 			if !ok {
 				return
 			}
