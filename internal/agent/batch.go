@@ -38,6 +38,7 @@ type batchKind int
 const (
 	batchInternal batchKind = iota
 	batchBuiltin
+	batchExternal
 	batchDisabled
 )
 
@@ -101,7 +102,15 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 			plan.kind = batchInternal
 			plan.internal = handler
 		} else if _, internal := cfg.InternalTools[tc.Name]; !internal && enabled[tc.Name] {
-			plan.kind = batchBuiltin
+			if lookup := cfg.ConcurrentTools; lookup != nil {
+				if handler, ok := lookup(tc.Name); ok {
+					plan.kind = batchExternal
+					plan.internal = handler
+				}
+			}
+			if plan.kind != batchExternal {
+				plan.kind = batchBuiltin
+			}
 		} else {
 			plan.kind = batchDisabled
 			plan.result = tools.Result{IsError: true, Content: []tools.Block{{Type: "text", Text: "Tool is not enabled in this session"}}}
@@ -131,6 +140,11 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 			b.outstanding++
 		case batchBuiltin:
 			go b.runBuiltinCall(batchCtx, plan, plan.runner, i)
+			b.outstanding++
+		case batchExternal:
+			go b.runBuiltinCall(batchCtx, plan, func(ctx context.Context) tools.Result {
+				return plan.internal(ctx, plan.invocation)
+			}, i)
 			b.outstanding++
 		}
 	}
