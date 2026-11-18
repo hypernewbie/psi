@@ -112,6 +112,59 @@ func TestReloadReadsModelsJSONAgain(t *testing.T) {
 	}
 }
 
+func TestCompactionProviderUsesReloadedCatalog(t *testing.T) {
+	r := testRuntime(t)
+	// The active model in this fixture is offline. Only the configured
+	// compactor needs a client for this test, and it sends no requests.
+	r.authErr = nil
+	r.publishLive()
+	const compactor = "local-openai/summary"
+	writeCatalog := func(maxTokens string) {
+		t.Helper()
+		raw := `{"providers":{"local-openai":{"api":"openai-completions","baseUrl":"https://provider.example/v1","apiKey":"synthetic-local-key","models":[{"id":"summary","maxTokens":` + maxTokens + `}]}}}`
+		if err := os.WriteFile(filepath.Join(r.agentDir, "models.json"), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCatalog("2048")
+	if err := r.reloadModels(); err != nil {
+		t.Fatal(err)
+	}
+	writeCatalog("4096")
+
+	type resolution struct {
+		model provider.ModelMeta
+		err   error
+	}
+	settings := r.settings
+	resolve := func() resolution {
+		_, model, cleanup, err := r.compactionProvider(compactor, settings)
+		if cleanup != nil {
+			cleanup()
+		}
+		return resolution{model, err}
+	}
+	start := make(chan struct{})
+	resolved := make(chan resolution, 1)
+	go func() {
+		<-start
+		resolved <- resolve()
+	}()
+	close(start)
+	reloadErr := r.reloadModels()
+	overlapping := <-resolved
+	if reloadErr != nil {
+		t.Fatal(reloadErr)
+	}
+	if overlapping.err != nil || overlapping.model.ID != "summary" || (overlapping.model.MaxTokens != 2048 && overlapping.model.MaxTokens != 4096) {
+		t.Fatalf("compactor resolution during reload = %+v, %v; want summary from either catalog", overlapping.model, overlapping.err)
+	}
+	latest := resolve()
+	if latest.err != nil || latest.model.ID != "summary" || latest.model.MaxTokens != 4096 {
+		t.Fatalf("compactor resolution after reload = %+v, %v; want summary from the new catalog", latest.model, latest.err)
+	}
+}
+
 // A provider from models.json runs through the existing protocol client with
 // its configured key, headers, and bearer header.
 func TestConfiguredProviderRunsThroughTheCompletionsClient(t *testing.T) {

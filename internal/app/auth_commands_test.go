@@ -233,6 +233,7 @@ func TestActiveAPIKeyChangesReachProviderRequests(t *testing.T) {
 			if err := r.configure(config.StartupOverrides{Provider: "deepseek", Model: "synthetic-deepseek", Thinking: "off"}); err != nil {
 				t.Fatal(err)
 			}
+			r.publishLive()
 			r.state = StateIdle
 			console := authCommandConsole(t)
 			r.lifecycle = &terminalLifecycle{console: console}
@@ -241,7 +242,11 @@ func TestActiveAPIKeyChangesReachProviderRequests(t *testing.T) {
 				if r.authErr != nil || r.state != StateIdle || r.prov == nil {
 					t.Fatalf("%s: active provider is unavailable", stage)
 				}
-				response, err := r.prov.Send(t.Context(), provider.Request{Model: r.cfg.Model, Thinking: "off", Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "synthetic"}}}}}, nil)
+				live := r.liveSettings()
+				if live.AuthErr != nil || live.Provider == nil {
+					t.Fatalf("%s: live provider is unavailable", stage)
+				}
+				response, err := live.Provider.Send(t.Context(), provider.Request{Model: live.Model, Thinking: live.Thinking, Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "synthetic"}}}}}, nil)
 				if err != nil || response == nil || response.Text != "ok" {
 					t.Fatalf("%s: provider request failed: %v", stage, err)
 				}
@@ -294,6 +299,7 @@ func TestLogoutActiveProviderWithoutFallbackGoesOffline(t *testing.T) {
 	if err := r.configure(config.StartupOverrides{Provider: "deepseek", Model: "deepseek-v4-pro"}); err != nil {
 		t.Fatal(err)
 	}
+	r.publishLive()
 	r.state = StateIdle
 	console := authCommandConsole(t)
 	r.lifecycle = &terminalLifecycle{console: console}
@@ -301,6 +307,9 @@ func TestLogoutActiveProviderWithoutFallbackGoesOffline(t *testing.T) {
 	r.finishLogout("deepseek", console, &out)
 	if r.authErr == nil || r.state != StateOffline || r.prov != nil {
 		t.Fatalf("logout without a fallback did not take the runtime offline: authErr=%v state=%s provider=%T", r.authErr, r.state, r.prov)
+	}
+	if live := r.liveSettings(); live.AuthErr == nil || live.Provider != nil {
+		t.Fatal("logout without a fallback left the live provider online")
 	}
 	if !strings.Contains(out.String(), "Removed stored API key for DeepSeek") {
 		t.Fatalf("logout status missing: %q", out.String())

@@ -207,9 +207,7 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 				selectionErr = candidate.authErr
 			}
 			if selectionErr == nil {
-				if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
-					selectionErr = err
-				}
+				selectionErr = r.selectModel(&candidate)
 			}
 			if selectionErr != nil {
 				if candidate.prov != nil {
@@ -217,7 +215,6 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 				}
 				status = fmt.Sprintf("Saved API key for %s, but could not select the default model: %v", prompt.providerName, selectionErr)
 			} else {
-				r.installConfiguration(&candidate)
 				if r.ac != nil {
 					r.ac.ResetGrowth()
 				}
@@ -252,9 +249,10 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 			r.authErr = refreshErr
 			status = fmt.Sprintf("Saved API key for %s, but could not refresh the active provider: %v", prompt.providerName, refreshErr)
 		} else {
-			r.installConfiguration(&candidate)
+			r.adoptConfiguration(&candidate)
 			status = fmt.Sprintf("Saved API key for %s. Credentials saved to %s.", prompt.providerName, authPath)
 		}
+		r.publishLive()
 	} else {
 		status = fmt.Sprintf("Saved API key for %s. Credentials saved to %s.", prompt.providerName, authPath)
 	}
@@ -324,8 +322,9 @@ func (r *runtime) finishLogout(providerID string, console *terminal.Console, out
 			r.prov = nil
 			r.authErr = refreshErr
 		} else {
-			r.installConfiguration(&candidate)
+			r.adoptConfiguration(&candidate)
 		}
+		r.publishLive()
 	}
 	if removed {
 		printStatusText(out, fmt.Sprintf("Removed stored API key for %s. Environment variables and models.json config are unchanged.", spec.Name))

@@ -123,6 +123,7 @@ func (l *Loop) ContinuePending(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer l.end()
+	applyLiveSettings(&cfg, l)
 	delivered, err := l.deliverQueuedSteering()
 	if err != nil {
 		return err
@@ -199,6 +200,7 @@ func (l *Loop) CheckCompaction(cfg Config) (CompactionPreparation, error) {
 }
 
 func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason string) (runErr error) {
+	applyLiveSettings(&cfg, l)
 	prepared, err := l.CheckCompaction(cfg)
 	if err != nil {
 		return err
@@ -211,6 +213,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 
 	summaryProvider, summaryModel := l.prov, cfg.Model
 	cleanup := func() {}
+	overrideUsed := false
 	if cfg.CompactionProvider != nil {
 		resolvedProvider, resolvedModel, closeProvider, resolveErr := cfg.CompactionProvider()
 		if resolveErr != nil {
@@ -221,9 +224,11 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 		}
 		if resolvedProvider != nil {
 			summaryProvider = resolvedProvider
+			overrideUsed = true
 		}
 		if resolvedModel.ID != "" {
 			summaryModel = resolvedModel
+			overrideUsed = true
 		}
 		if closeProvider != nil {
 			cleanup = closeProvider
@@ -231,7 +236,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	}
 	defer cleanup()
 	cfg.SummaryRetryReason = reason
-	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel)
+	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel, overrideUsed)
 	if cfg.ACPolicy != nil {
 		cfg.ACPolicy.RecordCompaction(err == nil, compactionSourceName(reason), prepared.TokensBefore)
 	}
@@ -253,7 +258,7 @@ func compactionSourceName(reason string) string {
 	}
 }
 
-func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, prepared CompactionPreparation, summaryProvider provider.Provider, summaryModel provider.ModelMeta) error {
+func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, prepared CompactionPreparation, summaryProvider provider.Provider, summaryModel provider.ModelMeta, overrideUsed bool) error {
 	if prepared.Disposition != CompactionEligible {
 		return &CompactionNoWorkError{Disposition: prepared.Disposition}
 	}
@@ -263,8 +268,26 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 	summaryCfg := cfg
 	summaryCfg.Model = summaryModel
 	historyText := prepared.PreviousSummary
-	var historyUsage provider.Usage
-	hasHistoryUsage := false
+	type summaryUsage struct {
+		model provider.ModelMeta
+		usage provider.Usage
+	}
+	var completed []summaryUsage
+	recordCompleted := func(note string) error {
+		for _, result := range completed {
+			if err := l.persistCompactionUsage(result.model, result.usage, note); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	failAfterSummary := func(cause error, note string) error {
+		if err := recordCompleted(note); err != nil {
+			return err // storage errors are terminal, not retryable summary failures
+		}
+		return cause
+	}
+	const cancelledBeforeCommit = "summary completed but compaction was cancelled before commit"
 	if len(prepared.Messages) > 0 {
 		transcript := summaryTranscript(session.ConvertToLLM(prepared.Messages))
 		if strings.TrimSpace(transcript) == "" {
@@ -275,55 +298,67 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 			return err
 		}
 		historyText = resp.Text
-		historyUsage = resp.Usage
-		hasHistoryUsage = true
+		completed = append(completed, summaryUsage{summaryCfg.Model, resp.Usage})
 	}
 	if prepared.SplitTurn {
+		// A split-turn compaction issues two distinct summary requests. A model
+		// change during the first summary must reach the second, unless an
+		// explicit compactor override pins the summary model.
+		if !overrideUsed {
+			liveCfg := cfg
+			applyLiveSettings(&liveCfg, l)
+			summaryCfg.Model = liveCfg.Model
+			summaryProvider = l.prov
+		} else if cfg.LiveSettings != nil {
+			// Keep the normal run's provider current for post-compaction
+			// requests, even though summaries stay on the override.
+			liveCfg := cfg
+			applyLiveSettings(&liveCfg, l)
+		}
 		if len(prepared.TurnPrefix) == 0 {
-			return &SummaryFailure{Err: fmt.Errorf("split-turn preparation has no prefix messages; original context is unchanged")}
+			failure := &SummaryFailure{Err: fmt.Errorf("split-turn preparation has no prefix messages; original context is unchanged")}
+			return failAfterSummary(failure, "history summary completed but turn prefix was missing")
 		}
 		if historyText == "" {
 			historyText = "No prior history."
 		}
 		transcript := summaryTranscript(session.ConvertToLLM(prepared.TurnPrefix))
 		if strings.TrimSpace(transcript) == "" {
-			if hasHistoryUsage {
-				if persistErr := l.persistCompactionUsage(summaryCfg, historyUsage, "history summary completed but turn prefix was empty"); persistErr != nil {
-					return persistErr
-				}
-			}
-			return &SummaryFailure{Err: fmt.Errorf("no turn-prefix conversation to summarize; original context is unchanged")}
+			failure := &SummaryFailure{Err: fmt.Errorf("no turn-prefix conversation to summarize; original context is unchanged")}
+			return failAfterSummary(failure, "history summary completed but turn prefix was empty")
 		}
 		resp, err := l.requestSummary(ctx, summaryProvider, summaryCfg, focus, transcript, "", true)
 		if err != nil {
-			if hasHistoryUsage {
-				if persistErr := l.persistCompactionUsage(summaryCfg, historyUsage, "history summary completed; split-turn summary did not complete"); persistErr != nil {
-					return persistErr
-				}
-			}
-			return err
+			return failAfterSummary(err, "history summary completed; split-turn summary did not complete")
 		}
 		historyText += "\n\n---\n\n**Turn Context (split turn):**\n\n" + resp.Text
-		if hasHistoryUsage {
-			historyUsage = combineProviderUsage(historyUsage, resp.Usage)
-		} else {
-			historyUsage = resp.Usage
-			hasHistoryUsage = true
-		}
+		completed = append(completed, summaryUsage{summaryCfg.Model, resp.Usage})
 	}
 	if strings.TrimSpace(historyText) == "" {
 		return &SummaryFailure{Err: fmt.Errorf("summary is incomplete; original context is unchanged")}
 	}
 	if err := ctx.Err(); err != nil {
-		if hasHistoryUsage {
-			if persistErr := l.persistCompactionUsage(summaryCfg, historyUsage, "summary completed but compaction was cancelled before commit"); persistErr != nil {
-				return persistErr
-			}
-		}
-		return err
+		return failAfterSummary(err, cancelledBeforeCommit)
 	}
-	usage := sessionUsage(historyUsage)
-	_, err := Compact(ctx, l.store, historyText, prepared.FirstKeptEntryID, float64(prepared.TokensBefore), &usage)
+	var checkpointUsage *session.Usage
+	if len(completed) == 2 && (completed[0].model.ProviderID() != completed[1].model.ProviderID() || completed[0].model.ID != completed[1].model.ID) {
+		// The checkpoint cannot name both models. Keep attributed records
+		// instead, and omit the checkpoint totals to avoid counting twice.
+		if err := recordCompleted("split-turn summary used different models"); err != nil {
+			return err
+		}
+	} else {
+		var total provider.Usage
+		for _, result := range completed {
+			total = combineProviderUsage(total, result.usage)
+		}
+		usage := sessionUsage(total)
+		checkpointUsage = &usage
+	}
+	_, err := Compact(ctx, l.store, historyText, prepared.FirstKeptEntryID, float64(prepared.TokensBefore), checkpointUsage)
+	if checkpointUsage != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return failAfterSummary(err, cancelledBeforeCommit)
+	}
 	return err
 }
 
@@ -450,13 +485,13 @@ func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Prov
 		return nil, &SummaryFailure{Err: fmt.Errorf("summary provider returned no response; original context is unchanged")}
 	}
 	if resp.StopReason == "length" {
-		if err := l.persistCompactionUsage(cfg, resp.Usage, "incomplete compaction summary; original context unchanged"); err != nil {
+		if err := l.persistCompactionUsage(cfg.Model, resp.Usage, "incomplete compaction summary; original context unchanged"); err != nil {
 			return nil, err
 		}
 		return nil, &SummaryFailure{Err: fmt.Errorf("summary hit the output token limit and is incomplete; original context is unchanged")}
 	}
 	if resp.StopReason == "error" {
-		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary stopped with an error"); err != nil {
+		if err := l.persistCompactionUsage(cfg.Model, resp.Usage, "compaction summary stopped with an error"); err != nil {
 			return nil, err
 		}
 		return nil, &SummaryFailure{Err: fmt.Errorf("summary provider reported an error; original context is unchanged")}
@@ -477,19 +512,19 @@ func (l *Loop) requestSummary(ctx context.Context, summaryProvider provider.Prov
 		text = textContent.String()
 	}
 	if hasToolCall {
-		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary attempted a tool call"); err != nil {
+		if err := l.persistCompactionUsage(cfg.Model, resp.Usage, "compaction summary attempted a tool call"); err != nil {
 			return nil, err
 		}
 		return nil, &SummaryFailure{Err: fmt.Errorf("summary attempted to call a tool; original context is unchanged")}
 	}
 	if strings.TrimSpace(text) == "" {
-		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary returned no text"); err != nil {
+		if err := l.persistCompactionUsage(cfg.Model, resp.Usage, "compaction summary returned no text"); err != nil {
 			return nil, err
 		}
 		return nil, &SummaryFailure{Err: fmt.Errorf("summary returned no text; original context is unchanged")}
 	}
 	if resp.StopReason != "stop" && resp.StopReason != "" {
-		if err := l.persistCompactionUsage(cfg, resp.Usage, "compaction summary stopped before completion"); err != nil {
+		if err := l.persistCompactionUsage(cfg.Model, resp.Usage, "compaction summary stopped before completion"); err != nil {
 			return nil, err
 		}
 		return nil, &SummaryFailure{Err: fmt.Errorf("summary stopped before completion (%s); original context is unchanged", resp.StopReason)}
@@ -519,11 +554,11 @@ func summaryOutputTokenLimit(model provider.ModelMeta, prompt string) int {
 	return limit
 }
 
-func (l *Loop) persistCompactionUsage(cfg Config, usage provider.Usage, note string) error {
+func (l *Loop) persistCompactionUsage(model provider.ModelMeta, usage provider.Usage, note string) error {
 	if usage.Input == 0 && usage.Output == 0 && usage.CacheRead == 0 && usage.CacheWrite == 0 && usage.TotalTokens == 0 && (usage.CacheWrite1h == nil || *usage.CacheWrite1h == 0) && (usage.Reasoning == nil || *usage.Reasoning == 0) {
 		return nil
 	}
-	if _, err := l.store.AppendUsage("compaction-summary", cfg.Model.ProviderID(), cfg.Model.ID, sessionUsage(usage), note); err != nil {
+	if _, err := l.store.AppendUsage("compaction-summary", model.ProviderID(), model.ID, sessionUsage(usage), note); err != nil {
 		return fmt.Errorf("storage failure, stopping: %w", err)
 	}
 	return nil

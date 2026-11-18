@@ -757,11 +757,10 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 		h.applyThinking(prep, cand, discard)
 		return
 	}
-	if _, err := h.r.store.AppendModelChange(cand.ov.Provider, cand.ov.Model); err != nil {
+	if err := h.r.selectModel(cand); err != nil {
 		discard("")
 		return
 	}
-	h.r.installConfiguration(cand)
 	if h.r.ac != nil {
 		h.r.ac.ResetGrowth()
 	}
@@ -777,11 +776,11 @@ func (h *bridgeHandler) applyThinking(prep *bridgePrep, cand *runtime, discard f
 		discard("model-changed")
 		return
 	}
-	if _, err := h.r.store.AppendThinkingLevelChange(cand.ov.Thinking); err != nil {
+	if err := h.r.commitThinking(cand.requestSettings()); err != nil {
 		discard("")
 		return
 	}
-	h.r.installConfiguration(cand)
+	h.r.adoptConfiguration(cand)
 	h.r.syncBridge()
 	req.ReplySetThinking(true, "")
 }

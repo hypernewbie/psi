@@ -104,6 +104,9 @@ func (r *runtime) settingsEntries() []settingsEntry {
 				// configure() derives this field, so keep both in step.
 				r.cfg.AutoCompact = enabled
 				r.footerKey = ""
+				// Publish so a change during a run reaches the loop's next
+				// adaptive-compaction check.
+				r.publishLive()
 				return nil
 			},
 		},

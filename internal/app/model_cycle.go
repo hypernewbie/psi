@@ -42,13 +42,12 @@ func (r *runtime) cycleModel(direction int) (string, error) {
 		}
 		return "", err
 	}
-	if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
+	if err := r.selectModel(&candidate); err != nil {
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return "", err
 	}
-	r.installConfiguration(&candidate)
 	if r.ac != nil {
 		r.ac.ResetGrowth()
 	}

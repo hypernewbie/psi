@@ -273,13 +273,14 @@ func testRuntimeWithCwd(t *testing.T, cwd string) *runtime {
 		t.Fatal(err)
 	}
 	r := &runtime{store: s, agentDir: t.TempDir(), settings: config.Settings{DefaultProvider: "anthropic", DefaultModel: "m", DefaultThinking: "off", DefaultTools: []string{"read"}},
-		models: &config.ModelsFile{Providers: map[string]config.ProviderMeta{"anthropic": {Models: []config.ModelMeta{{ID: "m", Reasoning: true, MaxTokens: 16384}}}}}, prompt: "workspace instructions"}
+		models: &config.ModelsFile{Providers: map[string]config.ProviderMeta{"anthropic": {Models: []config.ModelMeta{{ID: "m", Reasoning: true, MaxTokens: 16384}}}}}, prompt: "workspace instructions", live: newLiveConfig()}
 	if err := s.TryLock(); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.restore(); err != nil {
 		t.Fatal(err)
 	}
+	r.publishLive()
 	t.Cleanup(func() {
 		r.store.Unlock()
 		if r.prov != nil {
@@ -1563,5 +1564,32 @@ func TestReplUpdatesFooterContextDuringToolLoop(t *testing.T) {
 	}
 	if err := <-result; err != nil {
 		t.Fatalf("repl failed: %v", err)
+	}
+}
+
+func TestPickerClosePreservesStorageBlocked(t *testing.T) {
+	r := testRuntime(t)
+	r.authErr = nil
+	// A run outcome of unsaved surfaces as storage-blocked on picker close.
+	if got := r.pickerCloseState(false, "unsaved", StateSelecting); got != StateStorageBlocked {
+		t.Fatalf("unsaved outcome close = %q, want storage_blocked", got)
+	}
+	// A clean outcome with no failures restores idle (covered below with r2);
+	// the stored-write-error branch shares the same blocked outcome as unsaved.
+	// While a run is active the underlying run state is preserved.
+	for _, current := range []State{StateWaiting, StateCancelling, StateCompacting, StateRunningTool} {
+		if got := r.pickerCloseState(true, "", current); got != current {
+			t.Fatalf("busy close from %q = %q, want preserved", current, got)
+		}
+	}
+	// Idle close with no failures restores idle, or offline when auth failed.
+	r2 := testRuntime(t)
+	r2.authErr = nil
+	if got := r2.pickerCloseState(false, "", StateSelecting); got != StateIdle {
+		t.Fatalf("clean close = %q, want idle", got)
+	}
+	r2.authErr = errors.New("no key")
+	if got := r2.pickerCloseState(false, "", StateSelecting); got != StateOffline {
+		t.Fatalf("offline close = %q, want offline", got)
 	}
 }
