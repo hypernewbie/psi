@@ -152,13 +152,14 @@ func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.S
 	return s, store, log
 }
 
-// closeRPCTestRunner mirrors the production EOF path: cancel the run, wait for
-// it to settle, then release the store and provider. TempDir removal races the
-// run's session writes if the store is unlocked first. Every step is safe to
-// repeat, so a test can call this before its registered cleanup.
+// closeRPCTestRunner mirrors the production EOF path: cancel the workers,
+// wait for their terminal frames, then release the store and provider.
+// TempDir removal races the run's session writes if the store is unlocked
+// first. Every step is safe to repeat, so a test can call this before its
+// registered cleanup.
 func closeRPCTestRunner(s *rpcRunner, prov provider.Provider) {
 	s.cancelActive()
-	s.waitIdle(10 * time.Second)
+	s.waitWorkers()
 	if s.r.store != nil {
 		s.r.store.Unlock()
 	}
@@ -521,9 +522,14 @@ func TestRPCCompactEmptyThenAfterExchange(t *testing.T) {
 		},
 	}
 	s, _, log := newRPCTestRunner(t, fake, nil, 64)
-	empty := s.handle(rpcCommand{ID: strptr("c0"), Type: "compact"})
-	if empty == nil || empty.Success {
-		t.Fatalf("compact of empty session should fail, got %+v", empty)
+	if resp := s.handle(rpcCommand{ID: strptr("c0"), Type: "compact"}); resp != nil {
+		t.Fatalf("compact answers from its worker, got %+v", resp)
+	}
+	objs := log.waitFor(t, "compact c0", func(obj map[string]any) bool {
+		return obj["type"] == "response" && obj["id"] == "c0"
+	})
+	if empty := responseByID(objs, "c0"); empty == nil || empty["success"] != false {
+		t.Fatalf("compact of empty session should fail, got %v", empty)
 	}
 	for i, id := range []string{"c1a", "c1b"} {
 		started := s.handle(rpcCommand{ID: strptr(id), Type: "prompt", Message: long})
@@ -544,11 +550,16 @@ func TestRPCCompactEmptyThenAfterExchange(t *testing.T) {
 			return n >= want
 		})
 	}
-	done := s.handle(rpcCommand{ID: strptr("c2"), Type: "compact", CustomInstructions: "focus"})
-	if done == nil || !done.Success {
-		t.Fatalf("compact = %+v", done)
+	if resp := s.handle(rpcCommand{ID: strptr("c2"), Type: "compact", CustomInstructions: "focus"}); resp != nil {
+		t.Fatalf("compact answers from its worker, got %+v", resp)
 	}
-	objs := log.objects(t)
+	objs = log.waitFor(t, "compact c2", func(obj map[string]any) bool {
+		return obj["type"] == "response" && obj["id"] == "c2"
+	})
+	if done := responseByID(objs, "c2"); done == nil || done["success"] != true {
+		t.Fatalf("compact = %v", done)
+	}
+	objs = log.objects(t)
 	if !hasEvent(objs, "compaction_start", map[string]any{"reason": "manual"}) {
 		t.Fatalf("missing compaction_start: %v", objs)
 	}

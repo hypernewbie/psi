@@ -82,8 +82,13 @@ func TestRPCSummarizationRetryUsesPiEvents(t *testing.T) {
 
 func TestRPCEmptyCompactionDoesNotResetTranscript(t *testing.T) {
 	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
-	resp := s.handle(rpcCommand{Type: "compact"})
-	if resp.Success {
+	if resp := s.handle(rpcCommand{Type: "compact"}); resp != nil {
+		t.Fatalf("compact answers from its worker, got %+v", resp)
+	}
+	objs := log.waitFor(t, "compact response", func(obj map[string]any) bool {
+		return obj["type"] == "response" && obj["command"] == "compact"
+	})
+	if len(objs) == 0 || objs[len(objs)-1]["success"] != false {
 		t.Fatal("empty compaction succeeded")
 	}
 	if hasEvent(log.objects(t), "compaction_end", nil) {

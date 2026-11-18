@@ -1,14 +1,16 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
-	"time"
 
 	"psi/internal/config"
 	"psi/internal/session"
@@ -177,7 +179,7 @@ func runRPC(o Options, version string) error {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
-	s := &rpcRunner{r: r, out: enc}
+	s := &rpcRunner{r: r, out: enc, shutdown: make(chan struct{})}
 	// External clients hydrate resumed sessions separately. Never replay
 	// their old messages as new live events after the next prompt.
 	if proj, err := store.Projection(); err == nil {
@@ -191,41 +193,72 @@ func runRPC(o Options, version string) error {
 	// terminal loop uses.
 	s.loop = r.newLoop(s.sink)
 
+	// One shutdown path serves stdin EOF and termination signals: stop
+	// intake, cancel the owned workers, wait for their terminal frames,
+	// then release the store once. No timeout can unlock the store while
+	// a worker still owns it.
+	var shutdownOnce sync.Once
+	var signalled atomic.Bool
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			close(s.shutdown)
+			s.cancelActive()
+			s.waitWorkers()
+			// Release the scanner goroutine from its stdin read. The
+			// shutdown channel already stopped intake; this only ends
+			// the blocked read so no goroutine outlives the session.
+			// Errors are ignored: stdin may already be at EOF.
+			_ = os.Stdin.Close()
+			cleanup()
+		})
+	}
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
 	go func() {
 		<-sigs
-		s.cancelActive()
-		cleanup()
-		os.Exit(143)
+		signalled.Store(true)
+		shutdown()
 	}()
 
 	s.runLoop(os.Stdin)
-	s.cancelActive()
-	s.waitIdle(10 * time.Second)
-	cleanup()
+	shutdown()
+	if signalled.Load() {
+		os.Exit(143)
+	}
 	return nil
 }
 
-// cancelActive aborts the in-flight run, if any. It is safe to call twice.
+// cancelActive aborts the in-flight run and the compact reservation, if
+// any. Reader shutdown and abort share it; it is safe to call twice.
 func (s *rpcRunner) cancelActive() {
 	s.mu.Lock()
-	cancel := s.cancel
+	var cancels []context.CancelFunc
+	if s.run != nil {
+		cancels = append(cancels, s.run.cancel)
+	}
+	if s.reservation != nil {
+		cancels = append(cancels, s.reservation.cancel)
+	}
 	s.mu.Unlock()
-	if cancel != nil {
+	for _, cancel := range cancels {
 		cancel()
 	}
 }
 
-// waitIdle blocks until the run settles or the budget expires, so stdin EOF
-// does not truncate the settled events already queued for stdout.
-func (s *rpcRunner) waitIdle(budget time.Duration) {
-	deadline := time.Now().Add(budget)
-	for time.Now().Before(deadline) {
-		if !s.isRunning() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+// waitWorkers blocks until the owned prompt run and compact reservation
+// settle. Admissions after shutdown refuse, so the snapshot is complete.
+func (s *rpcRunner) waitWorkers() {
+	s.mu.Lock()
+	var waits []<-chan struct{}
+	if s.run != nil {
+		waits = append(waits, s.run.done)
+	}
+	if s.reservation != nil {
+		waits = append(waits, s.reservation.done)
+	}
+	s.mu.Unlock()
+	for _, wait := range waits {
+		<-wait
 	}
 }
