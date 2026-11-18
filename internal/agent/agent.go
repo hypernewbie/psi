@@ -24,6 +24,22 @@ import (
 
 type InternalToolHandler func(context.Context, tools.Invocation) tools.Result
 
+// LiveSettings is the mutable part of a run's request configuration. The
+// loop reads it at every turn boundary, so a change made during a run
+// applies to the next provider request without restarting the run.
+// Overrides and AuthErr ride along so summary-model resolution on the
+// agent goroutine observes one consistent snapshot.
+type LiveSettings struct {
+	Provider         provider.Provider
+	Overrides        config.StartupOverrides
+	Model            provider.ModelMeta
+	Thinking         string
+	AutoCompact      bool
+	ReserveTokens    int
+	KeepRecentTokens int
+	AuthErr          error
+}
+
 // ErrNotBumpable reports that interactive bump admission is unavailable or
 // an empty submission has no unfinished turn. It is not a provider failure.
 var ErrNotBumpable = errors.New("nothing to retry")
@@ -38,6 +54,11 @@ type Config struct {
 	AutoCompact      bool
 	ReserveTokens    int
 	KeepRecentTokens int
+	// LiveSettings returns the mutable request configuration for the next
+	// provider request. It is called at each turn boundary. A nil callback, or
+	// a snapshot without a provider or model, keeps the submitted
+	// configuration.
+	LiveSettings func() LiveSettings
 	// DynamicConfig returns the system prompt, its sections, and the tool set
 	// for each model request.
 	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
@@ -440,6 +461,7 @@ func (l *Loop) Bump(ctx context.Context, cfg Config) error {
 		cfg.Thinking = "off"
 	}
 	refreshDynamicConfig(&cfg)
+	applyLiveSettings(&cfg, l)
 	request, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
 	if err != nil {
 		return err
@@ -476,6 +498,7 @@ func (l *Loop) submit(ctx context.Context, input UserInput, cfg Config) error {
 		cfg.Thinking = "off"
 	}
 	refreshDynamicConfig(&cfg)
+	applyLiveSettings(&cfg, l)
 	request, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
 	if err != nil {
 		return err
@@ -501,6 +524,31 @@ func (l *Loop) submit(ctx context.Context, input UserInput, cfg Config) error {
 func refreshDynamicConfig(cfg *Config) {
 	if cfg.DynamicConfig != nil {
 		cfg.System, cfg.Sections, cfg.Tools = cfg.DynamicConfig()
+	}
+}
+
+// applyLiveSettings refreshes the run's mutable configuration at a turn
+// boundary. A snapshot without a provider or a model means "no live
+// configuration" and leaves the run unchanged.
+func applyLiveSettings(cfg *Config, l *Loop) {
+	if cfg.LiveSettings == nil {
+		return
+	}
+	live := cfg.LiveSettings()
+	if live.Provider == nil || live.Model.ID == "" {
+		return
+	}
+	l.prov = live.Provider
+	cfg.Model = live.Model
+	if live.Thinking != "" {
+		cfg.Thinking = live.Thinking
+	}
+	cfg.AutoCompact = live.AutoCompact
+	if live.ReserveTokens > 0 {
+		cfg.ReserveTokens = live.ReserveTokens
+	}
+	if live.KeepRecentTokens > 0 {
+		cfg.KeepRecentTokens = live.KeepRecentTokens
 	}
 }
 
@@ -580,6 +628,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		applyLiveSettings(&cfg, l)
 		// Turn boundary: deliver steering queued while the previous turn ran,
 		// before the next model request (Pi's getSteeringMessages poll). Pi skips
 		// this poll when the previous iteration already delivered a batch, so
@@ -630,6 +679,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			if err != nil {
 				return err
 			}
+			// Compaction can be long; a model or thinking change during the
+			// summary must reach the post-compaction request in this turn.
+			applyLiveSettings(&cfg, l)
 		}
 		req, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
 		if err != nil {
@@ -852,6 +904,7 @@ func (l *Loop) maybeAdaptiveCompact(ctx context.Context, cfg Config, canContinue
 	if cfg.ACPolicy == nil {
 		return nil
 	}
+	applyLiveSettings(&cfg, l)
 	proj, err := l.store.Projection()
 	if err != nil {
 		return err

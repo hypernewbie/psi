@@ -18,6 +18,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -584,6 +585,7 @@ func Run(args []string, version string) error {
 	}
 	r := &runtime{
 		store: store, version: version, options: o, settings: st, models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir, web: web,
+		live:         newLiveConfig(),
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
 		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
@@ -600,6 +602,7 @@ func Run(args []string, version string) error {
 	if err := r.restore(); err != nil {
 		return err
 	}
+	r.publishLive()
 	if err := r.loops.Reconstruct(); err != nil {
 		return err
 	}
@@ -653,21 +656,47 @@ func Run(args []string, version string) error {
 // newlineRun matches Pi's /name normalization: consecutive CR/LF runs collapse to one space.
 var newlineRun = regexp.MustCompile(`[\r\n]+`)
 
+// liveConfig is the mutable request configuration a running loop reads at
+// each turn boundary. The TUI goroutine writes it and the run goroutine
+// reads it. It is held by pointer because the runtime is copied by value.
+type liveConfig struct {
+	mu   sync.RWMutex
+	live agent.LiveSettings
+}
+
+func newLiveConfig() *liveConfig { return &liveConfig{} }
+
+func (c *liveConfig) publish(live agent.LiveSettings) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.live = live
+}
+
+func (c *liveConfig) snapshot() agent.LiveSettings {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.live
+}
+
 type runtime struct {
-	store                    *session.Store
-	version                  string
-	reg                      *tools.Registry
-	options                  Options
-	settings                 config.Settings
-	models                   *config.ModelsFile
-	skills                   []skills.Skill
-	prompt, agentDir         string
-	sections                 []config.PromptSection
-	ov                       config.StartupOverrides
-	cfg                      agent.Config
-	prov                     provider.Provider
-	web                      *webaccess.Client
-	authErr                  error
+	store            *session.Store
+	version          string
+	reg              *tools.Registry
+	options          Options
+	settings         config.Settings
+	models           *config.ModelsFile
+	skills           []skills.Skill
+	prompt, agentDir string
+	sections         []config.PromptSection
+	ov               config.StartupOverrides
+	cfg              agent.Config
+	prov             provider.Provider
+	web              *webaccess.Client
+	authErr          error
+	// live holds the mutable request configuration a running loop reads at
+	// each turn boundary. It is a pointer because the runtime is copied by
+	// value.
+	live                     *liveConfig
 	generation               int64
 	state                    State
 	bridge                   *pibridge.Client
@@ -802,6 +831,23 @@ func (r *runtime) checkBump(unavailable bool, requireUnfinished bool) error {
 		return fmt.Errorf("storage blocked: %w", err)
 	}
 	return nil
+}
+
+// pickerCloseState computes the UI state after a picker closes. While a run
+// is active the underlying run state (waiting, cancelling, compacting) is
+// preserved; otherwise storage failures surface as blocked, offline stays
+// offline, and idle is restored.
+func (r *runtime) pickerCloseState(busy bool, runOutcome string, current State) State {
+	if busy {
+		return current
+	}
+	if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
+		return StateStorageBlocked
+	}
+	if r.authErr != nil {
+		return StateOffline
+	}
+	return StateIdle
 }
 
 func (r *runtime) restore() error {
@@ -948,12 +994,16 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	return nil
 }
 
-func (r *runtime) compactionProvider(reference string) (provider.Provider, provider.ModelMeta, func(), error) {
-	if r.authErr != nil {
+func (r *runtime) compactionProvider(reference string, settings config.Settings) (provider.Provider, provider.ModelMeta, func(), error) {
+	// Compaction runs on the agent goroutine. Read the active overrides and
+	// credentials from the live snapshot so a mid-run /model change cannot
+	// race the summary-model resolution.
+	live := r.live.snapshot()
+	if live.AuthErr != nil {
 		// Pi resolves the summarization request only when it summarizes: the
 		// preparation runs first, so a session with nothing to compact never
 		// needs credentials.
-		return nil, provider.ModelMeta{}, nil, r.authErr
+		return nil, provider.ModelMeta{}, nil, live.AuthErr
 	}
 	if reference == "" {
 		return nil, provider.ModelMeta{}, nil, nil
@@ -962,17 +1012,16 @@ func (r *runtime) compactionProvider(reference string) (provider.Provider, provi
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("invalid compactor model %q; use provider/model", reference)
 	}
-	if parts[0] == r.ov.Provider && parts[1] == r.ov.Model {
+	if parts[0] == live.Overrides.Provider && parts[1] == live.Overrides.Model {
 		return nil, provider.ModelMeta{}, nil, nil
 	}
 	if r.models == nil {
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("model catalog is unavailable")
 	}
-	next := r.ov
+	next := live.Overrides
 	next.Provider, next.Model, next.Thinking = parts[0], parts[1], "off"
 	next.ThinkingExplicit = true
-	candidate := *r
-	candidate.prov = nil
+	candidate := &runtime{store: r.store, models: r.models, settings: settings, prompt: r.prompt, sections: r.sections, agentDir: r.agentDir}
 	if err := candidate.configure(next); err != nil {
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("compactor model %s: %w", reference, err)
 	}
@@ -1172,6 +1221,33 @@ func (r *runtime) installConfiguration(candidate *runtime) {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
+	r.publishLive()
+}
+
+// publishLive stores the mutable request configuration that a running loop
+// reads at its next turn boundary.
+func (r *runtime) publishLive() {
+	if r.live == nil {
+		return
+	}
+	r.live.publish(agent.LiveSettings{
+		Provider:         r.prov,
+		Overrides:        r.ov,
+		Model:            r.cfg.Model,
+		Thinking:         r.cfg.Thinking,
+		AutoCompact:      r.cfg.AutoCompact,
+		ReserveTokens:    r.cfg.ReserveTokens,
+		KeepRecentTokens: r.cfg.KeepRecentTokens,
+		AuthErr:          r.authErr,
+	})
+}
+
+// liveSettings returns the current mutable request configuration.
+func (r *runtime) liveSettings() agent.LiveSettings {
+	if r.live == nil {
+		return agent.LiveSettings{}
+	}
+	return r.live.snapshot()
 }
 
 // footerThinkingLabel follows Pi's footer. The thinking level appears only for
@@ -1532,7 +1608,31 @@ func (r *runtime) repl(console *terminal.Console) error {
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
 	var activeLoop *agent.Loop
-	var pendingACCompactFocus *string
+	// One deferred FIFO for /ac compact and /loop, executed in order at
+	// settlement after prior input work. At most one of each kind is queued.
+	type deferredAction struct {
+		kind string
+		arg  string
+	}
+	var deferredFIFO []deferredAction
+	// One exclusive post-cancellation action for replace, compact, or
+	// reload/retry. Set during a run, executed after settlement.
+	type interruptAction struct {
+		kind  string
+		focus string
+	}
+	var pendingInterrupt *interruptAction
+	// Reload descriptor captures the active operation for /reload replay.
+	type reloadDescriptor struct {
+		sessionID  string
+		generation int64
+		mode       inputMode
+		input      agent.UserInput
+		focus      string
+		resume     bool
+		explicit   bool
+	}
+	var activeReloadDesc *reloadDescriptor
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
@@ -1601,17 +1701,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.selectorRestoreOnSuccess = restoreOnSuccess
 		selector.SetFilter(query)
 		console.Editor.RestoreDraft(query, len([]rune(query)))
-		r.state = StateSelecting
+		// Picker visibility is separate from the run state. When a run is
+		// active, keep Waiting/Cancelling/Compacting so stream events and
+		// close logic stay accurate.
+		if !busy {
+			r.state = StateSelecting
+		}
 		r.draw(console)
+	}
+	restorePickerState := func() {
+		r.state = r.pickerCloseState(busy, runOutcome, r.state)
 	}
 	closeSelector := func(restoreDraft bool) {
 		r.selector = nil
 		console.ClearPickerRows()
 		r.selectorRestoreOnSuccess = false
-		r.state = StateIdle
-		if r.authErr != nil {
-			r.state = StateOffline
-		}
+		restorePickerState()
 		if restoreDraft {
 			console.Editor.RestoreDraft(r.selectorDraft, r.selectorCursor)
 			console.RefreshCompletion()
@@ -1623,16 +1728,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	openSettings := func() {
 		r.settingsPicker = r.newSettingsPicker()
-		r.state = StateSelecting
+		if !busy {
+			r.state = StateSelecting
+		}
 		r.draw(console)
 	}
 	closeSettings := func() {
 		r.settingsPicker = nil
 		console.ClearPickerRows()
-		r.state = StateIdle
-		if r.authErr != nil {
-			r.state = StateOffline
-		}
+		restorePickerState()
 		r.draw(console)
 	}
 	openTrust := func() {
@@ -1962,13 +2066,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}()
 	var compactionCountAtStart uint64
 	var resumeAfterCompaction bool
+	var compactExplicit bool
 	var activeConfig agent.Config
 	startInputMode := func(input agent.UserInput, focus string, mode inputMode, silent bool) (bool, string) {
 		compact := mode == inputCompact
 		bump := mode == inputBump
 		resumeThisCompaction := compact && resumeAfterCompaction
+		explicitThisCompaction := compact && compactExplicit
 		if compact {
 			resumeAfterCompaction = false
+			compactExplicit = false
 		}
 		cancelACEndTurn()
 		if err := r.store.WriteError(); err != nil {
@@ -2008,7 +2115,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 		runOutcome, visibleRunText = "", false
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
+		// Capture the active operation for /reload replay. Overwrites any
+		// prior descriptor; a new run owns the slot until it settles.
+		activeReloadDesc = &reloadDescriptor{
+			sessionID:  r.store.Header().ID,
+			generation: r.generation,
+			mode:       mode,
+			input:      input,
+			focus:      focus,
+			resume:     resumeThisCompaction,
+			explicit:   explicitThisCompaction,
+		}
 		compactionCountAtStart = r.ac.Snapshot().CompactionCount
+		// Sync the live snapshot with the starting configuration so turn
+		// boundaries see the provider this run actually uses. Tests replace
+		// r.prov directly; production always publishes via install.
+		r.publishLive()
 		r.state = StateWaiting
 		setActivity("Working")
 		if compact {
@@ -2017,12 +2139,36 @@ func (r *runtime) repl(console *terminal.Console) error {
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
 		cfg.ACPolicy = r.ac
+		// Capture the settings, tool list, and selected web tools once so the
+		// run goroutine never reads r.settings while the settings picker
+		// writes it.
+		compactionSettings := r.settings
+		defaultTools := r.settings.DefaultTools
+		webDefinitions := r.webDefinitions()
+		setRetryObserver := func(prov provider.Provider) {
+			if observable, ok := prov.(interface {
+				SetRetryObserver(func(provider.RetryInfo))
+			}); ok {
+				observable.SetRetryObserver(func(info provider.RetryInfo) {
+					seq++
+					events <- event.Event{Type: event.Retry, Generation: gen, Seq: seq, SessionID: r.store.Header().ID,
+						RetryAttempt: info.Attempt, RetryMaximum: info.Maximum, RetryDelayMs: int64(info.Delay / time.Millisecond), RetryClass: info.Class}
+				})
+			}
+		}
+		cfg.LiveSettings = func() agent.LiveSettings {
+			live := r.liveSettings()
+			if live.Provider != nil {
+				setRetryObserver(live.Provider)
+			}
+			return live
+		}
 		cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
-			return r.compactionProvider(r.ac.Snapshot().CompactorModel)
+			return r.compactionProvider(r.ac.Snapshot().CompactorModel, compactionSettings)
 		}
 		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
-			definitions := append(tools.Definitions(r.settings.DefaultTools), r.webDefinitions()...)
+			definitions := append(tools.Definitions(defaultTools), webDefinitions...)
 			if state.Active && !state.Forever {
 				definitions = append(definitions, loop.ToolDefinition())
 			}
@@ -2060,15 +2206,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			content, ok := r.loops.ContinuePrompt()
 			return loop.NudgeMessageType, content, ok
 		}
-		if observable, ok := r.prov.(interface {
-			SetRetryObserver(func(provider.RetryInfo))
-		}); ok {
-			observable.SetRetryObserver(func(info provider.RetryInfo) {
-				seq++
-				events <- event.Event{Type: event.Retry, Generation: gen, Seq: seq, SessionID: r.store.Header().ID,
-					RetryAttempt: info.Attempt, RetryMaximum: info.Maximum, RetryDelayMs: int64(info.Delay / time.Millisecond), RetryClass: info.Class}
-			})
-		}
+		setRetryObserver(r.prov)
 		activeConfig = cfg
 		loop := r.newLoop(func(e event.Event) {
 			seq++
@@ -2189,6 +2327,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			// Pi starts the compaction and reports the outcome through the
 			// run: the preparation happens once, inside the run.
 			resumeAfterCompaction = resume
+			compactExplicit = true
 			start("", "", focus, "", "", true)
 			return
 		}
@@ -2203,6 +2342,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		resumeAfterCompaction = resume
+		compactExplicit = false
 		start("", "", focus, "", "", true)
 	}
 	endTurnReady := func() bool {
@@ -2427,13 +2567,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 			// on cancellation or failure, restore it to the editor instead.
 			var undelivered []string
 			var lateQueueLoop *agent.Loop
-			if r.recoverInFlight() > 0 {
+			recoveredInFlight := r.recoverInFlight()
+			if recoveredInFlight > 0 {
 				notice(terminal.NoticeWarning, "An attachment prompt was not delivered. Phi keeps a saved copy you can restore.")
 			}
 			if activeLoop != nil {
 				pendingSteering := activeLoop.PendingSteering()
 				pendingFollowUp := activeLoop.PendingFollowUp()
-				if err == nil && !exiting && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
+				// An owned interrupt suppresses late-queue continuation even
+				// if the worker finished after cancellation was requested.
+				if err == nil && !exiting && pendingInterrupt == nil && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) && r.selector == nil && r.settingsPicker == nil {
 					lateQueueLoop = activeLoop
 				} else {
 					undelivered = append(r.takeSteering(activeLoop), activeLoop.ClearFollowUp()...)
@@ -2450,11 +2593,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if len(undelivered) > 0 {
 				combined := strings.Join(undelivered, "\n\n")
-				if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
-					combined += "\n\n" + current
+				if r.selector != nil {
+					// The editor holds the picker's query. Hand the restored
+					// text to the draft the picker will restore on close.
+					if strings.TrimSpace(r.selectorDraft) != "" {
+						combined += "\n\n" + r.selectorDraft
+					}
+					r.selectorDraft, r.selectorCursor = combined, len([]rune(combined))
+				} else {
+					if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
+						combined += "\n\n" + current
+					}
+					console.Editor.RestoreDraft(combined, len([]rune(combined)))
+					console.RefreshCompletion()
 				}
-				console.Editor.RestoreDraft(combined, len([]rune(combined)))
-				console.RefreshCompletion()
 			}
 			thinkingStream.Close()
 			stream.Close()
@@ -2542,9 +2694,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 				return outputErr
 			}
-			r.state = StateIdle
-			if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
-				r.state = StateStorageBlocked
+			if r.selector == nil && r.settingsPicker == nil {
+				r.state = StateIdle
+				if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
+					r.state = StateStorageBlocked
+				}
 			}
 			if suspendPending {
 				suspendPending = false
@@ -2558,7 +2712,107 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.refreshPresentation(console)
 				r.draw(console)
 			}
-			if r.state == StateIdle && len(initialMessages) > 0 {
+			// A completed run without a reload interrupt has no original to
+			// replay. A ContinuePending launched below also starts with none.
+			if pendingInterrupt == nil || pendingInterrupt.kind != "reload" {
+				activeReloadDesc = nil
+			}
+			if pendingInterrupt != nil && !exiting {
+				action := pendingInterrupt
+				pendingInterrupt = nil
+				// History stays append-only; the cancelled partial remains.
+				// The new operation starts fresh without re-asking.
+				switch action.kind {
+				case "compact":
+					if admitted, reason := startInput(agent.UserInput{}, action.focus, true); !admitted {
+						if reason != "" {
+							notice(terminal.NoticeError, reason)
+						}
+						r.draw(console)
+					}
+				case "reload":
+					desc := activeReloadDesc
+					activeReloadDesc = nil
+					if desc != nil && (r.store.Header().ID != desc.sessionID || r.generation != desc.generation) {
+						notice(terminal.NoticeWarning, "Session changed during reload; skipped.")
+						r.draw(console)
+						break
+					}
+					if _, reloadErr := r.handleReloadCommand("", out); reloadErr != nil {
+						notice(terminal.NoticeError, reloadErr.Error())
+						if desc != nil && desc.mode == inputPrompt {
+							if desc.input.Structured() {
+								r.retainInFlight(desc.input)
+								if r.recoverInFlight() > 0 {
+									notice(terminal.NoticeWarning, "Reload failed; the prompt was kept for explicit restore.")
+								}
+							} else if text := strings.TrimSpace(desc.input.Text()); text != "" {
+								if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
+									text += "\n\n" + current
+								}
+								console.Editor.RestoreDraft(text, len([]rune(text)))
+								console.RefreshCompletion()
+							}
+						} else if desc != nil {
+							notice(terminal.NoticeWarning, "Reload failed; retry the interrupted action.")
+						}
+						r.draw(console)
+						break
+					}
+					if desc == nil || recoveredInFlight > 0 || err == nil {
+						r.draw(console)
+						break
+					}
+					switch desc.mode {
+					case inputPrompt:
+						if admitted, reason := startInput(desc.input, "", false); !admitted {
+							if reason != "" {
+								notice(terminal.NoticeError, reason)
+							}
+							if desc.input.Structured() {
+								r.retainInFlight(desc.input)
+								if r.recoverInFlight() > 0 {
+									notice(terminal.NoticeWarning, "The prompt was kept for explicit restore.")
+								}
+							} else if text := strings.TrimSpace(desc.input.Text()); text != "" {
+								if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
+									text += "\n\n" + current
+								}
+								console.Editor.RestoreDraft(text, len([]rune(text)))
+								console.RefreshCompletion()
+							}
+							r.draw(console)
+						}
+					case inputCompact:
+						if !desc.explicit {
+							r.draw(console)
+							break
+						}
+						resumeAfterCompaction = desc.resume
+						compactExplicit = true
+						if admitted, reason := startInput(agent.UserInput{}, desc.focus, true); !admitted {
+							if reason != "" {
+								notice(terminal.NoticeError, reason)
+							}
+							notice(terminal.NoticeWarning, "Reload succeeded; run /compact again to retry.")
+							r.draw(console)
+						}
+					case inputBump:
+						if admitted, reason := startInputMode(agent.UserInput{}, "", inputBump, false); !admitted {
+							if reason != "" {
+								notice(terminal.NoticeError, reason)
+							}
+							notice(terminal.NoticeWarning, "Reload succeeded; the bump was not retried.")
+							r.draw(console)
+						}
+					default:
+						r.draw(console)
+					}
+				}
+				_, doneFramesAfter, _, _ := console.FrameStats()
+				r.eventFrames += doneFramesAfter - doneFramesBefore
+			}
+			if pendingInterrupt == nil && len(initialMessages) > 0 {
 				message := initialMessages[0]
 				initialMessages = initialMessages[1:]
 				start(message, message, "", "", "", false)
@@ -2576,10 +2830,40 @@ func (r *runtime) repl(console *terminal.Console) error {
 				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
 				r.draw(console)
 			}
-			if pendingACCompactFocus != nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
-				focus := *pendingACCompactFocus
-				pendingACCompactFocus = nil
-				checkAndStartCompact(focus, true, true)
+			for len(deferredFIFO) > 0 && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
+				action := deferredFIFO[0]
+				deferredFIFO = deferredFIFO[1:]
+				switch action.kind {
+				case "accompact":
+					checkAndStartCompact(action.arg, true, true)
+				case "loop":
+					if writeErr := r.store.WriteError(); writeErr != nil {
+						notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error())
+						continue
+					}
+					if r.authErr != nil {
+						notice(terminal.NoticeError, r.authErr.Error())
+						continue
+					}
+					state, startErr := r.loops.Start(action.arg)
+					if startErr != nil {
+						notice(terminal.NoticeError, startErr.Error())
+						continue
+					}
+					prompt := loop.BuildPrompt(state)
+					console.SetLoopStatus(r.loops.StatusLine())
+					if admitted, reason := startInput(agent.UserInput{Content: prompt, Display: prompt}, "", false); !admitted {
+						if reason != "" {
+							notice(terminal.NoticeError, reason)
+						}
+						continue
+					}
+				default:
+					notice(terminal.NoticeError, "Unknown deferred action: "+action.kind)
+				}
+				if busy {
+					break
+				}
 			}
 			if err == nil && lateQueueLoop == nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting && r.ac.Snapshot().CompactionCount == compactionCountAtStart {
 				scheduleEndTurn()
@@ -2632,7 +2916,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if !busy && r.settingsPicker != nil {
+			if r.settingsPicker != nil {
 				if input.Paste {
 					continue
 				}
@@ -2698,7 +2982,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if !busy && r.selector != nil {
+			if r.selector != nil {
 				key := string(input.Key)
 				if !input.Paste {
 					switch key {
@@ -2801,6 +3085,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 							closeSelector(r.selectorRestoreOnSuccess)
 							continue
 						}
+						if busy {
+							notice(terminal.NoticeInfo, "Finish or cancel the run before switching sessions.")
+							continue
+						}
 						if selected.ID == r.store.Header().ID {
 							print("already on session " + selected.ID)
 							closeSelector(false)
@@ -2858,7 +3146,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.draw(console)
 				continue
 			}
-			if !busy && !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
+			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
 				r.refreshModelsForPicker(notice)
 				openSelector(modelSelector(r), console.Editor.Text(), console.Editor.Pos(), "", true)
 				continue
@@ -2893,7 +3181,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Status("Skill blocks: " + state)
 				continue
 			}
-			if !busy && !input.Paste && string(input.Key) == "\x1b[Z" {
+			if !input.Paste && string(input.Key) == "\x1b[Z" {
 				cycleThinking()
 				continue
 			}
@@ -2946,22 +3234,31 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// waits for this run to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
-						notice(terminal.NoticeInfo, "Finish or cancel the run before changing settings.")
-						console.Editor.RestoreDraft(text, len([]rune(text)))
-						console.RefreshCompletion()
+						if strings.TrimSpace(cmd.Arg) != "" {
+							notice(terminal.NoticeError, "use /settings")
+						} else {
+							openSettings()
+						}
 						r.draw(console)
 						continue
 					}
 					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "ac" || cmd.Name == "autocompact") {
 						parts := strings.Fields(cmd.Arg)
 						if len(parts) > 0 && strings.EqualFold(parts[0], "compact") {
+							queued := false
+							for _, a := range deferredFIFO {
+								if a.kind == "accompact" {
+									queued = true
+									break
+								}
+							}
 							if compacting {
 								notice(terminal.NoticeInfo, "Compaction is already running.")
-							} else if pendingACCompactFocus != nil {
+							} else if queued {
 								notice(terminal.NoticeInfo, "An /ac compact request is already queued.")
 							} else {
 								focus := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cmd.Arg), parts[0]))
-								pendingACCompactFocus = &focus
+								deferredFIFO = append(deferredFIFO, deferredAction{kind: "accompact", arg: focus})
 								notice(terminal.NoticeInfo, "Compaction queued until the active run settles; it will resume the task afterward.")
 							}
 							console.Editor.Clear()
@@ -2981,10 +3278,125 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						continue
 					}
-					console.Editor.RestoreDraft(text, len([]rune(text)))
-					console.RefreshCompletion()
-					r.draw(console)
-					continue
+					// Live configuration: explicit model and thinking changes apply
+					// to the run's next request. Empty or unknown model args open
+					// the picker; empty thinking args open the level picker.
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "model" {
+						arg := strings.TrimSpace(cmd.Arg)
+						if arg != "" && r.modelArgumentKnown(arg) {
+							if _, err := r.command(cmd, out); err != nil {
+								print("error: " + err.Error())
+							}
+							r.draw(console)
+							continue
+						}
+						r.refreshModelsForPicker(notice)
+						openSelector(modelSelector(r), text, len([]rune(text)), arg, false)
+						continue
+					}
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "thinking" {
+						arg := strings.TrimSpace(cmd.Arg)
+						if arg == "" {
+							openSelector(thinkingSelector(r), text, len([]rune(text)), "", false)
+							continue
+						}
+						if _, err := r.command(cmd, out); err != nil {
+							print("error: " + err.Error())
+						}
+						r.draw(console)
+						continue
+					}
+					// Read-only and metadata commands run immediately without
+					// cancelling the active run.
+					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "session" || cmd.Name == "hotkeys" || cmd.Name == "name") {
+						if _, err := r.command(cmd, out); err != nil {
+							print("error: " + err.Error())
+						}
+						r.draw(console)
+						continue
+					}
+					// Manual compact cancels and settles, then starts after the
+					// outgoing run completes. It does not re-ask the prompt.
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "compact" {
+						if writeErr := r.store.WriteError(); writeErr != nil {
+							notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
+							r.draw(console)
+							continue
+						}
+						if pendingInterrupt != nil {
+							notice(terminal.NoticeInfo, "Another operation is already queued.")
+							r.draw(console)
+							continue
+						}
+						pendingInterrupt = &interruptAction{kind: "compact", focus: cmd.Arg}
+						console.Editor.Clear()
+						notice(terminal.NoticeInfo, "Cancelling the run for compaction.")
+						cancelActive()
+						r.draw(console)
+						continue
+					}
+					// Busy /reload interrupts the run, reloads resources at
+					// settlement, then replays the original input as a new turn.
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "reload" {
+						if strings.TrimSpace(cmd.Arg) != "" {
+							notice(terminal.NoticeError, "use /reload")
+							console.Editor.RestoreDraft(text, len([]rune(text)))
+							console.RefreshCompletion()
+							r.draw(console)
+							continue
+						}
+						if pendingInterrupt != nil {
+							notice(terminal.NoticeInfo, "Another operation is already queued.")
+							r.draw(console)
+							continue
+						}
+						pendingInterrupt = &interruptAction{kind: "reload"}
+						console.Editor.Clear()
+						notice(terminal.NoticeInfo, "Cancelling the run for reload.")
+						cancelActive()
+						r.draw(console)
+						continue
+					}
+					// Busy /loop queues in the deferred FIFO; validation and Start
+					// run at idle after prior input work.
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "loop" {
+						queued := false
+						for _, a := range deferredFIFO {
+							if a.kind == "loop" {
+								queued = true
+								break
+							}
+						}
+						if queued {
+							notice(terminal.NoticeInfo, "A /loop request is already queued.")
+						} else {
+							deferredFIFO = append(deferredFIFO, deferredAction{kind: "loop", arg: cmd.Arg})
+							notice(terminal.NoticeInfo, "Loop queued until the active run settles.")
+						}
+						console.Editor.Clear()
+						r.draw(console)
+						continue
+					}
+					// Known operations that need cancellation or are unsafe stay
+					// refused (restored) until their interrupt path lands. Unknown
+					// slash text falls through to ordinary steering below.
+					if cmd, ok := terminal.ParseCommand(text); ok {
+						switch cmd.Name {
+						case "quit", "new", "clone", "resume", "trust":
+							console.Editor.RestoreDraft(text, len([]rune(text)))
+							console.RefreshCompletion()
+							r.draw(console)
+							continue
+						}
+					} else {
+						// Not a parseable command (bare "/" or similar): restore.
+						console.Editor.RestoreDraft(text, len([]rune(text)))
+						console.RefreshCompletion()
+						r.draw(console)
+						continue
+					}
+					// Unknown slash (including /help, /history, /version): queue
+					// as ordinary prompt text via steering.
 				}
 				if activeLoop != nil {
 					if input.FollowUp {
@@ -3054,6 +3466,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 					// Pi starts the compaction and reports the outcome through
 					// the run: the preparation happens once, inside the run.
+					compactExplicit = true
 					start("", "", cmd.Arg, "", "", true)
 					continue
 				}

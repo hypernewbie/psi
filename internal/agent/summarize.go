@@ -123,6 +123,7 @@ func (l *Loop) ContinuePending(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer l.end()
+	applyLiveSettings(&cfg, l)
 	delivered, err := l.deliverQueuedSteering()
 	if err != nil {
 		return err
@@ -199,6 +200,7 @@ func (l *Loop) CheckCompaction(cfg Config) (CompactionPreparation, error) {
 }
 
 func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason string) (runErr error) {
+	applyLiveSettings(&cfg, l)
 	prepared, err := l.CheckCompaction(cfg)
 	if err != nil {
 		return err
@@ -211,6 +213,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 
 	summaryProvider, summaryModel := l.prov, cfg.Model
 	cleanup := func() {}
+	overrideUsed := false
 	if cfg.CompactionProvider != nil {
 		resolvedProvider, resolvedModel, closeProvider, resolveErr := cfg.CompactionProvider()
 		if resolveErr != nil {
@@ -221,9 +224,11 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 		}
 		if resolvedProvider != nil {
 			summaryProvider = resolvedProvider
+			overrideUsed = true
 		}
 		if resolvedModel.ID != "" {
 			summaryModel = resolvedModel
+			overrideUsed = true
 		}
 		if closeProvider != nil {
 			cleanup = closeProvider
@@ -231,7 +236,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	}
 	defer cleanup()
 	cfg.SummaryRetryReason = reason
-	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel)
+	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel, overrideUsed)
 	if cfg.ACPolicy != nil {
 		cfg.ACPolicy.RecordCompaction(err == nil, compactionSourceName(reason), prepared.TokensBefore)
 	}
@@ -253,7 +258,7 @@ func compactionSourceName(reason string) string {
 	}
 }
 
-func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, prepared CompactionPreparation, summaryProvider provider.Provider, summaryModel provider.ModelMeta) error {
+func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, prepared CompactionPreparation, summaryProvider provider.Provider, summaryModel provider.ModelMeta, overrideUsed bool) error {
 	if prepared.Disposition != CompactionEligible {
 		return &CompactionNoWorkError{Disposition: prepared.Disposition}
 	}
@@ -279,6 +284,20 @@ func (l *Loop) compactPrepared(ctx context.Context, cfg Config, focus string, pr
 		hasHistoryUsage = true
 	}
 	if prepared.SplitTurn {
+		// A split-turn compaction issues two distinct summary requests. A model
+		// change during the first summary must reach the second, unless an
+		// explicit compactor override pins the summary model.
+		if !overrideUsed {
+			liveCfg := cfg
+			applyLiveSettings(&liveCfg, l)
+			summaryCfg.Model = liveCfg.Model
+			summaryProvider = l.prov
+		} else if cfg.LiveSettings != nil {
+			// Keep the normal run's provider current for post-compaction
+			// requests, even though summaries stay on the override.
+			liveCfg := cfg
+			applyLiveSettings(&liveCfg, l)
+		}
 		if len(prepared.TurnPrefix) == 0 {
 			return &SummaryFailure{Err: fmt.Errorf("split-turn preparation has no prefix messages; original context is unchanged")}
 		}
