@@ -314,6 +314,31 @@ func TestSaveAPIKeyPreCancelledContextHasNoFilesystemEffects(t *testing.T) {
 	}
 }
 
+func TestReadAuthDocumentRefusesReplacedFile(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	const document = `{"deepseek":{"type":"api_key","key":"synthetic-key"}}`
+	if err := os.WriteFile(authPath, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target, err := resolveAuthTarget(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the original alive so a reused file ID cannot hide replacement.
+	if err := os.Rename(authPath, filepath.Join(dir, "original.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, _, _, err := readAuthDocument(target)
+	defer releaseRawEntries(entries)
+	if err == nil || !strings.Contains(err.Error(), "changed while being read") {
+		t.Fatalf("replaced file error = %v", err)
+	}
+}
+
 func TestWriteAuthDocumentLostLeaseLeavesOriginalAndNoTemp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "auth.json")
@@ -416,9 +441,14 @@ func TestWriteAuthDocumentRefusesReplacedAbsentParent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "target changed") {
 		t.Fatalf("replaced parent error = %v", err)
 	}
-	temps, err := filepath.Glob(filepath.Join(parent, ".psi-auth-*"))
-	if err != nil || len(temps) != 0 {
-		t.Fatalf("temporary files remain: %v, error=%v", temps, err)
+	for _, directory := range []string{parent, older} {
+		if _, err := os.Stat(filepath.Join(directory, "auth.json")); !os.IsNotExist(err) {
+			t.Fatalf("rejected write created auth.json in %s: %v", filepath.Base(directory), err)
+		}
+		temps, err := filepath.Glob(filepath.Join(directory, ".psi-auth-*"))
+		if err != nil || len(temps) != 0 {
+			t.Fatalf("temporary files remain in %s: %v, error=%v", filepath.Base(directory), temps, err)
+		}
 	}
 }
 

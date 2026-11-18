@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // authTarget is the resolved filesystem object for one auth write transaction.
@@ -17,6 +18,21 @@ type authTarget struct {
 	info       os.FileInfo
 	parentInfo os.FileInfo
 	exists     bool
+}
+
+// statAuthIdentity captures identity now rather than at a later comparison.
+// Windows os.Stat defers file-ID lookup until os.SameFile, so use an opened
+// handle there. Other platforms retain os.Stat and its permission requirements.
+func statAuthIdentity(path string) (os.FileInfo, error) {
+	if runtime.GOOS != "windows" {
+		return os.Stat(path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return file.Stat()
 }
 
 // resolveAuthTarget follows the final path and its parent directories. A
@@ -36,7 +52,7 @@ func resolveAuthTarget(path string) (authTarget, error) {
 	target := filepath.Join(resolvedParent, base)
 
 	if _, statErr := os.Lstat(absolute); errors.Is(statErr, os.ErrNotExist) {
-		parentInfo, err := os.Stat(resolvedParent)
+		parentInfo, err := statAuthIdentity(resolvedParent)
 		if err != nil || !parentInfo.IsDir() {
 			return authTarget{}, fmt.Errorf("cannot resolve auth.json directory")
 		}
@@ -48,7 +64,7 @@ func resolveAuthTarget(path string) (authTarget, error) {
 	if err != nil {
 		return authTarget{}, fmt.Errorf("cannot resolve auth.json target")
 	}
-	targetInfo, err := os.Stat(resolved)
+	targetInfo, err := statAuthIdentity(resolved)
 	if err != nil {
 		return authTarget{}, fmt.Errorf("cannot inspect auth.json target")
 	}

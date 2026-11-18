@@ -4,6 +4,12 @@
 
 - Never merge the default branch into a feature branch. Rebase the feature branch onto `main` instead. History stays linear, and no merge commits reach `main`.
 
+## Supported platforms
+
+- Linux, Windows, and macOS are first-tier supported platforms.
+- Treat reproducible failures on any supported platform as merge blockers.
+- Verify platform-specific runtime behavior natively. Cross-compilation alone is not runtime verification.
+
 ## Code readability
 
 - Write code for people who must read and change it. Compilation and passing tests are not enough.

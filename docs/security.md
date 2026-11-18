@@ -66,6 +66,11 @@ made atomic. Codex OAuth refresh uses the same logical-lock and resolved-target
 rule. `/logout` removes only the selected stored API key, not OAuth credentials,
 environment variables, or `models.json` credentials.
 
+Windows identity checks use an open handle to capture the file ID before a
+replacement can affect a later comparison. The file must allow read access.
+For a new file, its parent directory must allow read access instead.
+If inspection fails, psi aborts the auth operation.
+
 Interactive key entry and selected auth writes keep secret data in mutable
 bytes where practical. Secret cursor navigation follows the normal editor's
 Unicode line-break and cursor-ownership rules without rendering plaintext.
