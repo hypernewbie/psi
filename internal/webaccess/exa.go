@@ -85,30 +85,26 @@ func (c *Client) searchExaDirect(ctx context.Context, query string, limit int, f
 	if !ok || string(resultsRaw) == "null" {
 		return searchResponse{}, fmt.Errorf("%s: provider response has no results array", classInvalid)
 	}
-	var items []exaItem
+	var items []json.RawMessage
 	if err := json.Unmarshal(resultsRaw, &items); err != nil {
 		return searchResponse{}, fmt.Errorf("%s: provider results is not an array", classInvalid)
 	}
-	results := c.projectExaItems(items, limit)
-	return searchResponse{results: results}, nil
-}
-
-func (c *Client) projectExaItems(items []exaItem, limit int) []searchHit {
-	if limit < 1 {
-		return nil
-	}
-	var out []searchHit
-	for _, item := range items {
+	var results []searchHit
+	for _, raw := range items {
+		var item exaItem
+		if err := json.Unmarshal(raw, &item); err != nil {
+			continue // One malformed item should not discard the rest of the response.
+		}
 		hit, ok := c.projectExaHit(item)
 		if !ok {
 			continue
 		}
-		out = append(out, hit)
-		if len(out) == limit {
+		results = append(results, hit)
+		if len(results) == limit {
 			break
 		}
 	}
-	return out
+	return searchResponse{results: results}, nil
 }
 
 func (c *Client) projectExaHit(item exaItem) (searchHit, bool) {

@@ -40,8 +40,9 @@ omitted count instead of silently ending at `[truncated]`.
   a SearXNG error instead of silently using Exa. An explicit unavailable
   provider errors and never falls back. Exa with a key uses `POST /search`;
   without a key it uses the keyless `mcp.exa.ai` JSON-RPC endpoint. A failed
-  keyed request does not retry keyless. Keyless prose without a parseable
-  result is an invalid response, not an empty search.
+  keyed request does not retry keyless. Keyed search skips malformed entries
+  in a valid results array. Keyless prose without a parseable result is an
+  invalid response, not an empty search.
 - `domainFilter`: up to 20 ASCII hostnames. A leading `-` excludes. Filtering
   applies before the per-query result limit.
 - `recencyFilter`: `day`, `month`, or `year`.
@@ -193,6 +194,8 @@ network requests.
 - TLS handshake: 10 seconds. Response headers: 30 seconds.
 - Provider request: 30 seconds; the keyless Exa MCP request: 60 seconds.
 - Response headers: 64 KiB. Provider bodies: 5 MiB.
+- Each HTTP pool keeps at most 32 idle connections across hosts. Idle
+  connections expire after 90 seconds.
 - One fetch call: 30 seconds, including redirects and body reads. A batch runs
   at most three fetches at a time.
 - A search without content: one provider request per query. With content: 90

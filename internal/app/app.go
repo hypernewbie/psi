@@ -212,14 +212,14 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.StringVar(&o.Model, "model", "", "model ID or provider/model")
 	fs.StringVar(&o.Thinking, "thinking", "", "thinking level")
 	fs.StringVar(&o.SessionDir, "session-dir", "", "session directory")
-	fs.StringVar(&o.Tools, "tools", "", "tool list (read,bash,edit,write,web_search,fetch_content,get_search_content)")
+	fs.StringVar(&o.Tools, "tools", "", "comma-separated tool list")
 	fs.StringVar(&o.Tools, "t", "", "tool list (Pi alias)")
 	fs.StringVar(&o.ExcludeTools, "exclude-tools", "", "comma-separated tools to disable")
 	fs.StringVar(&o.ExcludeTools, "xt", "", "comma-separated tools to disable (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-tools", false, "disable read,bash,edit,write,web_search,fetch_content,get_search_content")
-	fs.BoolVar(&o.NoTools, "nt", false, "disable read,bash,edit,write,web_search,fetch_content,get_search_content (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable read,bash,edit,write,web_search,fetch_content,get_search_content (alias for --no-tools)")
-	fs.BoolVar(&o.NoTools, "nbt", false, "disable read,bash,edit,write,web_search,fetch_content,get_search_content (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-tools", false, "disable all selectable tools")
+	fs.BoolVar(&o.NoTools, "nt", false, "disable all selectable tools (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "alias for --no-tools")
+	fs.BoolVar(&o.NoTools, "nbt", false, "alias for --no-tools (Pi alias)")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -433,9 +433,9 @@ Pi-compatible options:
   --append-system-prompt <text|file> Append system prompt text or file (repeatable)
   --name, -n <name>          Set session display name
   --no-session               Keep this session in memory only
-  --tools, -t <list>         Select tools (read,bash,edit,write,web_search,fetch_content,get_search_content)
+  --tools, -t <list>         Select tools (%s)
   --exclude-tools, -xt <list> Disable selected tools
-  --no-tools, -nt            Disable read,bash,edit,write,web_search,fetch_content,get_search_content
+  --no-tools, -nt            Disable all selectable tools
   --no-builtin-tools, -nbt   Alias for --no-tools
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
@@ -455,13 +455,13 @@ Pi-compatible options:
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 Use -- before a message that starts with a hyphen.
-Tool-selection flags affect read,bash,edit,write,web_search,fetch_content,get_search_content only.
+Tool-selection flags affect only the tools listed under --tools.
 Inline search content requires selected and enabled fetch_content.
 loop_control and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
-`, version)
+`, version, config.DefaultToolsCSV())
 }
 
 func Run(args []string, version string) error {

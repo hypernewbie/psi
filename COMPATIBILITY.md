@@ -55,7 +55,7 @@ Additional storage rules:
 | `defaultThinkingLevel` | `off,minimal,low,medium,high,xhigh,max` | Anthropic budget/adaptive profiles and Codex effort maps; an unadvertised level is clamped, not refused |
 | `modelThinkingLevels` | object keyed by `provider/modelId`, levels `off,minimal,low,medium,high,xhigh,max` | per-model default applied at startup and on a model change; psi writes and clears entries from `/settings` and merges the project file per key; an unadvertised level is clamped |
 | `sessionDir` | `PI_CODING_AGENT_SESSION_DIR` env + `--session-dir` + `sessionDir` key | Pi-compatible resolution (see below) |
-| `defaultTools` | `read,bash,edit,write,web_search,fetch_content,get_search_content` with replacement and `+`/`-` | seven built-in tools; unknown names rejected |
+| `defaultTools` | names listed under `--tools` in `psi --help`, with replacement and `+`/`-` | unknown names rejected |
 | `skills` | `skills` path subset; `enableSkillCommands` is parsed but not wired | instructions only, no install/run at discovery |
 | `compaction` | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides[provider/model].reserveTokens` | compatible entries, bounded summary; model-specific reserve |
 | `shell` | `shellPath`, `shellCommandPrefix` | explicit consent for project-supplied executables |

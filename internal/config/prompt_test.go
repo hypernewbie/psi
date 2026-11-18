@@ -170,7 +170,7 @@ func TestCwdSectionPreservesWhitespace(t *testing.T) {
 }
 
 func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
-	tools := []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"}
+	tools := defaultSettings().DefaultTools
 	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, tools, "", false, nil))
 	for _, want := range []string{
 		"web_search: Search the web with one to three queries",

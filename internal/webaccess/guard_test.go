@@ -3,11 +3,65 @@ package webaccess
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httptrace"
 	"net/netip"
 	"strings"
 	"testing"
 )
+
+func TestWebTransportEvictsIdleConnectionsAcrossHosts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+	dialer := &net.Dialer{}
+	transport := newHTTPTransport(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, server.Listener.Addr().String())
+	})
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	fetch := func(origin int) bool {
+		t.Helper()
+		reused := false
+		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+			GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused },
+		})
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://origin-%d.example/", origin), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reused
+	}
+
+	// Model a long-lived session fetching from more hosts than the pool retains.
+	const maxIdle = 32
+	for i := range maxIdle + 1 {
+		fetch(i)
+	}
+	if !fetch(maxIdle) {
+		t.Fatal("the most recent idle connection should be reused")
+	}
+	if fetch(0) {
+		t.Fatal("the oldest idle connection should have been evicted")
+	}
+	if transport.IdleConnTimeout <= 0 {
+		t.Fatal("idle connections must expire even below the pool limit")
+	}
+}
 
 func TestAddressPolicy(t *testing.T) {
 	allow := []netip.Prefix{netip.MustParsePrefix("198.18.0.0/15")}

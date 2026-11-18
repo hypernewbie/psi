@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,6 +125,13 @@ type Settings struct {
 	Warnings []string
 }
 
+var defaultToolNames = []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"}
+
+// DefaultToolsCSV lists the selectable built-in tools in their default order.
+func DefaultToolsCSV() string {
+	return strings.Join(defaultToolNames, ",")
+}
+
 func defaultSettings() Settings {
 	return Settings{
 		Theme:                   "system",
@@ -136,7 +144,7 @@ func defaultSettings() Settings {
 		ModelThinkingLevels:     map[string]string{},
 		SteeringMode:            "one-at-a-time",
 		FollowUpMode:            "one-at-a-time",
-		DefaultTools:            []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"},
+		DefaultTools:            slices.Clone(defaultToolNames),
 		EnableSkills:            true,
 		SoftWrap:                true,
 		Compaction:              CompactionConfig{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
@@ -631,17 +639,12 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 	return nil
 }
 
-// resolveTools implements Pi defaultTools semantics: plain names replace the
+// ResolveTools implements Pi defaultTools semantics: plain names replace the
 // inherited selection; +name/-name add or remove.
-func resolveTools(list []string) ([]string, error) {
-	return ResolveTools(list, []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"})
-}
-
 func ResolveTools(list, inherited []string) ([]string, error) {
 	if len(list) == 0 {
 		return []string{}, nil
 	}
-	known := map[string]bool{"read": true, "bash": true, "edit": true, "write": true, "web_search": true, "fetch_content": true, "get_search_content": true}
 	hasPlain := false
 	for _, t := range list {
 		if t != "" && t[0] != '+' && t[0] != '-' {
@@ -669,25 +672,25 @@ func ResolveTools(list, inherited []string) ([]string, error) {
 			return nil, fmt.Errorf("empty tool name")
 		case t[0] == '+':
 			name := t[1:]
-			if !known[name] {
+			if !slices.Contains(defaultToolNames, name) {
 				return nil, fmt.Errorf("unknown tool %q", name)
 			}
 			set[name] = true
 		case t[0] == '-':
 			name := t[1:]
-			if !known[name] {
+			if !slices.Contains(defaultToolNames, name) {
 				return nil, fmt.Errorf("unknown tool %q", name)
 			}
 			delete(set, name)
 		default:
-			if !known[t] {
+			if !slices.Contains(defaultToolNames, t) {
 				return nil, fmt.Errorf("unknown tool %q", t)
 			}
 			// Plain names formed the base before modifiers were applied.
 		}
 	}
 	var out []string
-	for _, k := range []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"} {
+	for _, k := range defaultToolNames {
 		if set[k] {
 			out = append(out, k)
 		}

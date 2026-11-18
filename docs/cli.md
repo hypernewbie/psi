@@ -92,13 +92,12 @@ psi --no-tools
 ```
 
 - `-t`, `--tools <list>` replaces the default selection with a comma-separated
-  allowlist of `read`, `bash`, `edit`, `write`, `web_search`, `fetch_content`,
-  and `get_search_content`.
+  allowlist. Run `psi --help` to see the names under `--tools`.
 - `-xt`, `--exclude-tools <list>` removes names from whatever is selected.
-- `-nt`, `--no-tools` disables all seven built-in tools.
+- `-nt`, `--no-tools` disables all selectable tools.
 - `-nbt`, `--no-builtin-tools` behaves like `--no-tools`.
 
-These flags affect the seven built-in tools only. Web tools also honor the
+These flags apply only to the tools listed under `--tools`. Web tools honor the
 `web-search.json` switches described in [Web access](web.md). Excluding
 `fetch_content` also blocks `web_search` with `includeContent: true` before any
 network request; metadata-only search remains available. `loop_control`

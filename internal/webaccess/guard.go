@@ -187,7 +187,8 @@ func wrapClass(ctx context.Context, class, message string) error {
 }
 
 // newHTTPTransport builds a private pool. Proxy settings and environment
-// proxies are deliberately ignored.
+// proxies are deliberately ignored. Idle connections are bounded across all
+// origins, because the pool can outlive any one session.
 func newHTTPTransport(dial func(ctx context.Context, network, address string) (net.Conn, error)) *http.Transport {
 	return &http.Transport{
 		Proxy:                  nil,
@@ -195,6 +196,8 @@ func newHTTPTransport(dial func(ctx context.Context, network, address string) (n
 		TLSHandshakeTimeout:    10 * time.Second,
 		ResponseHeaderTimeout:  30 * time.Second,
 		MaxResponseHeaderBytes: 64 << 10,
+		MaxIdleConns:           32,
+		IdleConnTimeout:        90 * time.Second,
 		ForceAttemptHTTP2:      true,
 	}
 }

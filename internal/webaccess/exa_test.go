@@ -30,8 +30,9 @@ func TestExaDirectRequestShape(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"results":[
 			{"title":"A","url":"https://a.example/","publishedDate":"2026-02-03","highlights":["hl one","hl two"]},
-			{"title":"B","url":"https://b.example/","highlights":[]},
-			{"title":"bad","url":"ftp://c.example/"}
+			{"title":"incompatible","url":"https://d.example/","highlights":{"text":"unexpected shape"}},
+			{"title":"bad","url":"ftp://c.example/"},
+			{"title":"B","url":"https://b.example/","highlights":[]}
 		]}`)
 	}))
 	defer server.Close()
@@ -57,8 +58,8 @@ func TestExaDirectRequestShape(t *testing.T) {
 	if !strings.Contains(text, "hl one hl two") || !strings.Contains(text, "https://b.example/") {
 		t.Fatalf("projection:\n%s", text)
 	}
-	if strings.Contains(text, "ftp://c.example/") {
-		t.Fatalf("invalid URL survived:\n%s", text)
+	if strings.Contains(text, "ftp://c.example/") || strings.Contains(text, "https://d.example/") {
+		t.Fatalf("invalid result survived:\n%s", text)
 	}
 }
 
