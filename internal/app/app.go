@@ -662,6 +662,12 @@ var newlineRun = regexp.MustCompile(`[\r\n]+`)
 type liveConfig struct {
 	mu   sync.RWMutex
 	live agent.LiveSettings
+	// selection orders the durable model/thinking metadata append with the
+	// publication of the live selection. The agent holds it while it records
+	// a selection or an assistant response, so an older request snapshot
+	// cannot overwrite a newer committed choice. It is held by pointer
+	// because the runtime is copied by value.
+	selection sync.Mutex
 }
 
 func newLiveConfig() *liveConfig { return &liveConfig{} }
@@ -676,6 +682,20 @@ func (c *liveConfig) snapshot() agent.LiveSettings {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.live
+}
+
+// lockSelection serializes selection metadata writes with publication. A
+// runtime without a live holder keeps the original agent behavior.
+func (r *runtime) lockSelection() {
+	if r.live != nil {
+		r.live.selection.Lock()
+	}
+}
+
+func (r *runtime) unlockSelection() {
+	if r.live != nil {
+		r.live.selection.Unlock()
+	}
 }
 
 type runtime struct {
@@ -1631,8 +1651,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 		focus      string
 		resume     bool
 		explicit   bool
+		// op is the local worker token that owns this interruption. It never
+		// travels on the wire.
+		op uint64
 	}
 	var activeReloadDesc *reloadDescriptor
+	// workerToken identifies one launched worker. A new worker always takes
+	// a new token, so a descriptor cannot outlive the run that created it.
+	var workerToken, activeWorkerToken uint64
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
@@ -2134,6 +2160,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cancel, busy, compacting = stop, true, compact
 		// Capture the active operation for /reload replay. Overwrites any
 		// prior descriptor; a new run owns the slot until it settles.
+		workerToken++
+		activeWorkerToken = workerToken
 		activeReloadDesc = &reloadDescriptor{
 			sessionID:  r.store.Header().ID,
 			generation: r.generation,
@@ -2142,6 +2170,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			focus:      focus,
 			resume:     resumeThisCompaction,
 			explicit:   explicitThisCompaction,
+			op:         activeWorkerToken,
 		}
 		compactionCountAtStart = r.ac.Snapshot().CompactionCount
 		// Sync the live snapshot with the starting configuration so turn
@@ -2179,6 +2208,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				setRetryObserver(live.Provider)
 			}
 			return live
+		}
+		if r.live != nil {
+			cfg.SelectionMu = &r.live.selection
 		}
 		cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
 			return r.compactionProvider(r.ac.Snapshot().CompactorModel, compactionSettings)
@@ -2334,6 +2366,24 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		r.draw(console)
 		return err
+	}
+	// A busy reload shares the native interrupt slot and the native /reload
+	// settlement path. Only an owned, started prompt can be replayed.
+	bridge.reloadInterrupt = func() (uint64, string) {
+		if pendingInterrupt != nil {
+			return 0, "pending"
+		}
+		desc := activeReloadDesc
+		if desc == nil || desc.mode != inputPrompt || desc.op == 0 || desc.op != activeWorkerToken {
+			return 0, "busy"
+		}
+		if !busy || cancel == nil {
+			return 0, "busy"
+		}
+		pendingInterrupt = &interruptAction{kind: "reload"}
+		notice(terminal.NoticeInfo, "Cancelling the run for reload.")
+		cancelActive()
+		return desc.op, ""
 	}
 	checkAndStartCompact := func(focus string, explicit, resume bool) {
 		if writeErr := r.store.WriteError(); writeErr != nil {
@@ -2710,6 +2760,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			compacting = false
 			if exiting {
+				if activeReloadDesc != nil && activeReloadDesc.op == activeWorkerToken {
+					bridge.retireReload(activeReloadDesc.op)
+				}
 				_, doneFramesAfter, _, _ := console.FrameStats()
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 				return outputErr
@@ -2740,6 +2793,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if pendingInterrupt != nil && !exiting {
 				action := pendingInterrupt
 				pendingInterrupt = nil
+				retireOp := uint64(0)
+				if activeReloadDesc != nil {
+					retireOp = activeReloadDesc.op
+				}
 				// History stays append-only; the cancelled partial remains.
 				// The new operation starts fresh without re-asking.
 				switch action.kind {
@@ -2779,7 +2836,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 						break
 					}
-					if desc == nil || recoveredInFlight > 0 || err == nil {
+					if desc == nil || desc.op != activeWorkerToken || recoveredInFlight > 0 || !errors.Is(err, context.Canceled) {
 						r.draw(console)
 						break
 					}
@@ -2829,6 +2886,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 					}
 				}
+				// Retire only this worker's latch, after the retry admission
+				// (or its refusal) is final.
+				bridge.retireReload(retireOp)
 				_, doneFramesAfter, _, _ := console.FrameStats()
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 			}
@@ -3810,13 +3870,16 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 	if err := candidate.configure(next); err != nil {
 		return false, err
 	}
+	r.lockSelection()
 	if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
+		r.unlockSelection()
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
 	}
 	r.installConfiguration(&candidate)
+	r.unlockSelection()
 	if r.ac != nil {
 		r.ac.ResetGrowth()
 	}
@@ -3857,13 +3920,16 @@ func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error)
 	if err := candidate.configure(next); err != nil {
 		return false, err
 	}
+	r.lockSelection()
 	if _, err := r.store.AppendThinkingLevelChange(level); err != nil {
+		r.unlockSelection()
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
 	}
 	r.installConfiguration(&candidate)
+	r.unlockSelection()
 	printStatusText(out, "Thinking level: "+level)
 	return false, nil
 }

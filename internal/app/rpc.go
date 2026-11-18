@@ -142,6 +142,9 @@ func (s *rpcRunner) runConfig() agent.Config {
 	cfg.LiveSettings = func() agent.LiveSettings {
 		return r.liveSettings()
 	}
+	if r.live != nil {
+		cfg.SelectionMu = &r.live.selection
+	}
 	cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 		definitions := append(tools.Definitions(r.settings.DefaultTools), r.webDefinitions()...)
 		if r.syncboardAvailable() {
@@ -568,7 +571,9 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "set_model", cand.authErr.Error())
 		return &out
 	}
+	r.lockSelection()
 	if _, err := r.store.AppendModelChange(cand.ov.Provider, cand.ov.Model); err != nil {
+		r.unlockSelection()
 		cand.prov.CloseIdle()
 		out := rpcErr(cmd.ID, "set_model", err.Error())
 		return &out
@@ -577,6 +582,7 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 	// at its next turn boundary. The loop stays put: replacing it would
 	// drop queued steering and follow-ups.
 	r.installConfiguration(&cand)
+	r.unlockSelection()
 	out := rpcOK(cmd.ID, "set_model", rpcModel{Provider: providerID, ID: modelID, Name: rpcModelName(r.models, providerID, modelID)})
 	return &out
 }
@@ -603,9 +609,11 @@ func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "set_thinking_level", err.Error())
 		return &out
 	}
+	r.lockSelection()
 	r.ov.Thinking = level
 	r.cfg.Thinking = level
 	r.publishLive()
+	r.unlockSelection()
 	out := rpcOK(cmd.ID, "set_thinking_level", nil)
 	return &out
 }

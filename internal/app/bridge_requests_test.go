@@ -325,33 +325,6 @@ func TestBridgeSetModelWithoutCredentialRefuses(t *testing.T) {
 	}
 }
 
-// A running turn owns the configuration. The switch is refused before any
-// candidate work, so nothing can race the active provider.
-func TestBridgeSetModelRefusedWhileBusy(t *testing.T) {
-	r := testRuntime(t)
-	addModel(r, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
-	f, h := startBridgeRuntime(t, r)
-
-	before := countEntries(t, r)
-	f.inject <- &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_SetModelRequest{
-		SetModelRequest: &pibridgepb.SetModelRequest{RequestId: "req-busy", Provider: "anthropic", Model: "m2"},
-	}}
-	h.handle(nextRequest(t, r.bridge), true)
-	if h.busy() {
-		t.Fatal("busy runtime started a preparation")
-	}
-	ack := f.waitFrame(t, "busy refusal", func(frame *pibridgepb.PiToPhi) bool {
-		return frame.GetSetModelAck() != nil
-	}).GetSetModelAck()
-	if ack.GetOk() || ack.GetReason() != "" {
-		t.Fatalf("busy refusal must leave the outcome unknown: %+v", ack)
-	}
-	if r.ov.Model != "m" || countEntries(t, r) != before {
-		t.Fatal("refused switch changed the runtime or the session")
-	}
-}
-
 // A native change while the candidate is building invalidates it: installing
 // it would undo the user's own command.
 func TestBridgeSetModelCandidateInvalidatedByNativeChange(t *testing.T) {

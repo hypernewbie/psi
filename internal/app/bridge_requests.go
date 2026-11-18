@@ -59,6 +59,9 @@ type bridgePrep struct {
 	done    chan struct{}
 	err     error
 	failure string
+	// superseded marks a settings worker that lost to a newer arrival. It
+	// finishes on its own but cannot install or answer again.
+	superseded bool
 
 	// work expands one skill off the loop. The same slot serves every
 	// preparation job, so a second request waits instead of competing.
@@ -77,6 +80,9 @@ type bridgeHandler struct {
 	r       *runtime
 	console *terminal.Console
 	prep    *bridgePrep
+	// replacement is at most one validated live-settings request waiting for
+	// the running worker to release the slot. Later valid arrivals replace it.
+	replacement *bridgeSettings
 
 	// Loop-owned submission hook and the run currently in flight. They are
 	// refreshed by the loop, never by a worker.
@@ -100,6 +106,9 @@ type bridgeHandler struct {
 	// Phi's mutual exclusion and retired by readiness evidence.
 	reload    *bridgeReload
 	reloadRun func() error
+	// reloadInterrupt claims the native interrupt slot for a busy run. It
+	// returns the worker token it owns, or an existing refusal reason.
+	reloadInterrupt func() (uint64, string)
 
 	// Attachment admission state. attachHigh rejects replayed ids; the one
 	// live operation is the shared preparation slot above.
@@ -114,10 +123,24 @@ type bridgeCompact struct {
 	leaf    string
 }
 
-// bridgeReload is one admitted native reload.
+// bridgeReload is one admitted native reload. op is the TUI-local worker
+// token that owns the interruption; zero means the idle synchronous path.
 type bridgeReload struct {
 	id      uint64
 	request pibridge.Request
+	op      uint64
+}
+
+// bridgeSettings is one validated live-settings request waiting for the
+// running preparation to finish. It carries the identity it was admitted
+// against, so promotion cannot land on a different stream or session.
+type bridgeSettings struct {
+	request pibridge.Request
+	kind    string
+	next    config.StartupOverrides
+	base    config.StartupOverrides
+	session string
+	gen     int64
 }
 
 // bridgeSearch is one page read running outside the loop.
@@ -162,7 +185,8 @@ func (h *bridgeHandler) busy() bool {
 }
 
 // handle dispatches one request. runBusy is the loop's current run state;
-// mutations are refused while it is true.
+// live settings are admitted during owned work, other mutations are refused
+// while it is true.
 func (h *bridgeHandler) handle(req pibridge.Request, runBusy bool) {
 	switch req.Kind() {
 	case pibridge.RequestState:
@@ -365,7 +389,26 @@ func (h *bridgeHandler) startReload(req pibridge.Request, runBusy bool) {
 		expect.HasContextRev && expect.ContextRev != h.r.contextRev:
 		req.ReplyReload(false, "stale")
 		return
-	case runBusy || h.r.state != StateIdle:
+	case runBusy:
+		// Until RunStart binds the logical id, no local worker owns a
+		// prompt to interrupt or replay.
+		if h.r.bridge == nil || h.r.bridge.RunID() == 0 || h.reloadInterrupt == nil {
+			req.ReplyReload(false, "busy")
+			return
+		}
+		op, reason := h.reloadInterrupt()
+		if reason != "" {
+			req.ReplyReload(false, reason)
+			return
+		}
+		h.reload = &bridgeReload{id: id, request: req, op: op}
+		h.r.reloadPending = true
+		h.r.syncBridge()
+		// Entry is acknowledged before cancellation runs: DISPATCHED reports
+		// callback entry, never completion. The latch retires at settlement.
+		req.ReplyReload(true, "")
+		return
+	case h.r.state != StateIdle:
 		req.ReplyReload(false, "busy")
 		return
 	case h.r.compactActive:
@@ -392,6 +435,17 @@ func (h *bridgeHandler) startReload(req pibridge.Request, runBusy bool) {
 	h.r.reloadPending = false
 	h.r.syncBridge()
 	_ = runErr // entry already acknowledged; the native path reports locally
+}
+
+// retireReload releases this owner's latch once the retry decision and
+// admission are final. A newer owner's latch is left untouched.
+func (h *bridgeHandler) retireReload(op uint64) {
+	if h == nil || h.reload == nil || h.reload.op != op {
+		return
+	}
+	h.reload = nil
+	h.r.reloadPending = false
+	h.r.syncBridge()
 }
 
 // resolveCompactRun answers the outstanding compaction from the settled run.
@@ -588,7 +642,7 @@ func knownSkill(list []skills.Skill, name string) bool {
 // startModelSwitch admits a switch and hands the candidate configuration to
 // the preparation worker. Nothing is appended or installed here.
 func (h *bridgeHandler) startModelSwitch(req pibridge.Request, runBusy bool) {
-	if h.refuse(req, runBusy) {
+	if h.refuseSettings(req, runBusy) {
 		return
 	}
 	providerID, model := strings.TrimSpace(req.Provider()), strings.TrimSpace(req.Model())
@@ -600,21 +654,18 @@ func (h *bridgeHandler) startModelSwitch(req pibridge.Request, runBusy bool) {
 		req.ReplySetModel(false, "unknown-model")
 		return
 	}
-	if providerID == h.r.ov.Provider && model == h.r.ov.Model {
-		// Already current: nothing to persist, so answer without a write.
-		req.ReplySetModel(true, "")
-		return
-	}
 	next := h.r.ov
 	next.Provider, next.Model = providerID, model
 	next.ThinkingExplicit = false
-	h.begin(req, next)
+	// Already current: nothing to persist, so answer without a worker.
+	alreadyCurrent := providerID == h.r.ov.Provider && model == h.r.ov.Model
+	h.admitSettings(req, pibridge.RequestSetModel, next, alreadyCurrent)
 }
 
 // startThinkingSwitch admits a level change for the live model. An
 // unadvertised level is admitted because the provider clamps it.
 func (h *bridgeHandler) startThinkingSwitch(req pibridge.Request, runBusy bool) {
-	if h.refuse(req, runBusy) {
+	if h.refuseSettings(req, runBusy) {
 		return
 	}
 	level := strings.TrimSpace(req.Level())
@@ -630,14 +681,94 @@ func (h *bridgeHandler) startThinkingSwitch(req pibridge.Request, runBusy bool) 
 		req.ReplySetThinking(false, "unsupported-level")
 		return
 	}
-	if level == h.r.ov.Thinking {
-		req.ReplySetThinking(true, "")
-		return
-	}
 	next := h.r.ov
 	next.Thinking = level
 	next.ThinkingExplicit = true
-	h.begin(req, next)
+	h.admitSettings(req, pibridge.RequestSetThinking, next, level == h.r.ov.Thinking)
+}
+
+// admitSettings decides what one validated live-settings request does to the
+// preparation slot. Later arrivals win by arrival order: a running settings
+// worker is marked superseded once, and at most one replacement waits for it.
+// A skill or attachment preparation is never evicted.
+func (h *bridgeHandler) admitSettings(req pibridge.Request, kind string, next config.StartupOverrides, alreadyCurrent bool) {
+	if h.prep == nil {
+		if h.replacement != nil {
+			// The slot is free, so a waiting descriptor never survives a
+			// finished worker; refuse it instead of starting stale work.
+			replySettings(h.replacement.request, h.replacement.kind, false, "")
+			h.replacement = nil
+		}
+		if alreadyCurrent {
+			replySettings(req, kind, true, "")
+			return
+		}
+		h.begin(req, next)
+		return
+	}
+	if h.prep.kind != pibridge.RequestSetModel && h.prep.kind != pibridge.RequestSetThinking {
+		// Never evict skill or attachment preparation.
+		replySettings(req, kind, false, "")
+		return
+	}
+	h.supersedePrep()
+	if h.replacement != nil {
+		replySettings(h.replacement.request, h.replacement.kind, false, "")
+		h.replacement = nil
+	}
+	if alreadyCurrent {
+		replySettings(req, kind, true, "")
+		return
+	}
+	h.replacement = &bridgeSettings{
+		request: req,
+		kind:    kind,
+		next:    next,
+		base:    h.r.ov,
+		session: h.r.store.Header().ID,
+		gen:     h.r.generation,
+	}
+}
+
+// supersedePrep retires the running settings worker with one unknown outcome.
+// The worker keeps running so its candidate can be discarded and its provider
+// closed, but it can no longer install or answer.
+func (h *bridgeHandler) supersedePrep() {
+	if h.prep == nil || h.prep.superseded {
+		return
+	}
+	h.prep.superseded = true
+	replySettings(h.prep.request, h.prep.kind, false, "")
+}
+
+// promoteReplacement starts the newest validated request after the worker it
+// displaced finishes. Every fence is rechecked against the live runtime, so a
+// replacement never lands on a different stream, session, or selection.
+func (h *bridgeHandler) promoteReplacement() {
+	repl := h.replacement
+	h.replacement = nil
+	if repl == nil {
+		return
+	}
+	req := repl.request
+	switch {
+	case req.Expired(), h.r.reloadPending, h.r.store == nil, h.r.selector != nil, h.r.settingsPicker != nil:
+	case h.r.store.WriteError() != nil, !settingsAdmitted(h.r.state):
+	case h.r.generation != repl.gen, h.r.store.Header().ID != repl.session, h.r.ov != repl.base:
+	default:
+		h.begin(req, repl.next)
+		return
+	}
+	replySettings(req, repl.kind, false, "")
+}
+
+// replySettings answers one model or thinking request once.
+func replySettings(req pibridge.Request, kind string, ok bool, reason string) {
+	if kind == pibridge.RequestSetThinking {
+		req.ReplySetThinking(ok, reason)
+		return
+	}
+	req.ReplySetModel(ok, reason)
 }
 
 // begin starts the single preparation worker for one admitted mutation.
@@ -685,18 +816,35 @@ func (h *bridgeHandler) beginWork(req pibridge.Request, work func() (string, err
 	}()
 }
 
-// refuse reports whether native state is too busy for a bridge mutation. The
-// wire has no reason for these, so the answer stays unknown.
-func (h *bridgeHandler) refuse(req pibridge.Request, runBusy bool) bool {
+// refuseSettings reports whether a live model or thinking change must wait.
+// Unlike other mutations, these are admitted during an owned, non-cancelling
+// run or compaction: the running loop reads the new selection at its next
+// turn boundary. A built-in picker, a pending reload, cancellation, exit, or
+// blocked storage still fences the change. The wire has no reason for these
+// refusals, so the answer stays unknown.
+func (h *bridgeHandler) refuseSettings(req pibridge.Request, runBusy bool) bool {
 	switch {
-	case h.prep != nil, runBusy, req.Expired():
-	case h.r.store == nil, h.r.state != StateIdle, h.r.selector != nil:
+	case req.Expired(), h.r.reloadPending:
+	case h.r.store == nil, h.r.selector != nil, h.r.settingsPicker != nil:
 	case h.r.store.WriteError() != nil:
+	case !settingsAdmitted(h.r.state):
+	case runBusy && h.r.state == StateIdle:
 	default:
 		return false
 	}
 	req.ReplyUnavailable()
 	return true
+}
+
+// settingsAdmitted reports whether a live selection may change in this state.
+// Replay, selection UIs, cancellation, offline, exit and blocked storage are
+// excluded; an owned run or compaction keeps accepting changes.
+func settingsAdmitted(state State) bool {
+	switch state {
+	case StateIdle, StateWaiting, StateStreaming, StateRunningTool, StateCompacting:
+		return true
+	}
+	return false
 }
 
 // finishPreparation resolves the worker result on the loop. Every rejection
@@ -707,6 +855,15 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 		return
 	}
 	h.prep = nil
+	if prep.superseded {
+		// The newest arrival owns the answer; this worker may only release
+		// its candidate and hand the slot to the replacement.
+		if prep.cand != nil && prep.cand.prov != nil {
+			prep.cand.prov.CloseIdle()
+		}
+		h.promoteReplacement()
+		return
+	}
 	if prep.kind == pibridge.RequestAttachment {
 		h.finishAttach(prep, runBusy)
 		return
@@ -720,21 +877,23 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 		if cand != nil && cand.prov != nil {
 			cand.prov.CloseIdle()
 		}
-		if prep.kind == pibridge.RequestSetThinking {
-			req.ReplySetThinking(false, reason)
-			return
-		}
-		req.ReplySetModel(false, reason)
+		replySettings(req, prep.kind, false, reason)
 	}
 	if prep.err != nil {
 		discard(prep.failure)
 		return
 	}
 	if cand.authErr != nil {
-		discard("no-auth")
+		// no-auth is only a valid SetModelAck reason; thinking reports an
+		// unknown outcome instead of inventing a new vocabulary value.
+		reason := ""
+		if prep.kind == pibridge.RequestSetModel {
+			reason = "no-auth"
+		}
+		discard(reason)
 		return
 	}
-	if req.Expired() || runBusy || h.r.store == nil || h.r.selector != nil || h.r.state != StateIdle {
+	if req.Expired() || h.r.store == nil || h.r.selector != nil || h.r.settingsPicker != nil || !settingsAdmitted(h.r.state) || h.r.reloadPending {
 		discard("")
 		return
 	}
@@ -753,15 +912,27 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 		discard("")
 		return
 	}
+	// Compaction settings feed the candidate's request configuration too; a
+	// change after the worker started makes them stale.
+	liveCompact, snapCompact := h.r.settings.Compaction, cand.settings.Compaction
+	if liveCompact.Enabled != snapCompact.Enabled ||
+		liveCompact.KeepRecentTokens != snapCompact.KeepRecentTokens ||
+		liveCompact.ReserveForModel(cand.ov.Provider, cand.ov.Model) != snapCompact.ReserveForModel(cand.ov.Provider, cand.ov.Model) {
+		discard("")
+		return
+	}
 	if prep.kind == pibridge.RequestSetThinking {
 		h.applyThinking(prep, cand, discard)
 		return
 	}
+	h.r.lockSelection()
 	if _, err := h.r.store.AppendModelChange(cand.ov.Provider, cand.ov.Model); err != nil {
+		h.r.unlockSelection()
 		discard("")
 		return
 	}
 	h.r.installConfiguration(cand)
+	h.r.unlockSelection()
 	if h.r.ac != nil {
 		h.r.ac.ResetGrowth()
 	}
@@ -777,11 +948,14 @@ func (h *bridgeHandler) applyThinking(prep *bridgePrep, cand *runtime, discard f
 		discard("model-changed")
 		return
 	}
+	h.r.lockSelection()
 	if _, err := h.r.store.AppendThinkingLevelChange(cand.ov.Thinking); err != nil {
+		h.r.unlockSelection()
 		discard("")
 		return
 	}
 	h.r.installConfiguration(cand)
+	h.r.unlockSelection()
 	h.r.syncBridge()
 	req.ReplySetThinking(true, "")
 }

@@ -59,6 +59,11 @@ type Config struct {
 	// a snapshot without a provider or model, keeps the submitted
 	// configuration.
 	LiveSettings func() LiveSettings
+	// SelectionMu, when set, serializes model/thinking metadata writes with the
+	// host's publication of the live selection. The host owns the mutex and
+	// passes its address; the agent never copies it. Nil keeps the original
+	// projection-based behavior for callers without live settings.
+	SelectionMu *sync.Mutex
 	// DynamicConfig returns the system prompt, its sections, and the tool set
 	// for each model request.
 	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
@@ -599,13 +604,93 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 			return err
 		}
 	}
-	if proj.State.Provider != cfg.Model.ProviderID() || proj.State.ModelID != cfg.Model.ID {
-		if _, err := l.store.AppendModelChange(cfg.Model.ProviderID(), cfg.Model.ID); err != nil {
+	if err := l.syncSelection(proj, cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// syncSelection records the selection this request will use. A runtime-managed
+// run compares the latest published selection with the store's current state
+// under the host's selection mutex. The projection taken when the turn started
+// can already be behind a committed change, so it must not drive the write.
+func (l *Loop) syncSelection(proj *session.Projection, cfg Config) error {
+	if cfg.LiveSettings == nil {
+		if proj.State.Provider != cfg.Model.ProviderID() || proj.State.ModelID != cfg.Model.ID {
+			if _, err := l.store.AppendModelChange(cfg.Model.ProviderID(), cfg.Model.ID); err != nil {
+				return err
+			}
+		}
+		if proj.State.ThinkingLevel != cfg.Thinking {
+			if _, err := l.store.AppendThinkingLevelChange(cfg.Thinking); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if cfg.SelectionMu != nil {
+		cfg.SelectionMu.Lock()
+		defer cfg.SelectionMu.Unlock()
+	}
+	live := cfg.LiveSettings()
+	if live.Provider == nil || live.Model.ID == "" {
+		return nil
+	}
+	stored, err := l.store.ModelState()
+	if err != nil {
+		return err
+	}
+	if !stored.HasModel || stored.Provider != live.Overrides.Provider || stored.ModelID != live.Overrides.Model {
+		if _, err := l.store.AppendModelChange(live.Overrides.Provider, live.Overrides.Model); err != nil {
 			return err
 		}
 	}
-	if proj.State.ThinkingLevel != cfg.Thinking {
-		if _, err := l.store.AppendThinkingLevelChange(cfg.Thinking); err != nil {
+	if live.Thinking != "" && stored.ThinkingLevel != live.Thinking {
+		if _, err := l.store.AppendThinkingLevelChange(live.Thinking); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// appendAssistant records one assistant response under the host's selection
+// mutex and restores the live model when the response was produced before a
+// newer change. Assistant entries carry the real request identity, and the
+// session projection adopts that identity, so a late response from the old
+// model would otherwise rewrite the durable selection.
+func (l *Loop) appendAssistant(msg session.AgentMessage, cfg Config) error {
+	if cfg.LiveSettings == nil || cfg.SelectionMu == nil {
+		_, err := l.store.AppendMessage(msg)
+		return err
+	}
+	cfg.SelectionMu.Lock()
+	defer cfg.SelectionMu.Unlock()
+	if _, err := l.store.AppendMessage(msg); err != nil {
+		return err
+	}
+	return l.reassertLiveSelection(cfg)
+}
+
+// reassertLiveSelection appends the existing selection records when the
+// session currently names a different model or thinking level than the
+// published selection. Assistant entries only carry the model, but a change
+// that lands during the last turn must still survive in the saved selection.
+func (l *Loop) reassertLiveSelection(cfg Config) error {
+	live := cfg.LiveSettings()
+	if live.Provider == nil || live.Model.ID == "" {
+		return nil
+	}
+	stored, err := l.store.ModelState()
+	if err != nil {
+		return err
+	}
+	if !stored.HasModel || stored.Provider != live.Overrides.Provider || stored.ModelID != live.Overrides.Model {
+		if _, err := l.store.AppendModelChange(live.Overrides.Provider, live.Overrides.Model); err != nil {
+			return err
+		}
+	}
+	if live.Thinking != "" && stored.ThinkingLevel != live.Thinking {
+		if _, err := l.store.AppendThinkingLevelChange(live.Thinking); err != nil {
 			return err
 		}
 	}
@@ -816,7 +901,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			}
 		}
 		if !keepExistingFailure {
-			if _, err := l.store.AppendMessage(assistantMessage); err != nil {
+			if err := l.appendAssistant(assistantMessage, cfg); err != nil {
 				outcome = event.OutcomeUnsaved
 				storageFailure := fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
 				if providerErr != nil {
@@ -964,7 +1049,7 @@ func (l *Loop) savePartial(text, thinking, stop, reason string, cfg Config) erro
 		return nil
 	}
 	partial := &provider.Response{Text: text, Thinking: thinking, StopReason: stop}
-	if _, err := l.store.AppendMessage(toFailureAssistant(partial, cfg, reason)); err != nil {
+	if err := l.appendAssistant(toFailureAssistant(partial, cfg, reason), cfg); err != nil {
 		return fmt.Errorf("storage failure, stopping: %w (unsaved partial output %d bytes)", err, len(text)+len(thinking))
 	}
 	return nil
@@ -1048,7 +1133,7 @@ func (l *Loop) finalizeFailure(ctx context.Context, cfg *Config, outcome *string
 		stop = "aborted"
 		reason = ctx.Err().Error()
 	}
-	if _, aerr := l.store.AppendMessage(toFailureAssistant(&provider.Response{StopReason: stop}, *cfg, reason)); aerr != nil {
+	if aerr := l.appendAssistant(toFailureAssistant(&provider.Response{StopReason: stop}, *cfg, reason), *cfg); aerr != nil {
 		*outcome = event.OutcomeUnsaved
 		*runErr = errors.Join(*runErr, aerr)
 		return
