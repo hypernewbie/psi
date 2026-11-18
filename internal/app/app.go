@@ -465,7 +465,7 @@ Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 Inline search content requires selected and enabled fetch_content.
 Readable fetch_content may use a configured Crawl4AI fallback (crawl4aiBaseUrl) after a direct failure; raw mode is direct HTTP only.
-loop_done/loop_approve and syncboard remain available when their separate availability checks pass.
+read_session remains available independently of tool-selection flags. loop_done/loop_approve and syncboard have separate availability checks.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. The built-in openai-codex provider periodically reads its primary ChatGPT quota, backs off after failures, and shows the remaining percentage in unused footer space when available.
@@ -2427,6 +2427,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if r.syncboardAvailable() {
 				definitions = append(definitions, syncboardToolDefinition())
 			}
+			if r.readSessionAvailable() {
+				definitions = append(definitions, readSessionToolDefinition())
+			}
 			sections := r.sections
 			if addition := strings.TrimSpace(loop.SystemPromptAddition(state)); addition != "" {
 				sections = append(append([]config.PromptSection(nil), sections...), config.PromptSection{Name: "loop", Body: "<loop>\n" + addition + "\n</loop>"})
@@ -2442,7 +2445,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				result := r.loops.HandleApprove(invocation.Arguments)
 				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
 			},
-			syncboardToolName: r.syncboardInternalHandler,
+			syncboardToolName:   r.syncboardInternalHandler,
+			readSessionToolName: r.readSessionHandler,
 		}
 		for name, handler := range r.webHandlers() {
 			cfg.InternalTools[name] = handler

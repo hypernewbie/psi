@@ -117,10 +117,14 @@ func (s *rpcRunner) runConfig() agent.Config {
 		if r.syncboardAvailable() {
 			definitions = append(definitions, syncboardToolDefinition())
 		}
+		if r.readSessionAvailable() {
+			definitions = append(definitions, readSessionToolDefinition())
+		}
 		return r.prompt, r.sections, definitions
 	}
 	cfg.InternalTools = map[string]agent.InternalToolHandler{
-		syncboardToolName: r.syncboardInternalHandler,
+		syncboardToolName:   r.syncboardInternalHandler,
+		readSessionToolName: r.readSessionHandler,
 	}
 	for name, handler := range r.webHandlers() {
 		cfg.InternalTools[name] = handler

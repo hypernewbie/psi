@@ -38,7 +38,7 @@ Results settle in assistant-call order behind a barrier the next model request c
 
 Two psi deviations from Pi stay explicit:
 
-1. Internal calls (`loop_done`/`loop_approve`, `syncboard`, and the web tools) serialize with each other in call order, because loop state transitions and continuation messages are order-sensitive. Unrelated built-in calls in the same batch still overlap. A web call may still run up to three fetches internally.
+1. Internal calls (`loop_done`/`loop_approve`, `read_session`, `syncboard`, and the web tools) serialize with each other in call order, because loop state transitions and continuation messages are order-sensitive. Unrelated built-in calls in the same batch still overlap. A web call may still run up to three fetches internally.
 2. Terminal success rows commit only after the corresponding result is durable. Pi emits tool completion events when a worker finishes, before result messages join the context.
 
 Cancellation during a batch admits nothing new, joins every started worker, records unstarted calls as `not_started`, and never labels a started call unstarted.

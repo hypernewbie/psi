@@ -149,8 +149,10 @@ These flags apply only to the tools listed under `--tools`. Web tools honor the
 network request; metadata-only search remains available. A readable
 `fetch_content` call may use a configured Crawl4AI fallback (`crawl4aiBaseUrl`)
 after a direct failure; `raw` mode is direct HTTP only. `loop_done`/`loop_approve`
-remains available during an active goal loop (one at a time, by phase). `syncboard`
-remains available while the connected Phi bridge accepts that capability.
+remains available during an active goal loop (one at a time, by phase). `read_session`
+is always available, independently of these flags, and reads bounded excerpts from
+the raw active branch, including entries hidden by compaction or context edits.
+`syncboard` remains available while the connected Phi bridge accepts that capability.
 
 `defaultTools` in `settings.json` accepts the same names, plus `+name` and
 `-name` entries that add to or remove from the default set.

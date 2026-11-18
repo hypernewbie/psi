@@ -26,8 +26,8 @@ If extraction also fails, the tool returns the original direct error. There is
 no application retry. Caller cancellation or expiry overrides either attempt's
 result.
 
-Web tools are internal calls: they serialize with `loop_done`/`loop_approve` and
-`syncboard` calls in the same batch. File and shell built-ins can still overlap
+Web tools are internal calls: they serialize with `loop_done`/`loop_approve`,
+`read_session`, and `syncboard` calls in the same batch. File and shell built-ins can still overlap
 them.
 
 Batches use at most three workers and return sections in input order, with a
