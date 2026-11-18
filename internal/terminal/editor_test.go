@@ -662,52 +662,45 @@ func TestEditorVerticalMoveRewrapping(t *testing.T) {
 	// Line 2: "0123456789" (len 10)
 	e.Insert("0123456789\nabc\n0123456789")
 
-	// Start at line 0, col 8
+	// Start at line 0, col 9.
 	e.DocStart()
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 9; i++ {
 		e.MoveRight()
 	}
 
-	// MoveDown at width 80 -> clamps to col 3 on line 1, prefCol = 8.
+	// MoveDown at width 80 clamps to col 3 on line 1, prefCol = 9.
 	if !e.MoveDown(80) {
 		t.Fatal("MoveDown line 0->1 failed")
 	}
-	if e.prefCol != 8 || e.Pos() != 14 {
+	if e.prefCol != 9 || e.Pos() != 14 {
 		t.Fatalf("after clamp: pos=%d prefCol=%d", e.Pos(), e.prefCol)
 	}
 
 	// Terminal width narrows to 4 cells (limit 3 cells per row).
 	// Line 0 wraps into rows of 3: "012", "345", "678", "9".
 	// Line 1 is "abc" (3 cells).
-	// MoveUp(4) from "abc" to Row 3 ("9", len 1):
-	// Case 5 (target even shorter): keeps prefCol=8, lands on rune 10.
-	if !e.MoveUp(4) {
-		t.Fatal("MoveUp at width 4 failed")
+	// Case 5: MoveUp to "9" at its hard end, leaving prefCol at 9.
+	if !e.MoveUp(4) || e.Pos() != 10 || e.prefCol != 9 {
+		t.Fatalf("first narrow MoveUp: pos=%d prefCol=%d, want 10,9", e.Pos(), e.prefCol)
 	}
-	// Second MoveUp(4) to Row 2 ("678", len 3):
-	// Case 4 (target longer but < preferred): keeps prefCol=8, lands on rune 9.
-	if !e.MoveUp(4) {
-		t.Fatal("MoveUp 2 at width 4 failed")
-	}
-	if e.prefCol != 8 {
-		t.Fatalf("prefCol after narrow MoveUp = %d, want 8", e.prefCol)
+	// Case 4: MoveUp to "678". Its last owned position is before "8",
+	// because the boundary after it belongs to the row containing "9".
+	if !e.MoveUp(4) || e.Pos() != 8 || e.prefCol != 9 {
+		t.Fatalf("second narrow MoveUp: pos=%d prefCol=%d, want 8,9", e.Pos(), e.prefCol)
 	}
 
-	// Now terminal width expands back to 80.
-	// Rune 9 in width 80 is col 9 on Line 0 (len 10), so cursor is in the middle (9 < 10).
+	// At width 80, rune 8 is in the middle of the 10-cell first line.
 	l := LayoutDraft(e.buf, e.pos, 80)
 	if l.CursorRow != 0 || l.CursorCol >= l.RowWidth(0) {
 		t.Fatalf("expected cursor in middle of row 0: row=%d col=%d width=%d",
 			l.CursorRow, l.CursorCol, l.RowWidth(0))
 	}
-	// Case 7: cursor in middle (S=1), target (line 1, len 3) is shorter than current visual col (9).
-	// Target clamps to 3, and prefCol becomes currentVisualCol (9).
-	curCol := l.CursorCol
+	// Case 7: the target clamps to col 3, and prefCol changes from 9 to 8.
 	if !e.MoveDown(80) {
 		t.Fatal("MoveDown at width 80 failed")
 	}
-	if e.prefCol != curCol {
-		t.Fatalf("Case 7: prefCol=%d, want %d", e.prefCol, curCol)
+	if e.prefCol != 8 {
+		t.Fatalf("Case 7: prefCol=%d, want 8", e.prefCol)
 	}
 	if e.Pos() != 14 { // end of line 1
 		t.Fatalf("Case 7: pos=%d, want 14", e.Pos())
@@ -1073,4 +1066,96 @@ func BenchmarkGraphemeBoundariesASCIIFastPath(b *testing.B) {
 			_ = snapByte(s, mid)
 		}
 	})
+}
+
+func TestEditorVerticalMoveAcrossChineseSoftWrap(t *testing.T) {
+	const source = "0123456789\n甲乙丙丁戊，己庚辛"
+	const width = 11
+	e := NewEditor()
+	if !e.RestoreDraft(source, 8) {
+		t.Fatal("draft rejected")
+	}
+	// The comma stays with 戊, so 丁 is the last character in the first
+	// Chinese row. The boundary after 丁 belongs to the next row.
+	for _, step := range []struct {
+		name     string
+		move     func(int) bool
+		row, col int
+	}{
+		{"down onto short soft row", e.MoveDown, 1, 6},
+		{"down restores column", e.MoveDown, 2, 8},
+		{"up onto short soft row", e.MoveUp, 1, 6},
+		{"up restores column", e.MoveUp, 0, 8},
+	} {
+		if !step.move(width) {
+			t.Fatalf("%s: cursor did not move", step.name)
+		}
+		l := LayoutDraft(e.buf, e.Pos(), width)
+		if l.CursorRow != step.row || l.CursorCol != step.col {
+			t.Fatalf("%s: cursor = (%d,%d), want (%d,%d)", step.name, l.CursorRow, l.CursorCol, step.row, step.col)
+		}
+	}
+}
+
+func TestEditorWordWrapNavigation(t *testing.T) {
+	const source = "abc   de fg"
+	e := NewEditor()
+	e.Insert(source)
+	e.DocStart()
+	for i := 0; i < 4; i++ {
+		e.MoveRight()
+	}
+
+	// Position 4 sits inside the trimmed space run: row 0 reports column 4
+	// while the visible row is only 3 cells wide.
+	l := LayoutDraft(e.buf, e.Pos(), 8)
+	if l.CursorRow != 0 || l.CursorCol != 4 || l.RowWidth(0) != 3 {
+		t.Fatalf("hidden-space start: row=%d col=%d width=%d", l.CursorRow, l.CursorCol, l.RowWidth(0))
+	}
+
+	// Move down into the longer second row.
+	if !e.MoveDown(8) {
+		t.Fatal("MoveDown 0->1 failed")
+	}
+	if e.Pos() != 10 || e.prefCol != -1 {
+		t.Fatalf("down: pos=%d prefCol=%d, want 10,-1", e.Pos(), e.prefCol)
+	}
+
+	// Move up into the shorter, trimmed first row: clamp and keep column 4.
+	if !e.MoveUp(8) {
+		t.Fatal("MoveUp 1->0 failed")
+	}
+	if e.Pos() != 3 || e.prefCol != 4 {
+		t.Fatalf("up: pos=%d prefCol=%d, want 3,4", e.Pos(), e.prefCol)
+	}
+
+	// Restore the preferred column on the way down.
+	if !e.MoveDown(8) {
+		t.Fatal("MoveDown 0->1 restore failed")
+	}
+	if e.Pos() != 10 || e.prefCol != -1 {
+		t.Fatalf("restore: pos=%d prefCol=%d, want 10,-1", e.Pos(), e.prefCol)
+	}
+
+	// The preferred column survives a width change and is restored when the
+	// target row at the new width can fit it.
+	if !e.MoveUp(8) {
+		t.Fatal("MoveUp before width change failed")
+	}
+	if e.Pos() != 3 || e.prefCol != 4 {
+		t.Fatalf("before width change: pos=%d prefCol=%d, want 3,4", e.Pos(), e.prefCol)
+	}
+	if !e.MoveDown(9) {
+		t.Fatal("MoveDown at width 9 failed")
+	}
+	if e.Pos() != 10 || e.prefCol != -1 {
+		t.Fatalf("after width change: pos=%d prefCol=%d, want 10,-1", e.Pos(), e.prefCol)
+	}
+
+	if e.Text() != source {
+		t.Fatalf("navigation changed source: %q", e.Text())
+	}
+	if got := e.Submit(); got != source {
+		t.Fatalf("Submit = %q, want %q", got, source)
+	}
 }

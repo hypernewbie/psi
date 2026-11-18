@@ -645,13 +645,15 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 	}
 	// Up/Down move through visual rows. Pi does not bind prompt history to
 	// these keys; Ctrl+P is handled by the app as model cycling.
-	w, _ := c.size()
-	if s == "\x1b[A" || s == "\x1bOA" {
-		c.Editor.MoveUp(w)
-		c.drawIfChanged(false)
-		return "", false, false, false
-	} else if s == "\x1b[B" || s == "\x1bOB" {
-		c.Editor.MoveDown(w)
+	switch s {
+	case "\x1b[A", "\x1bOA", "\x1b[B", "\x1bOB":
+		w, _ := c.size()
+		_, draftWidth := c.presentation.Display.editorGeometry(w)
+		if s == "\x1b[A" || s == "\x1bOA" {
+			c.Editor.MoveUp(draftWidth)
+		} else {
+			c.Editor.MoveDown(draftWidth)
+		}
 		c.drawIfChanged(false)
 		return "", false, false, false
 	}

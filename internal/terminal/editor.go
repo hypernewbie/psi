@@ -358,8 +358,8 @@ func (e *Editor) MoveUp(width int) bool {
 	}
 	target := layout.CursorRow - 1
 	currentVisualCol := layout.CursorCol
-	sourceMaxVisualCol := layout.RowWidth(layout.CursorRow)
-	targetMaxVisualCol := layout.RowWidth(target)
+	sourceMaxVisualCol := layout.verticalMoveMaxCol(e.buf, layout.CursorRow)
+	targetMaxVisualCol := layout.verticalMoveMaxCol(e.buf, target)
 	col := computeVerticalMoveColumn(&e.prefCol, currentVisualCol, sourceMaxVisualCol, targetMaxVisualCol)
 	e.pos = layout.VisualRunePos(e.buf, target, col)
 	return true
@@ -373,8 +373,8 @@ func (e *Editor) MoveDown(width int) bool {
 	}
 	target := layout.CursorRow + 1
 	currentVisualCol := layout.CursorCol
-	sourceMaxVisualCol := layout.RowWidth(layout.CursorRow)
-	targetMaxVisualCol := layout.RowWidth(target)
+	sourceMaxVisualCol := layout.verticalMoveMaxCol(e.buf, layout.CursorRow)
+	targetMaxVisualCol := layout.verticalMoveMaxCol(e.buf, target)
 	col := computeVerticalMoveColumn(&e.prefCol, currentVisualCol, sourceMaxVisualCol, targetMaxVisualCol)
 	e.pos = layout.VisualRunePos(e.buf, target, col)
 	return true

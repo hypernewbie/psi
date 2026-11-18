@@ -60,6 +60,30 @@ func TestConsolePresentationAndDeferDraw(t *testing.T) {
 	}
 }
 
+func TestConsoleVerticalNavigationUsesPaddedWrap(t *testing.T) {
+	c, vt, _ := newTestConsole(12, 12)
+	c.SetPresentation(PresentationSnapshot{NoColor: true, Display: DisplaySettings{EditorPaddingX: 2}})
+	if !c.Editor.RestoreDraft("alpha beta", 1) {
+		t.Fatal("draft rejected")
+	}
+	c.Draw()
+
+	assertCursor := func(wantRow string) {
+		t.Helper()
+		row := strings.Split(vt.Text(), "\n")[vt.CursorRow]
+		if !vt.CursorVisible || row != wantRow || vt.CursorCol != 3 {
+			t.Fatalf("cursor visible=%t on row %q at column %d, want visible on %q at column 3", vt.CursorVisible, row, vt.CursorCol, wantRow)
+		}
+	}
+	assertCursor("  alpha")
+	c.Handle(Input{Key: []byte("\x1b[B")}, false)
+	c.Flush()
+	assertCursor("  beta")
+	c.Handle(Input{Key: []byte("\x1b[A")}, false)
+	c.Flush()
+	assertCursor("  alpha")
+}
+
 func TestConsoleHeldInputs(t *testing.T) {
 	defer leakcheck.Verify(t)
 	c, _, _ := newTestConsole(80, 24)

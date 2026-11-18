@@ -310,6 +310,12 @@ func (s DisplaySettings) normalized() DisplaySettings {
 	return s
 }
 
+// editorGeometry uses normalized settings and leaves at least one column for the draft.
+func (s DisplaySettings) editorGeometry(width int) (padding, draftWidth int) {
+	padding = min(s.EditorPaddingX, (width-1)/2)
+	return padding, width - 2*padding
+}
+
 func (s DisplaySettings) transcriptIndent() string {
 	s = s.normalized()
 	return strings.Repeat(" ", 1+s.OutputPad)
@@ -621,9 +627,8 @@ func EditorComponentRowBudget(height int) int {
 func ComposeConsoleViewComponents(width, height int, buf []rune, pos int, snapshot PresentationSnapshot, activity string, fragmentRows, completionRows []string) EditorView {
 	width, height = max(1, width), max(1, height)
 	noColor := colorDisabled(snapshot)
-	display := snapshot.Display.normalized()
-	editorPad := min(display.EditorPaddingX, max(0, (width-1)/2))
-	layout := LayoutDraft(buf, pos, max(1, width-2*editorPad))
+	editorPad, draftWidth := snapshot.Display.normalized().editorGeometry(width)
+	layout := LayoutDraft(buf, pos, draftWidth)
 	footerRows, footerWidths := formatFooter(snapshot, width, height, noColor)
 
 	// At the smallest sizes keep the focused input usable before chrome.
