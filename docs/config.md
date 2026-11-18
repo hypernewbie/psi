@@ -10,7 +10,7 @@ psi --session PATH
 psi --provider PROVIDER --model MODEL
 psi --thinking LEVEL
 psi --session-dir PATH
-psi --tools read,bash,edit,write
+psi --tools read,bash
 psi --no-tools
 psi --use-theme NAME
 psi --theme PATH
@@ -38,7 +38,7 @@ never change `--docs`; it reads embedded bytes only.
 | Provider/model | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-sgp`, `moonshotai`, `kimi-coding`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, or `mistral` |
 | Reasoning | `defaultThinkingLevel`, `modelThinkingLevels` | off/minimal/low/medium/high/xhigh/max; `modelThinkingLevels` keys are `provider/modelId` |
 | Sessions | `sessionDir` | CLI > env (`PI_CODING_AGENT_SESSION_DIR`) > settings > default |
-| Tools | `defaultTools` | four tools; plain replaces, `+`/`-` modify |
+| Tools | `defaultTools` | names listed under `--tools` in `psi --help`; plain names replace, `+`/`-` modify |
 | Skills | `skills`, `enableSkillCommands` | skill paths; `enableSkillCommands` is parsed but not wired, so `/skill:` stays registered |
 | Compaction | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides` | bounded summaries; per-model reserve overrides; `/ac` controls are session-local |
 | Queues | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`, as in Pi |
@@ -52,6 +52,8 @@ never change `--docs`; it reads embedded bytes only.
 | Auth | `auth.json` entries, env refs | no `!command` execution |
 | Startup | `quietStartup` | hides the Ψ banner, notes, and hint line; inline only |
 | Terminal | always inline | fullscreen and rich-display preferences are ignored |
+
+Web tools read `web-search.json`, not `settings.json`. See [Web access](web.md) for keys, enablement, and limits.
 
 `retry.enabled` and `retry.maxRetries` control provider retries and transient summary retries. Summary backoff uses `retry.baseDelayMs` (default 2000) and `retry.maxAgentDelayMs` (default 60000). Quota, billing, and account-limit errors are not retried.
 

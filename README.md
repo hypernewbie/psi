@@ -1,6 +1,6 @@
 # psi
 
-Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`. See [Providers](docs/providers.md) for supported providers and protocols. Sessions use Pi-compatible v3 JSONL.
+Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`, plus native web access: `web_search`, `fetch_content`, and `get_search_content`. See [Web access](docs/web.md), [Providers](docs/providers.md), and [Sessions](docs/sessions.md). Sessions use Pi-compatible v3 JSONL.
 
 ## Build
 

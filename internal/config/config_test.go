@@ -313,32 +313,26 @@ func TestMalformedDiagnostics(t *testing.T) {
 }
 
 func TestDefaultToolsSemantics(t *testing.T) {
-	// Plain replaces.
-	got, err := resolveTools([]string{"read", "bash"})
-	if err != nil || len(got) != 2 {
-		t.Errorf("replace: %v %v", got, err)
+	inherited := defaultSettings().DefaultTools
+	tests := []struct {
+		name string
+		list []string
+		want []string
+	}{
+		{"replace in default order", []string{"fetch_content", "read"}, []string{"read", "fetch_content"}},
+		{"remove web tools", []string{"-web_search", "-fetch_content", "-get_search_content"}, []string{"read", "bash", "edit", "write"}},
+		{"add to plain selection", []string{"get_search_content", "+bash"}, []string{"bash", "get_search_content"}},
 	}
-	// +/- modifies.
-	got, err = resolveTools([]string{"-write"})
-	if err != nil || len(got) != 3 || containsStr(got, "write") {
-		t.Errorf("remove: %v %v", got, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := ResolveTools(tt.list, inherited); err != nil || !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ResolveTools(%v) = %v, %v; want %v", tt.list, got, err, tt.want)
+			}
+		})
 	}
-	got, err = resolveTools([]string{"+write"})
-	if err != nil || len(got) != 4 {
-		t.Errorf("add: %v %v", got, err)
+	if _, err := ResolveTools([]string{"exec"}, inherited); err == nil {
+		t.Error("unknown tool must fail")
 	}
-	if _, err := resolveTools([]string{"exec"}); err == nil {
-		t.Errorf("unknown tool must fail")
-	}
-}
-
-func containsStr(list []string, s string) bool {
-	for _, e := range list {
-		if e == s {
-			return true
-		}
-	}
-	return false
 }
 
 func contains(s, sub string) bool {

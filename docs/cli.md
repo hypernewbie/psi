@@ -92,14 +92,17 @@ psi --no-tools
 ```
 
 - `-t`, `--tools <list>` replaces the default selection with a comma-separated
-  allowlist of `read`, `bash`, `edit`, and `write`.
+  allowlist. Run `psi --help` to see the names under `--tools`.
 - `-xt`, `--exclude-tools <list>` removes names from whatever is selected.
-- `-nt`, `--no-tools` disables `read`, `bash`, `edit`, and `write`.
+- `-nt`, `--no-tools` disables all selectable tools.
 - `-nbt`, `--no-builtin-tools` behaves like `--no-tools`.
 
-These flags affect the four file/shell tools only. `loop_control` remains
-available during an active goal or exact-count loop. `syncboard` remains
-available while the connected Phi bridge accepts that capability.
+These flags apply only to the tools listed under `--tools`. Web tools honor the
+`web-search.json` switches described in [Web access](web.md). Excluding
+`fetch_content` also blocks `web_search` with `includeContent: true` before any
+network request; metadata-only search remains available. `loop_control`
+remains available during an active goal or exact-count loop. `syncboard`
+remains available while the connected Phi bridge accepts that capability.
 
 `defaultTools` in `settings.json` accepts the same names, plus `+name` and
 `-name` entries that add to or remove from the default set.

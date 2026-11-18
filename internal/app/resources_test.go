@@ -24,7 +24,7 @@ func TestDeclinedProjectStaysOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Settings.DefaultTools) != 4 { // defaults, not project
+	if len(loaded.Settings.DefaultTools) != 7 { // defaults, not project
 		t.Fatalf("declined project leaked settings: %v", loaded.Settings.DefaultTools)
 	}
 	instr, err := config.DiscoverInstructions(work, agent, false)

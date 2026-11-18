@@ -37,6 +37,7 @@ import (
 	"psi/internal/terminal"
 	pitheme "psi/internal/theme"
 	"psi/internal/tools"
+	"psi/internal/webaccess"
 )
 
 type Options struct {
@@ -211,14 +212,14 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.StringVar(&o.Model, "model", "", "model ID or provider/model")
 	fs.StringVar(&o.Thinking, "thinking", "", "thinking level")
 	fs.StringVar(&o.SessionDir, "session-dir", "", "session directory")
-	fs.StringVar(&o.Tools, "tools", "", "tool list (read,bash,edit,write)")
+	fs.StringVar(&o.Tools, "tools", "", "comma-separated tool list")
 	fs.StringVar(&o.Tools, "t", "", "tool list (Pi alias)")
 	fs.StringVar(&o.ExcludeTools, "exclude-tools", "", "comma-separated tools to disable")
 	fs.StringVar(&o.ExcludeTools, "xt", "", "comma-separated tools to disable (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-tools", false, "disable read,bash,edit,write")
-	fs.BoolVar(&o.NoTools, "nt", false, "disable read,bash,edit,write (Pi alias)")
-	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "disable read,bash,edit,write (alias for --no-tools)")
-	fs.BoolVar(&o.NoTools, "nbt", false, "disable read,bash,edit,write (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-tools", false, "disable all selectable tools")
+	fs.BoolVar(&o.NoTools, "nt", false, "disable all selectable tools (Pi alias)")
+	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "alias for --no-tools")
+	fs.BoolVar(&o.NoTools, "nbt", false, "alias for --no-tools (Pi alias)")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -432,9 +433,9 @@ Pi-compatible options:
   --append-system-prompt <text|file> Append system prompt text or file (repeatable)
   --name, -n <name>          Set session display name
   --no-session               Keep this session in memory only
-  --tools, -t <list>         Select read,bash,edit,write tools
+  --tools, -t <list>         Select tools (%s)
   --exclude-tools, -xt <list> Disable selected tools
-  --no-tools, -nt            Disable read,bash,edit,write
+  --no-tools, -nt            Disable all selectable tools
   --no-builtin-tools, -nbt   Alias for --no-tools
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
@@ -454,12 +455,13 @@ Pi-compatible options:
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 Use -- before a message that starts with a hyphen.
-Tool-selection flags affect read,bash,edit,write only.
+Tool-selection flags affect only the tools listed under --tools.
+Inline search content requires selected and enabled fetch_content.
 loop_control and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
-`, version)
+`, version, config.DefaultToolsCSV())
 }
 
 func Run(args []string, version string) error {
@@ -557,7 +559,9 @@ func Run(args []string, version string) error {
 	themeSetting := selectedThemeSetting(st, o)
 	activeTheme, activeThemeName, themeFallback := resolveThemeSnapshot(themeCatalog, themeSetting, colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: activeTheme, NoColor: noColor, Display: presentationDisplay(st)})
-	models, sk, diagnostics, prompt, sections, _, store, err := activateSessionWithStore(o, cwd, agentDir, &st, consent, console, lifecycle, preparedStore)
+	web, webDiagnostics := loadWebAccess()
+	defer web.CloseIdle()
+	models, sk, diagnostics, prompt, sections, _, store, err := activateSessionWithStore(o, cwd, agentDir, &st, consent, console, lifecycle, preparedStore, web)
 	if errors.Is(err, errStartupCancelled) {
 		return nil
 	}
@@ -574,7 +578,7 @@ func Run(args []string, version string) error {
 		return err
 	}
 	r := &runtime{
-		store: store, version: version, options: o, settings: st, models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir,
+		store: store, version: version, options: o, settings: st, models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir, web: web,
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
 		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
@@ -604,6 +608,9 @@ func Run(args []string, version string) error {
 	console.SetDeferDraw(true)
 	startupOut := terminal.RawOutput{W: console}
 	writeThemeDiagnostics(startupOut, r.themeDiagnostics, r.themeFallback)
+	for _, line := range webDiagnosticsLines(webDiagnostics) {
+		fmt.Fprintln(startupOut, terminal.Sanitize(line))
+	}
 	grouped := map[string]int{}
 	for _, d := range diagnostics {
 		grouped[d.Message]++
@@ -654,6 +661,7 @@ type runtime struct {
 	ov                       config.StartupOverrides
 	cfg                      agent.Config
 	prov                     provider.Provider
+	web                      *webaccess.Client
 	authErr                  error
 	generation               int64
 	state                    State
@@ -841,7 +849,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	// model or the level changes, so a model that does not advertise the
 	// current level takes the nearest level it supports.
 	ov.Thinking = provider.ClampThinkingLevel(pm, ov.Thinking)
-	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: tools.Definitions(r.settings.DefaultTools), System: r.prompt, Sections: r.sections,
+	cfg := agent.Config{Model: pm, Thinking: ov.Thinking, Tools: append(tools.Definitions(r.settings.DefaultTools), r.webDefinitions()...), System: r.prompt, Sections: r.sections,
 		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveForModel(ov.Provider, ov.Model), KeepRecentTokens: r.settings.Compaction.KeepRecentTokens,
 		RetryAttempts: r.settings.MaxRetries, RetryBaseDelayMs: r.settings.RetryBaseDelayMs,
 		RetryMaxAgentDelayMs: r.settings.RetryMaxAgentDelayMs}
@@ -2009,7 +2017,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
-			definitions := tools.Definitions(r.settings.DefaultTools)
+			definitions := append(tools.Definitions(r.settings.DefaultTools), r.webDefinitions()...)
 			if state.Active && !state.Forever {
 				definitions = append(definitions, loop.ToolDefinition())
 			}
@@ -2028,6 +2036,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
 			},
 			syncboardToolName: r.syncboardInternalHandler,
+		}
+		for name, handler := range r.webHandlers() {
+			cfg.InternalTools[name] = handler
 		}
 		cfg.AfterToolCall = func(_ context.Context, invocation tools.Invocation, result tools.Result) error {
 			if invocation.Name != loop.ControlToolName || result.IsError {
