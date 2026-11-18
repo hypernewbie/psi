@@ -148,8 +148,8 @@ These flags apply only to the tools listed under `--tools`. Web tools honor the
 `fetch_content` also blocks `web_search` with `includeContent: true` before any
 network request; metadata-only search remains available. A readable
 `fetch_content` call may use a configured Crawl4AI fallback (`crawl4aiBaseUrl`)
-after a direct failure; `raw` mode is direct HTTP only. `loop_control`
-remains available during an active goal or exact-count loop. `syncboard`
+after a direct failure; `raw` mode is direct HTTP only. `loop_done`/`loop_approve`
+remains available during an active goal loop (one at a time, by phase). `syncboard`
 remains available while the connected Phi bridge accepts that capability.
 
 `defaultTools` in `settings.json` accepts the same names, plus `+name` and

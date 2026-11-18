@@ -19,7 +19,7 @@ import (
 // Reference: temp/pi-mono/packages/agent/src/agent-loop.ts (executeToolCallsParallel).
 //
 // Two psi deviations stay explicit:
-//   - Internal control tools (loop_control) execute in call order relative to
+//   - Internal control tools (loop_done, loop_approve) execute in call order relative to
 //     each other, because their state transitions and continuation messages
 //     are order-sensitive. Unrelated calls still overlap.
 //   - Workers never touch the session store or the terminal sink. Only the

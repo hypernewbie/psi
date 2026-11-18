@@ -465,7 +465,7 @@ Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 Inline search content requires selected and enabled fetch_content.
 Readable fetch_content may use a configured Crawl4AI fallback (crawl4aiBaseUrl) after a direct failure; raw mode is direct HTTP only.
-loop_control and syncboard remain available when their separate availability checks pass.
+loop_done/loop_approve and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. The built-in openai-codex provider periodically reads its primary ChatGPT quota, backs off after failures, and shows the remaining percentage in unused footer space when available.
@@ -2263,7 +2263,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.ClearToolRow()
 			}
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, ev.State, presentationDisplay(r.settings), r.theme, noColorEnvironment())
-			if ev.ToolName == loop.ControlToolName && r.loops != nil {
+			if loop.IsTool(ev.ToolName) && r.loops != nil {
 				console.SetLoopStatus(r.loops.StatusLine())
 			}
 			toolSpacing.pending = true
@@ -2421,8 +2421,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
 			definitions := append(tools.Definitions(defaultTools), webDefinitions...)
-			if state.Active && !state.Forever {
-				definitions = append(definitions, loop.ToolDefinition())
+			if definition := loop.ToolDefinition(state); definition != nil {
+				definitions = append(definitions, *definition)
 			}
 			if r.syncboardAvailable() {
 				definitions = append(definitions, syncboardToolDefinition())
@@ -2434,8 +2434,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return config.RenderSections(sections), sections, definitions
 		}
 		cfg.InternalTools = map[string]agent.InternalToolHandler{
-			loop.ControlToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {
-				result := r.loops.HandleControl(invocation.Arguments)
+			loop.DoneToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {
+				result := r.loops.HandleDone(invocation.Arguments)
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
+			},
+			loop.ApproveToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {
+				result := r.loops.HandleApprove(invocation.Arguments)
 				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
 			},
 			syncboardToolName: r.syncboardInternalHandler,
@@ -2444,20 +2448,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 			cfg.InternalTools[name] = handler
 		}
 		cfg.AfterToolCall = func(_ context.Context, invocation tools.Invocation, result tools.Result) error {
-			if invocation.Name != loop.ControlToolName || result.IsError {
+			if result.IsError {
 				return nil
 			}
-			state := r.loops.Snapshot()
-			if !state.Active || state.Forever {
-				return nil
+			switch invocation.Name {
+			case loop.DoneToolName:
+				// A recorded claim is checked in the same run: the next request
+				// must carry the confirmation prompt.
+				if content, ok := r.loops.EvaluationPrompt(); ok {
+					_, err := r.store.AppendCustomMessage(loop.EvaluationMessageType, content, false, nil)
+					return err
+				}
+			case loop.ApproveToolName:
+				// A rejected claim resumes the work in the same run.
+				if content, ok := r.loops.ResumePrompt(); ok {
+					_, err := r.store.AppendCustomMessage(loop.ResumeMessageType, content, false, nil)
+					return err
+				}
 			}
-			_, err := r.store.AppendCustomMessage(loop.IterationMessageType, loop.BuildPrompt(state), false, nil)
-			return err
+			return nil
 		}
-		cfg.ContinueOnEnd = func() (string, string, bool) {
-			content, ok := r.loops.ContinuePrompt()
-			return loop.NudgeMessageType, content, ok
-		}
+		cfg.ContinueOnEnd = r.loops.ContinuePrompt
 		setRetryObserver(r.prov)
 		activeConfig = cfg
 		loop := r.newLoop(func(e event.Event) {

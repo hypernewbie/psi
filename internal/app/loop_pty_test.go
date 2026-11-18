@@ -71,7 +71,7 @@ data: {}
 	q.finish()
 }
 
-func TestActualAppExactCountLoopUsesDynamicControlTool(t *testing.T) {
+func TestActualAppGoalLoopConfirmsClaimBeforeClosing(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	var requests atomic.Int32
@@ -87,13 +87,18 @@ func TestActualAppExactCountLoopUsesDynamicControlTool(t *testing.T) {
 		bodiesMu.Unlock()
 		turn := int(requests.Add(1))
 		w.Header().Set("Content-Type", "text/event-stream")
-		if turn < 3 {
-			fmt.Fprintf(w, "event: message_start\ndata: {\"message\":{\"id\":\"loop-%d\",\"model\":\"synthetic-model\",\"usage\":{\"input_tokens\":1}}}\n\n", turn)
-			fmt.Fprintf(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"control-%d\",\"name\":\"loop_control\",\"input\":{\"status\":\"next\",\"summary\":\"pass %d complete\"}}}\n\n", turn, turn)
+		switch turn {
+		case 1:
+			fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"loop-1\",\"model\":\"synthetic-model\",\"usage\":{\"input_tokens\":1}}}\n\n")
+			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"done-1\",\"name\":\"loop_done\",\"input\":{\"reason\":\"first iteration complete\"}}}\n\n")
 			fmt.Fprint(w, "event: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"}}\n\nevent: message_stop\ndata: {}\n\n")
-			return
+		case 2:
+			fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"loop-2\",\"model\":\"synthetic-model\",\"usage\":{\"input_tokens\":1}}}\n\n")
+			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"approve-1\",\"name\":\"loop_approve\",\"input\":{\"verdict\":\"reached\",\"reason\":\"verified the work\"}}}\n\n")
+			fmt.Fprint(w, "event: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"}}\n\nevent: message_stop\ndata: {}\n\n")
+		default:
+			fmt.Fprint(w, anthropicPTYText("LOOP_FINAL"))
 		}
-		fmt.Fprint(w, anthropicPTYText("LOOP_FINAL"))
 	}))
 	defer server.Close()
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"synthetic-model","defaultThinkingLevel":"off","defaultTools":[],"compaction":{"enabled":false},"outputPad":0}`)
@@ -102,7 +107,7 @@ func TestActualAppExactCountLoopUsesDynamicControlTool(t *testing.T) {
 
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools")
 	q.prompt()
-	q.write("/loop 2 polish the implementation\r")
+	q.write("/loop goal polish the implementation\r")
 	q.wait("LOOP_FINAL")
 	q.prompt()
 	if requests.Load() != 3 {
@@ -121,16 +126,23 @@ func TestActualAppExactCountLoopUsesDynamicControlTool(t *testing.T) {
 		}
 		requestsJSON = append(requestsJSON, request)
 	}
-	for index, step := range []string{"Pass 1 of 2", "Pass 2 of 2"} {
-		if !strings.Contains(string(bodies[index]), "loop_control") || !strings.Contains(string(bodies[index]), step) {
-			t.Fatalf("request %d lacks active loop instructions/tool: %s", index+1, bodies[index])
-		}
-		if len(requestsJSON[index]["tools"].([]any)) != 1 {
-			t.Fatalf("request %d tools = %#v", index+1, requestsJSON[index]["tools"])
-		}
+	// Request 1 works the goal and exposes only loop_done.
+	if !strings.Contains(string(bodies[0]), "loop_done") || !strings.Contains(string(bodies[0]), "Iteration 1") {
+		t.Fatalf("request 1 lacks the working-phase tool/instructions: %s", bodies[0])
 	}
-	if _, present := requestsJSON[2]["tools"]; present {
-		t.Fatalf("completed loop still exposed control tools: %#v", requestsJSON[2]["tools"])
+	if tools := requestsJSON[0]["tools"].([]any); len(tools) != 1 || !strings.Contains(fmt.Sprint(tools[0]), "loop_done") {
+		t.Fatalf("request 1 tools = %#v", tools)
+	}
+	// Request 2 checks the claim and exposes only loop_approve.
+	if !strings.Contains(string(bodies[1]), "loop_approve") || !strings.Contains(string(bodies[1]), "Confirmation check") {
+		t.Fatalf("request 2 lacks the checking-phase tool/instructions: %s", bodies[1])
+	}
+	if tools := requestsJSON[1]["tools"].([]any); len(tools) != 1 || !strings.Contains(fmt.Sprint(tools[0]), "loop_approve") {
+		t.Fatalf("request 2 tools = %#v", tools)
+	}
+	// The confirmed loop is closed: no tools and no active-loop prompt.
+	if tools, present := requestsJSON[2]["tools"]; present {
+		t.Fatalf("completed loop still exposed control tools: %#v", tools)
 	}
 	if strings.Contains(string(bodies[2]), "## Active Loop") {
 		t.Fatalf("completed loop system prompt stayed active: %s", bodies[2])

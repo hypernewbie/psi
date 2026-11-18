@@ -598,7 +598,7 @@ func TestParallelLoopControlMixesWithReads(t *testing.T) {
 	fake := &provider.Fake{Responses: []*provider.Response{
 		batchResponse(
 			readCall("r1", "a.txt"),
-			provider.Block{Type: "toolCall", ID: "control-1", Name: "loop_control", Arguments: map[string]any{"status": "next", "summary": "step done"}},
+			provider.Block{Type: "toolCall", ID: "control-1", Name: "loop_done", Arguments: map[string]any{"reason": "step done"}},
 		),
 		{Text: "finished", StopReason: "stop"},
 	}}
@@ -608,13 +608,13 @@ func TestParallelLoopControlMixesWithReads(t *testing.T) {
 	cfg := Config{
 		Model: modelMeta(), Tools: toolDefs(),
 		InternalTools: map[string]InternalToolHandler{
-			"loop_control": func(_ context.Context, _ tools.Invocation) tools.Result {
+			"loop_done": func(_ context.Context, _ tools.Invocation) tools.Result {
 				controlRan <- struct{}{}
 				return tools.Result{Content: []tools.Block{{Type: "text", Text: "advanced"}}}
 			},
 		},
 		AfterToolCall: func(_ context.Context, inv tools.Invocation, _ tools.Result) error {
-			if inv.Name != "loop_control" {
+			if inv.Name != "loop_done" {
 				return nil
 			}
 			continuations = append(continuations, "iteration")
@@ -1299,11 +1299,11 @@ func TestParallelBatch_InternalToolsSequentialWhileBuiltinsOverlap(t *testing.T)
 
 	batchCalls := []provider.Block{
 		readCall("b1", "b1.txt"),
-		{Type: "toolCall", ID: "i1", Name: "loop_control", Arguments: map[string]any{"step": 1}},
+		{Type: "toolCall", ID: "i1", Name: "loop_done", Arguments: map[string]any{"step": 1}},
 		readCall("b2", "b2.txt"),
-		{Type: "toolCall", ID: "i2", Name: "loop_control", Arguments: map[string]any{"step": 2}},
+		{Type: "toolCall", ID: "i2", Name: "loop_done", Arguments: map[string]any{"step": 2}},
 		readCall("b3", "b3.txt"),
-		{Type: "toolCall", ID: "i3", Name: "loop_control", Arguments: map[string]any{"step": 3}},
+		{Type: "toolCall", ID: "i3", Name: "loop_done", Arguments: map[string]any{"step": 3}},
 	}
 
 	fake := &provider.Fake{Responses: []*provider.Response{
@@ -1315,7 +1315,7 @@ func TestParallelBatch_InternalToolsSequentialWhileBuiltinsOverlap(t *testing.T)
 	cfg := Config{
 		Model: modelMeta(), Tools: toolDefs(),
 		InternalTools: map[string]InternalToolHandler{
-			"loop_control": func(_ context.Context, inv tools.Invocation) tools.Result {
+			"loop_done": func(_ context.Context, inv tools.Invocation) tools.Result {
 				cur := activeInternal.Add(1)
 				defer activeInternal.Add(-1)
 				for {

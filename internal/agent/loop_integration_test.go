@@ -49,10 +49,10 @@ func TestHiddenContinuationAddsModelContextWithoutVisibleTranscript(t *testing.T
 
 func TestDynamicToolsUpdateAfterInternalToolStateChanges(t *testing.T) {
 	_, _, fake, loop, _ := testSetup(t)
-	control := provider.ToolDef{Name: "loop_control", Description: "control", Schema: map[string]any{"type": "object"}}
+	control := provider.ToolDef{Name: "loop_done", Description: "claim completion", Schema: map[string]any{"type": "object"}}
 	active := true
 	fake.Responses = []*provider.Response{
-		{Text: "control", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "control-1", Name: "loop_control", Arguments: map[string]any{"status": "done", "summary": "complete"}}}},
+		{Text: "control", StopReason: "toolUse", ToolCalls: []provider.Block{{Type: "toolCall", ID: "control-1", Name: "loop_done", Arguments: map[string]any{"reason": "complete"}}}},
 		{Text: "finished", StopReason: "stop"},
 	}
 	cfg := Config{
@@ -64,7 +64,7 @@ func TestDynamicToolsUpdateAfterInternalToolStateChanges(t *testing.T) {
 			return "normal", nil, nil
 		},
 		InternalTools: map[string]InternalToolHandler{
-			"loop_control": func(_ context.Context, _ tools.Invocation) tools.Result {
+			"loop_done": func(_ context.Context, _ tools.Invocation) tools.Result {
 				active = false
 				return tools.Result{Content: []tools.Block{{Type: "text", Text: "loop complete"}}}
 			},
@@ -73,7 +73,7 @@ func TestDynamicToolsUpdateAfterInternalToolStateChanges(t *testing.T) {
 	if err := loop.Submit(context.Background(), "start", cfg); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.Calls) != 2 || len(fake.Calls[0].Tools) != 1 || fake.Calls[0].Tools[0].Name != "loop_control" || len(fake.Calls[1].Tools) != 0 {
+	if len(fake.Calls) != 2 || len(fake.Calls[0].Tools) != 1 || fake.Calls[0].Tools[0].Name != "loop_done" || len(fake.Calls[1].Tools) != 0 {
 		t.Fatalf("dynamic tool sets = %#v", []any{fake.Calls[0].Tools, fake.Calls[1].Tools})
 	}
 	if fake.Calls[1].System != "normal" {
