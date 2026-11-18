@@ -41,7 +41,7 @@ eleven otherwise.
 - `pi.thinking.v1`: list the live model's advertised thinking levels and
   switch. A switch accepts any of `off`, `minimal`, `low`, `medium`, `high`,
   `xhigh`, and `max`; the provider clamps a level the model does not advertise
-  and the session records the requested level. Only a level the model cannot
+  and the session records the resulting level. A level the model cannot
   apply is refused.
 - `pi.history.v1`: read editor recall, newest first.
 - `pi.context.v1`: token/window/percent telemetry, present only when known.
@@ -59,6 +59,16 @@ eleven otherwise.
   capability; the tool is available only while that capability is connected.
 - `pi.attachments.v3`: verified image and file references, advertised only
   with a usable handoff root.
+
+**Model and thinking changes.** Phi can change either setting while the pane
+is idle or a run is active. Psi records the selection before acknowledging
+it. If changing the model also changes the effective thinking level, Psi
+records that level too. The next provider request uses the new selection.
+An in-flight request and its transport retries keep their original settings.
+This does not cancel the run or clear queued input. Psi prepares one bridge
+request at a time. If another request is being prepared, a picker is open,
+or the run is cancelling, Psi refuses the change rather than queueing it.
+A stale candidate or a failed session write does not change the live selection.
 
 Phi keeps its own fallbacks for the capabilities a pane does not advertise.
 `pi.reload.v1` and `pi.syncboard.v1` are existing capabilities that predate

@@ -11,8 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"psi/internal/agent"
 	"psi/internal/config"
 	"psi/internal/provider"
+	"psi/internal/session"
 )
 
 // A command line reference to a provider from models.json resolves after the
@@ -109,6 +111,104 @@ func TestReloadReadsModelsJSONAgain(t *testing.T) {
 	}
 	if _, err := r.models.SelectModel("local-openai", "qwen2.5-coder"); err != nil {
 		t.Fatalf("a malformed models.json replaced the working configuration: %v", err)
+	}
+}
+
+func TestCompactionProviderUsesReloadedCatalog(t *testing.T) {
+	r := testRuntime(t)
+	// The active model in this fixture is offline. Only the configured
+	// compactor needs a client for this test, and it sends no requests.
+	r.authErr = nil
+	r.publishLive()
+	const compactor = "local-openai/summary"
+	writeCatalog := func(maxTokens string) {
+		t.Helper()
+		raw := `{"providers":{"local-openai":{"api":"openai-completions","baseUrl":"https://provider.example/v1","apiKey":"synthetic-local-key","models":[{"id":"summary","maxTokens":` + maxTokens + `}]}}}`
+		if err := os.WriteFile(filepath.Join(r.agentDir, "models.json"), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCatalog("2048")
+	if err := r.reloadModels(); err != nil {
+		t.Fatal(err)
+	}
+	writeCatalog("4096")
+
+	type resolution struct {
+		model provider.ModelMeta
+		err   error
+	}
+	settings := r.settings
+	resolve := func() resolution {
+		_, model, cleanup, err := r.compactionProvider(compactor, settings)
+		if cleanup != nil {
+			cleanup()
+		}
+		return resolution{model, err}
+	}
+	start := make(chan struct{})
+	resolved := make(chan resolution, 1)
+	go func() {
+		<-start
+		resolved <- resolve()
+	}()
+	close(start)
+	reloadErr := r.reloadModels()
+	overlapping := <-resolved
+	if reloadErr != nil {
+		t.Fatal(reloadErr)
+	}
+	if overlapping.err != nil || overlapping.model.ID != "summary" || (overlapping.model.MaxTokens != 2048 && overlapping.model.MaxTokens != 4096) {
+		t.Fatalf("compactor resolution during reload = %+v, %v; want summary from either catalog", overlapping.model, overlapping.err)
+	}
+	latest := resolve()
+	if latest.err != nil || latest.model.ID != "summary" || latest.model.MaxTokens != 4096 {
+		t.Fatalf("compactor resolution after reload = %+v, %v; want summary from the new catalog", latest.model, latest.err)
+	}
+}
+
+func TestCompactionPinsExplicitActiveModelAcrossSplit(t *testing.T) {
+	r := testRuntime(t)
+	for _, task := range []struct {
+		prompt string
+		spans  int
+	}{{"older task", 1}, {"current task", 4}} {
+		if _, err := r.store.AppendMessage(agentMessageUser(task.prompt)); err != nil {
+			t.Fatal(err)
+		}
+		for range task.spans {
+			if _, err := r.store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+				Role: "assistant", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: strings.Repeat("work ", 16_000)}}},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	oldModel := r.cfg.Model
+	newModel := oldModel
+	newModel.ID = "next"
+	old := &provider.Fake{Responses: []*provider.Response{{Text: "history summary", StopReason: "stop"}, {Text: "prefix summary", StopReason: "stop"}}}
+	next := &provider.Fake{Responses: []*provider.Response{{Text: "next response", StopReason: "stop"}, {Text: "next response", StopReason: "stop"}}}
+	r.prov, r.authErr = old, nil
+	r.cfg.KeepRecentTokens = 20_000
+	r.publishLive()
+	cfg := r.cfg
+	cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
+		return r.compactionProvider("anthropic/m", r.settings)
+	}
+	cfg.LiveSettings = func() agent.LiveSettings {
+		if old.CallCount() != 0 {
+			return agent.LiveSettings{Provider: next, Model: newModel, Thinking: "off", KeepRecentTokens: 20_000}
+		}
+		return r.liveSettings()
+	}
+	if err := r.newLoop(nil).CompactAndResume(t.Context(), cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+	summaries, continuation := old.Requests(), next.Requests()
+	if len(summaries) != 2 || summaries[0].Model.ID != oldModel.ID || summaries[1].Model.ID != oldModel.ID ||
+		len(continuation) != 1 || continuation[0].Model.ID != newModel.ID {
+		t.Fatalf("explicit compactor should handle both summaries, then resume on the new model; calls: compactor=%d next=%d", len(summaries), len(continuation))
 	}
 }
 

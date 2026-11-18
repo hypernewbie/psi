@@ -235,7 +235,7 @@ func TestActualAppSettingsCorruptFileStaysSessionOnly(t *testing.T) {
 	}
 }
 
-func TestActualAppSettingsRefusedWhileBusy(t *testing.T) {
+func TestActualAppSettingsAllowedWhileBusy(t *testing.T) {
 	if goruntime.GOOS == "windows" {
 		t.Skip("app settings workflow needs a Unix PTY")
 	}
@@ -265,8 +265,10 @@ func TestActualAppSettingsRefusedWhileBusy(t *testing.T) {
 	session.waitEditor()
 	session.write("work\r")
 	session.wait("Working")
+	// Live configuration: /settings opens during a run instead of refusing.
 	session.write("/settings\r")
-	session.wait("Finish or cancel the run before changing settings.")
+	session.waitScreen("Auto-compact")
+	session.write("\x1b")
 	close(release)
 	session.wait("DONE")
 	session.waitEditor()

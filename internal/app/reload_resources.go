@@ -55,5 +55,8 @@ func (r *runtime) reloadModels() error {
 		return err
 	}
 	r.models = models
+	if r.live != nil {
+		r.live.publishModels(models)
+	}
 	return nil
 }

@@ -20,6 +20,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -590,6 +591,7 @@ func Run(args []string, version string) error {
 	}
 	r := &runtime{
 		store: store, version: version, options: o, settings: st, models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir, web: web,
+		live:         newLiveConfig(),
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
 		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
@@ -606,6 +608,7 @@ func Run(args []string, version string) error {
 	if err := r.restore(); err != nil {
 		return err
 	}
+	r.publishLive()
 	if err := r.loops.Reconstruct(); err != nil {
 		return err
 	}
@@ -659,6 +662,35 @@ func Run(args []string, version string) error {
 // newlineRun matches Pi's /name normalization: consecutive CR/LF runs collapse to one space.
 var newlineRun = regexp.MustCompile(`[\r\n]+`)
 
+// liveConfig is the mutable request configuration a running loop reads at
+// each turn boundary. The TUI goroutine writes it and the run goroutine
+// reads it. It is held by pointer because the runtime is copied by value.
+type liveConfig struct {
+	mu     sync.RWMutex
+	live   agent.LiveSettings
+	models *config.ModelsFile // Immutable after load.
+}
+
+func newLiveConfig() *liveConfig { return &liveConfig{} }
+
+func (c *liveConfig) publish(live agent.LiveSettings, models *config.ModelsFile) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.live, c.models = live, models
+}
+
+func (c *liveConfig) publishModels(models *config.ModelsFile) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.models = models
+}
+
+func (c *liveConfig) snapshot() (agent.LiveSettings, *config.ModelsFile) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.live, c.models
+}
+
 type runtime struct {
 	store            *session.Store
 	version          string
@@ -683,7 +715,11 @@ type runtime struct {
 	openAIBind      func() (net.Listener, error)
 	openAIBrowser   func(context.Context, string) error
 	// openAIRename pauses the credential commit in tests. Nil in production.
-	openAIRename             func(string, string) error
+	openAIRename func(string, string) error
+	// live holds the mutable request configuration a running loop reads at
+	// each turn boundary. It is a pointer because the runtime is copied by
+	// value.
+	live                     *liveConfig
 	generation               int64
 	state                    State
 	bridge                   *pibridge.Client
@@ -819,6 +855,23 @@ func (r *runtime) checkBump(unavailable bool, requireUnfinished bool) error {
 		return fmt.Errorf("storage blocked: %w", err)
 	}
 	return nil
+}
+
+// pickerCloseState computes the UI state after a picker closes. While a run
+// is active the underlying run state (waiting, cancelling, compacting) is
+// preserved; otherwise storage failures surface as blocked, offline stays
+// offline, and idle is restored.
+func (r *runtime) pickerCloseState(busy bool, runOutcome string, current State) State {
+	if busy {
+		return current
+	}
+	if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
+		return StateStorageBlocked
+	}
+	if r.authErr != nil {
+		return StateOffline
+	}
+	return StateIdle
 }
 
 func (r *runtime) restore() error {
@@ -991,12 +1044,15 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	return nil
 }
 
-func (r *runtime) compactionProvider(reference string) (provider.Provider, provider.ModelMeta, func(), error) {
-	if r.authErr != nil {
+func (r *runtime) compactionProvider(reference string, settings config.Settings) (provider.Provider, provider.ModelMeta, func(), error) {
+	// Compaction runs on the agent goroutine. Read the live selection and
+	// catalog together; a model picker refresh replaces the published catalog.
+	live, models := r.live.snapshot()
+	if live.AuthErr != nil {
 		// Pi resolves the summarization request only when it summarizes: the
 		// preparation runs first, so a session with nothing to compact never
 		// needs credentials.
-		return nil, provider.ModelMeta{}, nil, r.authErr
+		return nil, provider.ModelMeta{}, nil, live.AuthErr
 	}
 	if reference == "" {
 		return nil, provider.ModelMeta{}, nil, nil
@@ -1005,17 +1061,18 @@ func (r *runtime) compactionProvider(reference string) (provider.Provider, provi
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("invalid compactor model %q; use provider/model", reference)
 	}
-	if parts[0] == r.ov.Provider && parts[1] == r.ov.Model {
-		return nil, provider.ModelMeta{}, nil, nil
+	if parts[0] == live.Overrides.Provider && parts[1] == live.Overrides.Model {
+		// Reuse the live client, but pin the explicit choice across both
+		// requests of a split summary even if the active model changes.
+		return live.Provider, live.Model, nil, nil
 	}
-	if r.models == nil {
+	if models == nil {
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("model catalog is unavailable")
 	}
-	next := r.ov
+	next := live.Overrides
 	next.Provider, next.Model, next.Thinking = parts[0], parts[1], "off"
 	next.ThinkingExplicit = true
-	candidate := *r
-	candidate.prov = nil
+	candidate := &runtime{store: r.store, models: models, settings: settings, prompt: r.prompt, sections: r.sections, agentDir: r.agentDir}
 	if err := candidate.configure(next); err != nil {
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("compactor model %s: %w", reference, err)
 	}
@@ -1210,11 +1267,114 @@ func firstLine(s string) string {
 	return s
 }
 
-func (r *runtime) installConfiguration(candidate *runtime) {
+func (r *runtime) adoptConfiguration(candidate *runtime) {
 	if r.prov != nil {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
+}
+
+// publishLive stores the mutable request configuration that a running loop
+// reads at its next turn boundary.
+func (r *runtime) publishLive() {
+	if r.live == nil {
+		return
+	}
+	r.live.publish(r.requestSettings(), r.models)
+}
+
+func (r *runtime) requestSettings() agent.LiveSettings {
+	return agent.LiveSettings{
+		Provider:         r.prov,
+		Overrides:        r.ov,
+		Model:            r.cfg.Model,
+		Thinking:         r.cfg.Thinking,
+		AutoCompact:      r.cfg.AutoCompact,
+		ReserveTokens:    r.cfg.ReserveTokens,
+		KeepRecentTokens: r.cfg.KeepRecentTokens,
+		AuthErr:          r.authErr,
+	}
+}
+
+// commitSelection orders a durable selection change and its publication with
+// the agent's metadata sync. Keep provider preparation and retirement outside
+// this lock; the worker only needs the published request settings.
+func (r *runtime) commitSelection(next agent.LiveSettings, persist func() error) error {
+	if r.live == nil {
+		return persist()
+	}
+	r.live.mu.Lock()
+	defer r.live.mu.Unlock()
+	if err := persist(); err != nil {
+		return err
+	}
+	r.live.live = next
+	return nil
+}
+
+func (r *runtime) selectModel(candidate *runtime) error {
+	next := candidate.requestSettings()
+	err := r.commitSelection(next, func() error {
+		state, err := r.store.ModelState()
+		if err != nil {
+			return err
+		}
+		if _, err := r.store.AppendModelChange(next.Model.ProviderID(), next.Model.ID); err != nil {
+			return err
+		}
+		// A model change can also resolve a different thinking level. Save
+		// it now rather than relying on a later run to sync the session.
+		if state.ThinkingLevel != next.Thinking {
+			_, err := r.store.AppendThinkingLevelChange(next.Thinking)
+			return err
+		}
+		return nil
+	})
+	if err == nil {
+		r.adoptConfiguration(candidate)
+	}
+	return err
+}
+
+func (r *runtime) commitThinking(next agent.LiveSettings) error {
+	return r.commitSelection(next, func() error {
+		_, err := r.store.AppendThinkingLevelChange(next.Thinking)
+		return err
+	})
+}
+
+func (r *runtime) modelSelectionSync() func() error {
+	if r.live == nil {
+		return nil
+	}
+	live, store := r.live, r.store
+	return func() error {
+		live.mu.Lock()
+		defer live.mu.Unlock()
+		state, err := store.ModelState()
+		if err != nil {
+			return err
+		}
+		selected := live.live
+		if state.Provider != selected.Model.ProviderID() || state.ModelID != selected.Model.ID {
+			if _, err := store.AppendModelChange(selected.Model.ProviderID(), selected.Model.ID); err != nil {
+				return err
+			}
+		}
+		if state.ThinkingLevel != selected.Thinking {
+			_, err = store.AppendThinkingLevelChange(selected.Thinking)
+		}
+		return err
+	}
+}
+
+// liveSettings returns the current mutable request configuration.
+func (r *runtime) liveSettings() agent.LiveSettings {
+	if r.live == nil {
+		return agent.LiveSettings{}
+	}
+	live, _ := r.live.snapshot()
+	return live
 }
 
 // footerThinkingLabel follows Pi's footer. The thinking level appears only for
@@ -1407,8 +1567,9 @@ func (r *runtime) replace(next *session.Store) error {
 			return err
 		}
 	}
-	r.installConfiguration(&candidate)
+	r.adoptConfiguration(&candidate)
 	r.store = next
+	r.publishLive()
 	// Undelivered prompts belonged to the replaced session; keeping them
 	// would let a later attachment send content the user has moved away from.
 	r.clearRecovery()
@@ -1659,6 +1820,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		r.state = StateCancelling
+		bridge.runCancelling = true
 		console.SetThinking(false)
 		cancel()
 	}
@@ -1707,23 +1869,43 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.syncBridge()
 		r.draw(console)
 	}
+	// Recovered input belongs to the editor, not to a picker query or its
+	// cancel-only draft. Hold it until the final picker closes.
+	var pickerRecovery []string
+	restoreQueuedDraft := func(messages []string) {
+		if len(messages) == 0 {
+			return
+		}
+		text := strings.Join(messages, "\n\n")
+		if draft := console.Editor.Text(); strings.TrimSpace(draft) != "" {
+			text += "\n\n" + draft
+		}
+		console.Editor.RestoreDraft(text, len([]rune(text)))
+		console.RefreshCompletion()
+	}
 	openSelector := func(selector *Selector, draft string, cursor int, query string, restoreOnSuccess bool) {
 		r.selector = selector
 		r.selectorDraft, r.selectorCursor = draft, cursor
 		r.selectorRestoreOnSuccess = restoreOnSuccess
 		selector.SetFilter(query)
 		console.Editor.RestoreDraft(query, len([]rune(query)))
-		r.state = StateSelecting
+		// Picker visibility is separate from the run state. When a run is
+		// active, keep Waiting/Cancelling/Compacting so stream events and
+		// close logic stay accurate.
+		if !busy {
+			r.state = StateSelecting
+		}
 		r.draw(console)
 	}
+	restorePickerState := func() {
+		r.state = r.pickerCloseState(busy, runOutcome, r.state)
+	}
 	closeSelector := func(restoreDraft bool) {
+		returnToSettings := r.selector.ModelThinking || r.selector.ModelThinkingLevel
 		r.selector = nil
 		console.ClearPickerRows()
 		r.selectorRestoreOnSuccess = false
-		r.state = StateIdle
-		if r.authErr != nil {
-			r.state = StateOffline
-		}
+		restorePickerState()
 		if restoreDraft {
 			console.Editor.RestoreDraft(r.selectorDraft, r.selectorCursor)
 			console.RefreshCompletion()
@@ -1731,19 +1913,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.Editor.Clear()
 		}
 		r.selectorDraft, r.selectorCursor = "", 0
+		if !returnToSettings {
+			restoreQueuedDraft(pickerRecovery)
+			pickerRecovery = nil
+		}
 		r.draw(console)
 	}
 	openSettings := func() {
 		r.settingsPicker = r.newSettingsPicker()
-		r.state = StateSelecting
+		if !busy {
+			r.state = StateSelecting
+		}
 		r.draw(console)
 	}
-	closeSettings := func() {
+	closeSettings := func(restoreDraft bool) {
 		r.settingsPicker = nil
 		console.ClearPickerRows()
-		r.state = StateIdle
-		if r.authErr != nil {
-			r.state = StateOffline
+		restorePickerState()
+		if restoreDraft {
+			restoreQueuedDraft(pickerRecovery)
+			pickerRecovery = nil
 		}
 		r.draw(console)
 	}
@@ -2142,6 +2331,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
 		compactionCountAtStart = r.ac.Snapshot().CompactionCount
+		// Sync the live snapshot with the starting configuration so turn
+		// boundaries see the provider this run actually uses. Tests replace
+		// r.prov directly; production always publishes via install.
+		r.publishLive()
 		r.state = StateWaiting
 		setActivity("Working")
 		if compact {
@@ -2150,12 +2343,37 @@ func (r *runtime) repl(console *terminal.Console) error {
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
 		cfg.ACPolicy = r.ac
+		cfg.SyncModelSelection = r.modelSelectionSync()
+		// Capture the settings, tool list, and selected web tools once so the
+		// run goroutine never reads r.settings while the settings picker
+		// writes it.
+		compactionSettings := r.settings
+		defaultTools := r.settings.DefaultTools
+		webDefinitions := r.webDefinitions()
+		setRetryObserver := func(prov provider.Provider) {
+			if observable, ok := prov.(interface {
+				SetRetryObserver(func(provider.RetryInfo))
+			}); ok {
+				observable.SetRetryObserver(func(info provider.RetryInfo) {
+					seq++
+					events <- event.Event{Type: event.Retry, Generation: gen, Seq: seq, SessionID: r.store.Header().ID,
+						RetryAttempt: info.Attempt, RetryMaximum: info.Maximum, RetryDelayMs: int64(info.Delay / time.Millisecond), RetryClass: info.Class}
+				})
+			}
+		}
+		cfg.LiveSettings = func() agent.LiveSettings {
+			live := r.liveSettings()
+			if live.Provider != nil {
+				setRetryObserver(live.Provider)
+			}
+			return live
+		}
 		cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
-			return r.compactionProvider(r.ac.Snapshot().CompactorModel)
+			return r.compactionProvider(r.ac.Snapshot().CompactorModel, compactionSettings)
 		}
 		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
-			definitions := append(tools.Definitions(r.settings.DefaultTools), r.webDefinitions()...)
+			definitions := append(tools.Definitions(defaultTools), webDefinitions...)
 			if state.Active && !state.Forever {
 				definitions = append(definitions, loop.ToolDefinition())
 			}
@@ -2193,15 +2411,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			content, ok := r.loops.ContinuePrompt()
 			return loop.NudgeMessageType, content, ok
 		}
-		if observable, ok := r.prov.(interface {
-			SetRetryObserver(func(provider.RetryInfo))
-		}); ok {
-			observable.SetRetryObserver(func(info provider.RetryInfo) {
-				seq++
-				events <- event.Event{Type: event.Retry, Generation: gen, Seq: seq, SessionID: r.store.Header().ID,
-					RetryAttempt: info.Attempt, RetryMaximum: info.Maximum, RetryDelayMs: int64(info.Delay / time.Millisecond), RetryClass: info.Class}
-			})
-		}
+		setRetryObserver(r.prov)
 		activeConfig = cfg
 		loop := r.newLoop(func(e event.Event) {
 			seq++
@@ -2603,6 +2813,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			bumpAwaitingStart = false
 			cancel()
 			busy = false
+			bridge.runCancelling = false
 			bridge.resolveCompactRun(err)
 			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
 			// Queued input can arrive after the run's last queue poll but before
@@ -2631,13 +2842,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.SetSteeringRows(nil)
 				console.SetFollowUpRows(nil)
 			}
-			if len(undelivered) > 0 {
-				combined := strings.Join(undelivered, "\n\n")
-				if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
-					combined += "\n\n" + current
-				}
-				console.Editor.RestoreDraft(combined, len([]rune(combined)))
-				console.RefreshCompletion()
+			if r.selector != nil || r.settingsPicker != nil {
+				pickerRecovery = append(pickerRecovery, undelivered...)
+			} else {
+				restoreQueuedDraft(undelivered)
 			}
 			thinkingStream.Close()
 			stream.Close()
@@ -2725,9 +2933,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 				return outputErr
 			}
-			r.state = StateIdle
-			if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
-				r.state = StateStorageBlocked
+			settledState := r.pickerCloseState(false, runOutcome, r.state)
+			r.state = settledState
+			if settledState == StateIdle && (r.selector != nil || r.settingsPicker != nil) {
+				// Block fresh admissions while the picker owns the editor, but
+				// do not strand work already accepted by this run.
+				r.state = StateSelecting
 			}
 			if suspendPending {
 				suspendPending = false
@@ -2741,12 +2952,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.refreshPresentation(console)
 				r.draw(console)
 			}
-			if r.state == StateIdle && len(initialMessages) > 0 {
-				message := initialMessages[0]
-				initialMessages = initialMessages[1:]
-				start(message, message, "", "", "", false)
-			}
-			if lateQueueLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
+			// Finish the current run's accepted input before a startup prompt
+			// replaces the loop that owns it.
+			if lateQueueLoop != nil && settledState == StateIdle {
 				ctx, stop := context.WithCancel(context.Background())
 				cancel = stop
 				busy = true
@@ -2758,8 +2966,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				lateLoop, cfg := lateQueueLoop, activeConfig
 				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
 				r.draw(console)
+			} else if settledState == StateIdle && len(initialMessages) > 0 {
+				message := initialMessages[0]
+				initialMessages = initialMessages[1:]
+				start(message, message, "", "", "", false)
 			}
-			if pendingACCompactFocus != nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
+			if !busy && pendingACCompactFocus != nil && settledState == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 {
 				focus := *pendingACCompactFocus
 				pendingACCompactFocus = nil
 				checkAndStartCompact(focus, true, true)
@@ -2891,13 +3103,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if !busy && r.settingsPicker != nil {
+			if r.settingsPicker != nil {
 				if input.Paste {
 					continue
 				}
 				switch string(input.Key) {
 				case "\x1b", "\x03":
-					closeSettings()
+					closeSettings(true)
 				case "\x1b[A", "\x1bOA":
 					r.settingsPicker.Move(-1)
 					r.draw(console)
@@ -2917,7 +3129,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						continue
 					}
 					if item.ID == "model-thinking" && string(input.Key) == "\r" {
-						closeSettings()
+						closeSettings(false)
 						r.refreshModelsForPicker(notice)
 						selector := NewSelector(modelSelectorItems(r), r.ov.Provider+"/"+r.ov.Model)
 						selector.Models = true
@@ -2957,7 +3169,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
-			if !busy && r.selector != nil {
+			if r.selector != nil {
 				key := string(input.Key)
 				if !input.Paste {
 					switch key {
@@ -3060,6 +3272,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 							closeSelector(r.selectorRestoreOnSuccess)
 							continue
 						}
+						// Only model and thinking pickers can apply changes during a run.
+						if busy {
+							notice(terminal.NoticeInfo, "Finish or cancel the run before using this picker.")
+							continue
+						}
 						if r.selector.AuthMode == AuthLogin {
 							if selected.ID == "openai" {
 								closeSelector(false)
@@ -3139,7 +3356,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.draw(console)
 				continue
 			}
-			if !busy && !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
+			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 12 {
 				r.refreshModelsForPicker(notice)
 				openSelector(modelSelector(r), console.Editor.Text(), console.Editor.Pos(), "", true)
 				continue
@@ -3174,7 +3391,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.Status("Skill blocks: " + state)
 				continue
 			}
-			if !busy && !input.Paste && string(input.Key) == "\x1b[Z" {
+			if !input.Paste && string(input.Key) == "\x1b[Z" {
 				cycleThinking()
 				continue
 			}
@@ -3227,9 +3444,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// waits for this run to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
-						notice(terminal.NoticeInfo, "Finish or cancel the run before changing settings.")
-						console.Editor.RestoreDraft(text, len([]rune(text)))
-						console.RefreshCompletion()
+						if strings.TrimSpace(cmd.Arg) != "" {
+							notice(terminal.NoticeError, "use /settings")
+						} else {
+							openSettings()
+						}
 						r.draw(console)
 						continue
 					}
@@ -3260,6 +3479,34 @@ func (r *runtime) repl(console *terminal.Console) error {
 						} else {
 							stopLoopCommand()
 						}
+						continue
+					}
+					// Live configuration: explicit model and thinking changes apply
+					// to the run's next request. Empty or unknown model args open
+					// the picker; empty thinking args open the level picker.
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "model" {
+						arg := strings.TrimSpace(cmd.Arg)
+						if arg != "" && r.modelArgumentKnown(arg) {
+							if _, err := r.command(cmd, out); err != nil {
+								print("error: " + err.Error())
+							}
+							r.draw(console)
+							continue
+						}
+						r.refreshModelsForPicker(notice)
+						openSelector(modelSelector(r), text, len([]rune(text)), arg, false)
+						continue
+					}
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "thinking" {
+						arg := strings.TrimSpace(cmd.Arg)
+						if arg == "" {
+							openSelector(thinkingSelector(r), text, len([]rune(text)), "", false)
+							continue
+						}
+						if _, err := r.command(cmd, out); err != nil {
+							print("error: " + err.Error())
+						}
+						r.draw(console)
 						continue
 					}
 					console.Editor.RestoreDraft(text, len([]rune(text)))
@@ -3689,13 +3936,12 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 	if err := candidate.configure(next); err != nil {
 		return false, err
 	}
-	if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
+	if err := r.selectModel(&candidate); err != nil {
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
 	}
-	r.installConfiguration(&candidate)
 	if r.ac != nil {
 		r.ac.ResetGrowth()
 	}
@@ -3736,13 +3982,13 @@ func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error)
 	if err := candidate.configure(next); err != nil {
 		return false, err
 	}
-	if _, err := r.store.AppendThinkingLevelChange(level); err != nil {
+	if err := r.commitThinking(candidate.requestSettings()); err != nil {
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
 	}
-	r.installConfiguration(&candidate)
+	r.adoptConfiguration(&candidate)
 	printStatusText(out, "Thinking level: "+level)
 	return false, nil
 }
