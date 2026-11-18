@@ -96,7 +96,7 @@ func TestSettingsPickerRows(t *testing.T) {
 	for i, item := range picker.Items {
 		labels[i] = item.Label
 	}
-	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode", "Context usage", "Default thinking level per model"}
+	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Soft wrap", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode", "Context usage", "Default thinking level per model"}
 	if strings.Join(labels, "|") != strings.Join(want, "|") {
 		t.Fatalf("labels = %v", labels)
 	}
@@ -125,6 +125,7 @@ func TestApplySettingRows(t *testing.T) {
 		{id: "output-padding", value: terminal.SettingsValue{Label: "1", Value: 1}, path: []string{"outputPad"}, want: "1"},
 		{id: "autocomplete-max", value: terminal.SettingsValue{Label: "7", Value: 7}, path: []string{"autocompleteMaxVisible"}, want: "7"},
 		{id: "code-indent", value: terminal.SettingsValue{Label: "4", Value: "    "}, path: []string{"markdown", "codeBlockIndent"}, want: `"    "`},
+		{id: "soft-wrap", value: terminal.SettingsValue{Label: "off", Value: false}, path: []string{"softWrap"}, want: "false"},
 		{id: "quiet-startup", value: terminal.SettingsValue{Label: "on", Value: true}, path: []string{"quietStartup"}, want: "true"},
 		{id: "theme", value: terminal.SettingsValue{Label: "light", Value: "light"}, path: []string{"theme"}, want: `"light"`},
 		{id: "color-mode", value: terminal.SettingsValue{Label: "false", Value: false}, path: []string{"terminal", "trueColor"}, want: "false"},
@@ -145,7 +146,7 @@ func TestApplySettingRows(t *testing.T) {
 
 	if r.settings.EditorPaddingX != 2 || r.settings.OutputPad != 1 || r.settings.AutocompleteMaxVisible != 7 ||
 		r.settings.MarkdownCodeBlockIndent != "    " || !r.settings.QuietStartup || r.settings.Theme != "light" ||
-		r.settings.TerminalTrueColor != "false" || r.settings.ContextUsageDisplay != "tokens" {
+		r.settings.TerminalTrueColor != "false" || r.settings.ContextUsageDisplay != "tokens" || r.settings.SoftWrap {
 		t.Fatalf("settings = %+v", r.settings)
 	}
 	if r.themeMode != pitheme.ColorMode256 {
