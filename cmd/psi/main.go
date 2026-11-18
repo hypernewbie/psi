@@ -8,7 +8,7 @@ import (
 	"psi/internal/terminal"
 )
 
-var version = "0.3.1"
+var version = "0.4.0"
 
 func main() {
 	if err := app.Run(os.Args[1:], version); err != nil {
