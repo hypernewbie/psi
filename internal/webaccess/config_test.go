@@ -16,9 +16,9 @@ func newEnv(t *testing.T, vars, files map[string]string) (Env, *fakeFS) {
 	t.Helper()
 	fs := &fakeFS{files: map[string]string{}}
 	for name, body := range files {
-		fs.files[name] = body
+		fs.files[filepath.FromSlash(name)] = body
 	}
-	home := "/home/tester"
+	home := filepath.FromSlash("/home/tester")
 	env := Env{
 		HomeDir: home,
 		LookupEnv: func(key string) (string, bool) {
@@ -52,9 +52,9 @@ func (f fakeInfo) IsDir() bool        { return false }
 func (f fakeInfo) Sys() any           { return nil }
 
 func TestResolvePathPrecedence(t *testing.T) {
-	xdgFile := "/xdg/pi/web-search.json"
-	legacy := "/home/tester/.pi/web-search.json"
-	agent := "/home/tester/.pi/agent/web-search.json"
+	xdgFile := filepath.Join("/xdg", "pi", "web-search.json")
+	legacy := filepath.Join("/home/tester", ".pi", "web-search.json")
+	agent := filepath.Join("/home/tester", ".pi", "agent", "web-search.json")
 
 	cases := []struct {
 		name  string
@@ -62,7 +62,7 @@ func TestResolvePathPrecedence(t *testing.T) {
 		files map[string]string
 		want  string
 	}{
-		{"agent dir", map[string]string{"PI_CODING_AGENT_DIR": "/explicit"}, nil, "/explicit/web-search.json"},
+		{"agent dir", map[string]string{"PI_CODING_AGENT_DIR": "/explicit"}, nil, filepath.Join("/explicit", "web-search.json")},
 		{"xdg existing", map[string]string{"XDG_CONFIG_HOME": "/xdg"}, map[string]string{xdgFile: "{}", legacy: "{}"}, xdgFile},
 		{"xdg falls to legacy", map[string]string{"XDG_CONFIG_HOME": "/xdg"}, map[string]string{legacy: "{}"}, legacy},
 		{"xdg no files", map[string]string{"XDG_CONFIG_HOME": "/xdg"}, nil, xdgFile},
@@ -95,14 +95,15 @@ func TestMissingFileUsesDefaults(t *testing.T) {
 }
 
 func TestUnsupportedCredentialFieldsAreIgnored(t *testing.T) {
-	body := `{"crawl4aiApiToken":"CANARY-TOKEN","firecrawlApiKey":"CANARY-FIRE","fetchRouting":{"providers":["crawl4ai"]},"provider":"auto"}`
+	body := `{"crawl4aiApiToken":"CANARY-TOKEN","firecrawlApiKey":"CANARY-FIRE","fetchRouting":{"providers":["crawl4ai"]},"provider":"auto","fetch":{"defaultMode":"raw"}}`
 	env, _ := newEnv(t, nil, map[string]string{"/home/tester/.pi/agent/web-search.json": body})
 	cfg, diags := Load(env)
 	if len(diags) != 0 {
 		t.Fatalf("diagnostics = %v", diags)
 	}
-	if !cfg.FetchEnabled {
-		t.Fatal("fetch should stay enabled")
+	// A nondefault mode proves Load read the fixture instead of using missing-file defaults.
+	if !cfg.FetchEnabled || cfg.FetchMode != "raw" {
+		t.Fatalf("fetch: enabled=%v mode=%q, want enabled raw mode", cfg.FetchEnabled, cfg.FetchMode)
 	}
 	joined := strings.Join(diags, " ")
 	if strings.Contains(joined, "CANARY") {
