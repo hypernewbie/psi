@@ -112,6 +112,9 @@ func (s *rpcRunner) emit(v any) {
 func (s *rpcRunner) runConfig() agent.Config {
 	r := s.r
 	cfg := r.cfg
+	cfg.LiveSettings = func() agent.LiveSettings {
+		return r.liveSettings()
+	}
 	cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 		definitions := append(tools.Definitions(r.settings.DefaultTools), r.webDefinitions()...)
 		if r.syncboardAvailable() {
@@ -392,6 +395,10 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 	}
 	s.emitted = len(proj.Flat)
 	ctx, cancel := context.WithCancel(context.Background())
+	// Sync the live snapshot with the starting configuration so turn
+	// boundaries see the provider this run actually uses. Tests replace
+	// r.prov directly; production always publishes via install.
+	s.r.publishLive()
 	cfg := s.runConfig()
 	s.mu.Lock()
 	s.running, s.cancel = true, cancel
@@ -476,10 +483,6 @@ func rpcAvailableModels(r *runtime) []rpcModel {
 // setModel switches the provider configuration synchronously: the command
 // loop is already serialized, so no preparation worker is needed.
 func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
-	if s.isRunning() || s.isCompacting() || s.pendingCount() > 0 {
-		out := rpcErr(cmd.ID, "set_model", "Cannot change model while a run is active or queued")
-		return &out
-	}
 	r := s.r
 	providerID, modelID := strings.TrimSpace(cmd.Provider), strings.TrimSpace(cmd.ModelID)
 	if providerID == "" || modelID == "" {
@@ -513,11 +516,10 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "set_model", err.Error())
 		return &out
 	}
-	if r.prov != nil {
-		r.prov.CloseIdle()
-	}
-	r.ov, r.cfg, r.prov, r.authErr, r.reg = cand.ov, cand.cfg, cand.prov, cand.authErr, cand.reg
-	s.loop = r.newLoop(s.sink)
+	// The install publishes the candidate, so a running loop picks it up
+	// at its next turn boundary. The loop stays put: replacing it would
+	// drop queued steering and follow-ups.
+	r.installConfiguration(&cand)
 	out := rpcOK(cmd.ID, "set_model", rpcModel{Provider: providerID, ID: modelID, Name: rpcModelName(r.models, providerID, modelID)})
 	return &out
 }
@@ -525,10 +527,6 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 // setThinking changes the level for the live model. Thinking is per-request
 // state, so no provider rebuild is needed.
 func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
-	if s.isRunning() || s.isCompacting() {
-		out := rpcErr(cmd.ID, "set_thinking_level", "Cannot change thinking level while a run is active")
-		return &out
-	}
 	r := s.r
 	level := strings.TrimSpace(cmd.Level)
 	if level == "" {
@@ -550,6 +548,7 @@ func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
 	}
 	r.ov.Thinking = level
 	r.cfg.Thinking = level
+	r.publishLive()
 	out := rpcOK(cmd.ID, "set_thinking_level", nil)
 	return &out
 }

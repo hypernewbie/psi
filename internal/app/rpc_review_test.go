@@ -52,18 +52,8 @@ func TestRPCResumedTranscriptNotReplayed(t *testing.T) {
 	}
 }
 
-func TestRPCModelSwitchRebuildsLoop(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test")
-	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
-	old := s.loop
-	resp := s.handle(rpcCommand{Type: "set_model", Provider: "anthropic", ModelID: "rpc-test-model-2"})
-	if !resp.Success {
-		t.Fatalf("switch: %+v", resp)
-	}
-	if s.loop == old {
-		t.Fatal("model switch retained old agent loop and provider")
-	}
-}
+// A model switch keeps the agent loop: queue and request preservation are
+// proven by TestRPCSetModelDuringRunPreservesLoopAndQueue.
 
 func TestRPCAutomaticCompactionPublishesCompletion(t *testing.T) {
 	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)

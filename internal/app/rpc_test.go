@@ -101,8 +101,8 @@ func isType(typ string) func(map[string]any) bool {
 }
 
 const rpcTestModels = `{"providers":{"anthropic":{"api":"anthropic-messages","models":[` +
-	`{"id":"rpc-test-model","name":"RPC Test","contextWindow":64000,"maxTokens":1000,"reasoning":true,"input":["text"]},` +
-	`{"id":"rpc-test-model-2","name":"RPC Test 2","contextWindow":64000,"maxTokens":1000,"reasoning":true,"input":["text"]}]}}}`
+	`{"id":"rpc-test-model","name":"RPC Test","contextWindow":64000,"maxTokens":16384,"reasoning":true,"input":["text"]},` +
+	`{"id":"rpc-test-model-2","name":"RPC Test 2","contextWindow":64000,"maxTokens":16384,"reasoning":true,"input":["text"]}]}}}`
 
 func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.Skill, keepRecent ...int) (*rpcRunner, *session.Store, *rpcLog) {
 	t.Helper()
@@ -141,6 +141,7 @@ func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.S
 		store: store, settings: settings, models: models,
 		skills: skillList, prompt: "test", agentDir: agentDir,
 		ov: ov, cfg: cfg, prov: prov, reg: tools.NewRegistry(ws),
+		live: newLiveConfig(),
 	}
 	log := &rpcLog{}
 	enc := json.NewEncoder(log)

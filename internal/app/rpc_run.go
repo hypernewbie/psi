@@ -154,7 +154,7 @@ func runRPC(o Options, version string) error {
 	r := &runtime{
 		store: store, version: version, options: o, settings: st, web: web,
 		models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir,
-		projectTrusted: consent,
+		projectTrusted: consent, live: newLiveConfig(),
 	}
 	cleanup := func() {
 		if r.web != nil {
