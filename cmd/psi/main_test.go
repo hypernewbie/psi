@@ -35,6 +35,21 @@ func TestBinarySmoke(t *testing.T) {
 	if !strings.Contains(string(out), "psi "+version) {
 		t.Errorf("expected version output containing %q, got: %s", version, string(out))
 	}
+	// The report identifies the build: release, VCS stamp, and toolchain. Only the
+	// line prefixes are asserted because the commit and toolchain vary per build.
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected three version lines, got %d: %q", len(lines), lines)
+	}
+	if lines[0] != "psi "+version {
+		t.Errorf("expected first version line %q, got %q", "psi "+version, lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "commit ") {
+		t.Errorf("expected commit line, got %q", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "build ") {
+		t.Errorf("expected build line, got %q", lines[2])
+	}
 
 	// 2. --help
 	cmd = exec.Command(binPath, "--help")

@@ -136,7 +136,10 @@ so the Pi flags that load them do not exist.
 - `-na`, `--no-approve` denies them. Escape and `Ctrl+C` at the prompt also
   deny.
 - `--offline` is accepted and does nothing; psi never refreshes catalogs.
-- `-h`, `--help` prints help. `-v`, `--version` prints the version.
+- `-h`, `--help` prints help. `-v`, `--version` prints three lines: the release,
+  the commit stamp Go embeds at build time, and the build toolchain with platform.
+  A build with no stamp, for example one made in a Git worktree where `.git` is a
+  file rather than a directory, prints `commit unknown (no VCS stamp)`.
 
 ## Documentation
 

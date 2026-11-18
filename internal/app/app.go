@@ -26,6 +26,7 @@ import (
 	"psi/docs"
 	"psi/internal/ac"
 	"psi/internal/agent"
+	"psi/internal/buildinfo"
 	"psi/internal/config"
 	"psi/internal/event"
 	"psi/internal/loop"
@@ -450,7 +451,7 @@ Pi-compatible options:
   --list-models [search]     List cached, bundled, and models.json models without network access
   --docs [topic]             Print psi documentation (no topic prints the list)
   --help, -h                 Show this help
-  --version, -v              Show version
+  --version, -v              Show version, commit, and build
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
@@ -470,7 +471,11 @@ func Run(args []string, version string) error {
 		return err
 	}
 	if o.Version {
-		fmt.Printf("psi %s\n", version)
+		// The release number alone cannot tell two builds apart, so the report adds
+		// the VCS stamp Go embeds in the binary and the toolchain it was built with.
+		for _, line := range buildinfo.Read(version).Lines() {
+			fmt.Println(line)
+		}
 		return nil
 	}
 	if o.Help {
