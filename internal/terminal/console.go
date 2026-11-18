@@ -12,6 +12,7 @@ import (
 	"github.com/rivo/uniseg"
 	"golang.org/x/term"
 
+	"psi/internal/secretmem"
 	pitheme "psi/internal/theme"
 )
 
@@ -28,6 +29,9 @@ type Input struct {
 	PasteEnd   bool
 	// Rejected signals an oversized paste rejected as a whole edit.
 	Rejected bool
+	// owned marks a byte payload created by the terminal reader. Borrowed
+	// inputs are left untouched by release.
+	owned bool
 }
 
 // Console owns the inline terminal document and its active prompt. Completed
@@ -60,12 +64,12 @@ type Console struct {
 	writer  *Writer
 	decoder *Decoder
 
-	secret              *Editor
-	secretPaste         bytes.Buffer
+	secret              *secretEditor
+	secretPaste         []byte
 	secretPasteActive   bool
 	secretPasteRejected bool
 	pasteActive         bool
-	pasteBuf            strings.Builder
+	pasteBuf            []byte
 	pasteNotice         bool
 	inputLimitShown     bool
 	lastDraft           string
@@ -127,6 +131,19 @@ func (c *Console) Pause() {
 	c.stop()
 	<-c.done
 	c.stop = nil
+	// The producer has stopped; release any events that never reached the app.
+	for c.Inputs != nil {
+		select {
+		case input, ok := <-c.Inputs:
+			if !ok {
+				c.Inputs = nil
+				break
+			}
+			input.Release()
+		default:
+			c.Inputs = nil
+		}
+	}
 	_ = c.emit(Frame{ShowCursor: c.hidden})
 	c.hidden = false
 	c.visibleTail = nil
@@ -147,7 +164,7 @@ func (c *Console) Resume() {
 	decoder := NewDecoder()
 	c.stop, c.done, c.Inputs, c.decoder = cancel, done, inputs, decoder
 	c.pasteActive = false
-	c.pasteBuf.Reset()
+	c.resetPaste()
 	c.mode("\x1b[?2004h")
 	if c.themeNotifications {
 		c.mode("\x1b[?2031h")
@@ -179,7 +196,23 @@ func (c *Console) Close() {
 		return
 	}
 	c.Pause()
+	if c.secret != nil {
+		c.secret.discard()
+		c.secret = nil
+	}
+	c.resetSecretPaste()
+	c.resetPaste()
+	for i := range c.heldInputs {
+		c.heldInputs[i].Release()
+	}
+	c.heldInputs = nil
 	c.closed = true
+}
+
+func (c *Console) resetPaste() {
+	secretmem.Wipe(c.pasteBuf[:cap(c.pasteBuf)])
+	c.pasteBuf = nil
+	c.pasteActive = false
 }
 
 func (c *Console) mode(s string) {
@@ -377,8 +410,11 @@ func (c *Console) QueryTerminalColors() error {
 	return WriteBounded(c.Out, pitheme.ColorQuery())
 }
 
+// HoldInput transfers ownership of input to the console-owned queue. The
+// caller must not release or reuse the input after this call.
 func (c *Console) HoldInput(input Input) { c.heldInputs = append(c.heldInputs, input) }
 
+// TakeHeldInputs transfers ownership of every held input to the caller.
 func (c *Console) TakeHeldInputs() []Input {
 	inputs := append([]Input(nil), c.heldInputs...)
 	c.heldInputs = nil
@@ -454,6 +490,40 @@ func (c *Console) RefreshCompletion() {
 	c.refreshCompletion()
 }
 
+func inputFromDecoded(d Decoded) Input {
+	switch {
+	case d.Reply:
+		return Input{Reply: d.Key, owned: true}
+	case d.PasteStart:
+		return Input{Paste: true, PasteStart: true, owned: true}
+	case d.PasteEnd:
+		return Input{Paste: true, PasteEnd: true, Rejected: d.Rejected, owned: true}
+	case d.Paste:
+		return Input{Key: d.Key, Paste: true, owned: true}
+	default:
+		return Input{Key: d.Key, FollowUp: d.FollowUp, owned: true}
+	}
+}
+
+// sendDecodedInputs consumes one decoded batch. A successful send transfers
+// the payload to the receiver. An aborted send wipes the unsent payloads.
+func sendDecodedInputs(ctx context.Context, out chan<- Input, units []Decoded) bool {
+	for i := range units {
+		input := inputFromDecoded(units[i])
+		select {
+		case out <- input:
+			// Ownership moved to the receiver.
+		case <-ctx.Done():
+			input.Release()
+			for _, unsent := range units[i+1:] {
+				secretmem.Wipe(unsent.Key[:cap(unsent.Key)])
+			}
+			return false
+		}
+	}
+	return true
+}
+
 func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder) {
 	send := func(input Input) bool {
 		select {
@@ -464,6 +534,10 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 		}
 	}
 	buf := make([]byte, 4096)
+	defer func() {
+		secretmem.Wipe(buf)
+		dec.reset()
+	}()
 	for ctx.Err() == nil {
 		ready, err := waitInputReady(in, 20)
 		if err != nil {
@@ -472,16 +546,8 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 		}
 		if !ready {
 			// Timeout tick: flush incomplete Escape prefix (50ms rule).
-			for _, d := range dec.Feed(nil) {
-				if d.Reply {
-					if !send(Input{Reply: append([]byte(nil), d.Key...)}) {
-						return
-					}
-					continue
-				}
-				if !send(Input{Key: d.Key, FollowUp: d.FollowUp}) {
-					return
-				}
+			if !sendDecodedInputs(ctx, out, dec.Feed(nil)) {
+				return
 			}
 			continue
 		}
@@ -494,34 +560,10 @@ func readInputs(ctx context.Context, in *os.File, out chan<- Input, dec *Decoder
 			send(Input{Err: io.EOF})
 			return
 		}
-		for _, d := range dec.Feed(buf[:n]) {
-			if d.Reply {
-				if !send(Input{Reply: append([]byte(nil), d.Key...)}) {
-					return
-				}
-				continue
-			}
-			if d.PasteStart {
-				if !send(Input{Paste: true, PasteStart: true}) {
-					return
-				}
-				continue
-			}
-			if d.PasteEnd {
-				if !send(Input{Paste: true, PasteEnd: true, Rejected: d.Rejected}) {
-					return
-				}
-				continue
-			}
-			if d.Paste {
-				if !send(Input{Key: d.Key, Paste: true}) {
-					return
-				}
-				continue
-			}
-			if !send(Input{Key: d.Key, FollowUp: d.FollowUp}) {
-				return
-			}
+		units := dec.Feed(buf[:n])
+		secretmem.Wipe(buf)
+		if !sendDecodedInputs(ctx, out, units) {
+			return
 		}
 	}
 }
@@ -544,30 +586,31 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 	// Bracketed paste transaction: buffer separately, single insert+draw on end marker.
 	// A paste is a whole edit and never submits, so it applies during a run too.
 	if input.PasteStart {
+		c.resetPaste()
 		c.pasteActive = true
-		c.pasteBuf.Reset()
 		return "", false, false, false
 	}
 	if c.pasteActive && (input.Paste || input.PasteEnd) {
 		if len(input.Key) > 0 {
-			c.pasteBuf.Write(input.Key)
+			c.pasteBuf = appendOwnedBytes(c.pasteBuf, input.Key)
 		}
 		if input.PasteEnd {
 			c.pasteActive = false
-			if input.Rejected || c.pasteBuf.Len()+len(c.Editor.Text()) > editorBudget {
-				c.pasteBuf.Reset()
+			if input.Rejected || len(c.pasteBuf)+len(c.Editor.Text()) > editorBudget {
+				c.resetPaste()
 				if !busy {
 					_, _ = c.Write([]byte("Paste exceeds 256 KiB. Draft unchanged.\r\n"))
 					c.Draw()
 				}
 				return "", false, false, false
 			}
-			content := c.pasteBuf.String()
-			c.pasteBuf.Reset()
+			content := c.pasteBuf
+			text := string(content)
+			c.resetPaste()
 			c.inputLimitShown = false
 			prev := c.Editor.Text()
-			if content != "" {
-				c.Editor.Insert(Sanitize(content))
+			if text != "" {
+				c.Editor.Insert(Sanitize(text))
 			}
 			if c.Editor.Text() != prev {
 				c.completionDismissed = false
@@ -614,8 +657,7 @@ func (c *Console) Handle(input Input, busy bool) (text string, submitted, quit, 
 			c.drawIfChanged(false)
 			return "", false, false, false
 		case 27: // Escape dismisses completion before it reaches the editor.
-			c.pasteActive = false
-			c.pasteBuf.Reset()
+			c.resetPaste()
 			if len(c.completionItems) > 0 {
 				c.clearCompletion(true)
 				c.Draw()

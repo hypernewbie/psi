@@ -1,8 +1,10 @@
 package terminal
 
 import (
+	"bytes"
 	"errors"
-	"strings"
+
+	"psi/internal/secretmem"
 )
 
 const (
@@ -11,7 +13,12 @@ const (
 	secretInputTooLarge = "Input exceeds 256 KiB. Draft unchanged."
 )
 
-func (c *Console) activeEditor() *Editor {
+type displayEditor interface {
+	DisplayBuffer() []rune
+	DisplayPos() int
+}
+
+func (c *Console) activeEditor() displayEditor {
 	if c.secret != nil {
 		return c.secret
 	}
@@ -19,27 +26,29 @@ func (c *Console) activeEditor() *Editor {
 }
 
 // BeginSecret starts a fresh masked editor and removes normal prompt state.
-func (c *Console) BeginSecret() *Editor {
+func (c *Console) BeginSecret() {
+	if c.secret != nil {
+		c.secret.discard()
+		c.secret = nil
+	}
 	c.Editor.Clear()
 	c.clearCompletion(false)
 	c.picker = nil
-	c.pasteActive = false
-	c.pasteBuf.Reset()
+	c.resetPaste()
 	c.resetSecretPaste()
-	c.secret = NewEditor()
-	c.secret.Masked = true
+	c.secret = newSecretEditor()
 	c.lastDraft, c.lastCursor = "", 0
-	return c.secret
 }
 
-// EndSecret returns the secret and clears all secret-editor state.
-func (c *Console) EndSecret() string {
+// EndSecret transfers the secret to the caller and clears all secret-editor
+// state. The caller owns the returned bytes and must wipe them after use.
+func (c *Console) EndSecret() []byte {
 	if c.secret == nil {
-		return ""
+		return nil
 	}
-	text := c.secret.Text()
-	c.clearSecret()
-	return text
+	draft := c.secret.detach()
+	c.clearSecretState()
+	return draft
 }
 
 // DiscardSecret clears the active secret without creating a plaintext copy.
@@ -50,10 +59,13 @@ func (c *Console) DiscardSecret() {
 }
 
 func (c *Console) clearSecret() {
-	clear(c.secret.buf)
-	clear(c.secret.history)
-	c.secret.buf = nil
-	c.secret.history = nil
+	if c.secret != nil {
+		c.secret.discard()
+	}
+	c.clearSecretState()
+}
+
+func (c *Console) clearSecretState() {
 	c.secret = nil
 	c.resetSecretPaste()
 	c.lastDraft, c.lastCursor = "", 0
@@ -61,10 +73,30 @@ func (c *Console) clearSecret() {
 }
 
 func (c *Console) resetSecretPaste() {
-	clear(c.secretPaste.Bytes())
-	c.secretPaste.Reset()
+	secretmem.Wipe(c.secretPaste[:cap(c.secretPaste)])
+	c.secretPaste = nil
 	c.secretPasteActive = false
 	c.secretPasteRejected = false
+}
+
+func (c *Console) appendSecretPaste(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	newLen := len(c.secretPaste) + len(b)
+	if newLen > cap(c.secretPaste) {
+		newCap := cap(c.secretPaste) * 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		next := make([]byte, newLen, newCap)
+		copy(next, c.secretPaste)
+		copy(next[len(c.secretPaste):], b)
+		secretmem.Wipe(c.secretPaste[:cap(c.secretPaste)])
+		c.secretPaste = next
+		return
+	}
+	c.secretPaste = append(c.secretPaste, b...)
 }
 
 // HandleSecret edits a masked single-line prompt without using Submit or history.
@@ -95,29 +127,33 @@ func (c *Console) HandleSecret(input Input) (submitted, cancelled bool, err erro
 			c.secretPasteRejected = true
 		}
 		if input.Paste && len(input.Key) > 0 && !c.secretPasteRejected {
-			if len(input.Key)+runeToByte(c.secret.buf, len(c.secret.buf))+c.secretPaste.Len() > editorBudget {
+			if len(input.Key)+len(c.secret.buf)+len(c.secretPaste) > editorBudget {
 				c.secretPasteRejected = true
 			} else {
-				_, _ = c.secretPaste.Write(input.Key)
+				c.appendSecretPaste(input.Key)
 			}
 		}
 		if !input.PasteEnd {
 			return false, false, nil
 		}
 		wasRejected := c.secretPasteRejected
-		content := string(c.secretPaste.Bytes())
-		c.resetSecretPaste()
+		content := c.secretPaste
 		if wasRejected {
+			c.resetSecretPaste()
 			return false, false, errors.New(secretPasteTooLarge)
 		}
-		if strings.ContainsAny(content, "\r\n") {
+		hasNewline := bytes.IndexByte(content, '\r') >= 0 || bytes.IndexByte(content, '\n') >= 0
+		if hasNewline {
+			c.resetSecretPaste()
 			return false, false, errors.New(secretPasteNewline)
 		}
-		beforeLen, beforePos := len(c.secret.buf), c.secret.Pos()
-		if !c.secret.Insert(content) {
+		beforeLen, beforePos := len(c.secret.buf), c.secret.pos
+		inserted := c.secret.insert(content)
+		c.resetSecretPaste()
+		if !inserted {
 			return false, false, errors.New(secretInputTooLarge)
 		}
-		if beforeLen != len(c.secret.buf) || beforePos != c.secret.Pos() {
+		if beforeLen != len(c.secret.buf) || beforePos != c.secret.pos {
 			c.drawIfChanged(false)
 		}
 		return false, false, nil
@@ -133,21 +169,20 @@ func (c *Console) HandleSecret(input Input) (submitted, cancelled bool, err erro
 		case 3, 27:
 			return false, true, nil
 		case 4:
-			beforeLen, beforePos := len(c.secret.buf), c.secret.Pos()
-			c.secret.Delete()
-			if beforeLen != len(c.secret.buf) || beforePos != c.secret.Pos() {
+			beforeLen, beforePos := len(c.secret.buf), c.secret.pos
+			c.secret.delete()
+			if beforeLen != len(c.secret.buf) || beforePos != c.secret.pos {
 				c.drawIfChanged(false)
 			}
 			return false, false, nil
 		}
 	}
-	beforeLen, beforePos := len(c.secret.buf), c.secret.Pos()
-	c.secret.rejectedInsert = false
-	c.secret.HandleKey(key, false)
+	beforeLen, beforePos := len(c.secret.buf), c.secret.pos
+	c.secret.handleKey(key)
 	if c.secret.rejectedInsert {
 		return false, false, errors.New(secretInputTooLarge)
 	}
-	if beforeLen != len(c.secret.buf) || beforePos != c.secret.Pos() {
+	if beforeLen != len(c.secret.buf) || beforePos != c.secret.pos {
 		c.drawIfChanged(false)
 	}
 	return false, false, nil

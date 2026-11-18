@@ -55,6 +55,162 @@ func TestActualAppLogoutMVP(t *testing.T) {
 	}
 }
 
+func TestActualAppAuthSymlinkMVP(t *testing.T) {
+	if *reviewBinary == "" {
+		t.Skip("requires -psi-test-binary for the delivered executable")
+	}
+
+	const (
+		enteredKey = "!sk-test-$-!"
+		storedKey  = "$!sk-test-$$-!"
+		customKey  = "custom-fixture-canary"
+		targetMode = 0o640
+	)
+
+	home, work, targetDir := t.TempDir(), t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	authPath := filepath.Join(agentDir, "auth.json")
+	targetPath := filepath.Join(targetDir, "auth.json")
+	writeAppFile(t, targetPath, `{"deepseek":{"type":"api_key","unknown":{"keep":true}},"custom":{"type":"api_key","key":"`+customKey+`"}}`)
+	if err := os.Chmod(targetPath, targetMode); err != nil {
+		t.Fatal("could not set target auth mode")
+	}
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal("could not create agent directory")
+	}
+	rel, err := filepath.Rel(agentDir, targetPath)
+	if err != nil {
+		t.Fatal("could not compute auth link")
+	}
+	if err := os.Symlink(rel, authPath); err != nil {
+		t.Fatal("could not create auth symlink")
+	}
+	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)
+
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
+	closeLoginPTYWatch(t, q)
+	waitLoginReady(t, q, "initial prompt", "")
+	q.write("/login deepseek\r")
+	waitLoginScreen(t, q, "login key prompt", "API key for DeepSeek", "")
+
+	q.write(enteredKey)
+	masked := strings.Repeat("*", len([]rune(enteredKey)))
+	waitLoginScreen(t, q, "masked key row", masked, enteredKey)
+	q.write("\r")
+	waitLogin(t, q, "linked save outcome", enteredKey, func() bool {
+		out := q.raw.String()
+		return strings.Contains(out, "Saved API key for DeepSeek") || strings.Contains(out, "refusing to write a symlinked auth.json")
+	})
+	if strings.Contains(q.raw.String(), "refusing to write a symlinked auth.json") {
+		t.Fatal("linked auth save refused: refusing to write a symlinked auth.json")
+	}
+	waitLoginOutput(t, q, "key saved", "Saved API key for DeepSeek", enteredKey)
+	waitLoginOutput(t, q, "first-login model selected", "Selected deepseek-v4-pro", enteredKey)
+	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)
+
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatal("could not read target auth.json")
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal("could not decode target auth.json")
+	}
+	var deepseek struct {
+		Type    string         `json:"type"`
+		Key     string         `json:"key"`
+		Unknown map[string]any `json:"unknown"`
+	}
+	if err := json.Unmarshal(doc["deepseek"], &deepseek); err != nil {
+		t.Fatal("could not decode saved DeepSeek entry")
+	}
+	if deepseek.Type != "api_key" || deepseek.Key != storedKey || deepseek.Unknown["keep"] != true {
+		t.Fatal("saved target entry or unknown field changed")
+	}
+	key, source, err := provider.SelectProviderAPIKey(map[string]string{}, authPath, "deepseek", "")
+	if err != nil || key != enteredKey || source != "auth.json:deepseek" {
+		t.Fatal("linked auth credential did not resolve to the entered key")
+	}
+	var custom struct {
+		Type string `json:"type"`
+		Key  string `json:"key"`
+	}
+	if err := json.Unmarshal(doc["custom"], &custom); err != nil || custom.Type != "api_key" || custom.Key != customKey {
+		t.Fatal("login changed the unrelated custom entry")
+	}
+	q.write("/quit\r")
+	finishLoginPTY(t, q, enteredKey)
+
+	q2 := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
+	closeLoginPTYWatch(t, q2)
+	waitLoginReady(t, q2, "restart prompt", enteredKey)
+	if strings.Contains(q2.raw.String(), "no DeepSeek credential") || strings.Contains(q2.raw.String(), "offline commands still work") {
+		t.Fatal("restart reported a missing credential")
+	}
+	if !strings.Contains(q2.screen.Text(), "deepseek-v4-pro") {
+		t.Fatal("restart did not select the saved model")
+	}
+	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)
+	q2.write("/logout\r")
+	waitLoginScreen(t, q2, "logout provider picker", "Stored API keys", enteredKey)
+	q2.write("deepseek\r")
+	waitLoginOutput(t, q2, "DeepSeek key removed", "Removed stored API key for DeepSeek", enteredKey)
+	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)
+	q2.write("/quit\r")
+	finishLoginPTY(t, q2, enteredKey)
+
+	data, err = os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatal("could not reread target auth.json")
+	}
+	doc = nil
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal("could not decode target auth.json after logout")
+	}
+	if _, ok := doc["deepseek"]; ok {
+		t.Fatal("logout retained the selected key")
+	}
+	if err := json.Unmarshal(doc["custom"], &custom); err != nil || custom.Type != "api_key" || custom.Key != customKey {
+		t.Fatal("logout changed the unrelated custom entry")
+	}
+	for _, canary := range []string{enteredKey, storedKey, customKey} {
+		if strings.Contains(q.raw.String(), canary) || strings.Contains(q2.raw.String(), canary) {
+			t.Fatal("synthetic API key appeared in PTY output")
+		}
+		if err := checkLoginSessions(agentDir, canary); err != nil {
+			t.Fatal("synthetic API key appeared in session output")
+		}
+	}
+}
+
+func assertAuthSymlink(t *testing.T, authPath, targetPath, wantLink string, wantMode os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(authPath)
+	if err != nil {
+		t.Fatal("could not inspect auth symlink")
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("auth.json is not a symlink")
+	}
+	link, err := os.Readlink(authPath)
+	if err != nil {
+		t.Fatal("could not read auth symlink")
+	}
+	if link != wantLink {
+		t.Fatal("auth symlink text changed")
+	}
+	target, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatal("could not inspect auth target")
+	}
+	if !target.Mode().IsRegular() {
+		t.Fatal("auth target is not a regular file")
+	}
+	if target.Mode().Perm() != wantMode {
+		t.Fatalf("auth target mode = %04o, want %04o", target.Mode().Perm(), wantMode)
+	}
+}
+
 func TestActualAppLoginMVP(t *testing.T) {
 	if *reviewBinary == "" {
 		t.Skip("requires -psi-test-binary for the delivered executable")

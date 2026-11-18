@@ -82,12 +82,15 @@ Anthropic API-key login or OpenAI Codex OAuth. Use an environment variable or
 Login stores the key in `<agentDir>/auth.json`. The agent directory is
 `PSI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR`, then
 `~/.pi/agent`. A stored key takes precedence over a `models.json` key and the
-provider's environment variable. psi does not validate the key during login;
-the first provider request can still fail. If the session is offline and the
-provider has a default model, login selects it and saves the default provider
-and model. Otherwise, the key is saved without changing the current model.
-If model selection or defaults persistence fails after the key is saved, psi
-reports the failure and keeps the saved key.
+provider's environment variable. An existing `auth.json` symlink is preserved:
+psi locks the logical path and atomically replaces the resolved regular-file
+target. Broken or nonregular targets fail. See [Security](security.md) for
+target-race and memory-cleanup limits. psi does not validate the key during
+login; the first provider request can still fail. If the session is offline and
+the provider has a default model, login selects it and saves the default
+provider and model. Otherwise, the key is saved without changing the current
+model. If model selection or defaults persistence fails after the key is saved,
+psi reports the failure and keeps the saved key.
 
 Use `/logout` to select and remove a stored built-in API key from
 `auth.json`. This includes Anthropic API keys. It does not remove OAuth

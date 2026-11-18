@@ -11,6 +11,7 @@ import (
 	"psi/internal/config"
 	"psi/internal/provider"
 	"psi/internal/providerregistry"
+	"psi/internal/secretmem"
 	"psi/internal/session"
 	"psi/internal/terminal"
 )
@@ -165,16 +166,21 @@ func (r *runtime) cancelLogin(console *terminal.Console) {
 	r.draw(console)
 }
 
+func saveLoginKey(ctx context.Context, authPath, providerID string, key []byte) error {
+	defer secretmem.Wipe(key[:cap(key)])
+	return provider.SaveAPIKey(ctx, authPath, providerID, key)
+}
+
 func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 	prompt := r.login
 	if prompt == nil {
 		return
 	}
-	key := strings.TrimSpace(console.EndSecret())
+	key := console.EndSecret()
 	console.Status("")
 	r.login = nil
 	authPath := filepath.Join(r.agentDir, "auth.json")
-	if err := provider.SaveAPIKey(context.Background(), authPath, prompt.providerID, key); err != nil {
+	if err := saveLoginKey(context.Background(), authPath, prompt.providerID, key); err != nil {
 		printStatusText(out, fmt.Sprintf("Failed to save API key for %s: %v", prompt.providerName, err))
 		r.restoreAuthState()
 		r.draw(console)

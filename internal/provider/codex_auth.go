@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"psi/internal/lockfile"
+	"psi/internal/secretmem"
 )
 
 const codexTokenURL = "https://auth.openai.com/oauth/token"
@@ -49,25 +50,30 @@ type codexCredential struct {
 	AccountID string `json:"accountId"`
 }
 
-// loadLocked reads and parses auth.json. The caller must own the shared lease;
-// callers outside a refresh transaction must use loadShared.
+// loadLocked reads auth.json without acquiring the lease. Tests use it after
+// a transaction. Production readers must use loadShared or a target captured
+// under the refresh lease.
 func (a *CodexAuth) loadLocked() (map[string]json.RawMessage, codexCredential, error) {
-	f, err := os.Open(a.Path)
+	target, err := resolveAuthTarget(a.Path)
 	if err != nil {
+		return nil, codexCredential{}, err
+	}
+	return a.loadTarget(target)
+}
+
+// loadTarget reads one captured target. The caller owns the returned map and
+// must call ReleaseAuthEntries after the last use.
+func (a *CodexAuth) loadTarget(target authTarget) (map[string]json.RawMessage, codexCredential, error) {
+	if !target.exists {
 		return nil, codexCredential{}, fmt.Errorf("cannot read Codex login; run /login openai-codex in Pi")
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 4*1024*1024+1))
-	if err != nil || len(data) > 4*1024*1024 {
-		return nil, codexCredential{}, fmt.Errorf("cannot read bounded auth.json")
-	}
-	data = stripAuthBOM(data)
-	var all map[string]json.RawMessage
-	if json.Unmarshal(data, &all) != nil || all == nil {
-		return nil, codexCredential{}, fmt.Errorf("auth.json is malformed")
+	all, _, _, err := readAuthDocument(target)
+	if err != nil {
+		return nil, codexCredential{}, err
 	}
 	var entry codexCredential
 	if json.Unmarshal(all["openai-codex"], &entry) != nil || entry.Type != "oauth" || (entry.Access == "" && entry.Refresh == "") {
+		ReleaseAuthEntries(all)
 		return nil, entry, fmt.Errorf("no Codex OAuth login; run /login openai-codex in Pi (no API-key fallback)")
 	}
 	return all, entry, nil
@@ -80,6 +86,7 @@ func codexAccount(entry codexCredential) (string, error) {
 	parts := strings.Split(entry.Access, ".")
 	if len(parts) == 3 {
 		data, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+		defer secretmem.Wipe(data[:cap(data)])
 		var claims struct {
 			Auth struct {
 				AccountID string `json:"chatgpt_account_id"`
@@ -101,7 +108,11 @@ func (a *CodexAuth) loadShared(ctx context.Context) (map[string]json.RawMessage,
 		return nil, codexCredential{}, err
 	}
 	defer unlock()
-	return a.loadLocked()
+	target, err := resolveAuthTarget(a.Path)
+	if err != nil {
+		return nil, codexCredential{}, err
+	}
+	return a.loadTarget(target)
 }
 
 // Check is local-only. Expired credentials with a refresh token are usable;
@@ -113,6 +124,7 @@ func (a *CodexAuth) Check() error {
 	if err != nil {
 		return err
 	}
+	defer ReleaseAuthEntries(all)
 	return codexCredentialCheck(all)
 }
 
@@ -139,37 +151,49 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	_, entry, err := a.loadShared(ctx)
+	all, entry, err := a.loadShared(ctx)
 	if err != nil {
 		return "", "", err
 	}
 	if entry.Access != "" && (entry.Expires > time.Now().Add(30*time.Second).UnixMilli() || entry.Refresh == "" && entry.Expires > time.Now().UnixMilli()) {
+		ReleaseAuthEntries(all)
 		account, err := codexAccount(entry)
 		return entry.Access, account, err
 	}
 	if entry.Refresh == "" {
+		ReleaseAuthEntries(all)
 		return "", "", fmt.Errorf("Codex login expired; log in again through Pi")
 	}
-	if st, err := os.Lstat(a.Path); err != nil || st.Mode()&os.ModeSymlink != 0 {
-		return "", "", fmt.Errorf("cannot safely refresh a symlinked auth.json; refresh the login in Pi")
-	}
+	ReleaseAuthEntries(all)
+
 	unlock, valid, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval, a.WaitAfter)
 	if err != nil {
 		return "", "", err
 	}
 	defer unlock()
-	_, entry, err = a.loadLocked()
+	target, err := resolveAuthTarget(a.Path)
+	if err != nil {
+		return "", "", err
+	}
+	all, entry, err = a.loadTarget(target)
 	if err != nil {
 		return "", "", err
 	}
 	// Another Pi/psi may have refreshed while this process waited for the lock.
 	if entry.Access != "" && entry.Expires > time.Now().Add(30*time.Second).UnixMilli() {
+		ReleaseAuthEntries(all)
 		account, err := codexAccount(entry)
 		return entry.Access, account, err
 	}
 	if entry.Refresh == "" {
+		ReleaseAuthEntries(all)
 		return "", "", fmt.Errorf("Codex refresh token is missing")
 	}
+	ReleaseAuthEntries(all)
+	if err := target.recheck(); err != nil {
+		return "", "", err
+	}
+
 	endpoint := a.TokenURL
 	if endpoint == "" {
 		endpoint = codexTokenURL
@@ -200,12 +224,16 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	// If a complete valid token response arrived before cancellation, retain
 	// the rotated refresh token even if the final body read was interrupted.
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
+	defer secretmem.Wipe(data[:cap(data)])
 	var token struct {
 		Access    string `json:"access_token"`
 		Refresh   string `json:"refresh_token"`
 		ExpiresIn int64  `json:"expires_in"`
 	}
 	if len(data) > 64*1024 || json.Unmarshal(data, &token) != nil || token.Access == "" || token.ExpiresIn <= 0 || token.ExpiresIn > 365*86400 {
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
 		return "", "", fmt.Errorf("invalid Codex OAuth refresh response")
 	}
 	updated := entry
@@ -227,10 +255,14 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if !valid() {
 		return "", "", fmt.Errorf("auth.json lock changed during OAuth refresh; refusing overwrite")
 	}
-	all, current, err := a.loadLocked()
+	if err := target.recheck(); err != nil {
+		return "", "", err
+	}
+	all, current, err := a.loadTarget(target)
 	if err != nil {
 		return "", "", err
 	}
+	defer ReleaseAuthEntries(all)
 	if current.Access != entry.Access || current.Refresh != entry.Refresh || current.Expires != entry.Expires {
 		return "", "", fmt.Errorf("Codex credentials changed during refresh; refusing overwrite")
 	}
@@ -238,21 +270,32 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if json.Unmarshal(all["openai-codex"], &fields) != nil {
 		return "", "", fmt.Errorf("invalid Codex credential object")
 	}
+	defer releaseRawEntries(fields)
 	for key, value := range map[string]any{"type": "oauth", "access": updated.Access, "refresh": updated.Refresh, "expires": updated.Expires, "accountId": account} {
+		if old, ok := fields[key]; ok {
+			secretmem.Wipe(old[:cap(old)])
+		}
 		fields[key], _ = json.Marshal(value)
+	}
+	if old, ok := all["openai-codex"]; ok {
+		secretmem.Wipe(old[:cap(old)])
 	}
 	all["openai-codex"], _ = json.Marshal(fields)
 	encoded, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
 		return "", "", fmt.Errorf("cannot encode refreshed credentials")
 	}
-	// Preserve existing permission bits: rename would otherwise replace them
-	// with the temporary file mode (Pi writes in place). New files stay 0600.
-	var keepMode os.FileMode
-	if st, err := os.Stat(a.Path); err == nil && !st.Mode().IsDir() {
-		keepMode = st.Mode().Perm()
+	defer secretmem.Wipe(encoded[:cap(encoded)])
+	if len(encoded)+1 > maxAuthJSONSize {
+		return "", "", fmt.Errorf("cannot encode refreshed credentials")
 	}
-	f, err := os.CreateTemp(filepath.Dir(a.Path), ".psi-auth-*")
+	// Preserve existing permission bits: rename would otherwise replace them
+	// with the temporary file mode (Pi writes in place).
+	keepMode := os.FileMode(0o600)
+	if target.info != nil {
+		keepMode = target.info.Mode().Perm()
+	}
+	f, err := os.CreateTemp(filepath.Dir(target.path), ".psi-auth-*")
 	if err != nil {
 		return "", "", fmt.Errorf("cannot persist refreshed credentials")
 	}
@@ -267,18 +310,25 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 			return "", "", fmt.Errorf("cannot preserve auth.json permissions")
 		}
 	}
-	if _, err = f.Write(append(encoded, '\n')); err == nil {
-		err = f.Sync()
+	writeErr := error(nil)
+	if _, writeErr = f.Write(encoded); writeErr == nil {
+		_, writeErr = f.Write([]byte{'\n'})
+	}
+	if writeErr == nil {
+		writeErr = f.Sync()
 	}
 	closeErr := f.Close()
-	if err != nil || closeErr != nil || !valid() {
+	if writeErr != nil || closeErr != nil || !valid() {
 		return "", "", fmt.Errorf("cannot safely persist refreshed credentials")
+	}
+	if err := target.recheck(); err != nil {
+		return "", "", err
 	}
 	rename := a.Rename
 	if rename == nil {
 		rename = os.Rename
 	}
-	if err := rename(f.Name(), a.Path); err != nil {
+	if err := rename(f.Name(), target.path); err != nil {
 		return "", "", fmt.Errorf("cannot replace refreshed auth.json")
 	}
 	if err := ctx.Err(); err != nil {

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,12 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/config"
 	"psi/internal/providerregistry"
+	"psi/internal/secretmem"
 )
 
 const (
@@ -24,18 +24,19 @@ const (
 )
 
 // SaveAPIKey atomically stores a literal API key in Pi-compatible auth.json.
-func SaveAPIKey(ctx context.Context, authPath, providerID, key string) error {
+// The caller owns key and must wipe it after SaveAPIKey returns.
+func SaveAPIKey(ctx context.Context, authPath, providerID string, key []byte) error {
 	if _, err := apiKeyProvider(providerID); err != nil {
 		return err
 	}
-	if strings.ContainsAny(key, "\r\n") {
+	if bytes.IndexByte(key, '\r') >= 0 || bytes.IndexByte(key, '\n') >= 0 {
 		return fmt.Errorf("API key must be a single line")
 	}
-	if !utf8.ValidString(key) {
+	if !utf8.Valid(key) {
 		return fmt.Errorf("API key is invalid UTF-8")
 	}
-	key = strings.TrimSpace(key)
-	if key == "" {
+	key = bytes.TrimSpace(key)
+	if len(key) == 0 {
 		return fmt.Errorf("API key is empty")
 	}
 	if err := ctx.Err(); err != nil {
@@ -45,33 +46,46 @@ func SaveAPIKey(ctx context.Context, authPath, providerID, key string) error {
 	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
 		return fmt.Errorf("cannot create auth.json directory: %w", err)
 	}
-	if _, _, err := inspectAuthPath(authPath); err != nil {
-		return err
-	}
 	unlock, leaseValid, err := acquireAuthLock(ctx, authPath+".lock", 0, 0, apiKeyAuthLockWait)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	if _, _, err := inspectAuthPath(authPath); err != nil {
-		return err
-	}
-	entries, mode, _, err := readAuthDocument(authPath)
+	target, err := resolveAuthTarget(authPath)
 	if err != nil {
 		return err
 	}
+	entries, mode, _, err := readAuthDocument(target)
+	if err != nil {
+		return err
+	}
+	defer releaseRawEntries(entries)
 	entry, _, err := selectedAPIKeyEntry(entries, providerID)
 	if err != nil {
 		return err
 	}
+	defer releaseRawEntries(entry)
+	if old, ok := entry["type"]; ok {
+		secretmem.Wipe(old[:cap(old)])
+	}
 	entry["type"], _ = json.Marshal("api_key")
-	entry["key"], _ = json.Marshal(config.EscapeCredentialLiteral(key))
+	encodedKey, err := encodeCredentialLiteral(key)
+	if err != nil {
+		return err
+	}
+	if old, ok := entry["key"]; ok {
+		secretmem.Wipe(old[:cap(old)])
+	}
+	entry["key"] = json.RawMessage(encodedKey)
+	if old, ok := entries[providerID]; ok {
+		secretmem.Wipe(old[:cap(old)])
+	}
 	entries[providerID], err = json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("cannot encode auth.json")
 	}
 	valid := func() bool { return ctx.Err() == nil && leaseValid() }
-	if err := writeAuthDocument(authPath, entries, mode, valid); err != nil {
+	if err := writeAuthDocument(target, entries, mode, valid); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -90,27 +104,28 @@ func RemoveAPIKey(ctx context.Context, authPath, providerID string) (bool, error
 		return false, err
 	}
 	authPath = resolvedWriteAuthPath(authPath)
-	if info, _, err := inspectAuthPath(authPath); err != nil {
-		return false, err
-	} else if info == nil {
+	if _, err := os.Lstat(authPath); errors.Is(err, os.ErrNotExist) {
 		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("cannot inspect auth.json")
 	}
 	unlock, leaseValid, err := acquireAuthLock(ctx, authPath+".lock", 0, 0, apiKeyAuthLockWait)
 	if err != nil {
 		return false, err
 	}
 	defer unlock()
-	info, _, err := inspectAuthPath(authPath)
+	target, err := resolveAuthTarget(authPath)
 	if err != nil {
 		return false, err
 	}
-	if info == nil {
+	if !target.exists {
 		return false, nil
 	}
-	entries, mode, exists, err := readAuthDocument(authPath)
+	entries, mode, exists, err := readAuthDocument(target)
 	if err != nil {
 		return false, err
 	}
+	defer releaseRawEntries(entries)
 	if !exists {
 		return false, nil
 	}
@@ -122,6 +137,7 @@ func RemoveAPIKey(ctx context.Context, authPath, providerID string) (bool, error
 	if err != nil {
 		return false, err
 	}
+	defer releaseRawEntries(entry)
 	credentialType, err := storedEntryType(entry, providerID)
 	if err != nil {
 		return false, err
@@ -133,8 +149,9 @@ func RemoveAPIKey(ctx context.Context, authPath, providerID string) (bool, error
 		return false, fmt.Errorf("unsupported credential type for %s", providerID)
 	}
 	delete(entries, providerID)
+	secretmem.Wipe(raw[:cap(raw)])
 	valid := func() bool { return ctx.Err() == nil && leaseValid() }
-	if err := writeAuthDocument(authPath, entries, mode, valid); err != nil {
+	if err := writeAuthDocument(target, entries, mode, valid); err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
@@ -150,6 +167,7 @@ func StoredAPIKeyProviders(authPath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer ReleaseAuthEntries(entries)
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -167,27 +185,43 @@ func StoredAPIKeyProviders(authPath string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		credentialType, err := storedEntryType(entry, providerID)
+		hasKey, err := storedAPIKeyPresent(entry, providerID)
 		if err != nil {
 			return nil, err
 		}
-		if credentialType != "" && credentialType != "api_key" {
-			continue
-		}
-		rawKey, present := entry["key"]
-		if !present {
-			continue
-		}
-		var key string
-		if err := json.Unmarshal(rawKey, &key); err != nil {
-			return nil, fmt.Errorf("malformed auth.json credential for %s", providerID)
-		}
-		if key != "" {
+		if hasKey {
 			providers = append(providers, providerID)
 		}
 	}
 	sort.Strings(providers)
 	return providers, nil
+}
+
+// storedAPIKeyPresent owns entry for the duration of the inspection and
+// releases its decoded raw-message allocations before returning. It inspects
+// the JSON string token directly so the logout listing does not create a
+// second secret string from the key.
+func storedAPIKeyPresent(entry map[string]json.RawMessage, providerID string) (bool, error) {
+	defer releaseRawEntries(entry)
+	credentialType, err := storedEntryType(entry, providerID)
+	if err != nil {
+		return false, err
+	}
+	if credentialType != "" && credentialType != "api_key" {
+		return false, nil
+	}
+	rawKey, present := entry["key"]
+	if !present {
+		return false, nil
+	}
+	value := bytes.TrimSpace(rawKey)
+	if bytes.Equal(value, []byte("null")) {
+		return false, nil
+	}
+	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
+		return false, fmt.Errorf("malformed auth.json credential for %s", providerID)
+	}
+	return len(value) > 2, nil
 }
 
 func apiKeyProvider(providerID string) (providerregistry.Spec, error) {
@@ -208,52 +242,34 @@ func resolvedWriteAuthPath(authPath string) string {
 	}, "")
 }
 
-// inspectAuthPath rejects symlinks and non-regular files before opening the
-// target. A missing target is reported through exists=false.
-func inspectAuthPath(path string) (os.FileInfo, os.FileMode, error) {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, 0, nil
-	}
-	if err != nil {
-		return nil, 0, fmt.Errorf("cannot inspect auth.json")
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, 0, fmt.Errorf("refusing to write a symlinked auth.json")
-	}
-	if !info.Mode().IsRegular() {
-		return nil, 0, fmt.Errorf("auth.json must be a regular file")
-	}
-	return info, info.Mode().Perm(), nil
-}
-
-func readAuthDocument(path string) (map[string]json.RawMessage, os.FileMode, bool, error) {
-	info, mode, err := inspectAuthPath(path)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	if info == nil {
+// readAuthDocument reads the captured target identity. A missing target is
+// reported through exists=false without opening a path that may have appeared.
+func readAuthDocument(target authTarget) (map[string]json.RawMessage, os.FileMode, bool, error) {
+	if !target.exists {
 		return map[string]json.RawMessage{}, 0o600, false, nil
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(target.path)
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("cannot read auth.json")
 	}
 	defer file.Close()
 	opened, err := file.Stat()
-	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(target.info, opened) {
 		return nil, 0, false, fmt.Errorf("auth.json changed while being read")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxAuthJSONSize+1))
 	if err != nil || len(data) > maxAuthJSONSize || !utf8.Valid(data) {
+		secretmem.Wipe(data[:cap(data)])
 		return nil, 0, false, fmt.Errorf("auth.json is malformed or exceeds the size limit")
 	}
+	defer secretmem.Wipe(data[:cap(data)])
 	data = stripAuthBOM(data)
 	var entries map[string]json.RawMessage
 	if json.Unmarshal(data, &entries) != nil || entries == nil {
+		releaseRawEntries(entries)
 		return nil, 0, false, fmt.Errorf("auth.json must be a JSON object")
 	}
-	return entries, mode, true, nil
+	return entries, target.info.Mode().Perm(), true, nil
 }
 
 func selectedAPIKeyEntry(entries map[string]json.RawMessage, providerID string) (map[string]json.RawMessage, string, error) {
@@ -267,12 +283,15 @@ func selectedAPIKeyEntry(entries map[string]json.RawMessage, providerID string) 
 	}
 	credentialType, err := storedEntryType(entry, providerID)
 	if err != nil {
+		releaseRawEntries(entry)
 		return nil, "", err
 	}
 	if credentialType == "oauth" || credentialType == "oauth_token" {
+		releaseRawEntries(entry)
 		return nil, "", fmt.Errorf("refusing to overwrite the OAuth credential for %s", providerID)
 	}
 	if credentialType != "" && credentialType != "api_key" {
+		releaseRawEntries(entry)
 		return nil, "", fmt.Errorf("unsupported credential type for %s", providerID)
 	}
 	return entry, credentialType, nil
@@ -281,6 +300,7 @@ func selectedAPIKeyEntry(entries map[string]json.RawMessage, providerID string) 
 func decodeStoredEntry(raw json.RawMessage, providerID string) (map[string]json.RawMessage, error) {
 	var entry map[string]json.RawMessage
 	if json.Unmarshal(raw, &entry) != nil || entry == nil {
+		releaseRawEntries(entry)
 		return nil, fmt.Errorf("auth.json credential for %s must be an object", providerID)
 	}
 	return entry, nil
@@ -298,16 +318,22 @@ func storedEntryType(entry map[string]json.RawMessage, providerID string) (strin
 	return credentialType, nil
 }
 
-func writeAuthDocument(path string, entries map[string]json.RawMessage, mode os.FileMode, valid func() bool) error {
+func writeAuthDocument(target authTarget, entries map[string]json.RawMessage, mode os.FileMode, valid func() bool) error {
 	encoded, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return fmt.Errorf("cannot encode auth.json")
 	}
-	encoded = append(encoded, '\n')
-	if len(encoded) > maxAuthJSONSize {
+	defer secretmem.Wipe(encoded[:cap(encoded)])
+	if len(encoded)+1 > maxAuthJSONSize {
 		return fmt.Errorf("auth.json exceeds the size limit")
 	}
-	dir := filepath.Dir(path)
+	if !valid() {
+		return fmt.Errorf("auth.json lock changed; refusing to write")
+	}
+	if err := target.recheck(); err != nil {
+		return err
+	}
+	dir := filepath.Dir(target.path)
 	temp, err := os.CreateTemp(dir, ".psi-auth-*")
 	if err != nil {
 		return fmt.Errorf("cannot create auth.json temporary file")
@@ -326,6 +352,9 @@ func writeAuthDocument(path string, entries map[string]json.RawMessage, mode os.
 	if _, err := temp.Write(encoded); err != nil {
 		return fmt.Errorf("cannot write auth.json")
 	}
+	if _, err := temp.Write([]byte{'\n'}); err != nil {
+		return fmt.Errorf("cannot write auth.json")
+	}
 	if err := temp.Sync(); err != nil {
 		return fmt.Errorf("cannot sync auth.json")
 	}
@@ -337,7 +366,10 @@ func writeAuthDocument(path string, entries map[string]json.RawMessage, mode os.
 	if !valid() {
 		return fmt.Errorf("auth.json lock changed; refusing to write")
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := target.recheck(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, target.path); err != nil {
 		return fmt.Errorf("cannot replace auth.json")
 	}
 	if dirFile, err := os.Open(dir); err == nil {

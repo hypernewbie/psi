@@ -258,6 +258,48 @@ func TestInputDecoderByteChunkingInvariance(t *testing.T) {
 	}
 }
 
+func TestInputDecoderPasteBudgetCountsUTF8Replacement(t *testing.T) {
+	for _, overLimit := range []bool{false, true} {
+		name := "exact_limit"
+		prefixLen := pasteBudget - len("\ufffd")
+		if overLimit {
+			name = "one_byte_over"
+			prefixLen++
+		}
+		t.Run(name, func(t *testing.T) {
+			d := NewDecoder()
+			d.Feed([]byte("\x1b[200~"))
+			content := append(bytes.Repeat([]byte{'x'}, prefixLen), 0xff)
+			for start := 0; start < len(content); start += 4096 {
+				if got := d.Feed(content[start:min(start+4096, len(content))]); len(got) != 0 {
+					t.Fatal("paste content escaped before the end marker")
+				}
+			}
+			out := d.Feed([]byte("\x1b[201~z"))
+			if len(out) < 2 || !out[len(out)-2].PasteEnd || out[len(out)-2].Rejected != overLimit {
+				t.Fatal("paste did not enforce the normalized byte limit")
+			}
+			if string(out[len(out)-1].Key) != "z" || out[len(out)-1].Paste {
+				t.Fatal("decoder did not resume ordinary input after the paste")
+			}
+			var pasted []byte
+			for _, unit := range out[:len(out)-2] {
+				if !unit.Paste || len(unit.Key) > pasteChunkSize {
+					t.Fatal("paste was not delivered in bounded chunks")
+				}
+				pasted = append(pasted, unit.Key...)
+			}
+			if overLimit {
+				if len(pasted) != 0 {
+					t.Fatal("rejected paste emitted partial content")
+				}
+			} else if len(pasted) != pasteBudget || !bytes.HasSuffix(pasted, []byte("\ufffd")) {
+				t.Fatal("exact-limit paste lost normalized content")
+			}
+		})
+	}
+}
+
 func TestInputDecoderOversizedPaste(t *testing.T) {
 	defer leakcheck.Verify(t)
 

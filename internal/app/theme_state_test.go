@@ -315,6 +315,15 @@ func TestThemeStateQueryHoldsInterleavedUserKeystrokes(t *testing.T) {
 	if text.String() != "user-typed-query" {
 		t.Fatalf("held text = %q, want 'user-typed-query'", text.String())
 	}
+	alias := held[0].Key
+	for i := range held {
+		held[i].Release()
+	}
+	for i, b := range alias {
+		if b != 0 {
+			t.Fatalf("held byte %d survived release", i)
+		}
+	}
 }
 
 func TestReloadThemeCopiesSoftWrap(t *testing.T) {

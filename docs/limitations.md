@@ -78,6 +78,21 @@ If a crashed writer left an interrupted interior record, psi keeps the remaining
 A 512 MiB compacted session stays inside the 3-second and 160 MiB RSS limits on the recorded local profile.
 A large active context still requires memory for its decoded payloads.
 
+Explicit byte wipes reduce retained secret copies in application-owned buffers.
+They cannot establish complete process-memory erasure. Go runtime and
+standard-library copies, provider credential strings, HTTP request/response
+state, terminal mask rendering, and other required boundaries can retain data.
+Memory is not locked. A hostile local process with process-inspection rights is
+outside this boundary.
+
+`auth.json` writes preserve an existing symlink by replacing the resolved
+regular-file target under the logical-path lock. The link and target identity
+are rechecked before staging and immediately before replacement. A change
+observed by those checks is refused. A retarget after the final check remains a
+filesystem race and is not made transactional. Broader filesystem behavior,
+including a hostile process that can replace paths at arbitrary times, is
+outside this boundary.
+
 Recall retains at most 200 prompts within a 4 MiB text budget.
 
 Persistent continuation resolves symlinks to one canonical writer-lock path.

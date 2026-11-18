@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,7 +30,7 @@ func TestSaveAPIKeyCreatesPiCompatibleAuthAndEscapesLiteral(t *testing.T) {
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "private", "auth.json")
 	key := "!sk-test-$-!"
-	if err := SaveAPIKey(context.Background(), authPath, "deepseek", key); err != nil {
+	if err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte(key)); err != nil {
 		t.Fatal(err)
 	}
 	requireAuthWriteMode(t, filepath.Dir(authPath), 0o700)
@@ -67,7 +68,7 @@ func TestSaveAPIKeyPreservesOtherProvidersAndUnknownFields(t *testing.T) {
 	if err := os.Chmod(authPath, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveAPIKey(context.Background(), authPath, "deepseek", "replacement"); err != nil {
+	if err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte("replacement")); err != nil {
 		t.Fatal(err)
 	}
 	requireAuthWriteMode(t, authPath, 0o640)
@@ -106,7 +107,7 @@ func TestSaveAPIKeyRejectsInvalidInputBeforeFilesystemEffects(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			authPath := filepath.Join(t.TempDir(), "missing", "auth.json")
-			err := SaveAPIKey(context.Background(), authPath, tc.providerID, tc.key)
+			err := SaveAPIKey(context.Background(), authPath, tc.providerID, []byte(tc.key))
 			if err == nil {
 				t.Fatal("invalid input was accepted")
 			}
@@ -139,7 +140,7 @@ func TestSaveAPIKeyRejectsMalformedAuthWithoutChangingBytes(t *testing.T) {
 			if err := os.WriteFile(authPath, []byte(tc.data), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := SaveAPIKey(context.Background(), authPath, "deepseek", "new-secret"); err == nil {
+			if err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte("new-secret")); err == nil {
 				t.Fatal("malformed document was accepted")
 			}
 			after, err := os.ReadFile(authPath)
@@ -160,7 +161,7 @@ func TestSaveAPIKeyRejectsOversizeInputAndOutput(t *testing.T) {
 		if err := os.WriteFile(authPath, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := SaveAPIKey(context.Background(), authPath, "deepseek", "new-secret"); err == nil {
+		if err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte("new-secret")); err == nil {
 			t.Fatal("oversize auth.json was accepted")
 		}
 		after, err := os.ReadFile(authPath)
@@ -177,7 +178,7 @@ func TestSaveAPIKeyRejectsOversizeInputAndOutput(t *testing.T) {
 		if err := os.WriteFile(authPath, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := SaveAPIKey(context.Background(), authPath, "deepseek", "new-secret"); err == nil {
+		if err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte("new-secret")); err == nil {
 			t.Fatal("oversize encoded auth.json was accepted")
 		}
 		after, err := os.ReadFile(authPath)
@@ -201,7 +202,7 @@ func TestSaveAPIKeyRejectsOAuthAndUnsupportedTypesUnchanged(t *testing.T) {
 			if err := os.WriteFile(authPath, []byte(tc.data), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			err := SaveAPIKey(context.Background(), authPath, "deepseek", "new-secret")
+			err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte("new-secret"))
 			if err == nil {
 				t.Fatal("credential type was overwritten")
 			}
@@ -216,26 +217,88 @@ func TestSaveAPIKeyRejectsOAuthAndUnsupportedTypesUnchanged(t *testing.T) {
 	}
 }
 
-func TestSaveAPIKeyRefusesSymlinkAndPreservesTarget(t *testing.T) {
+func TestSaveAPIKeyPreservesSymlinkAndTarget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink auth path test is POSIX-only")
 	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.json")
 	authPath := filepath.Join(dir, "auth.json")
-	original := `{"deepseek":{"type":"api_key","key":"original"}}`
-	if err := os.WriteFile(target, []byte(original), 0o600); err != nil {
+	original := `{"deepseek":{"type":"api_key","key":"original","unknown":{"keep":true}},"custom":{"type":"api_key","key":"keep"}}`
+	if err := os.WriteFile(target, []byte(original), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, authPath); err != nil {
+	if err := os.Chmod(target, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(target), authPath); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	if err := SaveAPIKey(context.Background(), authPath, "deepseek", "new-secret"); err == nil {
-		t.Fatal("symlinked auth.json was accepted")
+	if err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte("new-secret")); err != nil {
+		t.Fatal(err)
 	}
-	after, err := os.ReadFile(target)
-	if err != nil || string(after) != original {
-		t.Fatalf("symlink target changed: error=%v", err)
+	linkInfo, err := os.Lstat(authPath)
+	if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("auth.json link was replaced")
+	}
+	link, err := os.Readlink(authPath)
+	if err != nil || link != filepath.Base(target) {
+		t.Fatal("auth.json link text changed")
+	}
+	requireAuthWriteMode(t, target, 0o640)
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if string(entries["deepseek"]["key"]) != `"new-secret"` {
+		t.Fatalf("linked DeepSeek key was not updated: %s", entries["deepseek"])
+	}
+	var unknown map[string]bool
+	if err := json.Unmarshal(entries["deepseek"]["unknown"], &unknown); err != nil || !unknown["keep"] {
+		t.Fatalf("linked DeepSeek unknown field changed: %s", entries["deepseek"])
+	}
+	if string(entries["custom"]["key"]) != `"keep"` {
+		t.Fatalf("linked unrelated entry changed: %s", entries["custom"])
+	}
+	temps, err := filepath.Glob(filepath.Join(dir, ".psi-auth-*"))
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files remain: %v, error=%v", temps, err)
+	}
+}
+
+func TestSaveAPIKeyResolvesChainedAuthLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink auth path test is POSIX-only")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(target, []byte(`{"deepseek":{"type":"api_key","key":"original"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(dir, "first.json")
+	if err := os.Symlink(filepath.Base(target), first); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.Symlink(filepath.Base(first), authPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := SaveAPIKey(context.Background(), authPath, "deepseek", []byte("new-secret")); err != nil {
+		t.Fatal(err)
+	}
+	for _, linkPath := range []string{authPath, first} {
+		info, err := os.Lstat(linkPath)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("link %s was replaced", filepath.Base(linkPath))
+		}
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || !strings.Contains(string(data), `"key": "new-secret"`) {
+		t.Fatalf("chained target was not updated: %s, error=%v", data, err)
 	}
 }
 
@@ -243,7 +306,7 @@ func TestSaveAPIKeyPreCancelledContextHasNoFilesystemEffects(t *testing.T) {
 	authPath := filepath.Join(t.TempDir(), "missing", "auth.json")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := SaveAPIKey(ctx, authPath, "deepseek", "secret"); !errors.Is(err, context.Canceled) {
+	if err := SaveAPIKey(ctx, authPath, "deepseek", []byte("secret")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
 	}
 	if _, err := os.Stat(filepath.Dir(authPath)); !os.IsNotExist(err) {
@@ -258,7 +321,11 @@ func TestWriteAuthDocumentLostLeaseLeavesOriginalAndNoTemp(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAuthDocument(path, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, func() bool { return false }); err == nil {
+	target, err := resolveAuthTarget(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAuthDocument(target, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, func() bool { return false }); err == nil {
 		t.Fatal("lost lease did not refuse commit")
 	}
 	after, err := os.ReadFile(path)
@@ -266,6 +333,90 @@ func TestWriteAuthDocumentLostLeaseLeavesOriginalAndNoTemp(t *testing.T) {
 		t.Fatalf("auth.json changed after lease loss: error=%v", err)
 	}
 	temps, err := filepath.Glob(filepath.Join(dir, ".psi-auth-*"))
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files remain: %v, error=%v", temps, err)
+	}
+}
+
+func TestWriteAuthDocumentRefusesRetargetedAuth(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink auth path test is POSIX-only")
+	}
+	dir := t.TempDir()
+	targetA := filepath.Join(dir, "target-a.json")
+	targetB := filepath.Join(dir, "target-b.json")
+	authPath := filepath.Join(dir, "auth.json")
+	for _, target := range []string{targetA, targetB} {
+		if err := os.WriteFile(target, []byte(`{"deepseek":{"type":"api_key","key":"old"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Base(targetA), authPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	target, err := resolveAuthTarget(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	valid := func() bool {
+		calls++
+		if calls == 2 {
+			if err := os.Remove(authPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Base(targetB), authPath); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return true
+	}
+	err = writeAuthDocument(target, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, valid)
+	if err == nil || !strings.Contains(err.Error(), "target changed") {
+		t.Fatalf("retargeted auth error = %v", err)
+	}
+	for _, path := range []string{targetA, targetB} {
+		data, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(data), `"key":"old"`) {
+			t.Fatalf("failed commit changed %s: %s, error=%v", filepath.Base(path), data, err)
+		}
+	}
+	temps, err := filepath.Glob(filepath.Join(dir, ".psi-auth-*"))
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files remain: %v, error=%v", temps, err)
+	}
+}
+
+func TestWriteAuthDocumentRefusesReplacedAbsentParent(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "agent")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(parent, "auth.json")
+	target, err := resolveAuthTarget(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := filepath.Join(dir, "agent-old")
+	calls := 0
+	valid := func() bool {
+		calls++
+		if calls == 1 {
+			if err := os.Rename(parent, older); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return true
+	}
+	err = writeAuthDocument(target, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, valid)
+	if err == nil || !strings.Contains(err.Error(), "target changed") {
+		t.Fatalf("replaced parent error = %v", err)
+	}
+	temps, err := filepath.Glob(filepath.Join(parent, ".psi-auth-*"))
 	if err != nil || len(temps) != 0 {
 		t.Fatalf("temporary files remain: %v, error=%v", temps, err)
 	}
@@ -362,6 +513,104 @@ func TestInvalidAuthDocumentRejectsCredentialFallbackAndLogoutListing(t *testing
 			providers, err := StoredAPIKeyProviders(authPath)
 			if err == nil || providers != nil {
 				t.Fatalf("invalid auth.json was reported as an empty logout list: providers=%v err=%v", providers, err)
+			}
+		})
+	}
+}
+
+func TestSaveAPIKeyLeavesBorrowedInputUnchanged(t *testing.T) {
+	t.Run("success and trimming", func(t *testing.T) {
+		authPath := filepath.Join(t.TempDir(), "auth.json")
+		backing := bytes.Repeat([]byte{0x5a}, 64)
+		key := backing[8:15]
+		copy(key, " !sk-$ ")
+		before := append([]byte(nil), backing...)
+		if err := SaveAPIKey(context.Background(), authPath, "deepseek", key); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(backing, before) {
+			t.Fatalf("borrowed key or sentinels changed: %q", backing)
+		}
+		data, err := os.ReadFile(authPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), `"key": "$!sk-$$"`) {
+			t.Fatalf("trimmed literal was not encoded: %s", data)
+		}
+	})
+
+	t.Run("validation rejection", func(t *testing.T) {
+		authPath := filepath.Join(t.TempDir(), "missing", "auth.json")
+		backing := bytes.Repeat([]byte{0x33}, 32)
+		key := backing[4:11]
+		copy(key, "bad\rkey")
+		before := append([]byte(nil), backing...)
+		if err := SaveAPIKey(context.Background(), authPath, "deepseek", key); err == nil {
+			t.Fatal("newline key was accepted")
+		}
+		if !bytes.Equal(backing, before) {
+			t.Fatalf("rejected borrowed key changed: %q", backing)
+		}
+	})
+
+	t.Run("filesystem failure", func(t *testing.T) {
+		dir := t.TempDir()
+		parentFile := filepath.Join(dir, "not-a-directory")
+		if err := os.WriteFile(parentFile, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		backing := bytes.Repeat([]byte{0x44}, 32)
+		key := backing[3:10]
+		copy(key, "sk-test")
+		before := append([]byte(nil), backing...)
+		if err := SaveAPIKey(context.Background(), filepath.Join(parentFile, "auth.json"), "deepseek", key); err == nil {
+			t.Fatal("invalid parent was accepted")
+		}
+		if !bytes.Equal(backing, before) {
+			t.Fatalf("borrowed key changed after filesystem failure: %q", backing)
+		}
+	})
+}
+
+func TestStoredAPIKeyProvidersInspectsKeyWithoutDecoding(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []string
+		err  bool
+	}{
+		{name: "absent", body: `{"deepseek":{"type":"api_key"}}`},
+		{name: "null", body: `{"deepseek":{"type":"api_key","key":null}}`},
+		{name: "empty", body: `{"deepseek":{"type":"api_key","key":""}}`},
+		{name: "escaped", body: `{"deepseek":{"type":"api_key","key":"\\u0000"}}`, want: []string{"deepseek"}},
+		{name: "spaces", body: `{"deepseek":{"type":"api_key","key":" "}}`, want: []string{"deepseek"}},
+		{name: "number", body: `{"deepseek":{"type":"api_key","key":7}}`, err: true},
+		{name: "boolean", body: `{"deepseek":{"type":"api_key","key":true}}`, err: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authPath := filepath.Join(t.TempDir(), "auth.json")
+			if err := os.WriteFile(authPath, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := StoredAPIKeyProviders(authPath)
+			if tc.err {
+				if err == nil {
+					t.Fatalf("malformed key type was accepted: %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("providers = %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("providers = %v, want %v", got, tc.want)
+				}
 			}
 		})
 	}

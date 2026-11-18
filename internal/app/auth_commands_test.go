@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,6 +18,31 @@ import (
 	"psi/internal/session"
 	"psi/internal/terminal"
 )
+
+func TestSaveLoginKeyWipesCallerBuffer(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	backing := make([]byte, 0, 64)
+	key := append(backing, "!sk-wipe-$-key"...)
+	if err := saveLoginKey(context.Background(), authPath, "deepseek", key); err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range key[:cap(key)] {
+		if b != 0 {
+			t.Fatalf("key byte %d survived successful save", i)
+		}
+	}
+
+	failureBacking := make([]byte, 0, 64)
+	failureKey := append(failureBacking, "!sk-wipe-$-key"...)
+	if err := saveLoginKey(context.Background(), authPath, "missing-provider", failureKey); err == nil {
+		t.Fatal("unsupported provider was accepted")
+	}
+	for i, b := range failureKey[:cap(failureKey)] {
+		if b != 0 {
+			t.Fatalf("key byte %d survived failed save", i)
+		}
+	}
+}
 
 func TestFirstLoginAppliesPerModelThinkingDefault(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
@@ -334,7 +360,7 @@ func TestFirstLoginRetainsSavedKeyWhenLaterPersistenceFails(t *testing.T) {
 			if err != nil || resolved != key {
 				t.Fatal("later persistence failure discarded the saved key")
 			}
-			if console.EndSecret() != "" || r.login != nil || console.Editor.Text() != "" {
+			if len(console.EndSecret()) != 0 || r.login != nil || console.Editor.Text() != "" {
 				t.Fatal("later persistence failure retained secret input")
 			}
 			if !strings.Contains(output.String(), wantNotice) || strings.Contains(output.String(), "Credentials saved to") {

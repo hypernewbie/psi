@@ -2,9 +2,10 @@ package terminal
 
 import (
 	"bytes"
-	"strings"
 	"time"
 	"unicode/utf8"
+
+	"psi/internal/secretmem"
 )
 
 // Decoder is the bounded input state machine (P2-018).
@@ -19,6 +20,7 @@ const (
 	maxPendingEscape = 256
 	pasteBudget      = 256 * 1024
 	escapeTimeout    = 50 * time.Millisecond
+	pasteChunkSize   = 64 * 1024
 )
 
 type Decoded struct {
@@ -38,7 +40,6 @@ type Decoder struct {
 	inPaste       bool
 	pasteBuf      []byte
 	pasteOver     bool // oversized paste: draining through end marker
-	pasteSize     int  // bytes accepted before over-limit
 	discardEscape bool
 	discardOSC    bool
 	discardOSCEsc bool
@@ -48,6 +49,62 @@ type Decoder struct {
 func NewDecoder() *Decoder { return &Decoder{now: time.Now} }
 
 func (d *Decoder) SetClock(now func() time.Time) { d.now = now }
+
+// appendOwnedBytes grows dst without leaving the old allocation for the
+// garbage collector to retain. The caller keeps ownership of the returned
+// allocation.
+func appendOwnedBytes(dst, src []byte) []byte {
+	if len(src) == 0 {
+		return dst
+	}
+	newLen := len(dst) + len(src)
+	if newLen <= cap(dst) {
+		return append(dst, src...)
+	}
+	newCap := cap(dst) * 2
+	if newCap < 8 {
+		newCap = 8
+	}
+	if newCap < newLen {
+		newCap = newLen
+	}
+	next := make([]byte, newLen, newCap)
+	copy(next, dst)
+	copy(next[len(dst):], src)
+	secretmem.Wipe(dst[:cap(dst)])
+	return next
+}
+
+func (d *Decoder) clearPending() {
+	secretmem.Wipe(d.pending[:cap(d.pending)])
+	d.pending = nil
+}
+
+func (d *Decoder) clearPaste() {
+	secretmem.Wipe(d.pasteBuf[:cap(d.pasteBuf)])
+	d.pasteBuf = nil
+}
+
+// consumePending removes n consumed bytes while retaining the incomplete
+// suffix in a fresh allocation. The old prefix allocation is wiped.
+func (d *Decoder) consumePending(n int) {
+	suffix := d.pending[n:]
+	next := make([]byte, len(suffix))
+	copy(next, suffix)
+	secretmem.Wipe(d.pending[:cap(d.pending)])
+	d.pending = next
+}
+
+func (d *Decoder) reset() {
+	d.clearPending()
+	d.clearPaste()
+	d.inPaste = false
+	d.pasteOver = false
+	d.discardEscape = false
+	d.discardOSC = false
+	d.discardOSCEsc = false
+	d.pendingAt = time.Time{}
+}
 
 // Feed consumes bytes and returns decoded units.
 func (d *Decoder) Feed(data []byte) []Decoded {
@@ -62,7 +119,7 @@ func (d *Decoder) Feed(data []byte) []Decoded {
 	if len(d.pending) > 0 && d.pending[0] == 27 && d.now().Sub(d.pendingAt) >= escapeTimeout {
 		if len(d.pending) >= 2 && d.pending[1] == ']' {
 			d.discardOSCEsc = d.pending[len(d.pending)-1] == 27
-			d.pending = nil
+			d.clearPending()
 			d.discardOSC = true
 			return out
 		}
@@ -74,7 +131,7 @@ func (d *Decoder) Feed(data []byte) []Decoded {
 				out = append(out, Decoded{Key: []byte{bb}})
 			}
 		}
-		d.pending = nil
+		d.clearPending()
 	}
 	return out
 }
@@ -83,46 +140,35 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 	// Legacy terminals encode Alt+Enter as ESC followed by carriage return.
 	// Keep ordinary Escape handling unchanged when the timeout has elapsed.
 	if len(d.pending) == 1 && d.pending[0] == 27 && b == '\r' && d.now().Sub(d.pendingAt) < escapeTimeout {
-		d.pending = nil
+		d.clearPending()
 		d.pendingAt = time.Time{}
 		return []Decoded{{FollowUp: true}}
 	}
 	// Inside paste: buffer until end marker, normalize, enforce budget.
 	if d.inPaste {
-		d.pasteBuf = append(d.pasteBuf, b)
+		d.pasteBuf = appendOwnedBytes(d.pasteBuf, []byte{b})
 		if bytes.HasSuffix(d.pasteBuf, []byte("\x1b[201~")) {
 			content := d.pasteBuf[:len(d.pasteBuf)-6]
 			d.inPaste = false
-			d.pasteBuf = nil
 			if d.pasteOver {
 				d.pasteOver = false
-				d.pasteSize = 0
-				return []Decoded{{Paste: true, PasteEnd: true, Rejected: true}} // signals rejection notice
+				d.clearPaste()
+				return []Decoded{{Paste: true, PasteEnd: true, Rejected: true}}
 			}
-			// Normalize CRLF/lone CR to LF, preserve LF.
-			s := strings.ReplaceAll(string(content), "\r\n", "\n")
-			s = strings.ReplaceAll(s, "\r", "\n")
-			// Filter controls except \n\t (do not interpret as cancel/commands).
-			var f strings.Builder
-			for _, r := range s {
-				if r == '\n' || r == '\t' || (r >= 0x20 && (r < 0x7F || r > 0x9F)) || r > 0x9F {
-					f.WriteRune(r)
-				}
-			}
-			norm := f.String()
-			if len(norm) > pasteBudget {
+			norm, ok := normalizePaste(content)
+			d.clearPaste()
+			if !ok {
 				return []Decoded{{Paste: true, PasteEnd: true, Rejected: true}}
 			}
 			// Deliver as one bounded transaction (chunked if large, but single logical unit).
-			const chunk = 64 * 1024
 			var out []Decoded
-			for i := 0; i < len(norm); i += chunk {
-				end := i + chunk
-				if end > len(norm) {
-					end = len(norm)
-				}
-				out = append(out, Decoded{Key: []byte(norm[i:end]), Paste: true})
+			for i := 0; i < len(norm); i += pasteChunkSize {
+				end := min(i+pasteChunkSize, len(norm))
+				chunk := make([]byte, end-i)
+				copy(chunk, norm[i:end])
+				out = append(out, Decoded{Key: chunk, Paste: true})
 			}
+			secretmem.Wipe(norm[:cap(norm)])
 			out = append(out, Decoded{Paste: true, PasteEnd: true})
 			return out
 		}
@@ -131,7 +177,10 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 			d.pasteOver = true
 			// Bound memory: keep only suffix for end-marker detection.
 			if len(d.pasteBuf) > 32 {
-				d.pasteBuf = append([]byte(nil), d.pasteBuf[len(d.pasteBuf)-16:]...)
+				suffix := make([]byte, 16)
+				copy(suffix, d.pasteBuf[len(d.pasteBuf)-16:])
+				secretmem.Wipe(d.pasteBuf[:cap(d.pasteBuf)])
+				d.pasteBuf = suffix
 			}
 		}
 		return nil
@@ -152,7 +201,7 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 		return nil
 	}
 	// Check paste markers. Escape timeout is idle time, not total sequence age.
-	d.pending = append(d.pending, b)
+	d.pending = appendOwnedBytes(d.pending, []byte{b})
 	if d.pending[0] == 27 {
 		d.pendingAt = d.now()
 	}
@@ -163,17 +212,17 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 		if len(d.pending) > 0 {
 			out = append(out, d.emitPending()...)
 		}
+		d.clearPending()
+		d.clearPaste()
 		d.inPaste = true
-		d.pasteBuf = nil
 		d.pasteOver = false
 		out = append(out, Decoded{Paste: true, PasteStart: true})
 		return out
 	}
-	// Bound pending escape.
 	if len(d.pending) > maxPendingEscape {
 		osc := len(d.pending) >= 2 && d.pending[0] == 27 && d.pending[1] == ']'
 		terminatedOSC := osc && (b == 0x07 || len(d.pending) >= 2 && d.pending[len(d.pending)-2] == 27 && b == 92)
-		d.pending = nil
+		d.clearPending()
 		if osc {
 			d.discardOSC = !terminatedOSC
 			d.discardOSCEsc = !terminatedOSC && b == 27
@@ -182,8 +231,46 @@ func (d *Decoder) feedByte(b byte) []Decoded {
 		}
 		return nil
 	}
-	// Try to emit complete units.
 	return d.emitReady()
+}
+
+// normalizePaste returns a bounded normalized copy. It never creates a Go
+// string from pasted content.
+func normalizePaste(content []byte) ([]byte, bool) {
+	out := make([]byte, 0, min(len(content), pasteBudget))
+	for i := 0; i < len(content); {
+		b := content[i]
+		switch {
+		case b == '\r':
+			out = appendOwnedBytes(out, []byte{'\n'})
+			if i+1 < len(content) && content[i+1] == '\n' {
+				i += 2
+			} else {
+				i++
+			}
+		case b == '\n' || b == '\t':
+			out = appendOwnedBytes(out, []byte{b})
+			i++
+		case b < utf8.RuneSelf:
+			if b >= 0x20 && b != 0x7f {
+				out = appendOwnedBytes(out, []byte{b})
+			}
+			i++
+		default:
+			r, size := utf8.DecodeRune(content[i:])
+			if r == utf8.RuneError && size == 1 {
+				out = appendOwnedBytes(out, []byte("\ufffd"))
+			} else if r >= 0x20 && r != 0x7f && !(r >= 0x80 && r <= 0x9f) {
+				out = appendOwnedBytes(out, content[i:i+size])
+			}
+			i += size
+		}
+		if len(out) > pasteBudget {
+			secretmem.Wipe(out[:cap(out)])
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 func (d *Decoder) emitPending() []Decoded {
@@ -193,11 +280,12 @@ func (d *Decoder) emitPending() []Decoded {
 		if n == 0 {
 			break
 		}
-		out = append(out, Decoded{Key: append([]byte(nil), u...)})
-		d.pending = append([]byte(nil), d.pending[n:]...)
+		key := make([]byte, len(u))
+		copy(key, u)
+		out = append(out, Decoded{Key: key})
+		d.consumePending(n)
 	}
 	if len(d.pending) > 0 {
-		// Incomplete: keep for timeout, record time.
 		if d.pendingAt.IsZero() {
 			d.pendingAt = d.now()
 		}
@@ -217,13 +305,14 @@ func (d *Decoder) emitReady() []Decoded {
 			}
 			break
 		}
-		// Terminal replies (e.g. cursor reports, focus) are ignored, not consumed as input.
+		key := make([]byte, len(u))
+		copy(key, u)
 		if isReply(u) {
-			out = append(out, Decoded{Key: u, Reply: true})
+			out = append(out, Decoded{Key: key, Reply: true})
 		} else {
-			out = append(out, Decoded{Key: append([]byte(nil), u...)})
+			out = append(out, Decoded{Key: key})
 		}
-		d.pending = append([]byte(nil), d.pending[n:]...)
+		d.consumePending(n)
 		d.pendingAt = time.Time{}
 	}
 	return out
@@ -275,18 +364,17 @@ func splitUnit(p []byte) ([]byte, int) {
 }
 
 func isReply(u []byte) bool {
-	s := string(u)
 	// Cursor position reports, device attrs, focus in/out, kitty query replies.
-	if s == "\x1b[I" || s == "\x1b[O" {
+	if bytes.Equal(u, []byte("\x1b[I")) || bytes.Equal(u, []byte("\x1b[O")) {
 		return true
 	}
-	if len(s) >= 3 && s[0] == 27 && s[1] == '[' && s[len(s)-1] == 'R' {
+	if len(u) >= 3 && u[0] == 27 && u[1] == '[' && u[len(u)-1] == 'R' {
 		return true
 	}
-	if len(s) >= 3 && s[0] == 27 && s[1] == '[' && (s[len(s)-1] == 'c' || s[len(s)-1] == 'n') {
+	if len(u) >= 3 && u[0] == 27 && u[1] == '[' && (u[len(u)-1] == 'c' || u[len(u)-1] == 'n') {
 		return true
 	}
-	if len(s) >= 3 && s[0] == 27 && s[1] == ']' {
+	if len(u) >= 3 && u[0] == 27 && u[1] == ']' {
 		return true // Valid and malformed OSC frames are replies, never editor text.
 	}
 	return false

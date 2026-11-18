@@ -453,7 +453,7 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
-Interactive credential setup: use /login [provider] for a masked API-key prompt or provider picker. Use /logout to remove a stored API key.
+Interactive credential setup: use /login [provider] for a masked API-key prompt or provider picker. Use /logout to remove a stored API key. Existing auth.json symlinks are preserved; see docs/security.md for target-race and memory limits.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
@@ -1565,6 +1565,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 	for _, input := range pendingInputs {
 		pendingInputBytes += len(input.Key) + len(input.Reply)
 	}
+	var lastInput terminal.Input
+	defer func() {
+		lastInput.Release()
+		for i := range pendingInputs {
+			pendingInputs[i].Release()
+		}
+	}()
 	initialMessages := append([]string(nil), r.options.Messages...)
 	// Readiness must see queued input the moment it appears, not the next
 	// draw: Phi decides from the published snapshot alone.
@@ -1741,18 +1748,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 			select {
 			case input, ok := <-inputs:
 				if !ok || input.Err != nil {
+					input.Release()
 					exiting = true
 					return false
 				}
 				if len(input.Reply) > 0 {
 					r.handleTerminalReply(console, input.Reply)
+					input.Release()
 					continue
 				}
 				if input.Resize {
 					console.RequestFullRedraw()
+					input.Release()
 					continue
 				}
 				if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
+					input.Release()
 					return false
 				}
 				if len(pendingInputs) >= 8192 || pendingInputBytes+len(input.Key) > 256*1024 {
@@ -2297,6 +2308,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		resizeTimeout = resizeTimer.C
 	}
 	for {
+		lastInput.Release()
 		if exiting && !busy {
 			if count := len(r.recovery); count > 0 {
 				fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("%d undelivered attachment prompt(s) were not sent; Phi keeps a saved copy.", count)))
@@ -2600,9 +2612,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.eventFrames += doneFramesAfter - doneFramesBefore
 		case input, ok := <-inputSource:
 			if fromPendingInput {
+				pendingInputs[0] = terminal.Input{}
 				pendingInputs = pendingInputs[1:]
-				pendingInputBytes -= len(input.Key)
+				pendingInputBytes -= len(input.Key) + len(input.Reply)
 			}
+			lastInput = input
 			if !ok {
 				inputs = nil
 				if r.login != nil {
@@ -2619,6 +2633,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				key := string(input.Key)
 				if key == "\x18" || key == "\x1b[88;6u" {
 					stopLoopCommand()
+					input.Release()
+					lastInput = terminal.Input{}
 					if busy {
 						cancelActive()
 					}
@@ -2636,14 +2652,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 					r.draw(console)
 				}
+				input.Release()
+				lastInput = terminal.Input{}
 				continue
 			}
 			if input.Resize {
 				requestResizeDraw()
+				input.Release()
+				lastInput = terminal.Input{}
 				continue
 			}
 			if r.login != nil {
 				submitted, cancelled, err := console.HandleSecret(input)
+				input.Release()
+				lastInput = terminal.Input{}
 				if err != nil {
 					notice(terminal.NoticeError, err.Error())
 					r.draw(console)

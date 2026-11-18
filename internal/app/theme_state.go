@@ -246,6 +246,7 @@ func (r *runtime) queryTerminalColors(console *terminal.Console, timeout time.Du
 				if reply, valid := pitheme.ParseOSCColorResponse(string(input.Reply)); valid && reply.Color != nil {
 					r.themeColorsReceived = true
 				}
+				input.Release()
 				r.themeColors = collector.colors
 				if complete {
 					goto settled

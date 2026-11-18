@@ -806,24 +806,6 @@ func ResolveThinkingLevel(settings Settings, providerID, modelID, carried string
 	return carried
 }
 
-// EscapeCredentialLiteral returns a credential string that
-// ResolveCredentialWithEnv resolves back to raw.
-func EscapeCredentialLiteral(raw string) string {
-	var escaped strings.Builder
-	escaped.Grow(len(raw))
-	for i := 0; i < len(raw); i++ {
-		switch {
-		case raw[i] == '$':
-			escaped.WriteString("$$")
-		case raw[i] == '!' && i == 0:
-			escaped.WriteString("$!")
-		default:
-			escaped.WriteByte(raw[i])
-		}
-	}
-	return escaped.String()
-}
-
 // ResolveCredential supports literal and environment-reference forms.
 // Supported: "text", "$VAR", "${VAR}", mixed "prefix-$VAR-suffix" with $$
 // escaping. Rejects command values ("!cmd") unless explicitly enabled (never

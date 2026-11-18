@@ -126,7 +126,10 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 		console.Editor.Clear()
 		console.Draw()
 	}()
+	var lastInput terminal.Input
+	defer lastInput.Release()
 	for {
+		lastInput.Release()
 		select {
 		case <-resizeWait.timeout:
 			if resizeWait.Fallback() {
@@ -136,6 +139,7 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 			if !ok {
 				return -1, true, errors.New("terminal input closed during startup choice")
 			}
+			lastInput = input
 			if input.Err != nil {
 				return -1, true, input.Err
 			}
@@ -211,7 +215,10 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 		console.Editor.Clear()
 		console.Draw()
 	}()
+	var lastInput terminal.Input
+	defer lastInput.Release()
 	for {
+		lastInput.Release()
 		select {
 		case <-resizeWait.timeout:
 			if resizeWait.Fallback() {
@@ -221,6 +228,7 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 			if !ok {
 				return nil, true, errors.New("terminal input closed during session selection")
 			}
+			lastInput = input
 			if input.Err != nil {
 				return nil, true, input.Err
 			}

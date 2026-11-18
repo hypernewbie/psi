@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"strings"
 
 	"github.com/rivo/uniseg"
@@ -23,6 +24,21 @@ func GraphemeWidth(s string) int {
 		return 2
 	}
 	return uniseg.StringWidth(s)
+}
+
+// secretGraphemeWidth applies the same keycap width exception to a byte
+// grapheme. It avoids converting a secret draft to a Go string.
+func secretGraphemeWidth(cluster []byte, width int) int {
+	// U+20E3 COMBINING ENCLOSING KEYCAP. uniseg v0.4.7 reports the ASCII base
+	// as one cell, but terminals render the combined keycap in two cells.
+	if len(cluster) > 0 && bytes.HasSuffix(cluster, []byte("\u20e3")) && isKeycapBase(cluster[0]) {
+		return 2
+	}
+	return width
+}
+
+func isKeycapBase(b byte) bool {
+	return b == '#' || b == '*' || (b >= '0' && b <= '9')
 }
 
 func CellWidth(s string) int {

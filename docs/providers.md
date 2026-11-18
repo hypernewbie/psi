@@ -50,13 +50,25 @@ Pi and psi write compatible `auth.json` entries. For API-key providers the shape
 { "anthropic": { "type": "api_key", "key": "sk-ant-..." } }
 ```
 
+Both `/login` and `/logout` preserve an existing `auth.json` symlink. They use
+the logical path for the shared lock, resolve the regular-file target under
+that lock, and rename beside that target. Link text, target mode, unknown
+fields, and unrelated entries stay unchanged. Broken, cyclic, and nonregular
+targets fail closed. A link retargeted before a final recheck is refused; the
+final rename remains subject to filesystem races.
+
 `openai-codex` uses the ChatGPT OAuth entry from Pi instead. psi refreshes an
 expired Codex token, preserves unrelated fields, and never substitutes a billed
-OpenAI API key for Codex OAuth. Run `/login openai-codex` in Pi to sign in.
+OpenAI API key for Codex OAuth. Run `/login openai-codex` in Pi to sign in. An
+`auth.json` symlink is preserved during refresh; the logical path remains the
+lock target, while the resolved regular file receives the atomic replacement.
 
 By default, Codex credential checks and refreshes wait up to thirty seconds for
 each shared lock, matching Pi. API-key writes from `/login` and `/logout` wait
-up to five seconds. Both paths respect cancellation. psi reclaims a stale
+up to five seconds. Both paths respect cancellation. An incomplete or invalid
+Codex token response leaves the auth file unchanged. If a valid rotated token
+response arrives and the lease and target checks pass, psi commits it before
+returning cancellation so Pi can use the new refresh token. psi reclaims a stale
 lease after its heartbeat stops. On Windows, access-denied errors during lock
 creation use the same bounded wait.
 
