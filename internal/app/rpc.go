@@ -380,7 +380,11 @@ func (s *rpcRunner) handle(cmd rpcCommand) *rpcResponse {
 // prompt validates synchronously, then submits on a goroutine so the command
 // loop stays responsive to abort.
 func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
-	if s.isCompacting() {
+	// A summary in flight owns the context: queueing now would append to
+	// a prompt queue the summary may strand, so refuse before validating
+	// or appending anything. This covers the reservation and an automatic
+	// summary from the running turn alike.
+	if s.isCompacting() || s.isSummarizing() {
 		out := rpcErr(cmd.ID, "prompt", "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.")
 		return &out
 	}
@@ -402,14 +406,6 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 		// Do not accept a queue entry that the loop may never deliver.
 		if !s.loop.Running() {
 			out := rpcErr(cmd.ID, "prompt", "Agent is starting or settling; retry the prompt.")
-			return &out
-		}
-		// A summary in flight owns the context: queueing now would append
-		// to a prompt queue the summary may strand, so recheck before
-		// appending anything. The running check above already passed, so
-		// this only fires while compaction owns the turn.
-		if s.isCompacting() || s.isSummarizing() {
-			out := rpcErr(cmd.ID, "prompt", "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.")
 			return &out
 		}
 		switch cmd.StreamingBehavior {
@@ -666,8 +662,10 @@ func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWork
 		// Aborted while waiting: no summary starts. With no summary
 		// started there is no compaction_end either, the same way a
 		// no-work compact answers with the terminal response only.
-		s.finishCompact(res)
+		// The terminal response precedes the release: shutdown waits on
+		// done, so done must not close before the response goes out.
 		s.emit(rpcErr(res.id, "compact", "compaction aborted"))
+		s.finishCompact(res)
 		return
 	}
 	s.mu.Lock()
@@ -679,7 +677,6 @@ func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWork
 	reason := s.compactionReason
 	s.mu.Unlock()
 	aborted := compactErr != nil && ctx.Err() != nil
-	s.finishCompact(res)
 	if compactErr != nil {
 		if reason != "" {
 			s.emit(map[string]any{
@@ -689,6 +686,7 @@ func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWork
 			s.emit(map[string]any{"type": "agent_settled", "aborted": aborted})
 		}
 		s.emit(rpcErr(res.id, "compact", compactErr.Error()))
+		s.finishCompact(res)
 		return
 	}
 	s.emit(map[string]any{
@@ -697,18 +695,21 @@ func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWork
 	})
 	s.emit(map[string]any{"type": "agent_settled", "aborted": false})
 	s.emit(rpcOK(res.id, "compact", map[string]any{}))
+	s.finishCompact(res)
 }
 
-// finishCompact releases the reservation before the terminal response goes
-// out, so a client acting on the response never meets a stale refusal.
+// finishCompact ends the reservation after the terminal response goes out.
+// done closes first so a shutdown snapshot either waits on this worker or
+// observes a fully finished one; the reservation clears immediately after
+// so a client acting on the response never meets a stale refusal.
 func (s *rpcRunner) finishCompact(res *rpcCompactReservation) {
+	close(res.done)
 	s.mu.Lock()
 	if s.reservation == res {
 		s.reservation = nil
 		s.compacting = false
 	}
 	s.mu.Unlock()
-	close(res.done)
 }
 
 // sessionStats answers with stored token accounting and a live context

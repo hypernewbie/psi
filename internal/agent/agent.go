@@ -540,6 +540,12 @@ func applyLiveSettings(cfg *Config, l *Loop) {
 	}
 	l.prov = live.Provider
 	cfg.Model = live.Model
+	// The loop outlives set_model's registry rebuild, so the
+	// model-dependent read policy refreshes at the boundary too.
+	// Loops built per run already carry the current policy.
+	if l.reg != nil && l.reg.Read != nil {
+		l.reg.Read.BlockImages = !live.Model.InputImage
+	}
 	if live.Thinking != "" {
 		cfg.Thinking = live.Thinking
 	}

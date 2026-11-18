@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"psi/internal/provider"
+	"psi/internal/tools"
 )
 
 // TestLiveSettingsApplyAtTheNextTurnBoundary proves that a live configuration
@@ -63,5 +64,30 @@ func TestLiveSettingsApplyAtTheNextTurnBoundary(t *testing.T) {
 	}
 	if users != 1 || assistants != 2 || results != 1 {
 		t.Errorf("users=%d assistants=%d results=%d", users, assistants, results)
+	}
+}
+
+// TestApplyLiveSettingsRefreshesReadPolicy proves a model switch refreshes
+// the loop's image-read policy at the turn boundary: the loop outlives
+// set_model's registry rebuild, so without the refresh a stale policy would
+// govern reads for the rest of the session.
+func TestApplyLiveSettingsRefreshesReadPolicy(t *testing.T) {
+	reg := tools.NewRegistry("")
+	reg.Read.BlockImages = false
+	loop := &Loop{reg: reg}
+	fake := &provider.Fake{}
+	cfg := Config{LiveSettings: func() LiveSettings {
+		return LiveSettings{Provider: fake, Model: provider.ModelMeta{ID: "no-images", InputImage: false}}
+	}}
+	applyLiveSettings(&cfg, loop)
+	if !reg.Read.BlockImages {
+		t.Fatal("read policy still allows images after switching to a model without image input")
+	}
+	cfg.LiveSettings = func() LiveSettings {
+		return LiveSettings{Provider: fake, Model: provider.ModelMeta{ID: "images", InputImage: true}}
+	}
+	applyLiveSettings(&cfg, loop)
+	if reg.Read.BlockImages {
+		t.Fatal("read policy still blocks images after switching to a model with image input")
 	}
 }

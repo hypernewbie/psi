@@ -5,7 +5,9 @@ package app
 // then summarizes. Aborts route to the reservation; prompts refused with P1.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -132,6 +134,69 @@ func rpcSettledFlags(objs []map[string]any) []bool {
 	return out
 }
 
+// rpcCompactGateWriter forwards frames to the log but parks the terminal
+// compact response until the test releases it, so the test observes whether
+// the reservation released before its response went out.
+type rpcCompactGateWriter struct {
+	dst     *rpcLog
+	blocked chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *rpcCompactGateWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(`"command":"compact"`)) {
+		w.once.Do(func() { close(w.blocked) })
+		<-w.release
+	}
+	return w.dst.Write(p)
+}
+
+// TestRPCCompactResponsePrecedesOwnershipRelease proves the terminal compact
+// response goes out before the reservation releases: shutdown waits on the
+// reservation's done channel, so a release first would let the store unlock
+// and the process exit before the response is written.
+func TestRPCCompactResponsePrecedesOwnershipRelease(t *testing.T) {
+	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
+	gate := &rpcCompactGateWriter{dst: log, blocked: make(chan struct{}), release: make(chan struct{})}
+	enc := json.NewEncoder(gate)
+	enc.SetEscapeHTML(false)
+	s.out = enc
+	// An empty session has no compaction work, but the worker still owns
+	// the runner until its terminal response: the cheapest staging that
+	// exercises the release order.
+	if resp := s.handle(rpcCommand{ID: strptr("c1"), Type: "compact"}); resp != nil {
+		t.Fatalf("compact answers from its worker, got %+v", resp)
+	}
+	s.mu.Lock()
+	res := s.reservation
+	s.mu.Unlock()
+	if res == nil {
+		t.Fatal("compact was not admitted")
+	}
+	select {
+	case <-gate.blocked:
+	case <-time.After(8 * time.Second):
+		t.Fatal("terminal compact response never reached the writer")
+	}
+	// The response is parked at the writer: a closed done here proves the
+	// release ran before the response went out.
+	select {
+	case <-res.done:
+		t.Fatal("reservation released before its terminal response")
+	default:
+	}
+	close(gate.release)
+	select {
+	case <-res.done:
+	case <-time.After(8 * time.Second):
+		t.Fatal("reservation never released")
+	}
+	if resp := rpcWaitCompactResponse(t, log, "c1"); resp["success"] != false {
+		t.Fatalf("empty compact terminal response: %v", resp)
+	}
+}
+
 // TestRPCCompactDuringRunCancelsAndSummarizes proves a compact admitted
 // mid-run cancels the run, waits for it, then summarizes: the interrupted
 // prompt settles aborted and is never replayed, prompts during the
@@ -203,6 +268,60 @@ func TestRPCCompactDuringRunCancelsAndSummarizes(t *testing.T) {
 		t.Fatalf("second request is not the summary: %#v", reqs[1].System)
 	}
 	rpcAssertUserTranscript(t, store, "old question", "hello")
+}
+
+// TestRPCCompactDeliversPreviouslyQueuedSteering proves steering queued
+// before a mid-run compact is not stranded: the reservation refuses only
+// new prompts, and the compact delivers the earlier queue after the summary.
+func TestRPCCompactDeliversPreviouslyQueuedSteering(t *testing.T) {
+	gate := &rpcGatedProvider{entered: make(chan struct{}), release: make(chan struct{})}
+	s, store, log := newRPCTestRunner(t, gate, nil, 64)
+	big := strings.Repeat("context filler for the compaction budget. ", 60)
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "user", User: &session.UserMessage{Role: "user", Content: "old question"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{
+		Role:    "assistant",
+		Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: big}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	first := s.handle(rpcCommand{ID: strptr("p1"), Type: "prompt", Message: "hello"})
+	if first == nil || !first.Success {
+		t.Fatalf("prompt: %+v", first)
+	}
+	rpcGateEntered(t, gate)
+	steer := s.handle(rpcCommand{ID: strptr("p2"), Type: "prompt", Message: "queued steer", StreamingBehavior: "steer"})
+	if steer == nil || !steer.Success {
+		t.Fatalf("steer queue: %+v", steer)
+	}
+	if resp := s.handle(rpcCommand{ID: strptr("c1"), Type: "compact"}); resp != nil {
+		t.Fatalf("compact answers from its worker, got %+v", resp)
+	}
+	// The run settles through cancellation; no release is needed.
+	resp := rpcWaitCompactResponse(t, log, "c1")
+	if resp["success"] != true {
+		t.Fatalf("compact terminal response: %v", resp)
+	}
+	objs := log.objects(t)
+	rpcAssertNoExtensionError(t, objs)
+	if flags := rpcSettledFlags(objs); len(flags) != 2 || !flags[0] || flags[1] {
+		t.Fatalf("settled aborted flags = %v, want [true false]", flags)
+	}
+	reqs := gate.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("provider requests = %d, want 3 (interrupted turn, summary, delivered steer)", len(reqs))
+	}
+	if !rpcIsSummary(reqs[1]) {
+		t.Fatalf("second request is not the summary: %#v", reqs[1].System)
+	}
+	if rpcIsSummary(reqs[2]) {
+		t.Fatalf("third request is a second summary: %#v", reqs[2].System)
+	}
+	if last := rpcLastUserText(t, reqs[2]); last != "queued steer" {
+		t.Fatalf("third request newest user message = %q, want %q", last, "queued steer")
+	}
+	rpcAssertUserTranscript(t, store, "old question", "hello", "queued steer")
 }
 
 // TestRPCAbortDuringCompactWaitPreventsSummary proves an abort that lands
