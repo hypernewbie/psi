@@ -220,4 +220,7 @@ tool entries modify the inherited user selection.
 project `mcp.json` may use whole-value `!command` interpolation in `env` and
 `headers`. A project settings file cannot set or override it. MCP server
 definitions themselves live in `mcp.json`, not in `settings.json`; see
-[MCP servers](mcp.md).
+[MCP servers](mcp.md). Stdio server processes receive the resolved values in
+their own `env` setting, not psi's general environment. On Windows, Go may also
+add `SYSTEMROOT` when it is not set; this exception and the separate `!command`
+environment are described in [MCP servers](mcp.md).

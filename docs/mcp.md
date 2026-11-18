@@ -1,9 +1,9 @@
 # MCP configuration and data handling
 
 This layer adds MCP configuration parsing and value resolution, tool-catalog
-mapping, and result conversion. The application is not yet wired to load these
-files or connect to servers. This document describes data contracts; it does not
-claim that MCP tools are available.
+mapping, result conversion, and a managed stdio transport. The application is
+not yet wired to load these files or connect to servers. This document describes
+data and library contracts; it does not claim that MCP tools are available.
 
 ## Configuration files
 
@@ -76,6 +76,18 @@ unless the user settings file sets `mcp.allowProjectCommands` to `true`. The
 default is `false`, and a project settings file cannot enable this option.
 Trust alone does not permit project command interpolation.
 
+## Stdio child environment
+
+A stdio server receives the resolved values configured in its own `env` setting.
+psi does not merge its process environment. Configure any values the server needs;
+ambient `PATH`, `HOME`, proxy settings, and credentials are not passed through.
+
+On Windows, Go's process launcher also adds psi's `SYSTEMROOT` when the configured
+environment does not set it. This variable identifies the Windows installation
+directory. It is a Windows-specific exception, not a general environment merge.
+The `!command` interpolation shell remains separate and keeps its existing parent
+environment.
+
 ## Tool names and schemas
 
 The catalog maps a raw tool name to `mcp__<server>__<tool>`. Characters outside
@@ -118,6 +130,27 @@ fails, the notice reports that the complete output was not saved and does not
 show a false path. A regression test reads the saved output through the actual
 `read` tool.
 
-The configuration API and catalog/result conversion do not connect to MCP
-servers in this layer. Application integration, server lifecycle, and tool
-availability are added in later layers.
+## Stdio transport and process cleanup
+
+The stdio transport exchanges newline-delimited JSON-RPC messages over the
+child's stdin and stdout. Each incoming frame is limited to 16 MiB. Malformed,
+incomplete, and oversized frames fail the connection. The transport drains
+stderr continuously and retains only its last 64 KiB, so stderr output cannot
+fill the pipe or grow retained diagnostics without bound.
+
+A launcher exit does not discard complete frames already written to stdout.
+The transport reads those frames before EOF and rejects an incomplete trailing
+frame. Explicit close or cancellation closes the pipes and releases blocked
+reads. Close first closes stdin, then uses platform-specific bounded shutdown.
+Cancellation skips the graceful wait and force-stops the process or owned group.
+
+On Unix, graceful close waits 500 ms, then sends SIGTERM. If the launcher has
+not exited after another 1.5 seconds, psi sends SIGKILL. The launcher starts in
+its own process group. Cleanup signals that group and kills remaining group
+members when the launcher exits. A child that leaves the group is not owned or
+cleaned up. On Windows, psi waits 500 ms and then stops only the launched
+process; descendants can outlive cancellation.
+
+The configuration API, catalog/result conversion, and stdio transport are not
+yet wired into application startup. HTTP transport, application lifecycle
+integration, and MCP tool availability are added in later layers.
