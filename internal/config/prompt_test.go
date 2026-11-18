@@ -177,6 +177,8 @@ func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
 		"fetch_content: Fetch one or up to 20 public HTTP(S) URLs",
 		"Batch up to three queries",
 		"requires selected and enabled fetch_content and uses the configured fetch mode",
+		"Readable mode may use a configured Crawl4AI extractor",
+		"Raw mode is direct HTTP only",
 		"Use the returned next-offset for continuation",
 		"offsets count Unicode scalar values after output limits",
 		"Batch up to 20 URLs",

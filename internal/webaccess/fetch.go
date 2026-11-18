@@ -98,9 +98,9 @@ func parsePort(u *url.URL) (string, error) {
 	return port, nil
 }
 
-// fetchPage runs one guarded request and returns decoded text. Errors carry a
-// fixed class and no response body, header, or configuration values.
-func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, error) {
+// fetchDirectPage runs one guarded request and returns decoded text. Errors
+// carry a fixed class and no response body, header, or configuration values.
+func (c *Client) fetchDirectPage(ctx context.Context, rawURL, mode string) (pageData, error) {
 	u, err := validateTarget(rawURL)
 	if err != nil {
 		return pageData{}, err
@@ -216,6 +216,51 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 		Text:      text,
 		Truncated: truncated,
 	}, nil
+}
+
+// fetchPage returns a successful direct HTTP page. A readable fetch may use
+// the configured Crawl4AI extractor after an eligible direct failure. The
+// original direct error is preserved when extraction also fails.
+func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, error) {
+	if err := contextFailure(ctx); err != nil {
+		return pageData{}, err
+	}
+	page, directErr := c.fetchDirectPage(ctx, rawURL, mode)
+	if err := contextFailure(ctx); err != nil {
+		return pageData{}, err
+	}
+	if directErr == nil {
+		return page, nil
+	}
+	if mode != "readable" || !c.cfg.Crawl4AIAvailable || !c.cfg.Crawl4AIAllowed || c.cfg.Crawl4AIBaseURL == "" {
+		return pageData{}, directErr
+	}
+	message := directErr.Error()
+	if hasClass(message, classValidation) || hasClass(message, classBlocked) || hasClass(message, classCancelled) {
+		return pageData{}, directErr
+	}
+	target, err := validateTarget(rawURL)
+	if err != nil {
+		return pageData{}, directErr
+	}
+	extracted, extractErr := c.extractCrawl4AI(ctx, target)
+	if err := contextFailure(ctx); err != nil {
+		return pageData{}, err
+	}
+	if extractErr != nil {
+		return pageData{}, directErr
+	}
+	return extracted, nil
+}
+
+func contextFailure(ctx context.Context) error {
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		return fmt.Errorf("%s: cancelled", classCancelled)
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("%s: deadline exceeded", classTimeout)
+	}
+	return nil
 }
 
 func checkContentEncoding(resp *http.Response) error {

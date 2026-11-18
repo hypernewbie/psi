@@ -105,9 +105,12 @@ modes stay unchanged.
 Model requests contain the system prompt, the active branch, and the tool
 definitions. Codex OAuth refresh, OpenAI code exchange, and OpenAI OAuth
 refresh contact their providers. The web tools contact the configured SearXNG
-or Exa endpoint and fetch requested pages directly. See
-[Web access](web.md#network-guard) for address checks. Commands run by the
-`bash` tool can make their own network connections. The
+or Exa endpoint and fetch requested pages directly. A readable fetch may also
+send the validated target URL to a configured self-hosted Crawl4AI service.
+Query strings and fragments reach that service. It resolves and fetches the
+target from its own network, so its DNS, redirect, and outbound rules can
+differ from psi's. See [Web access](web.md#network-guard) for address checks.
+Commands run by the `bash` tool can make their own network connections. The
 native Phi bridge is a local Unix socket that publishes lifecycle and state.
 Transcript-search requests can return excerpts of visible conversation text to
 Phi. In RPC mode, prompts, responses, and tool results are also written to stdout.

@@ -2,7 +2,8 @@
 
 psi has native web tools. They read the `pi-web-access` plugin configuration
 file, `web-search.json`, so the same settings apply to Pi and psi. psi does not
-host the TypeScript extension, an MCP server, or a browser renderer.
+host the TypeScript extension, an MCP server, or a browser renderer. A
+configured self-hosted Crawl4AI service may extract readable pages on its own.
 
 ## Tools
 
@@ -15,6 +16,15 @@ host the TypeScript extension, an MCP server, or a browser renderer.
 - `url` or `urls` (exactly one): an absolute HTTP(S) URL, or 1-20 URLs.
 - `mode`: `readable` (default) converts HTML to Markdown. `raw` returns decoded
   text without HTML conversion.
+
+Readable fetches try direct HTTP first. If that attempt fails with a recoverable
+error, psi may ask a configured Crawl4AI service for Markdown. A successful
+nonempty direct response always wins, even when it is short; psi has no
+thin-content or JavaScript-shell heuristic. Invalid targets, blocked addresses,
+caller cancellation, excluded routing, and `raw` mode never trigger extraction.
+If extraction also fails, the tool returns the original direct error. There is
+no application retry. Caller cancellation or expiry overrides either attempt's
+result.
 
 Web tools are internal calls: they serialize with `loop_control` and
 `syncboard` calls in the same batch. File and shell built-ins can still overlap
@@ -75,10 +85,13 @@ sidebars. Relative links resolve against the final page URL; non-HTTP,
 credential-bearing, malformed, and overlong links are dropped.
 
 The model-facing result is limited to 2000 lines or 50 KiB, including metadata.
-The response body is capped at 5 MiB of decompressed text; a larger body is
-fetched only up to the cap and marked `source-truncated: true`. A result cut by
-the output limit ends with `[truncated]`; a batch or search result that drops
-whole numbered sections ends with `[truncated; N section(s) omitted]`.
+A direct response body is capped at 5 MiB of decompressed bytes; a larger body
+is fetched only up to the cap and marked `source-truncated: true`. A Crawl4AI
+response envelope is also capped at 5 MiB, but an oversized envelope or
+oversized redacted Markdown is rejected as an invalid response instead of
+returning partial success. A result cut by the output limit ends with
+`[truncated]`; a batch or search result that drops whole numbered sections ends
+with `[truncated; N section(s) omitted]`.
 
 Fetched content is retained in memory and `fetch_content` returns a
 `responseId`. `get_search_content` pages that text with `offset` and `limit`, or
@@ -120,6 +133,8 @@ Supported keys:
 | `provider`, `searchProvider` | `auto`, `searxng`, or `exa`; `auto` selects configured SearXNG, else Exa |
 | `searxngBaseUrl`, `searxngHeaders` | SearXNG endpoint and extra request headers |
 | `exaApiKey`, `exaBaseUrl` | Exa credentials and endpoint |
+| `crawl4aiBaseUrl`, `crawl4aiApiToken` | Optional self-hosted Crawl4AI endpoint and bearer token |
+| `fetchRouting.providers` | Limits Crawl4AI enablement when it contains a normalized `crawl4ai` entry; other names are ignored |
 | `allowHttpBaseUrls` | Allow plain-HTTP provider base URLs outside loopback |
 | `webSearch.enabled` | Disable `web_search` |
 | `tools.webSearch.enabled`, `tools.fetchContent.enabled`, `tools.getSearchContent.enabled` | Per-tool overrides |
@@ -140,16 +155,40 @@ Environment overrides:
 | `SEARXNG_BASE_URL` | Overrides `searxngBaseUrl`; an empty value leaves SearXNG unconfigured |
 | `EXA_BASE_URL` | Overrides `exaBaseUrl`; an empty value is invalid |
 | `EXA_API_KEY` | Overrides a configured literal key |
+| `CRAWL4AI_BASE_URL` | Overrides a nonempty `crawl4aiBaseUrl`; empty or whitespace-only uses the file value |
+| `CRAWL4AI_API_TOKEN` | Overrides a configured literal token; empty or whitespace-only uses the file value |
 | `PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS` | `true`, `false`, `1`, or `0`; overrides `allowHttpBaseUrls` |
 
 These overrides also apply when `web-search.json` is absent.
 
-`exaApiKey` accepts a literal value or `$NAME`. A `!command` value is refused;
-psi never runs a command to obtain a credential.
+`exaApiKey` accepts a literal value, `$NAME`, or `${NAME}`. A `!command` value
+is refused; psi never runs a command to obtain a credential.
+
+`crawl4aiApiToken` accepts a literal value, `$NAME`, or `${NAME}`. A configured
+reference is resolved before `CRAWL4AI_API_TOKEN` and a missing or empty
+reference disables extraction; the environment token does not rescue it. A
+nonempty environment token overrides a configured literal. A `!command` value is
+refused. With no token from either source, psi calls the service without an
+`Authorization` header.
 
 A configured `searxngBaseUrl` must be an absolute HTTP(S) URL with a host and
 without credentials, query, or fragment. Plain HTTP requires loopback or
 `allowHttpBaseUrls`.
+
+A configured `crawl4aiBaseUrl` follows the same URL rule. An absent or empty
+base means extraction is unconfigured; psi has no default Crawl4AI endpoint. A
+nonempty `CRAWL4AI_BASE_URL` overrides a file value, including an invalid one.
+When `fetchRouting.providers` is absent, extraction stays allowed. A present
+list must contain unique nonempty strings; psi trims and lowercases names,
+allows extraction when `crawl4ai` is present, and ignores names it does not
+support. An invalid routing value or a list without `crawl4ai` disables only
+the fallback. Direct HTTP still runs first even if the list omits `http`.
+
+Crawl4AI receives the validated requested URL, including query and fragment. It
+fetches that URL from its own network and applies its own DNS, redirect, and
+outbound rules. psi cannot enforce the remote service's network policy.
+Private or Tailscale endpoints need `allowHttpBaseUrls` for plain HTTP and a
+matching `ssrf.allowRanges` CIDR for the dialer. Keep the exemption narrow.
 
 Fetch page headers come from `fetch.headerProfile` and `fetch.acceptLanguage`:
 
@@ -189,6 +228,8 @@ Failures are scoped:
   limits, and enablement objects.
 - Invalid fetch settings disable `fetch_content` and inline page fetching.
   Metadata-only search and access to stored content stay available.
+- Invalid Crawl4AI settings or `fetchRouting` disable only the extraction
+  fallback. Direct fetching and search stay available.
 - Invalid routing disables `web_search` only.
 - Invalid provider settings disable that provider only.
 
@@ -200,16 +241,19 @@ values.
 psi fetches directly. It uses private HTTP transports, ignores proxy
 environment variables, and keeps TLS certificate and hostname checks.
 
-Every URL and redirect target is validated. At most five redirects are followed.
-HTTPS-to-HTTP downgrades are refused. Provider requests refuse cross-origin
-redirects.
+Every URL and redirect target is validated. Direct page requests and search
+providers follow at most five redirects. HTTPS-to-HTTP downgrades are refused.
+SearXNG and Exa provider requests refuse cross-origin redirects. Crawl4AI uses a
+dedicated guarded transport that accepts at most five same-origin redirects and
+replays the original JSON POST when required. It ignores proxies and keeps TLS
+certificate and hostname checks.
 
 DNS resolution happens inside the dialer. Every resolved address is checked and
 the checked literal address is dialed, so a second lookup cannot swap the
 destination. Private, loopback, link-local, CGNAT, multicast, documentation,
-and metadata destinations are denied. SearXNG gets a loopback exception only
-for its own configured origin. `ssrf.allowRanges` bypasses the address denial,
-not URL or TLS checks.
+and metadata destinations are denied. SearXNG and Crawl4AI each get a loopback
+exception only for their own configured origin. `ssrf.allowRanges` bypasses the
+address denial, not URL or TLS checks.
 
 This guard is defense in depth, not a sandbox. The `bash` tool can make its own
 network requests.
@@ -217,27 +261,35 @@ network requests.
 ## Limits and failure behavior
 
 - Dial budget: 10 seconds for DNS and all connection attempts.
-- TLS handshake: 10 seconds. Response headers: 30 seconds.
+- TLS handshake: 10 seconds. Response headers: 30 seconds for page and search
+  requests, 60 seconds for Crawl4AI extraction.
 - Provider request: 30 seconds; the keyless Exa MCP request: 60 seconds.
 - Response headers: 64 KiB. Provider bodies: 5 MiB.
 - Each HTTP pool keeps at most 32 idle connections across hosts. Idle
   connections expire after 90 seconds.
-- One fetch call: 30 seconds, including redirects and body reads. A batch runs
-  at most three fetches at a time. A fetch rejects an unsolicited `206 Partial
-  Content` response instead of returning it as a complete page.
+- One direct fetch attempt: 30 seconds, including redirects and body reads. A
+  readable Crawl4AI attempt gets at most 60 additional seconds, bounded by the
+  caller, so one URL can use up to 90 seconds. Redirects share that extraction
+  budget. A batch runs at most three fetches at a time. Fetching rejects an
+  unsolicited `206 Partial Content` response instead of returning it as a
+  complete page.
 - A search without content: one provider request per query. With content: 90
   seconds total, at most three page fetches at a time, and at most 60 pages.
-- No application retries and no provider fallback.
+  Extraction uses only the remaining shared deadline.
+- No application retries. A failed direct attempt gets at most one extraction
+  attempt.
 
 Errors use fixed classes: validation, blocked target, DNS, TLS/transport,
 timeout, cancellation, HTTP status, invalid response, and rate limit. Responses
 never include raw transport errors, provider bodies, headers, or configured
-values. Configured Exa keys and SearXNG header values are redacted from fetched
-text, URLs, and provider metadata before output clipping. Stored text is already
-redacted; retrieval does not scan redaction markers again.
+values. Configured Exa keys, Crawl4AI tokens, and SearXNG header values are
+redacted from fetched text, URLs, and provider metadata before output clipping.
+Stored text is already redacted; retrieval does not scan redaction markers
+again.
 
 ## Not supported
 
 `answer` and `extract` fetch modes, PDF parsing, images, video, GitHub cloning,
-provider fetch routing (Crawl4AI, Firecrawl), browser cookies, response caching
-to disk, and the `source_check` tool. See [Limitations](limitations.md).
+full provider ordering, Firecrawl and other hosted fetch providers, browser
+cookies, response caching to disk, and the `source_check` tool. See
+[Limitations](limitations.md).

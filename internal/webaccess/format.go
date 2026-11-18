@@ -14,6 +14,7 @@ const (
 	resultMaxLines = tools.DefaultMaxLines
 
 	truncatedNotice = "\n\n[truncated]"
+	redactionMarker = "[redacted]"
 )
 
 // boundResult enforces the shared model-facing output limits. It returns the
@@ -156,6 +157,7 @@ func newRedactor(cfg Config) redactor {
 		values = append(values, v)
 	}
 	add(cfg.ExaAPIKey)
+	add(cfg.Crawl4AIToken)
 	for _, list := range cfg.SearXNGHeaders {
 		for _, v := range list {
 			add(v)
@@ -183,7 +185,6 @@ func (r redactor) redact(s string, limit int) string {
 	}
 	// Match against the complete input. Clipping first could cut a secret
 	// across the output boundary and expose its unmatched prefix.
-	const marker = "[redacted]"
 	var b strings.Builder
 	b.Grow(min(len(s), limit))
 	for i := 0; i < len(s); {
@@ -195,10 +196,10 @@ func (r redactor) redact(s string, limit int) string {
 			}
 		}
 		if matched != "" {
-			if b.Len()+len(marker) > limit {
+			if b.Len()+len(redactionMarker) > limit {
 				break
 			}
-			b.WriteString(marker)
+			b.WriteString(redactionMarker)
 			i += len(matched)
 			continue
 		}
