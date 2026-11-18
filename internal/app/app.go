@@ -2374,7 +2374,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return 0, "pending"
 		}
 		desc := activeReloadDesc
-		if desc == nil || desc.mode != inputPrompt || desc.op == 0 || desc.op != activeWorkerToken {
+		if desc == nil || (desc.mode != inputPrompt && desc.mode != inputBump) || desc.op == 0 || desc.op != activeWorkerToken {
 			return 0, "busy"
 		}
 		if !busy || cancel == nil {
@@ -2898,6 +2898,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				start(message, message, "", "", "", false)
 			}
 			if lateQueueLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
+				// A resumed loop is a new worker with no reload descriptor of
+				// its own, so the previous prompt cannot claim this run.
+				workerToken++
+				activeWorkerToken = workerToken
 				ctx, stop := context.WithCancel(context.Background())
 				cancel = stop
 				busy = true

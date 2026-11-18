@@ -16,10 +16,29 @@ import (
 	"time"
 
 	pibridgepb "psi/internal/pibridge/pb"
+	"psi/internal/session"
 )
 
 // bridgeState asks for one correlated state snapshot. Frame scans are
 // cumulative, so callers pass a request id that has not been used before.
+// waitReloadRetired waits for the latch to clear while the retry is still
+// running, which proves retirement happened at admission, not completion.
+func waitReloadRetired(t *testing.T, f *bridgePhi) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for i := 0; time.Now().Before(deadline); i++ {
+		snap := bridgeState(t, f, fmt.Sprintf("state-retired-%d", i))
+		if !snap.GetReloadReadiness().GetReloadPending() {
+			if got := snap.GetReloadReadiness().GetHighWater(); got < 31 {
+				t.Fatalf("high water = %d, want at least the dispatched id 31", got)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("reload latch survived the bump retry admission")
+}
+
 func waitBridgeIdle(t *testing.T, f *bridgePhi) {
 	t.Helper()
 	deadline := time.Now().Add(8 * time.Second)
@@ -241,5 +260,99 @@ func TestBridgeProcessBusyReloadSettlesBeforeRetry(t *testing.T) {
 	}
 	if first["model"] != "local-model" {
 		t.Fatalf("original model = %v", first["model"])
+	}
+}
+
+// A busy reload on a bump run retries the bump, not a prompt: no user record
+// is appended and the retry stays in bump mode.
+func TestBridgeProcessBusyReloadBumpRetry(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("busy reload needs a Unix PTY")
+	}
+	bodies := make(chan map[string]any, 4)
+	release := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests.Add(1)
+		bodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		if requests.Load() == 1 {
+			select {
+			case <-req.Context().Done():
+				return
+			}
+		}
+		select {
+		case <-release:
+		case <-req.Context().Done():
+			return
+		}
+		fmt.Fprint(w, liveTextTurn("BUMP_DONE"))
+	}))
+	t.Cleanup(server.Close)
+
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","defaultTools":[],"compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"models":[{"id":"local-model","api":"anthropic-messages","baseUrl":"`+server.URL+`","contextWindow":65536,"maxTokens":16384,"input":["text"]}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("seed context")); err != nil {
+		t.Fatal(err)
+	}
+
+	f := startBridgePhi(t)
+	q := startReviewProcessEnv(t, home, ws, agentDir, *reviewBinary, "", bridgeChildEnv(t, f), "--deny-project", "--no-tools", "--session", store.File())
+	t.Cleanup(func() {
+		if output := q.raw.String(); strings.Contains(output, "WARNING: DATA RACE") {
+			t.Errorf("race detector report in app subprocess:\n%s", output)
+		}
+	})
+
+	q.prompt()
+	q.write("/bump\r")
+	if body := liveWaitBody(t, bodies); len(body) == 0 {
+		t.Fatal("bump sent no request")
+	}
+	held := bridgeState(t, f, "bump-held")
+	runID := held.GetReloadReadiness().GetRunId()
+	if runID == 0 {
+		t.Fatal("bump run did not bind a live run id")
+	}
+
+	f.inject <- reloadRequest("31", held.GetSessionId(), held.GetLeafId(), held.GetModel().GetProvider(), held.GetModel().GetModel(), &runID, nil)
+	cursor := 0
+	if ack := nextBridgeReload(t, f, &cursor); ack.GetOutcome() != pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED {
+		t.Fatalf("bump reload = %+v, want DISPATCHED", ack)
+	}
+	if retry := liveWaitBody(t, bodies); len(retry) == 0 {
+		t.Fatal("bump retry sent no request")
+	}
+	raw, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(raw), "seed context"); got != 1 {
+		t.Fatalf("seed user records = %d, want 1 (a bump retry adds none)", got)
+	}
+	waitReloadRetired(t, f)
+	release <- struct{}{}
+	q.wait("BUMP_DONE")
+	waitBridgeIdle(t, f)
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("provider requests = %d, want the bump and its retry", got)
 	}
 }

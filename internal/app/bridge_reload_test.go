@@ -245,3 +245,45 @@ func TestContextRevMovesWithContext(t *testing.T) {
 		t.Fatalf("rev = %d, want 1", r.contextRev)
 	}
 }
+
+// A busy reload admitted for an owned worker keeps that worker's token. Only
+// the owning settlement may retire the latch, and a later arrival sees it
+// pending instead of starting a second interruption.
+func TestBridgeReloadBusyOwnershipAndRetirement(t *testing.T) {
+	r, f, h, _ := reloadFixture(t)
+	r.state = StateWaiting
+	r.bridgeRunStarted()
+	runID := r.bridge.RunID()
+	if runID == 0 {
+		t.Fatal("live run id was not bound")
+	}
+	owned := uint64(41)
+	h.reloadInterrupt = func() (uint64, string) { return owned, "" }
+
+	f.inject <- reloadRequest("21", r.store.Header().ID, r.store.LeafID(), r.ov.Provider, r.ov.Model, &runID, nil)
+	h.handle(nextRequest(t, r.bridge), true)
+	cursor := 0
+	if ack := nextReloadResult(t, f, &cursor); ack.GetOutcome() != pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED {
+		t.Fatalf("busy dispatch = %+v, want DISPATCHED", ack)
+	}
+	if !r.reloadPending || h.reload == nil || h.reload.op != owned {
+		t.Fatalf("latch = %+v pending=%v, want owner %d", h.reload, r.reloadPending, owned)
+	}
+
+	// A newer arrival is pending, not a second dispatch.
+	f.inject <- reloadRequest("22", r.store.Header().ID, r.store.LeafID(), r.ov.Provider, r.ov.Model, &runID, nil)
+	h.handle(nextRequest(t, r.bridge), true)
+	if ack := nextReloadResult(t, f, &cursor); ack.GetReason() != "pending" {
+		t.Fatalf("second arrival = %+v, want pending", ack)
+	}
+
+	// Another owner cannot retire this latch.
+	h.retireReload(owned + 1)
+	if h.reload == nil || !r.reloadPending {
+		t.Fatal("foreign retirement released the latch")
+	}
+	h.retireReload(owned)
+	if h.reload != nil || r.reloadPending {
+		t.Fatal("owning retirement did not release the latch")
+	}
+}
