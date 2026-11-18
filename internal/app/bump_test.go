@@ -354,20 +354,23 @@ func TestBumpAdmissionRefusalsStaySilent(t *testing.T) {
 				fake := &provider.Fake{}
 				r.prov = fake
 				appendBumpUser(t, r.store, "hello")
+				refusalErr := errors.New("synthetic-bump-admission-refusal")
 				if refusal == "auth" {
-					r.authErr = errors.New("synthetic-auth-unavailable")
+					r.authErr = refusalErr
 				}
 				_, out, send, finish := startBumpREPL(t, r)
 				if refusal == "storage" {
-					r.store.FailWritesForTest(errors.New("injected storage failure"))
+					r.store.FailWritesForTest(refusalErr)
 				}
 				beforeEntries := r.store.EntryCount()
 				beforeOutput := out.String()
 				send(trigger + "/hotkeys\r")
 				waitBumpOutput(t, out, "Keys (fixed, no Kitty required):")
 				segment := strings.TrimPrefix(out.String(), beforeOutput)
-				if strings.Contains(strings.ToLower(segment), refusal) {
-					t.Fatalf("%q reported %q; want silence: %q", trigger, refusal, segment)
+				// The refusal type can occur in a footer path. Only the injected
+				// error reason proves that an admission notice escaped.
+				if strings.Contains(segment, refusalErr.Error()) {
+					t.Fatalf("%q reported %q; want silence: %q", trigger, refusalErr, segment)
 				}
 				send("/quit\r")
 				finish()
