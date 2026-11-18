@@ -22,7 +22,7 @@ Regression shell processes instead use an isolated environment.
 
 ## Phi integration
 
-The native Phi bridge uses a local Unix socket for lifecycle, state, and capability requests. Transcript search can return bounded excerpts of visible text to Phi; output is not streamed there. `--mode rpc` is a separate headless JSONL control interface for one session.
+The native Phi bridge uses a local Unix socket for lifecycle, state, and capability requests. Transcript search can return bounded excerpts of visible text to Phi; output is not streamed there. `--mode rpc` is a separate headless JSONL control interface for one session. Bridge model and thinking setters apply at the next request boundary, and bridge Reload dispatches through the native interrupt path. Current Phi holds a busy Reload in its browser and server, so no real-Phi busy Reload UI behavior is claimed; `DISPATCHED` reports entry, not completion.
 Windows panes stay plain because psi has no named-pipe dialer.
 phi injects the endpoint and token at spawn; psi clears them before any tool runs.
 

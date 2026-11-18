@@ -119,18 +119,18 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 
 | Command during a run | Native TUI | RPC and bridge |
 |---|---|---|
-| `/model`, `/thinking`, `/settings` | Run immediately; request settings apply to the next request | RPC `set_model`/`set_thinking_level` apply to the next request; bridge unchanged |
+| `/model`, `/thinking`, `/settings` | Run immediately; request settings apply to the next request | RPC `set_model`/`set_thinking_level` apply to the next request; bridge setters do the same, and a newer valid request replaces pending work with one empty-reason refusal |
 | `/session`, `/hotkeys`, `/name` | Run immediately | Unchanged |
-| `/compact [focus]` | Cancels the run, then compacts settled history | RPC cancels the run, waits, compacts, and answers when done; bridge keeps the busy refusal |
-| `/reload` | Cancels the run, reloads, then replays the interrupted work | Unchanged |
+| `/compact [focus]` | Cancels the run, then compacts settled history | RPC cancels the run, waits, compacts, and answers when done; bridge keeps the busy refusal and binds an accepted receipt to its worker |
+| `/reload` | Cancels the run, reloads, then replays the interrupted work | Bridge admits an owned run after identity checks, sends `DISPATCHED` before cancelling, reloads at settlement, and replays a prompt, bump, or uncommitted manual compaction; a resumed loop or automatic compaction reloads only. `DISPATCHED` is entry-only. |
 | `/loop ...`, `/ac compact` | Wait for the run to settle, then run | Unchanged |
 | Unknown `/text` | Queued as steering | Unchanged |
 | `/quit` | Releases the terminal, then settles and exits | Unchanged |
 | `/new`, `/clone`, `/resume`, `/trust` | Refused; restored to the draft | Unchanged |
 | `/b`, `/bump` | Discarded | Not exposed |
 
-Bridge live switches are pending; the bridge keeps its
-current admission and receipt limits.
+Current Phi forwards model and thinking setters while busy, but its browser and
+server hold a busy Reload; no real-Phi busy Reload UI behavior is claimed.
 
 ## Platform
 

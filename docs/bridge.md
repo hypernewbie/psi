@@ -65,6 +65,41 @@ Phi keeps its own fallbacks for the capabilities a pane does not advertise.
 attachments; they are listed here for completeness, not as attachment
 features.
 
+## Live settings and interruptions
+
+`set-model` and `set-thinking` follow the native `/model` and `/thinking`
+commands. An idle pane applies the change to the next request. During an owned
+run or compaction the change is prepared off the UI loop and applies to the
+next provider request of that same run; the request already in flight keeps
+the selection it started with. A newer valid request replaces one still
+preparing: the displaced request gets exactly one `ok:false` with an empty
+reason, and an arrival for the selection already in use succeeds without a
+worker. Skill and attachment preparation are never displaced.
+
+A refused or discarded change (unknown model or level, missing credential,
+storage error, changed session or generation, or a lost stream) leaves the
+durable selection untouched.
+
+`reload` uses the native `/reload` path. At idle it reloads resources
+synchronously. During an owned run the request must match the live session,
+leaf, model, and every counter it supplies; a stale identity cannot cancel.
+An accepted request receives `DISPATCHED` before cancellation, and settlement
+reloads resources and replays the interrupted work: a prompt, a bump, or a
+manual compaction whose summary did not commit. A resumed loop or an automatic
+compaction reloads without replaying. `DISPATCHED` reports entry only; a lost
+receipt does not roll the reload back, and reconnect publishes readiness and
+the high-water mark, never a retransmitted result. Reload stays `busy` until
+the owning worker reaches the phase that can be interrupted: RunStart for a
+prompt or bump, CompactionStart for a summary.
+
+`compact` keeps its busy refusal. A bridge Compact accepted at idle resolves
+its receipt from the worker it started: `COMPLETED` when that checkpoint
+committed, `CANCELLED` when a reload interrupted the summary before commit.
+
+Current Phi forwards model and thinking setters while a run is busy, but its
+browser and server hold a busy Reload. This section describes what psi does
+with frames that reach it; no real-Phi busy Reload UI behavior is claimed.
+
 ## Attachments
 
 An attachment prompt carries 1-8 references. Each reference names one basename
@@ -109,8 +144,10 @@ fallback.
 never published in hello, snapshots, acknowledgments, telemetry, or errors.
 Only the ordinary-file content block carries the checked absolute path.
 
-**Guarantees.** Identity, session, leaf, model, root, and readiness are checked
-at admission and again before dispatch. A change that happens after dispatch
+**Guarantees.** Attachment and chat text that starts with `/` or `!` stays a
+command and is refused with `command`; it is never dispatched as a prompt.
+Identity, session, leaf, model, root, and readiness are checked at admission
+and again before dispatch. A change that happens after dispatch
 is outside that preparation-time guarantee. Attachments are unavailable on
 Windows.
 

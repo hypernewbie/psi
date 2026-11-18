@@ -356,3 +356,180 @@ func TestBridgeProcessBusyReloadBumpRetry(t *testing.T) {
 		t.Fatalf("provider requests = %d, want the bump and its retry", got)
 	}
 }
+
+// A busy reload during an explicit standalone compaction is admitted from the
+// summary phase and restarts the compact because no checkpoint committed.
+func TestBridgeProcessBusyReloadCompactionRetry(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("busy reload needs a Unix PTY")
+	}
+	bodies := make(chan map[string]any, 4)
+	release := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests.Add(1)
+		bodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		if requests.Load() == 1 {
+			<-req.Context().Done()
+			return
+		}
+		select {
+		case <-release:
+		case <-req.Context().Done():
+			return
+		}
+		fmt.Fprint(w, liveTextTurn("SUMMARY"))
+	}))
+	t.Cleanup(server.Close)
+
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","compaction":{"enabled":false,"keepRecentTokens":50}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"models":[{"id":"local-model","api":"anthropic-messages","baseUrl":"`+server.URL+`","contextWindow":65536,"maxTokens":16384,"input":["text"]}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("seed")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "local-model", StopReason: "stop", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: strings.Repeat("prior ", 6000)}}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	f := startBridgePhi(t)
+	q := startReviewProcessEnv(t, home, ws, agentDir, *reviewBinary, "", bridgeChildEnv(t, f), "--deny-project", "--no-tools", "--session", store.File())
+	t.Cleanup(func() {
+		if output := q.raw.String(); strings.Contains(output, "WARNING: DATA RACE") {
+			t.Errorf("race detector report in app subprocess:\n%s", output)
+		}
+	})
+
+	q.prompt()
+	q.write("/compact\r")
+	if body := liveWaitBody(t, bodies); len(body) == 0 {
+		t.Fatal("compaction sent no summary request")
+	}
+	held := bridgeState(t, f, "compact-held")
+	f.inject <- reloadRequest("51", held.GetSessionId(), held.GetLeafId(), held.GetModel().GetProvider(), held.GetModel().GetModel(), nil, nil)
+	cursor := 0
+	if ack := nextBridgeReload(t, f, &cursor); ack.GetOutcome() != pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED {
+		t.Fatalf("compaction reload = %+v, want DISPATCHED", ack)
+	}
+	// The reload cancels the summary before its checkpoint, so the explicit
+	// compact is restarted instead of being dropped.
+	if retry := liveWaitBody(t, bodies); len(retry) == 0 {
+		t.Fatal("compaction retry sent no request")
+	}
+	waitReloadRetired(t, f)
+	release <- struct{}{}
+	waitBridgeIdle(t, f)
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("summary requests = %d, want the compact and its retry", got)
+	}
+	raw, err := os.ReadFile(store.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "SUMMARY") {
+		t.Fatal("the retried compaction did not commit a summary")
+	}
+}
+
+// A busy reload during a bridge-owned Compact resolves the old receipt before
+// the restart, then restarts the manual compaction once.
+func TestBridgeProcessBusyReloadOwnedCompactReceipt(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("busy reload needs a Unix PTY")
+	}
+	bodies := make(chan map[string]any, 4)
+	release := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests.Add(1)
+		bodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		if requests.Load() == 1 {
+			<-req.Context().Done()
+			return
+		}
+		select {
+		case <-release:
+		case <-req.Context().Done():
+			return
+		}
+		fmt.Fprint(w, liveTextTurn("SUMMARY"))
+	}))
+	t.Cleanup(server.Close)
+
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","compaction":{"enabled":false,"keepRecentTokens":50}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"models":[{"id":"local-model","api":"anthropic-messages","baseUrl":"`+server.URL+`","contextWindow":65536,"maxTokens":16384,"input":["text"]}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(agentMessageUser("seed")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(session.AgentMessage{Role: "assistant", Assistant: &session.AssistantMessage{Role: "assistant", API: "anthropic-messages", Provider: "anthropic", Model: "local-model", StopReason: "stop", Content: []session.ContentBlock{{Type: "text", Text: &session.TextContent{Type: "text", Text: strings.Repeat("prior ", 6000)}}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	f := startBridgePhi(t)
+	q := startReviewProcessEnv(t, home, ws, agentDir, *reviewBinary, "", bridgeChildEnv(t, f), "--deny-project", "--no-tools", "--session", store.File())
+	t.Cleanup(func() {
+		if output := q.raw.String(); strings.Contains(output, "WARNING: DATA RACE") {
+			t.Errorf("race detector report in app subprocess:\n%s", output)
+		}
+	})
+
+	q.prompt()
+	cursor := 0
+	f.inject <- compactRequest("61", store.Header().ID, store.LeafID(), "anthropic", "local-model")
+	if body := liveWaitBody(t, bodies); len(body) == 0 {
+		t.Fatal("bridge compact sent no summary request")
+	}
+	held := bridgeState(t, f, "owned-compact-held")
+	f.inject <- reloadRequest("62", held.GetSessionId(), held.GetLeafId(), held.GetModel().GetProvider(), held.GetModel().GetModel(), nil, nil)
+	if ack := nextBridgeReload(t, f, &cursor); ack.GetOutcome() != pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED {
+		t.Fatalf("owned compact reload = %+v, want DISPATCHED", ack)
+	}
+	got := nextCompactResult(t, f, &cursor)
+	if got.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_CANCELLED || got.GetReason() != "cancelled" {
+		t.Fatalf("receipt = %+v, want cancelled before the restart", got)
+	}
+	if retry := liveWaitBody(t, bodies); len(retry) == 0 {
+		t.Fatal("owned compact did not restart")
+	}
+	waitReloadRetired(t, f)
+	release <- struct{}{}
+	waitBridgeIdle(t, f)
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("summary requests = %d, want the compact and its restart", got)
+	}
+}

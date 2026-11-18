@@ -175,6 +175,23 @@ func TestBridgeReloadRefusesBusyQueuedPendingAndActive(t *testing.T) {
 	close(h.prep.done)
 	h.prep = nil
 
+	if *dispatched != 0 {
+		t.Fatalf("native runs = %d after refusals, want 0", *dispatched)
+	}
+}
+
+// Pending owners and unavailable hosts refuse without dispatching: a compact
+// or reload already owns the slot, the picker owns the editor, storage is
+// blocked, or no native command exists.
+func TestBridgeReloadRefusesUnavailableAndPendingOwners(t *testing.T) {
+	r, f, h, dispatched := reloadFixture(t)
+	cursor := 0
+	refuse := func(frame *pibridgepb.PhiToPi, runBusy bool) *pibridgepb.ReloadAck {
+		f.inject <- frame
+		h.handle(nextRequest(t, r.bridge), runBusy)
+		return nextReloadResult(t, f, &cursor)
+	}
+
 	h.compact = &bridgeCompact{id: 9}
 	if got := refuse(liveReloadFrame(r, "9"), false); got.GetReason() != "pending" {
 		t.Fatalf("compact pending = %+v, want pending", got)
@@ -193,8 +210,14 @@ func TestBridgeReloadRefusesBusyQueuedPendingAndActive(t *testing.T) {
 	}
 	r.selector = nil
 
-	h.reloadRun = nil
+	r.state = StateStorageBlocked
 	if got := refuse(liveReloadFrame(r, "13"), false); got.GetReason() != "unavailable" {
+		t.Fatalf("blocked storage = %+v, want unavailable", got)
+	}
+	r.state = StateIdle
+
+	h.reloadRun = nil
+	if got := refuse(reloadRequest("14", r.store.Header().ID, r.store.LeafID(), r.ov.Provider, r.ov.Model, nil, nil), false); got.GetReason() != "unavailable" {
 		t.Fatalf("missing runner = %+v, want unavailable", got)
 	}
 	if *dispatched != 0 {

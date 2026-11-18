@@ -1662,6 +1662,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// workerToken identifies one launched worker. A new worker always takes
 	// a new token, so a descriptor cannot outlive the run that created it.
 	var workerToken, activeWorkerToken uint64
+	// A compact worker is interruptible from its own CompactionStart until
+	// the summary phase ends. A later RunStart in the same worker opens the
+	// resume phase again; the initial RunStart does not.
+	var compactionBound, compactionEnded, compactResumeBound bool
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
@@ -1999,6 +2003,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			stream.Delta(ev.Text)
 		case event.RunStart:
+			if compactionEnded {
+				compactResumeBound = true
+			}
 			runOutcome, visibleRunText = "", false
 			bumpAwaitingStart = false
 			r.clearInFlight()
@@ -2070,6 +2077,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				setActivity("Working")
 			}
 		case event.CompactionStart:
+			compactionBound = true
+			compactResumeBound = false
 			console.SetThinking(false)
 			thinkingStream.Close()
 			stream.Close()
@@ -2078,6 +2087,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			setActivity(compactionActivity(ev.State))
 			r.syncBridge()
 		case event.CompactionEnd:
+			compactionBound = false
+			compactionEnded = true
 			r.compactActive = false
 			if ev.Err != nil && r.state != StateCancelling && ev.State != event.CompactionManual && ev.State != event.CompactionOverflow {
 				// Pi reports a failed auto-compaction and keeps the session alive;
@@ -2165,6 +2176,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		// prior descriptor; a new run owns the slot until it settles.
 		workerToken++
 		activeWorkerToken = workerToken
+		compactionBound, compactionEnded, compactResumeBound = false, false, false
 		activeReloadDesc = &reloadDescriptor{
 			sessionID:  r.store.Header().ID,
 			generation: r.generation,
@@ -2358,6 +2370,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return 0, writeErr
 		}
 		resumeAfterCompaction = false
+		// A bridge Compact is a manual one: an interrupted summary restarts.
+		compactExplicit = true
 		if admitted, reason := startInput(agent.UserInput{}, focus, true); !admitted {
 			if reason == "" {
 				reason = "unavailable"
@@ -2382,10 +2396,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return 0, "pending"
 		}
 		desc := activeReloadDesc
-		if desc == nil || (desc.mode != inputPrompt && desc.mode != inputBump) || desc.op == 0 || desc.op != activeWorkerToken {
+		if desc == nil || desc.op == 0 || desc.op != activeWorkerToken || !busy || cancel == nil {
 			return 0, "busy"
 		}
-		if !busy || cancel == nil {
+		switch desc.mode {
+		case inputPrompt, inputBump:
+			// A prompt must have reached RunStart before it owns an interrupt.
+			if r.bridge == nil || r.bridge.RunID() == 0 {
+				return 0, "busy"
+			}
+		case inputCompact:
+			// A compaction owns an interrupt only inside its summary phase,
+			// or after its resume phase reaches RunStart.
+			if !compactionBound && !compactResumeBound {
+				return 0, "busy"
+			}
+		default:
 			return 0, "busy"
 		}
 		pendingInterrupt = &interruptAction{kind: "reload"}
@@ -2912,6 +2938,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// Its own descriptor keeps a previous prompt from claiming it.
 				workerToken++
 				activeWorkerToken = workerToken
+				compactionBound, compactionEnded, compactResumeBound = false, false, false
 				activeReloadDesc = &reloadDescriptor{
 					sessionID:  r.store.Header().ID,
 					generation: r.generation,

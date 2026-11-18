@@ -393,9 +393,10 @@ func (h *bridgeHandler) startReload(req pibridge.Request, runBusy bool) {
 		req.ReplyReload(false, "stale")
 		return
 	case runBusy:
-		// Until RunStart binds the logical id, no local worker owns a
-		// prompt to interrupt or replay.
-		if h.r.bridge == nil || h.r.bridge.RunID() == 0 || h.reloadInterrupt == nil {
+		// The loop decides whether the active worker has reached the phase
+		// that owns an interrupt: RunStart for prompts, CompactionStart for
+		// a summary.
+		if h.reloadInterrupt == nil {
 			req.ReplyReload(false, "busy")
 			return
 		}
