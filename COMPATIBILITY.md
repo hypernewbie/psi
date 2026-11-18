@@ -119,9 +119,9 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 
 | Command during a run | Native TUI | RPC and bridge |
 |---|---|---|
-| `/model`, `/thinking`, `/settings` | Run immediately; request settings apply to the next request | Unchanged (RPC parity pending) |
+| `/model`, `/thinking`, `/settings` | Run immediately; request settings apply to the next request | RPC `set_model`/`set_thinking_level` apply to the next request; bridge unchanged |
 | `/session`, `/hotkeys`, `/name` | Run immediately | Unchanged |
-| `/compact [focus]` | Cancels the run, then compacts settled history | Bridge keeps the busy refusal; RPC parity pending |
+| `/compact [focus]` | Cancels the run, then compacts settled history | RPC cancels the run, waits, compacts, and answers when done; bridge keeps the busy refusal |
 | `/reload` | Cancels the run, reloads, then replays the interrupted work | Unchanged |
 | `/loop ...`, `/ac compact` | Wait for the run to settle, then run | Unchanged |
 | Unknown `/text` | Queued as steering | Unchanged |
@@ -129,7 +129,7 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 | `/new`, `/clone`, `/resume`, `/trust` | Refused; restored to the draft | Unchanged |
 | `/b`, `/bump` | Discarded | Not exposed |
 
-RPC mid-run parity and bridge live switches are pending; the bridge keeps its
+Bridge live switches are pending; the bridge keeps its
 current admission and receipt limits.
 
 ## Platform

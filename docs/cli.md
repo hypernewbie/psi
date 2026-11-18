@@ -33,6 +33,17 @@ level the model can apply and clamps it when the model does not advertise it.
 `prompt` expands a `/skill:<name> [args]` message before any user event, queue,
 store, or provider side effect. An unknown, unreadable, or oversized skill
 returns an error response instead of submitting the unexpanded command.
+`set_model` and `set_thinking_level` also run mid-run; the change applies
+to the next provider request without restarting the run. A `compact`
+admitted mid-run cancels the run, waits for it to settle, then summarizes,
+and answers with a terminal response correlated to the compact command id;
+the interrupted prompt is never replayed. While compaction runs, `prompt`
+is refused with `Cannot submit a prompt while compaction is in progress`
+and a second `compact` is refused; reads and `abort` stay usable, and an
+abort reports through the compact's terminal response. Stdin EOF, SIGTERM,
+and SIGINT stop intake, cancel the owned run and compaction, wait for their
+terminal frames, and then release the session; signal shutdown exits with
+status 143.
 It has no terminal UI, theme, or picker.
 
 Print mode (`--print/-p`), Pi's JSON event mode, HTML export, and `@file`
