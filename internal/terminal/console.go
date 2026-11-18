@@ -67,6 +67,7 @@ type Console struct {
 	lastDraft           string
 	lastCursor          int
 	lastW, lastH        int
+	appliedSize         resizeState
 	visibleTail         []string
 	presentation        PresentationSnapshot
 	activity            string
@@ -155,7 +156,7 @@ func (c *Console) Resume() {
 		}
 		go func() {
 			defer close(resizeDone)
-			watchConsoleResize(ctx, func() (int, int, error) { return term.GetSize(int(fd)) }, inputs, 100*time.Millisecond)
+			watchConsoleResize(ctx, func() (int, int, error) { return term.GetSize(int(fd)) }, &c.appliedSize, inputs, 100*time.Millisecond)
 		}()
 	} else {
 		close(resizeDone)
@@ -1161,6 +1162,7 @@ func (c *Console) emitComposed(appendText string) error {
 				c.markThinkingDisplayed()
 				c.fullDocumentRedraw = false
 				c.lastW, c.lastH = width, height
+				c.appliedSize.setApplied(width, height)
 			}
 			return err
 		}
@@ -1252,6 +1254,7 @@ func (c *Console) emitComposed(appendText string) error {
 		}
 		c.fullDocumentRedraw = false
 		c.lastW, c.lastH = width, height
+		c.appliedSize.setApplied(width, height)
 	}
 	c.hidden = hideCursor
 	c.visibleTail = view.Rows

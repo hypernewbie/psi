@@ -34,6 +34,7 @@ func TestConsoleResizeWatcherOnlyPostsValidChanges(t *testing.T) {
 	updates := make(chan [2]int)
 	observed := make(chan struct{}, 32)
 	inputs := make(chan Input, 4)
+	state := &resizeState{}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -49,7 +50,7 @@ func TestConsoleResizeWatcherOnlyPostsValidChanges(t *testing.T) {
 			default:
 			}
 			return width, height, nil
-		}, inputs, time.Millisecond)
+		}, state, inputs, time.Millisecond)
 	}()
 	for i := 0; i < 3; i++ {
 		select {
@@ -87,10 +88,62 @@ func TestConsoleResizeWatcherOnlyPostsValidChanges(t *testing.T) {
 	}
 }
 
+func TestConsoleResizeWatcherUsesDrawnSizeAfterMissedSize(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observed := make(chan struct{}, 16)
+	inputs := make(chan Input, 2)
+	state := &resizeState{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchConsoleResize(ctx, func() (int, int, error) {
+			select {
+			case observed <- struct{}{}:
+			default:
+			}
+			return 80, 24, nil
+		}, state, inputs, time.Millisecond)
+	}()
+	select {
+	case <-observed:
+	case <-time.After(time.Second):
+		t.Fatal("size watcher did not sample the console")
+	}
+	// A draw adopted the transient 120x40 size, then the console returned to
+	// 80x24 before the watcher sampled it. The watcher must not treat 80x24 as
+	// already handled just because that was its previous sample.
+	state.setApplied(120, 40)
+	select {
+	case event := <-inputs:
+		if !event.Resize {
+			t.Fatalf("resize state change was interpreted as editor input: %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not redraw the size after another frame adopted a transient size")
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-observed:
+		case <-time.After(time.Second):
+			t.Fatal("size watcher stopped polling")
+		}
+	}
+	if len(inputs) != 0 {
+		t.Fatal("watcher reposted a size that was already requested")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resize watcher survived console cancellation")
+	}
+}
+
 func TestConsoleResizeWatcherStopsWithoutConsoleOrReceiver(t *testing.T) {
 	watchConsoleResize(context.Background(), func() (int, int, error) {
 		return 0, 0, errors.New("not a console")
-	}, make(chan Input), time.Millisecond)
+	}, &resizeState{}, make(chan Input), time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -106,7 +159,7 @@ func TestConsoleResizeWatcherStopsWithoutConsoleOrReceiver(t *testing.T) {
 			}
 			close(changed)
 			return 20, 6, nil
-		}, make(chan Input), time.Millisecond)
+		}, &resizeState{}, make(chan Input), time.Millisecond)
 	}()
 	select {
 	case <-changed:
