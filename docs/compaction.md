@@ -62,8 +62,10 @@ error and leaves the original context unchanged.
 | `modelOverrides` | Per `provider/model` reserve override |
 
 `/ac compact` can use a separate compactor model. `/ac compactor current`
-selects the active model for this session; `/ac compactor clear` removes that
-choice. Without a saved choice, psi summarizes with the active model.
+saves the current model for summaries in this session. A split summary uses
+that model for both requests, even if you change the active model between
+requests. `/ac compactor clear` removes the choice. Without a saved choice,
+each summary request uses the active model.
 
 ## What a summary keeps
 

@@ -553,12 +553,9 @@ func applyLiveSettings(cfg *Config, l *Loop) {
 		cfg.Thinking = live.Thinking
 	}
 	cfg.AutoCompact = live.AutoCompact
-	if live.ReserveTokens > 0 {
-		cfg.ReserveTokens = live.ReserveTokens
-	}
-	if live.KeepRecentTokens > 0 {
-		cfg.KeepRecentTokens = live.KeepRecentTokens
-	}
+	// A reserve or retained-token budget of zero is a valid setting.
+	cfg.ReserveTokens = live.ReserveTokens
+	cfg.KeepRecentTokens = live.KeepRecentTokens
 }
 
 func userMsg(content any) session.AgentMessage {

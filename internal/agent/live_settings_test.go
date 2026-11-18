@@ -69,6 +69,31 @@ func TestLiveSettingsApplyAtTheNextTurnBoundary(t *testing.T) {
 	}
 }
 
+func TestLiveModelUsesZeroCompactionReserve(t *testing.T) {
+	store, _, fake, loop, _ := testSetup(t)
+	if _, err := store.AppendMessage(userMsg("earlier prompt")); err != nil {
+		t.Fatal(err)
+	}
+	appendAssistantText(t, store, strings.Repeat("earlier response ", 200))
+	fake.Responses = []*provider.Response{{Text: "answer", StopReason: "stop"}, {Text: "answer", StopReason: "stop"}}
+	oldModel := modelMeta()
+	oldModel.ContextWindow = 65_536
+	newModel := oldModel
+	newModel.ID = "no-reserve"
+	cfg := Config{Model: oldModel, AutoCompact: true, ReserveTokens: oldModel.ContextWindow, KeepRecentTokens: 100}
+	// The model changed after submission but before the request boundary.
+	cfg.LiveSettings = func() LiveSettings {
+		return LiveSettings{Provider: fake, Model: newModel, AutoCompact: true, ReserveTokens: 0, KeepRecentTokens: 100}
+	}
+	if err := loop.Submit(t.Context(), "current prompt", cfg); err != nil {
+		t.Fatal(err)
+	}
+	calls := fake.Requests()
+	if len(calls) != 1 || calls[0].Model.ID != newModel.ID {
+		t.Fatalf("requests = %d, want one normal request on %s without threshold compaction", len(calls), newModel.ID)
+	}
+}
+
 func TestSplitCompactionAttributesUsageAcrossLiveModelSwitch(t *testing.T) {
 	for _, mode := range []string{"success", "incomplete prefix", "cancel before prefix"} {
 		t.Run(mode, func(t *testing.T) {
@@ -96,12 +121,12 @@ func TestSplitCompactionAttributesUsageAcrossLiveModelSwitch(t *testing.T) {
 			defer cancel()
 			cfg := Config{Model: oldModel, KeepRecentTokens: 20_000, LiveSettings: func() LiveSettings {
 				if history.CallCount() == 0 {
-					return LiveSettings{Provider: history, Model: oldModel}
+					return LiveSettings{Provider: history, Model: oldModel, KeepRecentTokens: 20_000}
 				}
 				if mode == "cancel before prefix" {
 					cancel()
 				}
-				return LiveSettings{Provider: prefix, Model: newModel}
+				return LiveSettings{Provider: prefix, Model: newModel, KeepRecentTokens: 20_000}
 			}}
 			err := loop.Compact(ctx, cfg, "")
 			if mode == "success" && err != nil || mode == "incomplete prefix" && !IsSummaryFailure(err) || mode == "cancel before prefix" && !errors.Is(err, context.Canceled) {

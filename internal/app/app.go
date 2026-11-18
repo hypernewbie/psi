@@ -1062,7 +1062,9 @@ func (r *runtime) compactionProvider(reference string, settings config.Settings)
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("invalid compactor model %q; use provider/model", reference)
 	}
 	if parts[0] == live.Overrides.Provider && parts[1] == live.Overrides.Model {
-		return nil, provider.ModelMeta{}, nil, nil
+		// Reuse the live client, but pin the explicit choice across both
+		// requests of a split summary even if the active model changes.
+		return live.Provider, live.Model, nil, nil
 	}
 	if models == nil {
 		return nil, provider.ModelMeta{}, nil, fmt.Errorf("model catalog is unavailable")
