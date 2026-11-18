@@ -384,5 +384,88 @@ func TestActualAppPickerSettlementPreservesDraft(t *testing.T) {
 	liveAssertOneUserTranscript(t, ws, agentDir)
 }
 
-// TestActualAppCompactWaitsForCancelledRun proves that /compact during a run
-// cancels, settles, then compacts without re-asking the cancelled prompt.
+func TestActualAppPickerKeepsAcceptedInputAtSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail bool
+	}{
+		{name: "next startup message"},
+		{name: "recover steering on provider failure", fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bodies := make(chan map[string]any, 2)
+			release := make(chan struct{}, 2)
+			var turns atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Errorf("decode request: %v", err)
+					return
+				}
+				select {
+				case bodies <- body:
+				case <-req.Context().Done():
+					return
+				}
+				select {
+				case <-release:
+				case <-req.Context().Done():
+					return
+				}
+				if tc.fail {
+					http.Error(w, `{"error":{"message":"PICKER_PROBE_FAILED"}}`, http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				text := fmt.Sprintf("PICKER_STARTUP_RESULT_%d", turns.Add(1))
+				fmt.Fprint(w, strings.Replace(liveThinkingTurn(2), "DONE", text, 1))
+			}))
+			defer server.Close()
+			home, ws := t.TempDir(), t.TempDir()
+			agentDir := filepath.Join(home, ".pi", "agent")
+			writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","compaction":{"enabled":false}}`)
+			writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"api":"anthropic-messages","baseUrl":"`+server.URL+`","models":[{"id":"local-model","contextWindow":65536,"maxTokens":4096},{"id":"local-next","contextWindow":65536,"maxTokens":4096}]}}}`)
+			writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+			args := []string{"--deny-project", "FIRST_STARTUP"}
+			if !tc.fail {
+				args = append(args, "SECOND_STARTUP")
+			}
+			q := startReviewProcess(t, home, ws, agentDir, *reviewBinary, "", args...)
+			liveWaitBody(t, bodies)
+			if tc.fail {
+				q.write("RECOVER_STEERING\r")
+				q.waitScreen("Steering: RECOVER_STEERING")
+			}
+			q.write("/model\r")
+			q.waitScreen("local-next")
+			q.write("local-next")
+			q.waitScreen("> local-next")
+			release <- struct{}{}
+			if tc.fail {
+				q.waitScreen("PICKER_PROBE_FAILED")
+				liveWaitScreenAbsence(t, q, "Steering: RECOVER_STEERING")
+				q.write("\r")
+				q.waitScreen("Model: local-next")
+				q.waitScreen("RECOVER_STEERING")
+				q.write("\x03") // Clear the recovered draft, not the session.
+				liveWaitScreenAbsence(t, q, "RECOVER_STEERING")
+			} else {
+				body := liveWaitBody(t, bodies)
+				messages, err := json.Marshal(body["messages"])
+				if err != nil || !strings.Contains(string(messages), "SECOND_STARTUP") || body["model"] != "local-model" {
+					t.Fatalf("second startup request: model=%v messages=%s err=%v", body["model"], messages, err)
+				}
+				release <- struct{}{}
+				q.waitScreen("PICKER_STARTUP_RESULT_2")
+				q.waitScreen("> local-next")
+				q.write("\x1b")
+				liveWaitScreenAbsence(t, q, "> local-next")
+				q.waitScreen("/model")
+				q.write("\x03") // Clear the restored /model draft.
+				liveWaitScreenAbsence(t, q, "/model")
+			}
+			q.write("/quit\r")
+			q.finish()
+		})
+	}
+}

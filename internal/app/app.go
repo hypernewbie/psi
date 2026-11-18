@@ -1853,6 +1853,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.syncBridge()
 		r.draw(console)
 	}
+	// Recovered input belongs to the editor, not to a picker query or its
+	// cancel-only draft. Hold it until the final picker closes.
+	var pickerRecovery []string
+	restoreQueuedDraft := func(messages []string) {
+		if len(messages) == 0 {
+			return
+		}
+		text := strings.Join(messages, "\n\n")
+		if draft := console.Editor.Text(); strings.TrimSpace(draft) != "" {
+			text += "\n\n" + draft
+		}
+		console.Editor.RestoreDraft(text, len([]rune(text)))
+		console.RefreshCompletion()
+	}
 	openSelector := func(selector *Selector, draft string, cursor int, query string, restoreOnSuccess bool) {
 		r.selector = selector
 		r.selectorDraft, r.selectorCursor = draft, cursor
@@ -1871,6 +1885,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.state = r.pickerCloseState(busy, runOutcome, r.state)
 	}
 	closeSelector := func(restoreDraft bool) {
+		returnToSettings := r.selector.ModelThinking || r.selector.ModelThinkingLevel
 		r.selector = nil
 		console.ClearPickerRows()
 		r.selectorRestoreOnSuccess = false
@@ -1882,6 +1897,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.Editor.Clear()
 		}
 		r.selectorDraft, r.selectorCursor = "", 0
+		if !returnToSettings {
+			restoreQueuedDraft(pickerRecovery)
+			pickerRecovery = nil
+		}
 		r.draw(console)
 	}
 	openSettings := func() {
@@ -1891,10 +1910,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		r.draw(console)
 	}
-	closeSettings := func() {
+	closeSettings := func(restoreDraft bool) {
 		r.settingsPicker = nil
 		console.ClearPickerRows()
 		restorePickerState()
+		if restoreDraft {
+			restoreQueuedDraft(pickerRecovery)
+			pickerRecovery = nil
+		}
 		r.draw(console)
 	}
 	openTrust := func() {
@@ -2787,7 +2810,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if activeLoop != nil {
 				pendingSteering := activeLoop.PendingSteering()
 				pendingFollowUp := activeLoop.PendingFollowUp()
-				if err == nil && !exiting && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) && r.selector == nil && r.settingsPicker == nil {
+				if err == nil && !exiting && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
 					lateQueueLoop = activeLoop
 				} else {
 					undelivered = append(r.takeSteering(activeLoop), activeLoop.ClearFollowUp()...)
@@ -2802,22 +2825,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.SetSteeringRows(nil)
 				console.SetFollowUpRows(nil)
 			}
-			if len(undelivered) > 0 {
-				combined := strings.Join(undelivered, "\n\n")
-				if r.selector != nil {
-					// The editor holds the picker's query. Hand the restored
-					// text to the draft the picker will restore on close.
-					if strings.TrimSpace(r.selectorDraft) != "" {
-						combined += "\n\n" + r.selectorDraft
-					}
-					r.selectorDraft, r.selectorCursor = combined, len([]rune(combined))
-				} else {
-					if current := console.Editor.Text(); strings.TrimSpace(current) != "" {
-						combined += "\n\n" + current
-					}
-					console.Editor.RestoreDraft(combined, len([]rune(combined)))
-					console.RefreshCompletion()
-				}
+			if r.selector != nil || r.settingsPicker != nil {
+				pickerRecovery = append(pickerRecovery, undelivered...)
+			} else {
+				restoreQueuedDraft(undelivered)
 			}
 			thinkingStream.Close()
 			stream.Close()
@@ -2905,11 +2916,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 				return outputErr
 			}
-			if r.selector == nil && r.settingsPicker == nil {
-				r.state = StateIdle
-				if runOutcome == event.OutcomeUnsaved || r.store.WriteError() != nil {
-					r.state = StateStorageBlocked
-				}
+			settledState := r.pickerCloseState(false, runOutcome, r.state)
+			r.state = settledState
+			if settledState == StateIdle && (r.selector != nil || r.settingsPicker != nil) {
+				// Block fresh admissions while the picker owns the editor, but
+				// do not strand work already accepted by this run.
+				r.state = StateSelecting
 			}
 			if suspendPending {
 				suspendPending = false
@@ -2923,12 +2935,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.refreshPresentation(console)
 				r.draw(console)
 			}
-			if r.state == StateIdle && len(initialMessages) > 0 {
+			if settledState == StateIdle && len(initialMessages) > 0 {
 				message := initialMessages[0]
 				initialMessages = initialMessages[1:]
 				start(message, message, "", "", "", false)
 			}
-			if lateQueueLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
+			if !busy && lateQueueLoop != nil && settledState == StateIdle && len(initialMessages) == 0 {
 				ctx, stop := context.WithCancel(context.Background())
 				cancel = stop
 				busy = true
@@ -2941,7 +2953,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
 				r.draw(console)
 			}
-			if pendingACCompactFocus != nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
+			if !busy && pendingACCompactFocus != nil && settledState == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 {
 				focus := *pendingACCompactFocus
 				pendingACCompactFocus = nil
 				checkAndStartCompact(focus, true, true)
@@ -3079,7 +3091,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				switch string(input.Key) {
 				case "\x1b", "\x03":
-					closeSettings()
+					closeSettings(true)
 				case "\x1b[A", "\x1bOA":
 					r.settingsPicker.Move(-1)
 					r.draw(console)
@@ -3099,7 +3111,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						continue
 					}
 					if item.ID == "model-thinking" && string(input.Key) == "\r" {
-						closeSettings()
+						closeSettings(false)
 						r.refreshModelsForPicker(notice)
 						selector := NewSelector(modelSelectorItems(r), r.ov.Provider+"/"+r.ov.Model)
 						selector.Models = true
