@@ -1017,6 +1017,18 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 		switch providerID {
 		case "anthropic":
 			id = "claude-sonnet-4-5"
+		case "deepseek":
+			id = "deepseek-v4-pro"
+		case "google":
+			id = "gemini-3.1-pro-preview"
+		case "kimi-coding":
+			id = "kimi-for-coding"
+		case "minimax":
+			id = "MiniMax-M2.7"
+		case "opencode-go":
+			id = "kimi-k3"
+		case "zai":
+			id = "glm-5.3"
 		case "openai-codex":
 			id = "gpt-5.6-luna"
 		case "xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp":

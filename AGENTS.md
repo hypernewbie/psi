@@ -4,6 +4,12 @@
 
 - Never merge the default branch into a feature branch. Rebase the feature branch onto `main` instead. History stays linear, and no merge commits reach `main`.
 
+## Supported platforms
+
+- Linux, Windows, and macOS are first-tier supported platforms.
+- Treat reproducible failures on any supported platform as merge blockers.
+- Verify platform-specific runtime behavior natively. Cross-compilation alone is not runtime verification.
+
 ## Code readability
 
 - Write code for people who must read and change it. Compilation and passing tests are not enough.
@@ -13,6 +19,15 @@
 - Use meaningful names for constants and helper functions that clarify a rule. Do not add abstractions that only hide unexplained values.
 - Use comments to explain intent, constraints, and exceptions, not to repeat the syntax.
 - Read the changed code as a maintainer before you finish. Rewrite code that requires readers to decode literals or reconstruct unexplained rules.
+
+## Secret handling
+
+- Prefer mutable byte buffers for secrets until a required string boundary. Keep secret lifetimes short and document each forced string or interface copy.
+- State whether a function borrows secret bytes or takes ownership. A transfer moves cleanup responsibility to the receiver; a borrowed slice is never wiped by the callee.
+- Use `internal/secretmem.Wipe` for retired application-owned storage: vacated ranges, discarded events, and fully retired allocations. Wipe exact dead ranges; use the full capacity only when the whole allocation is retired.
+- Keep `Wipe` as `clear` followed by `runtime.KeepAlive`. The keep-alive prevents the optimized path from dropping the explicit clear.
+- Never use an unsafe byte/string alias as an erasure shortcut. Do not log secrets. Do not claim complete process-memory erasure; document unavoidable runtime, standard-library, provider, HTTP, and terminal-rendering copies instead.
+- Preserve symlink-preserving auth writes: the logical `auth.json` path owns the Pi lock, while the resolved regular-file target receives the atomic replacement. Recheck the link and target identity before staging and before replacement, and refuse a change observed by those checks; do not claim an atomic guard against a race after the final check.
 
 ## Tests
 

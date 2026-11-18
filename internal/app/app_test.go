@@ -832,24 +832,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	screen := testutil.NewVTModel(80, 24)
 	wait := func(want string) {
 		t.Helper()
-		timer := time.NewTimer(8 * time.Second)
-		defer timer.Stop()
-		for {
-			if i := strings.Index(pending, want); i >= 0 {
-				pending = pending[i+len(want):]
-				return
-			}
-			select {
-			case chunk, ok := <-chunks:
-				pending += chunk
-				screen.Feed([]byte(chunk))
-				if !ok {
-					t.Fatalf("process exited waiting for %q: %q", want, pending)
-				}
-			case <-timer.C:
-				t.Fatalf("timeout waiting for %q: %q", want, pending)
-			}
-		}
+		waitForAppOutput(t, chunks, screen, &pending, want)
 	}
 	write := func(s string) {
 		t.Helper()
@@ -1044,19 +1027,41 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	write("draft-during-stream")
 	waitScreen("draft-during-stream")
 	write("\x0f")
-	view = waitScreen("Skill blocks: expanded")
+	// Confirmations are output events: a later spinner frame can replace them
+	// within one PTY read. Check retained screen state separately.
+	waitForAppOutput(t, chunks, screen, &pending, "Skill blocks: expanded")
+	view = screenView()
 	if !strings.Contains(view, "SLOW_PART") || !strings.Contains(view, "draft-during-stream") || screen.CursorVisible {
 		t.Fatalf("Ctrl+O during a run disturbed output/draft/cursor: cursor=%v %q", screen.CursorVisible, view)
 	}
 	write("\x14")
-	view = waitScreen("Thinking blocks: hidden")
-	if !strings.Contains(view, "SLOW_PART") || !strings.Contains(view, "draft-during-stream") {
-		t.Fatalf("Ctrl+T during a run disturbed output/draft: %q", view)
+	waitForAppOutput(t, chunks, screen, &pending, "Thinking blocks: hidden")
+	view = screenView()
+	if !strings.Contains(view, "SLOW_PART") || !strings.Contains(view, "draft-during-stream") || screen.CursorVisible {
+		t.Fatalf("Ctrl+T during a run disturbed output/draft/cursor: cursor=%v %q", screen.CursorVisible, view)
 	}
+	assertThinkingSetting := func(want bool) {
+		t.Helper()
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored struct {
+			HideThinkingBlock *bool `json:"hideThinkingBlock"`
+		}
+		if err := json.Unmarshal(data, &stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored.HideThinkingBlock == nil || *stored.HideThinkingBlock != want {
+			t.Fatalf("busy Ctrl+T did not persist hideThinkingBlock=%v: %s", want, data)
+		}
+	}
+	assertThinkingSetting(true)
 	write("\x14")
-	waitScreen("Thinking blocks: visible")
+	waitForAppOutput(t, chunks, screen, &pending, "Thinking blocks: visible")
+	assertThinkingSetting(false)
 	write("\x0f")
-	waitScreen("Skill blocks: collapsed")
+	waitForAppOutput(t, chunks, screen, &pending, "Skill blocks: collapsed")
 	if !strings.Contains(screenView(), "draft-during-stream") {
 		t.Fatalf("busy skill toggles lost the draft: %q", screen.Text())
 	}
@@ -1186,6 +1191,74 @@ func semanticEditorReady(screen *testutil.VTModel) bool {
 		}
 	}
 	return above && below
+}
+
+func TestWaitForAppOutputWithCoalescedRedraw(t *testing.T) {
+	const status = "Thinking blocks: visible"
+	var output bytes.Buffer
+	writer := terminal.NewWriter(&output)
+	for _, activity := range []string{status, "Working"} {
+		if err := writer.Emit(terminal.Frame{
+			Tail:       []string{"**SLOW_PART", activity, "draft-during-stream"},
+			CursorRow:  2,
+			CursorCol:  len("draft-during-stream"),
+			HideCursor: true,
+			Width:      80,
+			Height:     24,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw := output.String()
+	split := strings.Index(raw, status) + len("Thinking blocks:")
+	for _, tc := range []struct {
+		name   string
+		chunks []string
+	}{
+		{"coalesced", []string{raw}},
+		{"split confirmation", []string{raw[:split], raw[split:]}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chunks := make(chan string, len(tc.chunks))
+			for _, chunk := range tc.chunks {
+				chunks <- chunk
+			}
+			close(chunks)
+			screen := testutil.NewVTModel(80, 24)
+			var pending string
+			t.Logf("raw toggle/spinner output: %q", raw)
+			waitForAppOutput(t, chunks, screen, &pending, status)
+			view := screen.Text()
+			if strings.Contains(view, status) || !strings.Contains(view, "Working") || !strings.Contains(view, "**SLOW_PART") || !strings.Contains(view, "draft-during-stream") || screen.CursorVisible {
+				t.Fatalf("coalesced redraw did not retain busy screen state: cursor=%v screen=%q", screen.CursorVisible, view)
+			}
+			if !strings.Contains(pending, "Working") || strings.Contains(pending, status) {
+				t.Fatalf("output acknowledgement lost or replayed bytes: %q", pending)
+			}
+		})
+	}
+}
+
+func waitForAppOutput(t *testing.T, chunks <-chan string, screen *testutil.VTModel, pending *string, want string) {
+	t.Helper()
+	timer := time.NewTimer(8 * time.Second)
+	defer timer.Stop()
+	for {
+		if i := strings.Index(*pending, want); i >= 0 {
+			*pending = (*pending)[i+len(want):]
+			return
+		}
+		select {
+		case chunk, ok := <-chunks:
+			if !ok {
+				t.Fatalf("process exited waiting for %q: %q", want, *pending)
+			}
+			*pending += chunk
+			screen.Feed([]byte(chunk))
+		case <-timer.C:
+			t.Fatalf("timeout waiting for %q: %q", want, *pending)
+		}
+	}
 }
 
 func waitForEditorScreen(t *testing.T, chunks <-chan string, screen *testutil.VTModel, pending *string) {

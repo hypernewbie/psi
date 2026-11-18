@@ -12,6 +12,10 @@ with `/`, `\`, and `:` replaced by `-`. The agent directory is
 it. New sessions, `/new`, and `/clone` use the canonical name immediately. The
 file itself is created when the first session entry is written.
 
+On Unix, psi creates new session directories and missing parents with mode
+`0700`. This includes a new agent directory. Existing directory modes stay
+unchanged. If psi cannot create the session directory, startup fails.
+
 A session saved under an older timestamp-based name moves to its canonical
 name when a persisted session is activated. The move holds both the old and
 new writer locks, never replaces an existing file, and leaves the transcript

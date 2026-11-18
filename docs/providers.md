@@ -40,23 +40,57 @@ psi resolves a credential in this order:
 2. Credentials declared for the provider in `models.json`.
 3. The provider's environment variable.
 
-`auth.json` entries are written by Pi. For API-key providers the shape is:
+Malformed JSON, invalid UTF-8, and documents larger than 4 MiB stop credential
+selection and `/logout` listing. psi does not fall back to another credential
+source after these errors.
+
+Pi and psi write compatible `auth.json` entries. For API-key providers the shape is:
 
 ```json
 { "anthropic": { "type": "api_key", "key": "sk-ant-..." } }
 ```
 
+Both `/login` and `/logout` preserve an existing `auth.json` symlink. They use
+the logical path for the shared lock, resolve the regular-file target under
+that lock, and rename beside that target. Link text, target mode, unknown
+fields, and unrelated entries stay unchanged. Broken, cyclic, and nonregular
+targets fail closed. A link retargeted before a final recheck is refused; the
+final rename remains subject to filesystem races.
+
 `openai-codex` uses the ChatGPT OAuth entry from Pi instead. psi refreshes an
 expired Codex token, preserves unrelated fields, and never substitutes a billed
-OpenAI API key for Codex OAuth. Run `/login openai-codex` in Pi to sign in.
+OpenAI API key for Codex OAuth. Run `/login openai-codex` in Pi to sign in. An
+`auth.json` symlink is preserved during refresh; the logical path remains the
+lock target, while the resolved regular file receives the atomic replacement.
 
-Each acquisition of the shared credential lock waits as long as Pi waits for
-it, thirty seconds, and respects cancellation. A lease that stops reporting
-its owner is reclaimed after the stale timeout. On Windows, access-denied
-errors during lock creation use the same bounded wait.
+By default, Codex credential checks and refreshes wait up to thirty seconds for
+each shared lock, matching Pi. API-key writes from `/login` and `/logout` wait
+up to five seconds. Both paths respect cancellation. An incomplete or invalid
+Codex token response leaves the auth file unchanged. If a valid rotated token
+response arrives and the lease and target checks pass, psi commits it before
+returning cancellation so Pi can use the new refresh token. psi reclaims a stale
+lease after its heartbeat stops. On Windows, access-denied errors during lock
+creation use the same bounded wait.
 
 Credential values in `models.json` accept `$VAR`, `${VAR}`, `$$`, and `$!`
 escapes. `!command` values are rejected without being executed.
+
+Interactive `/login [provider]` supports the 16 built-in API-key providers
+listed in [the CLI guide](cli.md#interactive-api-key-login). With no provider
+argument, it opens a searchable picker. The prompt masks the key and writes a
+Pi-compatible `api_key` entry to `auth.json`; key values are not accepted as
+command arguments. The login flow does not validate the key against the
+provider. If an offline session has a default model for the provider, psi
+selects that model and saves the new defaults. Otherwise, it keeps the current
+model. Anthropic API-key login and OpenAI Codex OAuth login are not available
+in psi. Use the matching environment variable or `models.json` for Anthropic,
+and Pi's `/login openai-codex` for Codex OAuth.
+
+Use `/logout` to select and remove a stored built-in API key. It includes
+Anthropic API keys, but does not remove OAuth credentials, environment
+variables, or credentials from `models.json`. Removing the active provider key
+reloads that provider from the remaining credential sources; if none exists,
+psi goes offline until you configure a credential again.
 
 ## Choose a model
 

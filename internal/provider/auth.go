@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"psi/internal/config"
 	"psi/internal/providerregistry"
+	"psi/internal/secretmem"
 )
 
 // authReads counts shared auth.json reads. The model lists resolve every
@@ -39,6 +42,7 @@ func SelectProviderAPIKey(env map[string]string, authPath, providerID, configure
 	if err != nil {
 		return "", "", err
 	}
+	defer ReleaseAuthEntries(entries)
 	return apiKeyFromEntries(env, entries, authPath, providerID, configuredKey)
 }
 
@@ -47,7 +51,10 @@ func resolveAuthPath(env map[string]string, authPath string) string {
 	if authPath != "" {
 		return authPath
 	}
-	agentDir := env["PI_CODING_AGENT_DIR"]
+	agentDir := env["PSI_CODING_AGENT_DIR"]
+	if agentDir == "" {
+		agentDir = env["PI_CODING_AGENT_DIR"]
+	}
 	if agentDir == "" {
 		home, _ := os.UserHomeDir()
 		agentDir = filepath.Join(home, ".pi", "agent")
@@ -59,20 +66,22 @@ func resolveAuthPath(env map[string]string, authPath string) string {
 // provider entries. A missing file yields no entries and no error, so
 // providers can fall back to their models.json key or environment variable.
 // A busy or malformed file returns an error instead of a partial view.
+// The caller owns the returned raw-message allocations and must call
+// ReleaseAuthEntries after the last credential read.
 func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
 	authReads.Add(1)
 	data, readErr := readAuthShared(authPath)
 	if readErr != nil {
-		if os.IsNotExist(readErr) {
-			return nil, nil
-		}
 		if _, statErr := os.Lstat(authPath); os.IsNotExist(statErr) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("cannot read auth.json: %w", readErr)
 	}
+	defer secretmem.Wipe(data[:cap(data)])
+	data = stripAuthBOM(data)
 	var entries map[string]json.RawMessage
-	if err := json.Unmarshal(data, &entries); err != nil {
+	if !utf8.Valid(data) || json.Unmarshal(data, &entries) != nil || entries == nil {
+		releaseRawEntries(entries)
 		return nil, fmt.Errorf("auth.json is malformed")
 	}
 	return entries, nil
@@ -169,6 +178,9 @@ type CredentialState struct {
 func Credentials(env map[string]string, authPath string, configured map[string]string, providerIDs []string) map[string]CredentialState {
 	authPath = resolveAuthPath(env, authPath)
 	entries, readErr := AuthEntries(authPath)
+	if readErr == nil {
+		defer ReleaseAuthEntries(entries)
+	}
 	out := map[string]CredentialState{}
 	for _, providerID := range providerIDs {
 		spec, builtin := providerregistry.Lookup(providerID)
@@ -238,5 +250,33 @@ func readAuthShared(authPath string) ([]byte, error) {
 		return nil, err
 	}
 	defer unlock()
-	return os.ReadFile(authPath)
+	fileInfo, err := os.Stat(authPath)
+	if err != nil {
+		return nil, err
+	}
+	if !fileInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("auth.json must be a regular file")
+	}
+	file, err := os.Open(authPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(fileInfo, opened) {
+		return nil, fmt.Errorf("auth.json changed while being read")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxAuthJSONSize+1))
+	if err != nil {
+		secretmem.Wipe(data[:cap(data)])
+		return nil, err
+	}
+	if len(data) > maxAuthJSONSize {
+		secretmem.Wipe(data[:cap(data)])
+		return nil, fmt.Errorf("auth.json exceeds size limit")
+	}
+	return data, nil
 }

@@ -101,6 +101,58 @@ func TestReservedSessionIDIsRejected(t *testing.T) {
 	}
 }
 
+func TestNewSessionDirectoryPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix directory permissions")
+	}
+	for _, tt := range []struct {
+		name     string
+		persist  bool
+		existing bool
+	}{
+		{name: "fresh", persist: true},
+		{name: "preserve existing", persist: true, existing: true},
+		{name: "in memory"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			agentDir := filepath.Join(root, ".pi", "agent")
+			dir := DefaultSessionDir(root, agentDir)
+			paths := []string{filepath.Dir(agentDir), agentDir, filepath.Dir(dir), dir}
+			want := os.FileMode(0o700)
+			if tt.existing {
+				want = 0o750
+				if err := os.MkdirAll(dir, want); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range paths {
+					if err := os.Chmod(path, want); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := New(OpenOptions{Cwd: root, AgentDir: agentDir, Persist: tt.persist}); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range paths {
+				info, err := os.Stat(path)
+				if !tt.persist {
+					if !os.IsNotExist(err) {
+						t.Fatalf("in-memory session created %s: %v", path, err)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := info.Mode().Perm(); got != want {
+					t.Errorf("%s mode = %04o, want %04o", path, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestNewRefusesOccupiedCanonicalPath(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(OpenOptions{Cwd: "/tmp/work", SessionDir: dir, Persist: true, ID: "taken-id"})

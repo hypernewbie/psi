@@ -2,11 +2,15 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
+	"psi/internal/lockfile"
 )
 
 // SettingsUpdate sets or removes one settings.json value at a 1- or 2-element
@@ -45,6 +49,26 @@ func UpdateUserSettings(path string, updates []SettingsUpdate) error {
 		}
 	}
 
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve settings path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
+		return fmt.Errorf("create settings directory: %w", err)
+	}
+	unlock, valid, err := lockfile.Acquire(context.Background(), absolute+".lock", lockfile.Options{
+		StaleAfter: 10 * time.Second,
+		Heartbeat:  5 * time.Second,
+		Wait:       200 * time.Millisecond,
+	})
+	if err != nil {
+		if errors.Is(err, lockfile.ErrBusy) {
+			return fmt.Errorf("settings file is locked by another process")
+		}
+		return fmt.Errorf("cannot lock settings: %w", err)
+	}
+	defer unlock()
+
 	target, err := resolveSettingsPath(path)
 	if err != nil {
 		return err
@@ -52,12 +76,6 @@ func UpdateUserSettings(path string, updates []SettingsUpdate) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return fmt.Errorf("create settings directory: %w", err)
 	}
-	release, err := lockSettings(target)
-	if err != nil {
-		return err
-	}
-	defer release()
-
 	values, order, err := readSettingsObject(target)
 	if err != nil {
 		return err
@@ -84,7 +102,7 @@ func UpdateUserSettings(path string, updates []SettingsUpdate) error {
 	if err := json.Indent(&pretty, compact, "", "  "); err != nil {
 		return fmt.Errorf("encode settings: %w", err)
 	}
-	return writeSettingsFile(target, pretty.Bytes())
+	return writeSettingsFile(target, pretty.Bytes(), valid)
 }
 
 // resolveSettingsPath resolves parent-directory symlinks and then the file
@@ -317,7 +335,7 @@ func jsonNull(raw json.RawMessage) bool {
 	return bytes.Equal(trimmed, []byte("null"))
 }
 
-func writeSettingsFile(path string, data []byte) error {
+func writeSettingsFile(path string, data []byte, valid func() bool) error {
 	mode := os.FileMode(0o600)
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
 		mode = info.Mode().Perm()
@@ -343,6 +361,9 @@ func writeSettingsFile(path string, data []byte) error {
 	}
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close settings: %w", err)
+	}
+	if !valid() {
+		return fmt.Errorf("settings lock changed; refusing to write")
 	}
 	if err := os.Rename(tempName, path); err != nil {
 		return fmt.Errorf("replace settings: %w", err)

@@ -55,7 +55,9 @@ Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Kimi 
 
 A provider that `models.json` declares uses an API key from `auth.json` or from its own `apiKey` entry. It has no environment variable, and an unsupported stored credential stops the selection.
 
-psi has no login interface, does not support Anthropic OAuth, and does not execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
+Interactive `/login` supports 16 built-in API-key providers, excluding Anthropic and OpenAI Codex. `/logout` removes stored built-in API keys, including Anthropic, but never OAuth credentials, environment variables, or `models.json` credentials. Login stores the key without a provider request. See [Providers](providers.md) for the supported login providers.
+
+psi does not support Anthropic OAuth or execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
 
 ## Documentation topics
 
@@ -75,6 +77,21 @@ It decodes the selected context on demand and streams history one record at a ti
 If a crashed writer left an interrupted interior record, psi keeps the remaining history visible and continues after the recovered gap.
 A 512 MiB compacted session stays inside the 3-second and 160 MiB RSS limits on the recorded local profile.
 A large active context still requires memory for its decoded payloads.
+
+Explicit byte wipes reduce retained secret copies in application-owned buffers.
+They cannot establish complete process-memory erasure. Go runtime and
+standard-library copies, provider credential strings, HTTP request/response
+state, terminal mask rendering, and other required boundaries can retain data.
+Memory is not locked. A hostile local process with process-inspection rights is
+outside this boundary.
+
+`auth.json` writes preserve an existing symlink by replacing the resolved
+regular-file target under the logical-path lock. The link and target identity
+are rechecked before staging and immediately before replacement. A change
+observed by those checks is refused. A retarget after the final check remains a
+filesystem race and is not made transactional. Broader filesystem behavior,
+including a hostile process that can replace paths at arbitrary times, is
+outside this boundary.
 
 Recall retains at most 200 prompts within a 4 MiB text budget.
 

@@ -52,8 +52,43 @@ them in `/session`, and refuses `!command` credential values without running
 them. Codex OAuth tokens are refreshed in place with a Pi-compatible directory
 lock.
 
+Interactive `/login` masks the key and excludes it from conversation history
+and prompt recall. It does not check the key with the provider. Keys remain
+unencrypted in `auth.json`. New auth files use mode `0600`, and new parent
+directories use mode `0700` on Unix. `/login` and `/logout` preserve an existing
+`auth.json` symlink. They resolve the link under the shared Pi lock, atomically
+replace its regular-file target, and preserve the link text, target mode,
+unrelated entries, and unknown fields. Broken, cyclic, and nonregular targets
+fail closed. psi rechecks the logical target and file identity before staging
+and immediately before replacement. It refuses a change observed by those
+checks; a retarget after the final check remains a filesystem race and is not
+made atomic. Codex OAuth refresh uses the same logical-lock and resolved-target
+rule. `/logout` removes only the selected stored API key, not OAuth credentials,
+environment variables, or `models.json` credentials.
+
+Windows identity checks use an open handle to capture the file ID before a
+replacement can affect a later comparison. The file must allow read access.
+For a new file, its parent directory must allow read access instead.
+If inspection fails, psi aborts the auth operation.
+
+Interactive key entry and selected auth writes keep secret data in mutable
+bytes where practical. Secret cursor navigation follows the normal editor's
+Unicode line-break and cursor-ownership rules without rendering plaintext.
+Only mask characters enter the secret display path. psi wipes retired
+application-owned buffers with an explicit clear followed by
+`runtime.KeepAlive`, including vacated ranges and fully retired allocations.
+These wipes resist removal of the explicit clear in
+the optimized path. They do not provide complete process-memory erasure. Go
+runtime, standard-library JSON, HTTP, provider credential strings, terminal
+mask rendering, and other required boundaries can retain copies outside psi's
+control. The system does not lock memory or protect against a hostile local
+process inspecting the process.
+
 Session files record prompts, tool calls, tool output, and file contents shown
 to the model. Treat a session file as sensitive as the work it describes.
+On Unix, new session directories and missing parents use mode `0700`. This
+includes the agent directory when startup creates it. Existing directory
+modes stay unchanged.
 
 ## What leaves the process
 

@@ -453,6 +453,9 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
+Interactive credential setup: use /login [provider] for a masked API-key prompt or provider picker. Use /logout to remove a stored API key. Existing auth.json symlinks are preserved; see docs/security.md for target-race and memory limits.
+Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
+
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 Use -- before a message that starts with a hyphen.
@@ -637,7 +640,7 @@ func Run(args []string, version string) error {
 			}
 		}
 		if r.authErr != nil {
-			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error()+" (offline commands still work; /model to select, /session for status)", 80, noColorEnvironment(), r.theme) {
+			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error()+" (offline commands still work; /login [provider], /logout, /model to select, /session for status)", 80, noColorEnvironment(), r.theme) {
 				fmt.Fprintln(startupOut, line)
 			}
 		}
@@ -674,6 +677,7 @@ type runtime struct {
 	bridgeTried              bool
 	selector                 *Selector
 	settingsPicker           *terminal.SettingsPicker
+	login                    *loginPrompt
 	selectorDraft            string
 	selectorCursor           int
 	selectorRestoreOnSuccess bool
@@ -1529,6 +1533,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 	if r.lifecycle == nil {
 		r.lifecycle = &terminalLifecycle{tty: r.tty, console: console, signals: signals}
 	}
+	defer func() {
+		if r.login != nil {
+			console.DiscardSecret()
+			console.Status("")
+			r.login = nil
+			r.restoreAuthState()
+		}
+	}()
 	busy, exiting, compacting := false, false, false
 	var cancel context.CancelFunc
 	var activeLoop *agent.Loop
@@ -1553,6 +1565,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 	for _, input := range pendingInputs {
 		pendingInputBytes += len(input.Key) + len(input.Reply)
 	}
+	var lastInput terminal.Input
+	defer func() {
+		lastInput.Release()
+		for i := range pendingInputs {
+			pendingInputs[i].Release()
+		}
+	}()
 	initialMessages := append([]string(nil), r.options.Messages...)
 	// Readiness must see queued input the moment it appears, not the next
 	// draw: Phi decides from the published snapshot alone.
@@ -1729,18 +1748,22 @@ func (r *runtime) repl(console *terminal.Console) error {
 			select {
 			case input, ok := <-inputs:
 				if !ok || input.Err != nil {
+					input.Release()
 					exiting = true
 					return false
 				}
 				if len(input.Reply) > 0 {
 					r.handleTerminalReply(console, input.Reply)
+					input.Release()
 					continue
 				}
 				if input.Resize {
 					console.RequestFullRedraw()
+					input.Release()
 					continue
 				}
 				if !input.Paste && len(input.Key) == 1 && input.Key[0] == 3 {
+					input.Release()
 					return false
 				}
 				if len(pendingInputs) >= 8192 || pendingInputBytes+len(input.Key) > 256*1024 {
@@ -2285,6 +2308,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		resizeTimeout = resizeTimer.C
 	}
 	for {
+		lastInput.Release()
 		if exiting && !busy {
 			if count := len(r.recovery); count > 0 {
 				fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("%d undelivered attachment prompt(s) were not sent; Phi keeps a saved copy.", count)))
@@ -2588,27 +2612,38 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.eventFrames += doneFramesAfter - doneFramesBefore
 		case input, ok := <-inputSource:
 			if fromPendingInput {
+				pendingInputs[0] = terminal.Input{}
 				pendingInputs = pendingInputs[1:]
-				pendingInputBytes -= len(input.Key)
+				pendingInputBytes -= len(input.Key) + len(input.Reply)
 			}
-			if ok && !input.Paste && r.loops != nil && r.loops.Snapshot().Active {
-				key := string(input.Key)
-				if key == "\x18" || key == "\x1b[88;6u" {
-					stopLoopCommand()
-					if busy {
-						cancelActive()
-					}
-					continue
-				}
-			}
+			lastInput = input
 			if !ok {
 				inputs = nil
+				if r.login != nil {
+					r.cancelLogin(console)
+				}
 				if busy {
 					exiting = true
 					cancelActive()
 					continue
 				}
 				return nil
+			}
+			if r.login == nil && !input.Paste && r.loops != nil && r.loops.Snapshot().Active {
+				key := string(input.Key)
+				if key == "\x18" || key == "\x1b[88;6u" {
+					stopLoopCommand()
+					input.Release()
+					lastInput = terminal.Input{}
+					if busy {
+						cancelActive()
+					}
+					continue
+				}
+			}
+			if input.Err != nil && r.login != nil {
+				r.cancelLogin(console)
+				return input.Err
 			}
 			if len(input.Reply) > 0 {
 				if r.handleTerminalReply(console, input.Reply) {
@@ -2617,10 +2652,34 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 					r.draw(console)
 				}
+				input.Release()
+				lastInput = terminal.Input{}
 				continue
 			}
 			if input.Resize {
 				requestResizeDraw()
+				input.Release()
+				lastInput = terminal.Input{}
+				continue
+			}
+			if r.login != nil {
+				submitted, cancelled, err := console.HandleSecret(input)
+				input.Release()
+				lastInput = terminal.Input{}
+				if err != nil {
+					notice(terminal.NoticeError, err.Error())
+					r.draw(console)
+					continue
+				}
+				if cancelled {
+					r.cancelLogin(console)
+					continue
+				}
+				if submitted {
+					r.finishLogin(console, out)
+					continue
+				}
+				r.draw(console)
 				continue
 			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
@@ -2799,6 +2858,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 								continue
 							}
 							closeSelector(r.selectorRestoreOnSuccess)
+							continue
+						}
+						if r.selector.AuthMode == AuthLogin {
+							spec, ok := providerregistry.Lookup(selected.ID)
+							if !ok || spec.Auth != providerregistry.AuthAPIKey {
+								notice(terminal.NoticeError, "unsupported login provider: "+selected.ID)
+								closeSelector(true)
+								continue
+							}
+							r.startLogin(selected.ID, spec.Name, console)
+							continue
+						}
+						if r.selector.AuthMode == AuthLogout {
+							r.finishLogout(selected.ID, console, out)
 							continue
 						}
 						if selected.ID == r.store.Header().ID {
@@ -3000,6 +3073,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if cmd, ok := terminal.ParseCommand(text); ok {
+				if cmd.Name == "login" {
+					if err := r.loginCommand(cmd.Arg, console); err != nil {
+						notice(terminal.NoticeError, err.Error())
+						r.draw(console)
+					}
+					continue
+				}
+				if cmd.Name == "logout" {
+					if err := r.logoutCommand(cmd.Arg, console, out); err != nil {
+						notice(terminal.NoticeError, err.Error())
+						r.draw(console)
+					}
+					continue
+				}
 				if cmd.Name == "loop" {
 					if err := r.store.WriteError(); err != nil {
 						notice(terminal.NoticeError, "Storage is blocked: "+err.Error())
@@ -3061,7 +3148,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 					query := strings.TrimSpace(cmd.Arg)
 					if query == "" || !r.modelArgumentKnown(query) {
 						r.refreshModelsForPicker(notice)
-						openSelector(modelSelector(r), submittedDraft, submittedCursor, query, false)
+						selector := modelSelector(r)
+						if len(selector.Items) == 0 {
+							notice(terminal.NoticeInfo, "No credentialed models. Run /login or set a provider API key.")
+							r.draw(console)
+							continue
+						}
+						openSelector(selector, submittedDraft, submittedCursor, query, false)
 						continue
 					}
 				}
@@ -3152,6 +3245,18 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return r.handleSessionCommand(cmd.Arg, out)
 	case "settings":
 		return r.handleSettingsCommand(cmd.Arg, out)
+	case "login":
+		var console *terminal.Console
+		if r.lifecycle != nil {
+			console = r.lifecycle.console
+		}
+		return false, r.loginCommand(cmd.Arg, console)
+	case "logout":
+		var console *terminal.Console
+		if r.lifecycle != nil {
+			console = r.lifecycle.console
+		}
+		return false, r.logoutCommand(cmd.Arg, console, out)
 	case "reload":
 		return r.handleReloadCommand(cmd.Arg, out)
 	case "new":

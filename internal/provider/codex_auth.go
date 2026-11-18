@@ -4,25 +4,27 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"psi/internal/lockfile"
+	"psi/internal/secretmem"
 )
 
 const codexTokenURL = "https://auth.openai.com/oauth/token"
 const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
 // CodexAuth reuses Pi's existing subscription login. Refresh updates only that
-// provider and uses the same auth.json.lock directory protocol as proper-lockfile.
-// There is deliberately no API-key fallback and no interactive login flow.
+// provider and uses the shared lease in internal/lockfile. There is deliberately
+// no API-key fallback and no interactive login flow.
 type CodexAuth struct {
 	Path     string
 	HTTP     *http.Client
@@ -48,24 +50,30 @@ type codexCredential struct {
 	AccountID string `json:"accountId"`
 }
 
-// loadLocked reads and parses auth.json. The caller must own the shared lease;
-// callers outside a refresh transaction must use loadShared.
+// loadLocked reads auth.json without acquiring the lease. Tests use it after
+// a transaction. Production readers must use loadShared or a target captured
+// under the refresh lease.
 func (a *CodexAuth) loadLocked() (map[string]json.RawMessage, codexCredential, error) {
-	f, err := os.Open(a.Path)
+	target, err := resolveAuthTarget(a.Path)
 	if err != nil {
+		return nil, codexCredential{}, err
+	}
+	return a.loadTarget(target)
+}
+
+// loadTarget reads one captured target. The caller owns the returned map and
+// must call ReleaseAuthEntries after the last use.
+func (a *CodexAuth) loadTarget(target authTarget) (map[string]json.RawMessage, codexCredential, error) {
+	if !target.exists {
 		return nil, codexCredential{}, fmt.Errorf("cannot read Codex login; run /login openai-codex in Pi")
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 4*1024*1024+1))
-	if err != nil || len(data) > 4*1024*1024 {
-		return nil, codexCredential{}, fmt.Errorf("cannot read bounded auth.json")
-	}
-	var all map[string]json.RawMessage
-	if json.Unmarshal(data, &all) != nil || all == nil {
-		return nil, codexCredential{}, fmt.Errorf("auth.json is malformed")
+	all, _, _, err := readAuthDocument(target)
+	if err != nil {
+		return nil, codexCredential{}, err
 	}
 	var entry codexCredential
 	if json.Unmarshal(all["openai-codex"], &entry) != nil || entry.Type != "oauth" || (entry.Access == "" && entry.Refresh == "") {
+		ReleaseAuthEntries(all)
 		return nil, entry, fmt.Errorf("no Codex OAuth login; run /login openai-codex in Pi (no API-key fallback)")
 	}
 	return all, entry, nil
@@ -78,6 +86,7 @@ func codexAccount(entry codexCredential) (string, error) {
 	parts := strings.Split(entry.Access, ".")
 	if len(parts) == 3 {
 		data, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+		defer secretmem.Wipe(data[:cap(data)])
 		var claims struct {
 			Auth struct {
 				AccountID string `json:"chatgpt_account_id"`
@@ -99,7 +108,11 @@ func (a *CodexAuth) loadShared(ctx context.Context) (map[string]json.RawMessage,
 		return nil, codexCredential{}, err
 	}
 	defer unlock()
-	return a.loadLocked()
+	target, err := resolveAuthTarget(a.Path)
+	if err != nil {
+		return nil, codexCredential{}, err
+	}
+	return a.loadTarget(target)
 }
 
 // Check is local-only. Expired credentials with a refresh token are usable;
@@ -111,6 +124,7 @@ func (a *CodexAuth) Check() error {
 	if err != nil {
 		return err
 	}
+	defer ReleaseAuthEntries(all)
 	return codexCredentialCheck(all)
 }
 
@@ -137,37 +151,49 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	_, entry, err := a.loadShared(ctx)
+	all, entry, err := a.loadShared(ctx)
 	if err != nil {
 		return "", "", err
 	}
 	if entry.Access != "" && (entry.Expires > time.Now().Add(30*time.Second).UnixMilli() || entry.Refresh == "" && entry.Expires > time.Now().UnixMilli()) {
+		ReleaseAuthEntries(all)
 		account, err := codexAccount(entry)
 		return entry.Access, account, err
 	}
 	if entry.Refresh == "" {
+		ReleaseAuthEntries(all)
 		return "", "", fmt.Errorf("Codex login expired; log in again through Pi")
 	}
-	if st, err := os.Lstat(a.Path); err != nil || st.Mode()&os.ModeSymlink != 0 {
-		return "", "", fmt.Errorf("cannot safely refresh a symlinked auth.json; refresh the login in Pi")
-	}
+	ReleaseAuthEntries(all)
+
 	unlock, valid, err := acquireAuthLock(ctx, a.Path+".lock", a.StaleAfter, a.HeartbeatInterval, a.WaitAfter)
 	if err != nil {
 		return "", "", err
 	}
 	defer unlock()
-	_, entry, err = a.loadLocked()
+	target, err := resolveAuthTarget(a.Path)
+	if err != nil {
+		return "", "", err
+	}
+	all, entry, err = a.loadTarget(target)
 	if err != nil {
 		return "", "", err
 	}
 	// Another Pi/psi may have refreshed while this process waited for the lock.
 	if entry.Access != "" && entry.Expires > time.Now().Add(30*time.Second).UnixMilli() {
+		ReleaseAuthEntries(all)
 		account, err := codexAccount(entry)
 		return entry.Access, account, err
 	}
 	if entry.Refresh == "" {
+		ReleaseAuthEntries(all)
 		return "", "", fmt.Errorf("Codex refresh token is missing")
 	}
+	ReleaseAuthEntries(all)
+	if err := target.recheck(); err != nil {
+		return "", "", err
+	}
+
 	endpoint := a.TokenURL
 	if endpoint == "" {
 		endpoint = codexTokenURL
@@ -198,12 +224,16 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	// If a complete valid token response arrived before cancellation, retain
 	// the rotated refresh token even if the final body read was interrupted.
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
+	defer secretmem.Wipe(data[:cap(data)])
 	var token struct {
 		Access    string `json:"access_token"`
 		Refresh   string `json:"refresh_token"`
 		ExpiresIn int64  `json:"expires_in"`
 	}
 	if len(data) > 64*1024 || json.Unmarshal(data, &token) != nil || token.Access == "" || token.ExpiresIn <= 0 || token.ExpiresIn > 365*86400 {
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
 		return "", "", fmt.Errorf("invalid Codex OAuth refresh response")
 	}
 	updated := entry
@@ -225,10 +255,14 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if !valid() {
 		return "", "", fmt.Errorf("auth.json lock changed during OAuth refresh; refusing overwrite")
 	}
-	all, current, err := a.loadLocked()
+	if err := target.recheck(); err != nil {
+		return "", "", err
+	}
+	all, current, err := a.loadTarget(target)
 	if err != nil {
 		return "", "", err
 	}
+	defer ReleaseAuthEntries(all)
 	if current.Access != entry.Access || current.Refresh != entry.Refresh || current.Expires != entry.Expires {
 		return "", "", fmt.Errorf("Codex credentials changed during refresh; refusing overwrite")
 	}
@@ -236,21 +270,32 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	if json.Unmarshal(all["openai-codex"], &fields) != nil {
 		return "", "", fmt.Errorf("invalid Codex credential object")
 	}
+	defer releaseRawEntries(fields)
 	for key, value := range map[string]any{"type": "oauth", "access": updated.Access, "refresh": updated.Refresh, "expires": updated.Expires, "accountId": account} {
+		if old, ok := fields[key]; ok {
+			secretmem.Wipe(old[:cap(old)])
+		}
 		fields[key], _ = json.Marshal(value)
+	}
+	if old, ok := all["openai-codex"]; ok {
+		secretmem.Wipe(old[:cap(old)])
 	}
 	all["openai-codex"], _ = json.Marshal(fields)
 	encoded, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
 		return "", "", fmt.Errorf("cannot encode refreshed credentials")
 	}
-	// Preserve existing permission bits: rename would otherwise replace them
-	// with the temporary file mode (Pi writes in place). New files stay 0600.
-	var keepMode os.FileMode
-	if st, err := os.Stat(a.Path); err == nil && !st.Mode().IsDir() {
-		keepMode = st.Mode().Perm()
+	defer secretmem.Wipe(encoded[:cap(encoded)])
+	if len(encoded)+1 > maxAuthJSONSize {
+		return "", "", fmt.Errorf("cannot encode refreshed credentials")
 	}
-	f, err := os.CreateTemp(filepath.Dir(a.Path), ".psi-auth-*")
+	// Preserve existing permission bits: rename would otherwise replace them
+	// with the temporary file mode (Pi writes in place).
+	keepMode := os.FileMode(0o600)
+	if target.info != nil {
+		keepMode = target.info.Mode().Perm()
+	}
+	f, err := os.CreateTemp(filepath.Dir(target.path), ".psi-auth-*")
 	if err != nil {
 		return "", "", fmt.Errorf("cannot persist refreshed credentials")
 	}
@@ -265,18 +310,25 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 			return "", "", fmt.Errorf("cannot preserve auth.json permissions")
 		}
 	}
-	if _, err = f.Write(append(encoded, '\n')); err == nil {
-		err = f.Sync()
+	writeErr := error(nil)
+	if _, writeErr = f.Write(encoded); writeErr == nil {
+		_, writeErr = f.Write([]byte{'\n'})
+	}
+	if writeErr == nil {
+		writeErr = f.Sync()
 	}
 	closeErr := f.Close()
-	if err != nil || closeErr != nil || !valid() {
+	if writeErr != nil || closeErr != nil || !valid() {
 		return "", "", fmt.Errorf("cannot safely persist refreshed credentials")
+	}
+	if err := target.recheck(); err != nil {
+		return "", "", err
 	}
 	rename := a.Rename
 	if rename == nil {
 		rename = os.Rename
 	}
-	if err := rename(f.Name(), a.Path); err != nil {
+	if err := rename(f.Name(), target.path); err != nil {
 		return "", "", fmt.Errorf("cannot replace refreshed auth.json")
 	}
 	if err := ctx.Err(); err != nil {
@@ -295,125 +347,24 @@ func authLockWaitLimit(waitAfter time.Duration) time.Duration {
 	return waitAfter
 }
 
-// acquireAuthLock implements the shared Pi-compatible lease: atomic mkdir,
-// heartbeat ownership, and bounded stale recovery. staleAfter <= 0 selects the
-// Pi async policy (30 seconds). A fresh lease is never stolen and a replaced
-// lease is never deleted by a former owner.
+// acquireAuthLock preserves auth.json-specific errors around the shared Pi lease.
 func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat, waitAfter time.Duration) (func(), func() bool, error) {
-	if staleAfter <= 0 {
-		staleAfter = 30 * time.Second
+	unlock, valid, err := lockfile.Acquire(ctx, path, lockfile.Options{
+		StaleAfter: staleAfter,
+		Heartbeat:  heartbeat,
+		Wait:       authLockWaitLimit(waitAfter),
+	})
+	if err == nil {
+		return unlock, valid, nil
 	}
-	if heartbeat <= 0 {
-		heartbeat = 2 * time.Second
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, authLockWaitLimit(waitAfter))
-	defer cancel()
-	for {
-		if err := waitCtx.Err(); err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
-			}
-			return nil, nil, fmt.Errorf("auth.json is busy; retry or refresh the login in Pi")
-		}
-		err := os.Mkdir(path, 0700)
-		if err == nil {
-			break
-		}
-		// Windows can report access denied during a directory handoff.
-		// Retry within the same deadline; ownership still requires mkdir success.
-		if !os.IsExist(err) && !(runtime.GOOS == "windows" && os.IsPermission(err)) {
-			return nil, nil, fmt.Errorf("cannot lock auth.json: %w", err)
-		}
-		// Another holder may own the lease. Reclaim only a provably stale,
-		// unchanged lease; never steal a fresh or replaced one.
-		before, statErr := os.Stat(path)
-		if statErr == nil {
-			if time.Since(before.ModTime()) > staleAfter {
-				// Re-check identity before removal so a fresh replacement
-				// created between stat and remove is never deleted.
-				if after, err := os.Stat(path); err == nil && os.SameFile(before, after) &&
-					time.Since(after.ModTime()) > staleAfter {
-					// Older psi builds left an owner file in the directory.
-					// Remove only that known entry, never arbitrary contents.
-					_ = os.Remove(filepath.Join(path, "owner"))
-					_ = os.Remove(path)
-				}
-			}
-		}
-		timer := time.NewTimer(50 * time.Millisecond)
-		select {
-		case <-waitCtx.Done():
-			timer.Stop()
-		case <-timer.C:
-		}
+	if errors.Is(err, lockfile.ErrBusy) {
+		return nil, nil, fmt.Errorf("auth.json is busy; retry or refresh the login in Pi")
 	}
-	// Keep the directory empty for proper-lockfile's rmdir-based recovery.
-	// An open descriptor pins its inode, preventing identity reuse while a
-	// former owner is still alive, without adding a non-Pi owner file.
-	dir, err := os.Open(path)
-	if err != nil {
+	if errors.Is(err, lockfile.ErrInspect) {
 		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")
 	}
-	owner, err := dir.Stat()
-	if err != nil {
-		dir.Close()
-		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")
-	}
-	var compromised atomic.Bool
-	var leaseMu sync.Mutex
-	mtime := owner.ModTime()
-	validLocked := func() bool {
-		st, err := os.Stat(path)
-		return !compromised.Load() && err == nil && os.SameFile(owner, st) && st.ModTime().Equal(mtime)
-	}
-	valid := func() bool {
-		leaseMu.Lock()
-		defer leaseMu.Unlock()
-		return validLocked()
-	}
-	stop, done := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(heartbeat)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case now := <-ticker.C:
-				leaseMu.Lock()
-				ok := validLocked()
-				if ok {
-					ok = os.Chtimes(path, now, now) == nil
-				}
-				if ok {
-					st, err := os.Stat(path)
-					ok = err == nil && os.SameFile(owner, st)
-					if ok {
-						mtime = st.ModTime() // retain filesystem timestamp precision
-					}
-				}
-				leaseMu.Unlock()
-				if !ok {
-					compromised.Store(true)
-					return
-				}
-			}
-		}
-	}()
-	var once sync.Once
-	unlock := func() {
-		once.Do(func() {
-			close(stop)
-			<-done
-			stillValid := valid()
-			// Windows cannot remove a directory with an open handle in
-			// it, so release the descriptor before removing the lease.
-			dir.Close()
-			if stillValid {
-				_ = os.Remove(path)
-			}
-		})
-	}
-	return unlock, valid, nil
+	return nil, nil, fmt.Errorf("cannot lock auth.json: %w", err)
 }

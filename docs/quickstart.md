@@ -9,18 +9,39 @@ go build -o psi ./cmd/psi
 ./psi
 ```
 
-Daily use (Anthropic Messages, ChatGPT Codex Responses, and the registered API-key providers):
+## Add a credential
+
+For API-key setup without Pi:
+
+1. Start `./psi`.
+2. Enter `/login` and select a provider, or enter `/login deepseek` directly.
+3. Enter the key at the masked prompt.
+4. Press `Enter` to save, or `Escape` to cancel.
+
+psi saves a Pi-compatible API-key entry in `<agentDir>/auth.json`. Login does
+not check the key with the provider. If the session is offline and the provider
+has a default model, psi selects that model and saves the defaults.
+
+Login supports 16 built-in API-key providers, excluding Anthropic and OpenAI
+Codex. For Anthropic, set `ANTHROPIC_API_KEY` or configure an API key in
+`auth.json` or `models.json`. For Codex OAuth, use Pi's `/login openai-codex`.
+See [Providers](providers.md) for the supported login providers and credential
+precedence.
+
+API-key providers also accept their own environment variables. For example:
 
 ```sh
 export ANTHROPIC_API_KEY="..."
 ./psi
 ```
 
-Use `/model` to select a provider and model that are already logged in; providers
-without a credential are not listed. Each API-key provider needs its own
-environment variable; see `docs/config.md`. A provider that `models.json`
-declares uses a key from `auth.json` or from its `apiKey` entry instead. The
-`--provider` and `--model` options accept the exact IDs shown by `/model`.
+Use `/logout` to remove a stored built-in API key. This does not remove OAuth
+credentials, environment variables, or credentials in `models.json`.
+
+Use `/model` to select a provider and model with a usable credential. Providers
+without a credential are not listed. A provider that `models.json` declares
+uses a key from `auth.json` or from its `apiKey` entry instead. The `--provider`
+and `--model` options accept the exact IDs shown by `/model`.
 
 Model lists come from the bundled public snapshot and Pi's local cache. Psi
 does not fetch catalogs from the network. OpenCode Go's API and endpoint are
@@ -37,7 +58,7 @@ Resume (every form shows current-view history before the next prompt):
 ./psi --no-session
 ```
 
-Inline commands: `/model /thinking /name /session /hotkeys /clone /new /compact /resume /reload /quit /ac /autocompact /loop /loop-stop /skill:name`.
+Inline commands: `/login /logout /model /thinking /name /session /hotkeys /clone /new /compact /resume /reload /quit /ac /autocompact /loop /loop-stop /skill:name`.
 `/name [name]` sets or shows the session display name. `/clone` copies the current branch to a new session file.
 `/resume` opens the searchable workspace picker; use arrows or PageUp/PageDown, Enter to select, Escape to cancel.
 `/help`, `/version`, and `/history` are not commands. Use `./psi --help` and `./psi --version` for CLI information. Unknown slash commands are sent as ordinary prompts, like Pi.

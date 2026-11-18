@@ -6,7 +6,7 @@
   "offlineStartup40x12": [
     "<WORKSPACE> · <SESSION> (0 skills)",
     "warning: no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry",
-    "to <PRIVATE_HOME>/agent/auth.json (offline commands still work; /model to select, /session for status)",
+    "to <PRIVATE_HOME>/agent/auth.json (offline commands still work; /login [provider], /logout, /model to select, /session for status)",
     "Enter submits · Ctrl+J newline · Ctrl+C cancel · /help · /quit",
     "--- session <SESSION> ---",
     ">"

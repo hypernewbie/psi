@@ -84,7 +84,7 @@ func New(opts OpenOptions) (*Store, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	s.header = &SessionHeader{Type: "session", Version: intPtr(CurrentSessionVersion), ID: id, Timestamp: now, Cwd: opts.Cwd}
 	if s.persist {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 		dir, err := canonicalSessionPath(dir)
