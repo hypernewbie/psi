@@ -508,6 +508,18 @@ func TestCrawl4AIEnvironment(t *testing.T) {
 			wantDiag: true,
 		},
 		{
+			name:     "unsupported dollar escape is not a reference",
+			vars:     map[string]string{"$CRAWL_KEY": "SECRET", "CRAWL4AI_API_TOKEN": "env-token"},
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$$CRAWL_KEY"}`,
+			wantDiag: true,
+		},
+		{
+			name:     "unsupported bang escape is not a reference",
+			vars:     map[string]string{"!CRAWL_KEY": "SECRET", "CRAWL4AI_API_TOKEN": "env-token"},
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$!CRAWL_KEY"}`,
+			wantDiag: true,
+		},
+		{
 			name:     "invalid env token header",
 			vars:     map[string]string{"CRAWL4AI_API_TOKEN": "bad\nSECRET"},
 			body:     `{"crawl4aiBaseUrl":"https://crawl.example"}`,

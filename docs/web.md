@@ -167,9 +167,9 @@ is refused; psi never runs a command to obtain a credential.
 `crawl4aiApiToken` accepts a literal value, `$NAME`, or `${NAME}`. A configured
 reference is resolved before `CRAWL4AI_API_TOKEN` and a missing or empty
 reference disables extraction; the environment token does not rescue it. A
-nonempty environment token overrides a configured literal. A `!command` value is
-refused. With no token from either source, psi calls the service without an
-`Authorization` header.
+nonempty environment token overrides a configured literal. psi rejects
+`!command` and the `$$` and `$!` literal escapes in the file. With no token
+from either source, psi calls the service without an `Authorization` header.
 
 A configured `searxngBaseUrl` must be an absolute HTTP(S) URL with a host and
 without credentials, query, or fragment. Plain HTTP requires loopback or

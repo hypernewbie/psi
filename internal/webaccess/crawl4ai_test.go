@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"testing/synctest"
 	"time"
 )
 
@@ -842,36 +843,50 @@ func TestCrawl4AIBudgets(t *testing.T) {
 		t.Fatal("extractor transport budget or proxy is wrong")
 	}
 
-	deadlineCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	callerDeadline, _ := deadlineCtx.Deadline()
-	var requestedDeadline time.Time
-	client.extractor = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		var ok bool
-		requestedDeadline, ok = r.Context().Deadline()
-		if !ok {
-			t.Error("extraction request has no deadline")
-		}
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"success":true,"markdown":"budget"}`)), Request: r}, nil
-	})}
-	target := mustURL("https://example.com/page")
-	if _, err := client.extractCrawl4AI(deadlineCtx, target); err != nil {
-		t.Fatal(err)
-	}
-	if !requestedDeadline.Equal(callerDeadline) {
-		t.Fatal("extraction deadline was not bounded by the caller")
-	}
-
-	var backgroundDeadline time.Time
-	client.extractor = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		backgroundDeadline, _ = r.Context().Deadline()
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"success":true,"markdown":"budget"}`)), Request: r}, nil
-	})}
-	if _, err := client.extractCrawl4AI(context.Background(), target); err != nil {
-		t.Fatal(err)
-	}
-	if remaining := time.Until(backgroundDeadline); remaining <= 0 || remaining > crawl4AIExtractionTimeout {
-		t.Fatal("extraction deadline is not the 60-second budget")
+	for _, tc := range []struct {
+		name          string
+		callerTimeout time.Duration
+		wantElapsed   time.Duration
+		wantError     string
+	}{
+		{"extractor deadline preserves direct error", 0, 60 * time.Second, "http status: 403"},
+		{"caller deadline takes precedence", 5 * time.Second, 5 * time.Second, "timeout: deadline exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := t.Context()
+				if tc.callerTimeout > 0 {
+					callerCtx, cancel := context.WithTimeout(ctx, tc.callerTimeout)
+					defer cancel()
+					ctx = callerCtx
+				}
+				client := testClient(crawl4AIConfig("https://crawl.example"))
+				client.page.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: http.StatusForbidden, Body: http.NoBody, Request: r}, nil
+				})
+				client.extractor.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if _, ok := r.Context().Deadline(); !ok {
+						t.Fatal("extraction request has no deadline")
+					}
+					reader, writer := io.Pipe()
+					go func() {
+						// A complete-looking envelope must not succeed before EOF.
+						io.WriteString(writer, `{"success":true,"markdown":"stalled"}`)
+						<-r.Context().Done()
+						writer.CloseWithError(r.Context().Err())
+					}()
+					return &http.Response{StatusCode: http.StatusOK, Body: reader, Request: r}, nil
+				})
+				start := time.Now()
+				_, err := client.fetchPage(ctx, "https://example.com/page", "readable")
+				if elapsed := time.Since(start); elapsed != tc.wantElapsed {
+					t.Fatalf("stalled body returned after %v of fake time, want %v", elapsed, tc.wantElapsed)
+				}
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("stalled body error = %v, want %q", err, tc.wantError)
+				}
+			})
+		})
 	}
 }
 

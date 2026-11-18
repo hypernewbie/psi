@@ -732,6 +732,10 @@ func applyCrawl4AI(cfg *Config, root map[string]json.RawMessage, env Env, diags 
 		}
 	}
 	configured = strings.TrimSpace(configured)
+	if strings.HasPrefix(configured, "$$") || strings.HasPrefix(configured, "$!") {
+		*diags = append(*diags, "web access: crawl4aiApiToken literal escapes are not supported")
+		return
+	}
 	if strings.HasPrefix(configured, "!") {
 		*diags = append(*diags, "web access: crawl4aiApiToken command credentials are not supported")
 		return
