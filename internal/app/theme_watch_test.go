@@ -5,7 +5,10 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 func TestThemeWatchDebouncesAtomicUserThemeSaveAndCloses(t *testing.T) {
@@ -78,36 +81,56 @@ func TestThemeWatchIgnoresUnselectedThemeFiles(t *testing.T) {
 }
 
 func TestThemeWatchDebouncesBurstToSingleChange(t *testing.T) {
-	agentDir := t.TempDir()
-	themeDir := filepath.Join(agentDir, "themes")
-	if err := os.Mkdir(themeDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(themeDir, "selected.json")
-	watch, err := newThemeWatch(agentDir, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer watch.Close()
-	for i := 0; i < 8; i++ {
-		temp := filepath.Join(themeDir, ".selected.tmp")
-		if err := os.WriteFile(temp, []byte(`{"name":"selected"}`), 0600); err != nil {
-			t.Fatal(err)
+	synctest.Test(t, func(t *testing.T) {
+		agentDir := filepath.Join("synthetic", "agent")
+		themeDir := filepath.Join(agentDir, "themes")
+		selected := filepath.Join(themeDir, "selected.json")
+		events := make(chan fsnotify.Event, 8)
+		for i := 0; i < 8; i++ {
+			events <- fsnotify.Event{Name: selected, Op: fsnotify.Create}
 		}
-		if err := os.Rename(temp, path); err != nil {
-			t.Fatal(err)
+		w := &themeWatch{
+			changes: make(chan struct{}, 10),
+			stop:    make(chan struct{}),
+			done:    make(chan struct{}),
 		}
-	}
-	select {
-	case <-watch.changes:
-	case <-time.After(2 * time.Second):
-		t.Fatal("theme save burst was not reported")
-	}
-	select {
-	case <-watch.changes:
-		t.Fatal("theme save burst produced more than one debounced change")
-	case <-time.After(200 * time.Millisecond):
-	}
+		w.SetSelected(selected)
+		watchErrors := make(chan error)
+		go w.runEvents(agentDir, themeDir, events, watchErrors)
+		defer func() {
+			close(w.stop)
+			<-w.done
+		}()
+
+		synctest.Wait()
+		if got := len(w.changes); got != 0 {
+			t.Fatalf("after queued burst: got %d notifications, want 0", got)
+		}
+
+		// These sleeps advance the bubble's fake clock, not the host clock.
+		time.Sleep(50 * time.Millisecond)
+		events <- fsnotify.Event{Name: selected, Op: fsnotify.Create}
+		synctest.Wait()
+
+		time.Sleep(99 * time.Millisecond)
+		synctest.Wait()
+		if got := len(w.changes); got != 0 {
+			t.Fatalf("before reset deadline: got %d notifications, want 0", got)
+		}
+
+		time.Sleep(2 * time.Millisecond)
+		synctest.Wait()
+		if got := len(w.changes); got != 1 {
+			t.Fatalf("at reset deadline: got %d notifications, want 1", got)
+		}
+		<-w.changes
+
+		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
+		if got := len(w.changes); got != 0 {
+			t.Fatalf("after quiet window: got %d notifications, want 0", got)
+		}
+	})
 }
 
 func TestThemeWatchRepeatedLifecycleDoesNotLeakGoroutines(t *testing.T) {
