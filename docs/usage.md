@@ -117,6 +117,8 @@ one message per turn) or `all`.
 - `/settings` sets a per-model default under `Default thinking level per model`.
   The current model uses a new default at once; other models use theirs on the
   next switch.
+- `/model`, `/thinking`, and `/settings` also work during a run. The run is
+  not cancelled; request settings apply to the next request.
 - An explicit CLI, restored, or `/thinking` level applies to that selection.
   A later model change applies `modelThinkingLevels[provider/modelId]` first,
   then `defaultThinkingLevel`, then the carried level. An unadvertised level
@@ -124,6 +126,8 @@ one message per turn) or `all`.
 - `/reload` re-reads instructions, skills, theme/display settings, and
   `steeringMode`/`followUpMode` and resources; new queue modes apply to the
   next run. Model, tool, shell, and network settings are not reloaded.
+  During a run, `/reload` cancels the run first, reloads, then retries the
+  interrupted input.
 
 Startup selection uses `--provider`, `--model`, and `--thinking`; see
 [Command line](cli.md). Model IDs come from the bundled catalog and Pi's local

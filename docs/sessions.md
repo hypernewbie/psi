@@ -82,6 +82,12 @@ error. Otherwise a new session is created with the ID.
 The display name is stored in session metadata and shown by `/session` and the
 session picker; it is not sent to the model.
 
+Interrupting a run never rewrites history: an aborted turn stays as a visible
+partial record, and a `/reload` retry appends the interrupted prompt again
+instead of editing it. Opening another session needs an idle terminal:
+`/resume`, `/new`, and `/clone` are refused during a run and return to the
+draft.
+
 ## Format
 
 psi writes Pi session version 3. Reading:

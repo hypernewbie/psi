@@ -34,7 +34,9 @@ settle, compacts, then resumes the task.
 ```
 
 `/compact` calls the provider for a real summary and reports start and outcome.
-It is cancellable. Cancelling leaves the original context untouched. Transient
+It is cancellable. Cancelling leaves the original context untouched. Entering
+`/compact` during a run cancels the run first; the summary covers settled
+history and the interrupted prompt is not re-asked. Transient
 provider or stream failures retry according to `retry` settings; quota and
 billing errors do not retry. If summary generation still fails, psi reports the
 error and leaves the original context unchanged.
