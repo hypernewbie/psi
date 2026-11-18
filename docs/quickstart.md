@@ -11,6 +11,9 @@ go build -o psi ./cmd/psi
 
 ## Add a credential
 
+For ChatGPT subscription access, start psi, enter `/login`, and select
+**OpenAI**. Finish signing in in your browser. No API key or Pi is required.
+
 For API-key setup without Pi:
 
 1. Start `./psi`.

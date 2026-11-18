@@ -112,7 +112,7 @@ func TestEditor(t *testing.T) {
 }
 
 func TestCommands(t *testing.T) {
-	for _, c := range []string{"/new", "/resume", "/model", "/thinking", "/compact", "/b", "/bump", "/session", "/clone", "/hotkeys", "/reload", "/quit", "/ac status", "/autocompact help", "/loop goal fix tests", "/loop-stop", "/name foo", "/skill:do arg"} {
+	for _, c := range []string{"/new", "/resume", "/model", "/thinking", "/compact", "/b", "/bump", "/session", "/clone", "/hotkeys", "/reload", "/quit", "/ac status", "/autocompact help", "/loop goal fix tests", "/loop-stop", "/name foo", "/login openai", "/skill:do arg"} {
 		if _, ok := ParseCommand(c); !ok {
 			t.Errorf("command %q not parsed", c)
 		}

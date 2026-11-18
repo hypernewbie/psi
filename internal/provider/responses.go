@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,7 +19,13 @@ import (
 
 // ResponsesClient speaks the generic OpenAI Responses protocol. It uses API-key
 // bearer authentication and is separate from the ChatGPT Codex client.
-type ResponsesClient struct{ *Client }
+// ResolveAuth, when set, supplies a request-local bearer per HTTP attempt so
+// the built-in openai provider can refresh its subscription login at submit.
+// A nil callback keeps the static-key behavior for other providers.
+type ResponsesClient struct {
+	*Client
+	ResolveAuth func(context.Context) (string, error)
+}
 
 func NewResponsesClient(baseURL, apiKey string, maxRetry int, idle time.Duration) *ResponsesClient {
 	base := NewClient("", apiKey, maxRetry, idle)
@@ -30,8 +37,8 @@ func (c *ResponsesClient) Send(ctx context.Context, req Request, onDelta func(De
 	if req.Model.API != "openai-responses" {
 		return nil, fmt.Errorf("openai-responses requires the openai-responses API")
 	}
-	if !req.Model.Custom && req.Model.ProviderID() != "opencode-go" && req.Model.ProviderID() != "xai" {
-		return nil, fmt.Errorf("openai-responses is only enabled for the registered OpenCode Go and xAI providers")
+	if !req.Model.Custom && req.Model.ProviderID() != "opencode-go" && req.Model.ProviderID() != "xai" && req.Model.ProviderID() != "openai" {
+		return nil, fmt.Errorf("openai-responses is only enabled for the registered OpenCode Go, xAI, and OpenAI providers")
 	}
 	baseURL := c.BaseURL
 	if baseURL == "" {
@@ -40,8 +47,10 @@ func (c *ResponsesClient) Send(ctx context.Context, req Request, onDelta func(De
 	if baseURL == "" {
 		return nil, fmt.Errorf("model endpoint is required for openai-responses")
 	}
-	if strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) {
-		return nil, fmt.Errorf("No API key for provider: %s", req.Model.ProviderID())
+	// Validate the endpoint and the ordinary request template before any auth
+	// resolution, so an invalid local request never rotates credentials.
+	if _, err := responsesEndpoint(baseURL); err != nil {
+		return nil, err
 	}
 	compat, err := resolveResponsesCompat(req.Model)
 	if err != nil {
@@ -54,13 +63,63 @@ func (c *ResponsesClient) Send(ctx context.Context, req Request, onDelta func(De
 	if c.SessionID != "" {
 		body["prompt_cache_key"] = clampResponsesCacheKey(c.SessionID)
 	}
-	raw, err := json.Marshal(body)
+	ordinary, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode OpenAI Responses request")
 	}
+	if c.ResolveAuth == nil && strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) {
+		return nil, fmt.Errorf("No API key for provider: %s", req.Model.ProviderID())
+	}
 	return sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) {
-		return c.sendResponses(ctx, baseURL, compat, raw, req, onDelta)
+		token := c.APIKey
+		if c.ResolveAuth != nil {
+			resolved, err := c.ResolveAuth(ctx)
+			if err != nil {
+				if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+					return nil, err
+				}
+				// Auth failures are safe and non-retryable. The resolver
+				// already returns static credential-free errors; a header
+				// never bypasses them.
+				return nil, &ProviderError{Kind: ErrAuth, Message: err.Error()}
+			}
+			token = resolved
+			if strings.TrimSpace(token) == "" && !hasNonemptyAuthHeader(c.Headers) {
+				return nil, fmt.Errorf("No API key for provider: %s", req.Model.ProviderID())
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		attempt := ordinary
+		if isOpenAISubscriptionRequest(req.Model, baseURL, token) {
+			// Omit the token limit for ChatGPT sign-in tokens. The copy
+			// is shallow; nested values stay shared and unchanged.
+			profiled := make(map[string]any, len(body))
+			for key, value := range body {
+				profiled[key] = value
+			}
+			delete(profiled, "max_output_tokens")
+			attempt, err = json.Marshal(profiled)
+			if err != nil {
+				return nil, fmt.Errorf("cannot encode OpenAI Responses request")
+			}
+		}
+		return c.sendResponses(ctx, baseURL, compat, attempt, token, req, onDelta)
 	})
+}
+
+// isOpenAISubscriptionRequest matches Pi's ChatGPT sign-in detection:
+// provider openai, the exact effective base URL, and a token without the
+// API-key prefix. The stored entry type alone does not select the profile.
+func isOpenAISubscriptionRequest(model ModelMeta, baseURL, token string) bool {
+	if model.Custom || model.ProviderID() != "openai" {
+		return false
+	}
+	if strings.TrimRight(strings.TrimSpace(baseURL), "/") != "https://api.openai.com/v1" {
+		return false
+	}
+	return token != "" && !strings.HasPrefix(token, "sk-")
 }
 
 func clampResponsesCacheKey(value string) string {
@@ -79,7 +138,7 @@ func responsesEndpoint(baseURL string) (string, error) {
 	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/responses", nil
 }
 
-func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, compat responsesCompat, body []byte, req Request, onDelta func(Delta)) (*Response, error) {
+func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, compat responsesCompat, body []byte, token string, req Request, onDelta func(Delta)) (*Response, error) {
 	endpoint, err := responsesEndpoint(baseURL)
 	if err != nil {
 		return nil, err
@@ -90,13 +149,13 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	if c.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+token)
 	}
 	if c.SessionID != "" {
 		switch compat.sessionAffinityFormat {
 		case "openai":
-			httpReq.Header.Set("session-id", c.SessionID)
+			httpReq.Header.Set("session_id", c.SessionID)
 			httpReq.Header.Set("x-client-request-id", c.SessionID)
 		case "openai-nosession":
 			httpReq.Header.Set("x-client-request-id", c.SessionID)
@@ -119,12 +178,36 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 		reader := newStreamReader(ctx, resp.Body, c.IdleTimeout)
 		defer reader.close()
 		resp.Body = structReadCloser{Reader: reader, Closer: resp.Body}
-		return nil, classifyHTTPError(resp)
+		classified := classifyHTTPError(resp)
+		classified.Detail = c.redact(classified.Detail, token)
+		classified.Reason = c.redact(classified.Reason, token)
+		if !req.Model.Custom && req.Model.ProviderID() == "openai" {
+			// Built-in OpenAI never displays a provider body, even when
+			// the shared classifier preserves Zhipu's raw 1308 payload
+			// for other providers.
+			message := http.StatusText(resp.StatusCode)
+			if message == "" {
+				if resp.StatusCode == 529 {
+					message = "Overloaded"
+				} else {
+					message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+				}
+			}
+			classified.Message = message
+			classified.Reason = ""
+		}
+		return nil, classified
 	}
 	result, err := parseResponsesSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
-		message := c.redact(err.Error())
-		wrapped := fmt.Errorf("OpenAI Responses stream interrupted (not retried): %s", message)
+		// An OpenAI stream can embed provider-controlled values in parser or
+		// body-read errors. Keep partial output, but not that diagnostic text.
+		var wrapped error
+		if !req.Model.Custom && req.Model.ProviderID() == "openai" {
+			wrapped = errors.New("OpenAI Responses stream interrupted (not retried)")
+		} else {
+			wrapped = fmt.Errorf("OpenAI Responses stream interrupted (not retried): %s", c.redact(err.Error(), token))
+		}
 		if result != nil {
 			return result, &StreamInterrupt{Partial: result, Err: wrapped}
 		}

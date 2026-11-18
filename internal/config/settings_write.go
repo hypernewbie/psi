@@ -56,16 +56,9 @@ func UpdateUserSettings(path string, updates []SettingsUpdate) error {
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
 		return fmt.Errorf("create settings directory: %w", err)
 	}
-	unlock, valid, err := lockfile.Acquire(context.Background(), absolute+".lock", lockfile.Options{
-		StaleAfter: 10 * time.Second,
-		Heartbeat:  5 * time.Second,
-		Wait:       200 * time.Millisecond,
-	})
+	unlock, valid, err := lockUserSettings(context.Background(), absolute, 200*time.Millisecond)
 	if err != nil {
-		if errors.Is(err, lockfile.ErrBusy) {
-			return fmt.Errorf("settings file is locked by another process")
-		}
-		return fmt.Errorf("cannot lock settings: %w", err)
+		return err
 	}
 	defer unlock()
 
@@ -103,6 +96,21 @@ func UpdateUserSettings(path string, updates []SettingsUpdate) error {
 		return fmt.Errorf("encode settings: %w", err)
 	}
 	return writeSettingsFile(target, pretty.Bytes(), valid)
+}
+
+func lockUserSettings(ctx context.Context, absolute string, wait time.Duration) (unlock func(), valid func() bool, err error) {
+	unlock, valid, err = lockfile.Acquire(ctx, absolute+".lock", lockfile.Options{
+		StaleAfter: 10 * time.Second,
+		Heartbeat:  5 * time.Second,
+		Wait:       wait,
+	})
+	if errors.Is(err, lockfile.ErrBusy) {
+		return nil, nil, fmt.Errorf("settings file is locked by another process")
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot lock settings: %w", err)
+	}
+	return unlock, valid, nil
 }
 
 // resolveSettingsPath resolves parent-directory symlinks and then the file

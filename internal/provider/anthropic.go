@@ -199,8 +199,8 @@ type structReadCloser struct {
 	io.Closer
 }
 
-func (c *Client) redact(s string) string {
-	for _, secret := range append([]string{c.APIKey}, headerValues(c.Headers)...) {
+func (c *Client) redact(s string, extra ...string) string {
+	for _, secret := range append(append([]string{c.APIKey}, headerValues(c.Headers)...), extra...) {
 		if secret != "" {
 			s = strings.ReplaceAll(s, secret, "[redacted]")
 		}

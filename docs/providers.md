@@ -1,6 +1,6 @@
 # Providers
 
-psi supports eighteen built-in providers. Each has a fixed protocol list and its
+psi supports nineteen built-in providers. Each has a fixed protocol list and its
 own credential. There is no automatic provider discovery, routing, or virtual
 model layer. `models.json` can add providers of its own; see
 [Custom providers](#custom-providers).
@@ -8,6 +8,7 @@ model layer. `models.json` can add providers of its own; see
 | Provider ID | Name | Protocol | Credential |
 |---|---|---|---|
 | `anthropic` | Anthropic | `anthropic-messages` | `ANTHROPIC_API_KEY` |
+| `openai` | OpenAI | `openai-responses` | Pi OAuth session or `OPENAI_API_KEY` |
 | `openai-codex` | OpenAI Codex | `openai-codex-responses` | Pi OAuth session |
 | `minimax` | MiniMax | `anthropic-messages` | `MINIMAX_API_KEY` |
 | `opencode-go` | OpenCode Go | per model (see below) | `OPENCODE_API_KEY` |
@@ -50,7 +51,7 @@ Pi and psi write compatible `auth.json` entries. For API-key providers the shape
 { "anthropic": { "type": "api_key", "key": "sk-ant-..." } }
 ```
 
-Both `/login` and `/logout` preserve an existing `auth.json` symlink. They use
+API-key login and `/logout` preserve an existing `auth.json` symlink. They use
 the logical path for the shared lock, resolve the regular-file target under
 that lock, and rename beside that target. Link text, target mode, unknown
 fields, and unrelated entries stay unchanged. Broken, cyclic, and nonregular
@@ -72,12 +73,32 @@ returning cancellation so Pi can use the new refresh token. psi reclaims a stale
 lease after its heartbeat stops. On Windows, access-denied errors during lock
 creation use the same bounded wait.
 
+`openai` signs in from `/login` by selecting OpenAI, or directly with
+`/login openai`. It can also use a stored API key. A stored `openai`
+entry owns the provider: OAuth failures and invalid entries never fall back
+to another key. Only a missing entry permits `models.json`, then
+`OPENAI_API_KEY`. An OAuth token that is missing or near expiry refreshes
+when you submit a request. A request waits up to five seconds for the shared
+credential lock. Once an exchange starts, it has its own 15-second deadline.
+psi waits for the exchange and saves a valid rotation before returning
+cancellation.
+
+ChatGPT sign-in needs no prerequisite credential. It opens the authorization
+page in your browser and serves the callback on `127.0.0.1:1455`; psi and the
+browser must run on the same machine. If the browser does not open, use the
+link in the notice. Never paste the callback URL into chat. `Esc` or `Ctrl+C`
+cancels; `Ctrl+D` cancels and exits. The browser wait lasts five minutes. A
+failed code exchange is not retried; start a new login. Cancelling before the
+save starts keeps the previous credential. An admitted save finishes without
+activating the model after cancellation. OpenAI sign-in and refresh refuse a
+symlinked `auth.json`. The user `settings.json` stores a stable installation
+UUID as `deviceId`; it is not a token.
+
 Credential values in `models.json` accept `$VAR`, `${VAR}`, `$$`, and `$!`
 escapes. `!command` values are rejected without being executed.
 
-Interactive `/login [provider]` supports the 16 built-in API-key providers
-listed in [the CLI guide](cli.md#interactive-api-key-login). With no provider
-argument, it opens a searchable picker. The prompt masks the key and writes a
+Interactive API-key login supports the 16 built-in API-key providers
+listed in [the CLI guide](cli.md#interactive-login). The prompt masks the key and writes a
 Pi-compatible `api_key` entry to `auth.json`; key values are not accepted as
 command arguments. The login flow does not validate the key against the
 provider. If an offline session has a default model for the provider, psi
@@ -264,5 +285,5 @@ classifier models, and OAuth providers.
 ## Excluded providers
 
 Cloud credential discovery, Vertex AI, Amazon Bedrock, Azure, Cloudflare, and
-OpenAI API keys are not wired. Provider OAuth beyond Codex is not available.
-See [Limitations](limitations.md).
+classifier models are not wired. Provider OAuth beyond Codex and OpenAI is
+not available. OpenAI signs in with `/login openai` in psi.

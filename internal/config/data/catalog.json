@@ -13230,5 +13230,1150 @@
         "max": "max"
       }
     }
+  ],
+  "openai": [
+    {
+      "id": "chat-latest",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "Chat Latest",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4",
+      "contextWindow": 8192,
+      "maxTokens": 8192,
+      "reasoning": false,
+      "input": [
+        "text"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4-turbo",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4 Turbo",
+      "contextWindow": 128000,
+      "maxTokens": 4096,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4.1",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4.1",
+      "contextWindow": 1047576,
+      "maxTokens": 32768,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4.1 mini",
+      "contextWindow": 1047576,
+      "maxTokens": 32768,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4.1-nano",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4.1 nano",
+      "contextWindow": 1047576,
+      "maxTokens": 32768,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4o",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4o",
+      "contextWindow": 128000,
+      "maxTokens": 16384,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4o-2024-05-13",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4o (2024-05-13)",
+      "contextWindow": 128000,
+      "maxTokens": 4096,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4o-2024-08-06",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4o (2024-08-06)",
+      "contextWindow": 128000,
+      "maxTokens": 16384,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4o-2024-11-20",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4o (2024-11-20)",
+      "contextWindow": 128000,
+      "maxTokens": 16384,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-4o-mini",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-4o mini",
+      "contextWindow": 128000,
+      "maxTokens": 16384,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "gpt-5",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5-chat-latest",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5 Chat Latest",
+      "contextWindow": 128000,
+      "maxTokens": 16384,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5-mini",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5 Mini",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5-nano",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5 Nano",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5-pro",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5 Pro",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": null,
+        "medium": null,
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.1",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.1",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.2",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.2",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.2-pro",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.2 Pro",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": null,
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.3 Codex",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.3 Codex Spark",
+      "contextWindow": 128000,
+      "maxTokens": 32000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.4",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.4",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsMidConvoSystemMessages": true
+      }
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.4 mini",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsMidConvoSystemMessages": true
+      }
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.4 nano",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.4-pro",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.4 Pro",
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": null,
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsMidConvoSystemMessages": true
+      }
+    },
+    {
+      "id": "gpt-5.5",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.5",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsMidConvoSystemMessages": true
+      }
+    },
+    {
+      "id": "gpt-5.5-pro",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.5 Pro",
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": null,
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true
+      }
+    },
+    {
+      "id": "gpt-5.6-cyber",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.6 Cyber",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.6 Luna",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.6 Sol",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-5.6 Terra",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-6-astra",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6 Astra",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "gpt-6-cyber",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6 Cyber",
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-6-luna",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6 Luna",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "gpt-6-sol",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6 Sol",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6.1 Sol",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6.1 Terra",
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true,
+        "supportsExplicitPromptCacheMode": true,
+        "supportsMidConvoEffort": true
+      }
+    },
+    {
+      "id": "gpt-6.2-astra",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6.2 Astra",
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "GPT-6.2 Sol",
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsOpenAIGrammarTools": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-blue-latest",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "Daybreak Blue",
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-red-latest",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "Daybreak Red",
+      "contextWindow": 400000,
+      "maxTokens": 128000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": "none",
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "compat": {
+        "supportsStrictMode": true,
+        "supportsExplicitPromptCacheMode": true
+      }
+    },
+    {
+      "id": "o1",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "o1",
+      "contextWindow": 200000,
+      "maxTokens": 100000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "o1-pro",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "o1-pro",
+      "contextWindow": 200000,
+      "maxTokens": 100000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "o3",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "o3",
+      "contextWindow": 200000,
+      "maxTokens": 100000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "o3-mini",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "o3-mini",
+      "contextWindow": 200000,
+      "maxTokens": 100000,
+      "reasoning": true,
+      "input": [
+        "text"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "o3-pro",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "o3-pro",
+      "contextWindow": 200000,
+      "maxTokens": 100000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true
+      }
+    },
+    {
+      "id": "o4-mini",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "name": "o4-mini",
+      "contextWindow": 200000,
+      "maxTokens": 100000,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "off": null,
+        "minimal": null,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": null,
+        "max": null
+      },
+      "compat": {
+        "supportsStrictMode": true
+      }
+    }
   ]
 }

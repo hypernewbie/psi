@@ -120,7 +120,7 @@ func TestBareLoginOpensProviderPicker(t *testing.T) {
 	for _, item := range r.selector.Items {
 		got = append(got, item.ID)
 	}
-	want := []string{"deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
+	want := []string{"deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("login providers=%v want %v", got, want)
 	}

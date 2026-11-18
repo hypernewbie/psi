@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,7 +35,7 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 // stored credential is found.
 func SelectProviderAPIKey(env map[string]string, authPath, providerID, configuredKey string) (key, source string, err error) {
 	spec, builtin := providerregistry.Lookup(providerID)
-	if builtin && spec.Auth != providerregistry.AuthAPIKey {
+	if builtin && spec.Auth != providerregistry.AuthAPIKey && spec.Auth != providerregistry.AuthAPIKeyOrOAuth {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
 	}
 	authPath = resolveAuthPath(env, authPath)
@@ -72,7 +73,7 @@ func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
 	authReads.Add(1)
 	data, readErr := readAuthShared(authPath)
 	if readErr != nil {
-		if _, statErr := os.Lstat(authPath); os.IsNotExist(statErr) {
+		if authPathAbsent(authPath, readErr) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("cannot read auth.json: %w", readErr)
@@ -87,12 +88,22 @@ func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
 	return entries, nil
 }
 
+// authPathAbsent distinguishes a missing file from a dangling symlink or
+// another lock/read failure. Only an absent file permits credential fallback.
+func authPathAbsent(path string, err error) bool {
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	_, statErr := os.Lstat(path)
+	return errors.Is(statErr, os.ErrNotExist)
+}
+
 // apiKeyFromEntries resolves one provider's API key from one auth.json
 // snapshot. It keeps the precedence and the no-fallback rules of
 // SelectProviderAPIKey.
 func apiKeyFromEntries(env map[string]string, entries map[string]json.RawMessage, authPath, providerID, configuredKey string) (key, source string, err error) {
 	spec, builtin := providerregistry.Lookup(providerID)
-	if builtin && spec.Auth != providerregistry.AuthAPIKey {
+	if builtin && spec.Auth != providerregistry.AuthAPIKey && spec.Auth != providerregistry.AuthAPIKeyOrOAuth {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
 	}
 	if raw, present := entries[providerID]; present {
@@ -166,6 +177,9 @@ type CredentialState struct {
 	// Source names the credential, such as "auth.json:anthropic" or
 	// "ANTHROPIC_API_KEY".
 	Source string
+	// OAuth reports that the usable credential is an OAuth login rather than
+	// an API key. The UI reads this flag directly instead of parsing Source.
+	OAuth bool
 	// Err explains why the provider has no usable credential.
 	Err error
 }
@@ -196,6 +210,12 @@ func Credentials(env map[string]string, authPath string, configured map[string]s
 					continue
 				}
 				out[providerID] = CredentialState{Usable: true, Source: "auth.json:" + providerID}
+			case providerregistry.AuthAPIKeyOrOAuth:
+				if readErr != nil {
+					out[providerID] = CredentialState{Err: readErr}
+					continue
+				}
+				out[providerID] = openAICredentialState(env, entries, authPath, configured[providerID])
 			case providerregistry.AuthAPIKey:
 				if readErr != nil {
 					out[providerID] = CredentialState{Err: readErr}
@@ -250,6 +270,12 @@ func readAuthShared(authPath string) ([]byte, error) {
 		return nil, err
 	}
 	defer unlock()
+	return readAuthFile(authPath)
+}
+
+// readAuthFile reads a bounded regular file under the caller's auth lease.
+// Read-only callers may follow an auth.json symlink.
+func readAuthFile(authPath string) ([]byte, error) {
 	fileInfo, err := os.Stat(authPath)
 	if err != nil {
 		return nil, err

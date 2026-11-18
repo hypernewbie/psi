@@ -1029,6 +1029,8 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 			id = "kimi-k3"
 		case "zai":
 			id = "glm-5.3"
+		case "openai":
+			id = "gpt-6.1-sol"
 		case "openai-codex":
 			id = "gpt-5.6-luna"
 		case "xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp":

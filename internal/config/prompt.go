@@ -58,6 +58,7 @@ var toolGuidelines = map[string][]string{
 var fixedRules = []string{
 	"Be concise in your responses",
 	"Show file paths clearly when working with files",
+	"OpenAI browser sign-in is user-only: choose OpenAI from /login or use /login openai; never read credential files or ask for tokens or callback URLs",
 }
 
 // BuildPromptSections returns the ordered, non-empty system-prompt sections.

@@ -6,7 +6,7 @@ import (
 )
 
 func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
-	want := []string{"anthropic", "deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
+	want := []string{"anthropic", "deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
 	if got := IDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("provider IDs = %v, want %v", got, want)
 	}
@@ -14,6 +14,7 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		provider, api, environment, endpoint string
 	}{
 		{"anthropic", "anthropic-messages", "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
+		{"openai", "openai-responses", "OPENAI_API_KEY", "https://api.openai.com/v1"},
 		{"openai-codex", "openai-codex-responses", "", "https://chatgpt.com/backend-api"},
 		{"minimax", "anthropic-messages", "MINIMAX_API_KEY", "https://api.minimax.io/anthropic"},
 		{"opencode-go", "anthropic-messages", "OPENCODE_API_KEY", "https://opencode.ai/inference/go/anthropic"},
@@ -42,6 +43,7 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 	}
 	wantAPIs := map[string][]string{
 		"anthropic":             {"anthropic-messages"},
+		"openai":                {"openai-responses"},
 		"openai-codex":          {"openai-codex-responses"},
 		"minimax":               {"anthropic-messages"},
 		"opencode-go":           {"anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"},

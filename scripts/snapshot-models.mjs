@@ -21,6 +21,7 @@ if (pkg.name !== "@earendil-works/pi-ai") {
 // catalog; Pi's overlay cache applies the same rule at load time.
 const providerAPIs = {
 	anthropic: ["anthropic-messages"],
+	openai: ["openai-responses"],
 	"openai-codex": ["openai-codex-responses"],
 	minimax: ["anthropic-messages"],
 	"opencode-go": ["anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses"],
