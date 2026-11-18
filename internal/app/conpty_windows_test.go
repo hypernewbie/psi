@@ -191,9 +191,10 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	// Check only the application's interactive redraws below.
 	drain()
 	raw.Reset()
-	write("abc")
-	waitFor("typed draft", func(text string) bool { return strings.Contains(text, "abc") })
-	expectedDraft := "abc"
+	const draftText = "draft" // Non-hex letters cannot occur in the session UUID header.
+	write(draftText)
+	waitFor("typed draft", func(text string) bool { return strings.Contains(text, draftText) })
+	expectedDraft := draftText
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 16}, {40, 12}, {20, 6}, {80, 24}} {
 		resize(size[0], size[1])
 		waitFor("resize without a key", func(_ string) bool {
@@ -210,7 +211,7 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		}
 	}
 	write("\x03")
-	waitFor("cleared draft", func(text string) bool { return !strings.Contains(text, "abc") })
+	waitFor("cleared draft", func(text string) bool { return !strings.Contains(text, draftText) })
 	write("resize-stream\r")
 	waitFor("stream start", func(text string) bool { return strings.Contains(text, "STREAM_SENTINEL") })
 	select {
