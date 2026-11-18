@@ -1805,6 +1805,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		r.state = StateCancelling
+		bridge.runCancelling = true
 		console.SetThinking(false)
 		cancel()
 	}
@@ -2797,6 +2798,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			bumpAwaitingStart = false
 			cancel()
 			busy = false
+			bridge.runCancelling = false
 			bridge.resolveCompactRun(err)
 			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
 			// Queued input can arrive after the run's last queue poll but before

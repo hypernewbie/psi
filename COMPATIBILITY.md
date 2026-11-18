@@ -118,9 +118,10 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 
 ### Mid-run command parity
 
-| Command during a run | Native TUI | RPC and bridge |
-|---|---|---|
-| `/model`, `/thinking`, `/settings` | Run immediately; request settings apply to the next request | Unchanged |
+| Change during a run | Native TUI | Phi bridge | RPC |
+|---|---|---|---|
+| Model or thinking | `/model` and `/thinking`; applies on the next provider request | Model and thinking setters; applies on the next provider request | Idle only |
+| Other supported `/settings` options | Display changes are immediate; request settings apply to the next request | No general settings control | No general settings control |
 
 ## Platform
 

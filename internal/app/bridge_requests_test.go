@@ -325,30 +325,49 @@ func TestBridgeSetModelWithoutCredentialRefuses(t *testing.T) {
 	}
 }
 
-// A running turn owns the configuration. The switch is refused before any
-// candidate work, so nothing can race the active provider.
-func TestBridgeSetModelRefusedWhileBusy(t *testing.T) {
-	r := testRuntime(t)
-	addModel(r, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
-	f, h := startBridgeRuntime(t, r)
-
-	before := countEntries(t, r)
-	f.inject <- &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_SetModelRequest{
-		SetModelRequest: &pibridgepb.SetModelRequest{RequestId: "req-busy", Provider: "anthropic", Model: "m2"},
-	}}
-	h.handle(nextRequest(t, r.bridge), true)
-	if h.busy() {
-		t.Fatal("busy runtime started a preparation")
-	}
-	ack := f.waitFrame(t, "busy refusal", func(frame *pibridgepb.PiToPhi) bool {
-		return frame.GetSetModelAck() != nil
-	}).GetSetModelAck()
-	if ack.GetOk() || ack.GetReason() != "" {
-		t.Fatalf("busy refusal must leave the outcome unknown: %+v", ack)
-	}
-	if r.ov.Model != "m" || countEntries(t, r) != before {
-		t.Fatal("refused switch changed the runtime or the session")
+func TestBridgeSetModelRejectsCandidateIfRunStateChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*runtime, *bridgeHandler)
+	}{
+		{"cancellation despite a late delta", func(_ *runtime, h *bridgeHandler) { h.runCancelling = true }},
+		{"settings picker took focus", func(r *runtime, _ *bridgeHandler) { r.settingsPicker = r.newSettingsPicker() }},
+		{"auto-compaction changed", func(r *runtime, _ *bridgeHandler) { r.settings.Compaction.Enabled = !r.settings.Compaction.Enabled }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := testRuntime(t)
+			addModel(r, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
+			t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
+			f, h := startBridgeRuntime(t, r)
+			r.state = StateStreaming
+			before := countEntries(t, r)
+			f.inject <- &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_SetModelRequest{
+				SetModelRequest: &pibridgepb.SetModelRequest{RequestId: "req-live", Provider: "anthropic", Model: "m2"},
+			}}
+			h.handle(nextRequest(t, r.bridge), true)
+			if !h.busy() {
+				t.Fatal("streaming runtime refused preparation")
+			}
+			select {
+			case <-h.completed():
+			case <-time.After(10 * time.Second):
+				t.Fatal("preparation did not finish")
+			}
+			if h.prep.err != nil || h.prep.cand.authErr != nil {
+				t.Fatalf("candidate failed: configure=%v auth=%v", h.prep.err, h.prep.cand.authErr)
+			}
+			tc.change(r, h)
+			h.finishPreparation(true)
+			ack := f.waitFrame(t, "candidate refusal", func(frame *pibridgepb.PiToPhi) bool {
+				return frame.GetSetModelAck().GetRequestId() == "req-live"
+			}).GetSetModelAck()
+			if ack.GetOk() || ack.GetReason() != "" || h.busy() {
+				t.Fatalf("candidate was not discarded: %v", ack)
+			}
+			if r.ov.Model != "m" || r.liveSettings().Model.ID != "m" || countEntries(t, r) != before {
+				t.Fatal("refused switch changed the live selection or the session")
+			}
+		})
 	}
 }
 

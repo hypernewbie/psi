@@ -132,6 +132,9 @@ select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 `/ac`, `/autocompact`, `/loop-stop`, and `/skill:<name>` have busy-run handling.
 `/model`, `/thinking`, and `/settings` work during a run. Request settings apply to the next request.
 Other slash commands return to the draft.
+Phi can also change the model or thinking level during a run. Bridge reload
+and compaction still require an idle pane. RPC model and thinking changes
+still require an idle session.
 An unknown, unreadable, or oversized `/skill:` invocation is refused rather than sent as prompt text.
 
 Context-limit recovery permits at most one compaction and retry before visible partial output.

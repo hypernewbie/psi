@@ -80,9 +80,10 @@ type bridgeHandler struct {
 
 	// Loop-owned submission hook and the run currently in flight. They are
 	// refreshed by the loop, never by a worker.
-	start      func(text, display, focus, invocation, source string, compact bool)
-	startInput func(input agent.UserInput, focus string, compact bool) (bool, string)
-	activeLoop *agent.Loop
+	start         func(text, display, focus, invocation, source string, compact bool)
+	startInput    func(input agent.UserInput, focus string, compact bool) (bool, string)
+	activeLoop    *agent.Loop
+	runCancelling bool // late run events can still change the displayed State
 
 	// searchDone receives finished pages. searches counts live workers on the
 	// loop only; two are enough because each page is already bounded.
@@ -161,8 +162,8 @@ func (h *bridgeHandler) busy() bool {
 	return h != nil && h.prep != nil
 }
 
-// handle dispatches one request. runBusy is the loop's current run state;
-// mutations are refused while it is true.
+// handle dispatches a request on the loop. Each capability checks its own
+// admission rules against the current run state.
 func (h *bridgeHandler) handle(req pibridge.Request, runBusy bool) {
 	switch req.Kind() {
 	case pibridge.RequestState:
@@ -588,7 +589,8 @@ func knownSkill(list []skills.Skill, name string) bool {
 // startModelSwitch admits a switch and hands the candidate configuration to
 // the preparation worker. Nothing is appended or installed here.
 func (h *bridgeHandler) startModelSwitch(req pibridge.Request, runBusy bool) {
-	if h.refuse(req, runBusy) {
+	if h.prep != nil || !h.settingsAllowed(req, runBusy) {
+		req.ReplyUnavailable()
 		return
 	}
 	providerID, model := strings.TrimSpace(req.Provider()), strings.TrimSpace(req.Model())
@@ -614,7 +616,8 @@ func (h *bridgeHandler) startModelSwitch(req pibridge.Request, runBusy bool) {
 // startThinkingSwitch admits a level change for the live model. An
 // unadvertised level is admitted because the provider clamps it.
 func (h *bridgeHandler) startThinkingSwitch(req pibridge.Request, runBusy bool) {
-	if h.refuse(req, runBusy) {
+	if h.prep != nil || !h.settingsAllowed(req, runBusy) {
+		req.ReplyUnavailable()
 		return
 	}
 	level := strings.TrimSpace(req.Level())
@@ -685,18 +688,22 @@ func (h *bridgeHandler) beginWork(req pibridge.Request, work func() (string, err
 	}()
 }
 
-// refuse reports whether native state is too busy for a bridge mutation. The
-// wire has no reason for these, so the answer stays unknown.
-func (h *bridgeHandler) refuse(req pibridge.Request, runBusy bool) bool {
-	switch {
-	case h.prep != nil, runBusy, req.Expired():
-	case h.r.store == nil, h.r.state != StateIdle, h.r.selector != nil:
-	case h.r.store.WriteError() != nil:
+// settingsAllowed keeps model and thinking changes on their own admission
+// path. They can publish for the next request without touching the run.
+func (h *bridgeHandler) settingsAllowed(req pibridge.Request, runBusy bool) bool {
+	r := h.r
+	if req.Expired() || h.runCancelling || r.reloadPending || r.store == nil || r.store.WriteError() != nil ||
+		r.selector != nil || r.settingsPicker != nil || r.login != nil {
+		return false
+	}
+	switch r.state {
+	case StateIdle:
+		return !runBusy
+	case StateWaiting, StateStreaming, StateRunningTool, StateCompacting:
+		return runBusy
 	default:
 		return false
 	}
-	req.ReplyUnavailable()
-	return true
 }
 
 // finishPreparation resolves the worker result on the loop. Every rejection
@@ -731,10 +738,14 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 		return
 	}
 	if cand.authErr != nil {
-		discard("no-auth")
+		if prep.kind == pibridge.RequestSetModel {
+			discard("no-auth")
+		} else {
+			discard("")
+		}
 		return
 	}
-	if req.Expired() || runBusy || h.r.store == nil || h.r.selector != nil || h.r.state != StateIdle {
+	if !h.settingsAllowed(req, runBusy) {
 		discard("")
 		return
 	}
@@ -747,9 +758,17 @@ func (h *bridgeHandler) finishPreparation(runBusy bool) {
 	// Settings saves replace the published map instead of mutating it, so the
 	// candidate holds an immutable snapshot. A change after the worker started
 	// makes the candidate's defaults stale.
-	if !maps.Equal(h.r.settings.ModelThinkingLevels, cand.settings.ModelThinkingLevels) ||
+	if h.r.models != cand.models ||
+		!maps.Equal(h.r.settings.ModelThinkingLevels, cand.settings.ModelThinkingLevels) ||
 		h.r.settings.DefaultThinking != cand.settings.DefaultThinking ||
 		h.r.settings.DefaultThinkingSet != cand.settings.DefaultThinkingSet {
+		discard("")
+		return
+	}
+	// Publishing a candidate must not undo a live auto-compaction change.
+	compaction := h.r.settings.Compaction
+	if cand.cfg.AutoCompact != compaction.Enabled || cand.cfg.KeepRecentTokens != compaction.KeepRecentTokens ||
+		cand.cfg.ReserveTokens != compaction.ReserveForModel(cand.ov.Provider, cand.ov.Model) {
 		discard("")
 		return
 	}
