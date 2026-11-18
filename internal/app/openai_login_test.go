@@ -333,6 +333,8 @@ func TestOpenAILoginDuringRunRestored(t *testing.T) {
 		t.Fatalf("authErr: %v", r.authErr)
 	}
 	console, out, inputWrite, result := startLoginTestREPL(t, r)
+	finishRun := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(finishRun)
 	waitAppOutput(t, out, "gpt-6.1-sol")
 	if _, err := inputWrite.Write([]byte("hi\r")); err != nil {
 		t.Fatal(err)
@@ -342,10 +344,13 @@ func TestOpenAILoginDuringRunRestored(t *testing.T) {
 	case <-time.After(60 * time.Second):
 		t.Fatal("run never started")
 	}
-	if _, err := inputWrite.Write([]byte("/login openai\r")); err != nil {
+	// Ctrl+O is handled after the login command. Its status confirms the
+	// REPL processed the command before the fake model run can finish.
+	if _, err := inputWrite.Write([]byte("/login openai\r\x0f")); err != nil {
 		t.Fatal(err)
 	}
-	close(release)
+	waitAppOutput(t, out, "Skill blocks:")
+	finishRun()
 	waitAppOutput(t, out, "busy-reply")
 	if err := inputWrite.Close(); err != nil {
 		t.Fatal(err)

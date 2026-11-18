@@ -256,9 +256,7 @@ func TestOpenAIRefreshPersistsAndReusesRotation(t *testing.T) {
 	if len(updated.Scopes) != 2 || updated.Scopes[1] != openAIDirectScope {
 		t.Fatalf("persisted scopes = %v", updated.Scopes)
 	}
-	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
-		t.Fatal("refreshed auth is not private")
-	}
+	requireAuthWriteMode(t, path, 0o600)
 	// A later caller reuses the persisted credential without another exchange.
 	later := &OpenAIAuth{Path: path, HTTP: &http.Client{Transport: fake}}
 	later.now = func() time.Time { return now }
@@ -479,16 +477,35 @@ func TestOpenAISharedLoginProtections(t *testing.T) {
 	t.Run("lease loss", func(t *testing.T) {
 		path := newExpired(t)
 		fake := &openAIFakeToken{handler: func(*http.Request) (*http.Response, error) {
-			_ = os.Remove(path + ".lock")
 			return openAITokenResponse(200, `{"access_token":"a","refresh_token":"r","scope":"`+openAIDirectScope+`","expires_in":3600}`), nil
 		}}
-		auth := &OpenAIAuth{Path: path, HTTP: &http.Client{Transport: fake}}
-		if _, err := auth.Get(context.Background()); err == nil {
-			t.Fatal("lease loss was ignored")
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
 		}
-		data, _ := os.ReadFile(path)
-		if bytes.Contains(data, []byte(`"access":"a"`)) {
-			t.Fatal("lease loss allowed an overwrite")
+		auth := &OpenAIAuth{Path: path, HTTP: &http.Client{Transport: fake}}
+		auth.Chmod = func(temp string, mode os.FileMode) error {
+			// A timestamp change invalidates the lease without removing the
+			// directory, which Windows disallows while its handle is open.
+			lock := path + ".lock"
+			info, err := os.Stat(lock)
+			if err != nil {
+				t.Errorf("inspect auth lease: %v", err)
+				return err
+			}
+			older := info.ModTime().Add(-time.Hour)
+			if err := os.Chtimes(lock, older, older); err != nil {
+				t.Errorf("invalidate auth lease: %v", err)
+				return err
+			}
+			return os.Chmod(temp, mode)
+		}
+		if _, err := auth.Get(context.Background()); err == nil || !strings.Contains(err.Error(), "auth.json lock changed") {
+			t.Fatalf("refresh after lease loss: %v", err)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("auth document changed after lease loss: %v", err)
 		}
 	})
 	t.Run("symlink refused before exchange", func(t *testing.T) {

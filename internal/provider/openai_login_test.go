@@ -205,9 +205,7 @@ func TestOpenAILoginHappyPath(t *testing.T) {
 	if strings.Contains(string(data), "login-id-token") || strings.Contains(string(data), "login-code") {
 		t.Fatalf("transient secret persisted in %s", data)
 	}
-	if info, err := os.Stat(authPath); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("auth mode = %v, %v", info, err)
-	}
+	requireAuthWriteMode(t, authPath, 0o600)
 }
 
 // Exactly one valid terminal outcome is published, no matter how many valid
