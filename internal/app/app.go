@@ -2935,12 +2935,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.refreshPresentation(console)
 				r.draw(console)
 			}
-			if settledState == StateIdle && len(initialMessages) > 0 {
-				message := initialMessages[0]
-				initialMessages = initialMessages[1:]
-				start(message, message, "", "", "", false)
-			}
-			if !busy && lateQueueLoop != nil && settledState == StateIdle && len(initialMessages) == 0 {
+			// Finish the current run's accepted input before a startup prompt
+			// replaces the loop that owns it.
+			if lateQueueLoop != nil && settledState == StateIdle {
 				ctx, stop := context.WithCancel(context.Background())
 				cancel = stop
 				busy = true
@@ -2952,6 +2949,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				lateLoop, cfg := lateQueueLoop, activeConfig
 				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
 				r.draw(console)
+			} else if settledState == StateIdle && len(initialMessages) > 0 {
+				message := initialMessages[0]
+				initialMessages = initialMessages[1:]
+				start(message, message, "", "", "", false)
 			}
 			if !busy && pendingACCompactFocus != nil && settledState == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 {
 				focus := *pendingACCompactFocus

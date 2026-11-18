@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	goruntime "runtime"
 	"strings"
 	"sync/atomic"
@@ -158,15 +159,12 @@ func TestActualAppThinkingChangeAppliesToTheNextRequest(t *testing.T) {
 }
 
 // TestActualAppModelChangeAppliesToTheNextRequest proves that a model
-// changed during a run reaches the next provider request of that run, and
-// that the request already in flight keeps its own model.
+// change applies to the next logical request but not to a transport retry of
+// the request already in flight.
 func TestActualAppModelChangeAppliesToTheNextRequest(t *testing.T) {
-	if goruntime.GOOS == "windows" {
-		t.Skip("live configuration workflow needs a Unix PTY")
-	}
 	bodies := make(chan map[string]any, 8)
 	release := make(chan struct{}, 8)
-	var turns atomic.Int32
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/v1/messages" || req.Header.Get("x-api-key") != "file-test-key" {
 			t.Errorf("endpoint/auth not used: %s", req.URL.Path)
@@ -176,15 +174,20 @@ func TestActualAppModelChangeAppliesToTheNextRequest(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
+		attempt := int(attempts.Add(1))
 		bodies <- body
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.(http.Flusher).Flush()
 		select {
 		case <-release:
 		case <-req.Context().Done():
 			return
 		}
-		fmt.Fprint(w, liveThinkingTurn(int(turns.Add(1))))
+		if attempt == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, `{"error":{"type":"rate_limit_error"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, liveThinkingTurn(attempt-1))
 	}))
 	defer server.Close()
 	home, ws := t.TempDir(), t.TempDir()
@@ -209,7 +212,12 @@ func TestActualAppModelChangeAppliesToTheNextRequest(t *testing.T) {
 		t.Fatalf("first request model = %v, want local-model", first["model"])
 	}
 	q.write("/model anthropic/local-next\r")
-	q.waitScreen("local-next")
+	q.waitScreen("Model: local-next")
+	release <- struct{}{}
+	retry := liveWaitBody(t, bodies)
+	if !reflect.DeepEqual(retry, first) {
+		t.Fatalf("retry changed the in-flight request:\nfirst: %v\nretry: %v", first, retry)
+	}
 	release <- struct{}{}
 	second := liveWaitBody(t, bodies)
 	if second["model"] != "local-next" {

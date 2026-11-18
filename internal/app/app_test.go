@@ -1567,6 +1567,88 @@ func TestReplUpdatesFooterContextDuringToolLoop(t *testing.T) {
 	}
 }
 
+// startupQueueProvider gates the first run after its final follow-up poll.
+// The adaptive-compaction check snapshots the live request settings there,
+// which installs the retry observer on the current provider.
+type startupQueueProvider struct {
+	*provider.Fake
+	atSettlement chan struct{}
+	settledLast  chan struct{}
+	release      chan struct{}
+	stop         <-chan struct{}
+	once         sync.Once
+}
+
+func (p *startupQueueProvider) SetRetryObserver(observer func(provider.RetryInfo)) {
+	if observer == nil {
+		if p.CallCount() == 4 {
+			close(p.settledLast)
+		}
+		return
+	}
+	if p.CallCount() == 1 {
+		p.once.Do(func() {
+			close(p.atSettlement)
+			select {
+			case <-p.release:
+			case <-p.stop:
+			}
+		})
+	}
+}
+
+func TestLateFollowUpPrecedesRemainingStartupMessages(t *testing.T) {
+	r := testRuntime(t)
+	r.state, r.authErr = StateIdle, nil
+	r.options.Messages = []string{"STARTUP_FIRST", "STARTUP_SECOND", "STARTUP_THIRD"}
+	p := &startupQueueProvider{
+		Fake: &provider.Fake{Responses: []*provider.Response{
+			{Text: "FIRST_ANSWER", StopReason: "stop"},
+			{Text: "SECOND_ANSWER", StopReason: "stop"},
+			{Text: "THIRD_ANSWER", StopReason: "stop"},
+			{Text: "LAST_ANSWER", StopReason: "stop"},
+		}},
+		atSettlement: make(chan struct{}),
+		settledLast:  make(chan struct{}),
+		release:      make(chan struct{}),
+		stop:         t.Context().Done(),
+	}
+	r.prov = p
+	_, out, send, finish := startBumpREPL(t, r)
+	waitBumpSettlement(t, p.atSettlement)
+	send("LATE_FOLLOW_UP\x1b\r")
+	waitBumpOutput(t, out, "Follow-up: LATE_FOLLOW_UP")
+	send("/settings\r")
+	waitBumpOutput(t, out, "Auto-compact")
+	close(p.release)
+	assertPrompts := func(want ...string) {
+		t.Helper()
+		requests := p.Requests()
+		if len(requests) < len(want) {
+			t.Fatalf("provider received %d requests, want at least %d", len(requests), len(want))
+		}
+		for i, expected := range want {
+			messages := requests[i].Messages
+			if len(messages) == 0 {
+				t.Fatalf("request %d has no messages", i+1)
+			}
+			last := messages[len(messages)-1]
+			if last.Role != "user" || len(last.Content) == 0 || last.Content[0].Text != expected {
+				t.Fatalf("request %d ends with %+v, want user prompt %q", i+1, last, expected)
+			}
+		}
+	}
+	waitBumpOutput(t, out, "SECOND_ANSWER")
+	assertPrompts("STARTUP_FIRST", "LATE_FOLLOW_UP")
+	waitBumpSettlement(t, p.settledLast)
+	send("\x03/quit\r") // Ctrl+C closes settings before /quit reaches the editor.
+	finish()
+	assertPrompts("STARTUP_FIRST", "LATE_FOLLOW_UP", "STARTUP_SECOND", "STARTUP_THIRD")
+	if p.CallCount() != 4 {
+		t.Fatalf("provider received %d requests, want exactly 4", p.CallCount())
+	}
+}
+
 func TestPickerClosePreservesStorageBlocked(t *testing.T) {
 	r := testRuntime(t)
 	r.authErr = nil
