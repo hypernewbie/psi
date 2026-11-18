@@ -143,6 +143,7 @@ func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.S
 		ov: ov, cfg: cfg, prov: prov, reg: tools.NewRegistry(ws),
 		live: newLiveConfig(),
 	}
+	r.publishLive()
 	log := &rpcLog{}
 	enc := json.NewEncoder(log)
 	enc.SetEscapeHTML(false)

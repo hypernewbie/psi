@@ -134,66 +134,83 @@ func rpcSettledFlags(objs []map[string]any) []bool {
 	return out
 }
 
-// rpcCompactGateWriter forwards frames to the log but parks the terminal
-// compact response until the test releases it, so the test observes whether
-// the reservation released before its response went out.
-type rpcCompactGateWriter struct {
+// rpcTerminalGateWriter delivers a terminal frame but waits to return from
+// Write. This lets the test look for stale ownership once a client can read it.
+type rpcTerminalGateWriter struct {
 	dst     *rpcLog
-	blocked chan struct{}
+	match   string
+	written chan struct{}
 	release chan struct{}
-	once    sync.Once
 }
 
-func (w *rpcCompactGateWriter) Write(p []byte) (int, error) {
-	if bytes.Contains(p, []byte(`"command":"compact"`)) {
-		w.once.Do(func() { close(w.blocked) })
+func (w *rpcTerminalGateWriter) Write(p []byte) (int, error) {
+	n, err := w.dst.Write(p)
+	if bytes.Contains(p, []byte(w.match)) {
+		close(w.written)
 		<-w.release
 	}
-	return w.dst.Write(p)
+	return n, err
 }
 
-// TestRPCCompactResponsePrecedesOwnershipRelease proves the terminal compact
-// response goes out before the reservation releases: shutdown waits on the
-// reservation's done channel, so a release first would let the store unlock
-// and the process exit before the response is written.
-func TestRPCCompactResponsePrecedesOwnershipRelease(t *testing.T) {
-	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
-	gate := &rpcCompactGateWriter{dst: log, blocked: make(chan struct{}), release: make(chan struct{})}
-	enc := json.NewEncoder(gate)
-	enc.SetEscapeHTML(false)
-	s.out = enc
-	// An empty session has no compaction work, but the worker still owns
-	// the runner until its terminal response: the cheapest staging that
-	// exercises the release order.
-	if resp := s.handle(rpcCommand{ID: strptr("c1"), Type: "compact"}); resp != nil {
-		t.Fatalf("compact answers from its worker, got %+v", resp)
-	}
-	s.mu.Lock()
-	res := s.reservation
-	s.mu.Unlock()
-	if res == nil {
-		t.Fatal("compact was not admitted")
-	}
-	select {
-	case <-gate.blocked:
-	case <-time.After(8 * time.Second):
-		t.Fatal("terminal compact response never reached the writer")
-	}
-	// The response is parked at the writer: a closed done here proves the
-	// release ran before the response went out.
-	select {
-	case <-res.done:
-		t.Fatal("reservation released before its terminal response")
-	default:
-	}
-	close(gate.release)
-	select {
-	case <-res.done:
-	case <-time.After(8 * time.Second):
-		t.Fatal("reservation never released")
-	}
-	if resp := rpcWaitCompactResponse(t, log, "c1"); resp["success"] != false {
-		t.Fatalf("empty compact terminal response: %v", resp)
+func TestRPCTerminalFrameOrdersOwnershipRelease(t *testing.T) {
+	for _, command := range []string{"prompt", "compact"} {
+		t.Run(command, func(t *testing.T) {
+			prov := newRPCBlockingProvider()
+			s, _, log := newRPCTestRunner(t, prov, nil)
+			gate := &rpcTerminalGateWriter{dst: log, match: `"type":"agent_settled"`, written: make(chan struct{}), release: make(chan struct{})}
+			if command == "compact" {
+				gate.match = `"command":"compact"`
+			}
+			s.out = json.NewEncoder(gate)
+			unblock := sync.OnceFunc(func() { close(gate.release) })
+			defer unblock()
+
+			var done <-chan struct{}
+			if command == "compact" {
+				// An empty session reaches the terminal response without a
+				// provider call. Keep the reservation so we can wait on it.
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				res := &rpcCompactReservation{id: strptr("c1"), cfg: s.runConfig(), done: make(chan struct{}), cancel: cancel}
+				s.reservation, s.compacting = res, true
+				done = res.done
+				go s.compactWorker(res, nil, ctx)
+			} else {
+				if resp := s.handle(rpcCommand{Type: "prompt", Message: "hello"}); resp == nil || !resp.Success {
+					t.Fatalf("prompt: %+v", resp)
+				}
+				done = s.run.done
+				close(prov.release)
+			}
+			select {
+			case <-gate.written:
+			case <-time.After(8 * time.Second):
+				t.Fatal("worker did not write a terminal frame")
+			}
+			select {
+			case <-done:
+				t.Fatal("worker finished before its terminal write returned")
+			default:
+			}
+			// Probe command admission without blocking the parked writer.
+			if s.mu.TryLock() {
+				busy := s.running || s.compacting
+				s.mu.Unlock()
+				if busy {
+					t.Fatal("command admission can still observe stale ownership after the terminal frame")
+				}
+			}
+			unblock()
+			select {
+			case <-done:
+			case <-time.After(8 * time.Second):
+				t.Fatal("worker did not release ownership")
+			}
+			state := s.getState(rpcCommand{Type: "get_state"}).Data.(map[string]any)
+			if state["isStreaming"] != false || state["isCompacting"] != false {
+				t.Fatalf("worker still busy after settlement: %v", state)
+			}
+		})
 	}
 }
 

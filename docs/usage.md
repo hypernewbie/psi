@@ -127,7 +127,8 @@ one message per turn) or `all`.
   `steeringMode`/`followUpMode` and resources; new queue modes apply to the
   next run. Model, tool, shell, and network settings are not reloaded.
   During a run, `/reload` cancels the run first, reloads, then retries the
-  interrupted input.
+  interrupted input. It retries an interrupted manual compaction only if
+  the compaction has not saved its checkpoint.
 
 Startup selection uses `--provider`, `--model`, and `--thinking`; see
 [Command line](cli.md). Model IDs come from the bundled catalog and Pi's local

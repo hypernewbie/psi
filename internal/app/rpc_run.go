@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 
 	"psi/internal/config"
@@ -171,6 +171,7 @@ func runRPC(o Options, version string) error {
 		cleanup()
 		return err
 	}
+	r.publishLive()
 	if o.Name != "" {
 		if _, err := r.store.AppendSessionInfo(o.Name); err != nil {
 			cleanup()
@@ -193,40 +194,48 @@ func runRPC(o Options, version string) error {
 	// terminal loop uses.
 	s.loop = r.newLoop(s.sink)
 
-	// One shutdown path serves stdin EOF and termination signals: stop
-	// intake, cancel the owned workers, wait for their terminal frames,
-	// then release the store once. No timeout can unlock the store while
-	// a worker still owns it.
-	var shutdownOnce sync.Once
-	var signalled atomic.Bool
-	shutdown := func() {
-		shutdownOnce.Do(func() {
-			close(s.shutdown)
-			s.cancelActive()
-			s.waitWorkers()
-			// Release the scanner goroutine from its stdin read. The
-			// shutdown channel already stopped intake; this only ends
-			// the blocked read so no goroutine outlives the session.
-			// Errors are ignored: stdin may already be at EOF.
-			_ = os.Stdin.Close()
-			cleanup()
-		})
-	}
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
-	go func() {
-		<-sigs
-		signalled.Store(true)
-		shutdown()
-	}()
-
-	s.runLoop(os.Stdin)
-	shutdown()
-	if signalled.Load() {
+	if s.serve(os.Stdin, sigs, cleanup) {
 		os.Exit(143)
 	}
 	return nil
+}
+
+// serve owns the session through both command dispatch and worker settlement.
+// A signal stops intake and cancels work, but only the command-loop owner may
+// release the store: a synchronous setter can still be persisting a change.
+func (s *rpcRunner) serve(stdin io.ReadCloser, sigs <-chan os.Signal, cleanup func()) bool {
+	var stopOnce sync.Once
+	stopIntake := func() {
+		stopOnce.Do(func() {
+			close(s.shutdown)
+			s.cancelActive()
+		})
+	}
+	stopSignal, signalDone := make(chan struct{}), make(chan struct{})
+	signalled := false
+	go func() {
+		defer close(signalDone)
+		select {
+		case <-sigs:
+			signalled = true
+			stopIntake()
+		case <-stopSignal:
+		}
+	}()
+
+	s.runLoop(stdin)
+	stopIntake()
+	s.waitWorkers()
+	// Shutdown already stopped intake. Close stdin to release any scanner
+	// still blocked on a read.
+	_ = stdin.Close()
+	close(stopSignal)
+	<-signalDone
+	cleanup()
+	return signalled
 }
 
 // cancelActive aborts the in-flight run and the compact reservation, if

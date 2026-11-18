@@ -1216,12 +1216,11 @@ func firstLine(s string) string {
 	return s
 }
 
-func (r *runtime) installConfiguration(candidate *runtime) {
+func (r *runtime) adoptConfiguration(candidate *runtime) {
 	if r.prov != nil {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
-	r.publishLive()
 }
 
 // publishLive stores the mutable request configuration that a running loop
@@ -1230,7 +1229,11 @@ func (r *runtime) publishLive() {
 	if r.live == nil {
 		return
 	}
-	r.live.publish(agent.LiveSettings{
+	r.live.publish(r.requestSettings())
+}
+
+func (r *runtime) requestSettings() agent.LiveSettings {
+	return agent.LiveSettings{
 		Provider:         r.prov,
 		Overrides:        r.ov,
 		Model:            r.cfg.Model,
@@ -1239,7 +1242,66 @@ func (r *runtime) publishLive() {
 		ReserveTokens:    r.cfg.ReserveTokens,
 		KeepRecentTokens: r.cfg.KeepRecentTokens,
 		AuthErr:          r.authErr,
+	}
+}
+
+// commitSelection orders a durable selection change and its publication with
+// the agent's metadata sync. Keep provider preparation and retirement outside
+// this lock; the worker only needs the published request settings.
+func (r *runtime) commitSelection(next agent.LiveSettings, persist func() error) error {
+	if r.live == nil {
+		return persist()
+	}
+	r.live.mu.Lock()
+	defer r.live.mu.Unlock()
+	if err := persist(); err != nil {
+		return err
+	}
+	r.live.live = next
+	return nil
+}
+
+func (r *runtime) selectModel(candidate *runtime) error {
+	err := r.commitSelection(candidate.requestSettings(), func() error {
+		_, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model)
+		return err
 	})
+	if err == nil {
+		r.adoptConfiguration(candidate)
+	}
+	return err
+}
+
+func (r *runtime) commitThinking(next agent.LiveSettings) error {
+	return r.commitSelection(next, func() error {
+		_, err := r.store.AppendThinkingLevelChange(next.Thinking)
+		return err
+	})
+}
+
+func (r *runtime) modelSelectionSync() func() error {
+	if r.live == nil {
+		return nil
+	}
+	live, store := r.live, r.store
+	return func() error {
+		live.mu.Lock()
+		defer live.mu.Unlock()
+		state, err := store.ModelState()
+		if err != nil {
+			return err
+		}
+		selected := live.live
+		if state.Provider != selected.Model.ProviderID() || state.ModelID != selected.Model.ID {
+			if _, err := store.AppendModelChange(selected.Model.ProviderID(), selected.Model.ID); err != nil {
+				return err
+			}
+		}
+		if state.ThinkingLevel != selected.Thinking {
+			_, err = store.AppendThinkingLevelChange(selected.Thinking)
+		}
+		return err
+	}
 }
 
 // liveSettings returns the current mutable request configuration.
@@ -1440,8 +1502,9 @@ func (r *runtime) replace(next *session.Store) error {
 			return err
 		}
 	}
-	r.installConfiguration(&candidate)
+	r.adoptConfiguration(&candidate)
 	r.store = next
+	r.publishLive()
 	// Undelivered prompts belonged to the replaced session; keeping them
 	// would let a later attachment send content the user has moved away from.
 	r.clearRecovery()
@@ -2156,6 +2219,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		gen, seq := r.generation, int64(0)
 		cfg := r.cfg
 		cfg.ACPolicy = r.ac
+		cfg.SyncModelSelection = r.modelSelectionSync()
 		// Capture the settings, tool list, and selected web tools once so the
 		// run goroutine never reads r.settings while the settings picker
 		// writes it.
@@ -2744,6 +2808,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// The new operation starts fresh without re-asking.
 				switch action.kind {
 				case "compact":
+					compactExplicit = true
 					if admitted, reason := startInput(agent.UserInput{}, action.focus, true); !admitted {
 						if reason != "" {
 							notice(terminal.NoticeError, reason)
@@ -2804,6 +2869,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 							r.draw(console)
 						}
 					case inputCompact:
+						// A queued prompt may have run after the checkpoint. Its
+						// interruption does not make the compaction replayable.
+						if compactionCommitted {
+							notice(terminal.NoticeInfo, "Kept the saved compaction checkpoint.")
+							r.draw(console)
+							break
+						}
 						if !desc.explicit {
 							r.draw(console)
 							break
@@ -2832,12 +2904,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 				_, doneFramesAfter, _, _ := console.FrameStats()
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 			}
-			if pendingInterrupt == nil && len(initialMessages) > 0 {
+			// An interrupt can already have started the next worker. Leave
+			// lower-priority work queued until that worker settles.
+			if !busy && len(initialMessages) > 0 {
 				message := initialMessages[0]
 				initialMessages = initialMessages[1:]
 				start(message, message, "", "", "", false)
 			}
-			if lateQueueLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
+			if !busy && lateQueueLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
 				ctx, stop := context.WithCancel(context.Background())
 				cancel = stop
 				busy = true
@@ -2850,7 +2924,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
 				r.draw(console)
 			}
-			for len(deferredFIFO) > 0 && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
+			for !busy && len(deferredFIFO) > 0 && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
 				action := deferredFIFO[0]
 				deferredFIFO = deferredFIFO[1:]
 				switch action.kind {
@@ -2880,9 +2954,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 				default:
 					notice(terminal.NoticeError, "Unknown deferred action: "+action.kind)
-				}
-				if busy {
-					break
 				}
 			}
 			if err == nil && lateQueueLoop == nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting && r.ac.Snapshot().CompactionCount == compactionCountAtStart {
@@ -3810,13 +3881,12 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 	if err := candidate.configure(next); err != nil {
 		return false, err
 	}
-	if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
+	if err := r.selectModel(&candidate); err != nil {
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
 	}
-	r.installConfiguration(&candidate)
 	if r.ac != nil {
 		r.ac.ResetGrowth()
 	}
@@ -3857,13 +3927,13 @@ func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error)
 	if err := candidate.configure(next); err != nil {
 		return false, err
 	}
-	if _, err := r.store.AppendThinkingLevelChange(level); err != nil {
+	if err := r.commitThinking(candidate.requestSettings()); err != nil {
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
 		return false, err
 	}
-	r.installConfiguration(&candidate)
+	r.adoptConfiguration(&candidate)
 	printStatusText(out, "Thinking level: "+level)
 	return false, nil
 }

@@ -113,8 +113,9 @@ type rpcRunner struct {
 // rpcRunWorker tracks one prompt submission. done closes after durable
 // settlement and the terminal run frame, never before.
 type rpcRunWorker struct {
-	done   chan struct{}
-	cancel context.CancelFunc
+	done    chan struct{}
+	cancel  context.CancelFunc
+	started bool // guarded by rpcRunner.mu
 }
 
 // rpcCompactReservation owns the runner from compact admission until its
@@ -139,6 +140,7 @@ func (s *rpcRunner) emit(v any) {
 func (s *rpcRunner) runConfig() agent.Config {
 	r := s.r
 	cfg := r.cfg
+	cfg.SyncModelSelection = r.modelSelectionSync()
 	cfg.LiveSettings = func() agent.LiveSettings {
 		return r.liveSettings()
 	}
@@ -174,6 +176,17 @@ func (s *rpcRunner) pendingCount() int {
 func (s *rpcRunner) sink(ev event.Event) {
 	switch ev.Type {
 	case event.RunStart:
+		// ContinuePending can start another loop inside one RPC prompt
+		// worker. Keep its wire lifecycle paired with one agent_settled.
+		s.mu.Lock()
+		if s.running && s.run != nil {
+			if s.run.started {
+				s.mu.Unlock()
+				return
+			}
+			s.run.started = true
+		}
+		s.mu.Unlock()
 		s.emit(map[string]any{"type": "agent_start"})
 	case event.SteeringDelivered, event.FollowUpDelivered:
 		s.userMessage(ev.Text)
@@ -384,7 +397,7 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 	// a prompt queue the summary may strand, so refuse before validating
 	// or appending anything. This covers the reservation and an automatic
 	// summary from the running turn alike.
-	if s.isCompacting() || s.isSummarizing() {
+	if s.promptBlockedByCompaction() {
 		out := rpcErr(cmd.ID, "prompt", "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.")
 		return &out
 	}
@@ -401,26 +414,8 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "prompt", s.r.authErr.Error())
 		return &out
 	}
-	if s.isRunning() {
-		// Submission and settlement have small windows outside Loop.Running.
-		// Do not accept a queue entry that the loop may never deliver.
-		if !s.loop.Running() {
-			out := rpcErr(cmd.ID, "prompt", "Agent is starting or settling; retry the prompt.")
-			return &out
-		}
-		switch cmd.StreamingBehavior {
-		case "followUp":
-			s.loop.FollowUp(text)
-		case "steer":
-			s.loop.Steer(text)
-		case "":
-			out := rpcErr(cmd.ID, "prompt", "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.")
-			return &out
-		default:
-			s.loop.Steer(text)
-		}
-		out := rpcOK(cmd.ID, "prompt", map[string]any{"disposition": "queued"})
-		return &out
+	if resp := s.queuePrompt(cmd, text); resp != nil {
+		return resp
 	}
 	// Compaction or an imported session can change the active projection.
 	// Only publish messages written by this new run.
@@ -451,37 +446,68 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 	s.userMessage(text)
 	go func() {
 		err := s.loop.Submit(ctx, text, cfg)
+		for err == nil && s.hasLatePrompts(ctx) {
+			err = s.loop.ContinuePending(ctx, cfg)
+		}
 		s.sweepDurable()
-		// The terminal frame goes out before ownership clears: a prompt
-		// admitted in between lands in the settling window above and is
-		// refused retryably instead of queueing into a spent run. No
-		// state mutex is held while encoding.
 		if err != nil && ctx.Err() == nil {
 			s.emit(map[string]any{"type": "extension_error", "error": err.Error()})
 		}
-		s.emit(map[string]any{"type": "agent_settled", "aborted": ctx.Err() != nil})
+		// Pair the terminal frame with the idle state so a client acting
+		// on settlement cannot be refused by stale run ownership.
 		s.mu.Lock()
+		s.emit(map[string]any{"type": "agent_settled", "aborted": ctx.Err() != nil})
 		if s.run == worker {
 			s.running = false
 		}
 		s.streamOpen, s.toolIndex = false, 0
-		s.mu.Unlock()
 		close(worker.done)
+		s.mu.Unlock()
 	}()
 	out := rpcOK(cmd.ID, "prompt", map[string]any{"disposition": "started"})
 	return &out
 }
 
-func (s *rpcRunner) isSummarizing() bool {
+func (s *rpcRunner) queuePrompt(cmd rpcCommand, text string) *rpcResponse {
+	// Pair admission with the worker's last queue check. Loop.Running can
+	// turn false at any time, but an accepted enqueue must precede that check.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.summarizing
+	if s.compacting || s.summarizing {
+		out := rpcErr(cmd.ID, "prompt", "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.")
+		return &out
+	}
+	if !s.running {
+		return nil
+	}
+	if !s.loop.Running() || s.isShutdown() {
+		out := rpcErr(cmd.ID, "prompt", "Agent is starting or settling; retry the prompt.")
+		return &out
+	}
+	switch cmd.StreamingBehavior {
+	case "followUp":
+		s.loop.FollowUp(text)
+	case "":
+		out := rpcErr(cmd.ID, "prompt", "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.")
+		return &out
+	default:
+		s.loop.Steer(text)
+	}
+	out := rpcOK(cmd.ID, "prompt", map[string]any{"disposition": "queued"})
+	return &out
 }
 
-func (s *rpcRunner) isCompacting() bool {
+func (s *rpcRunner) hasLatePrompts(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.compacting
+	// If a compact is waiting, it owns the queue after this run settles.
+	return ctx.Err() == nil && !s.isShutdown() && s.reservation == nil && s.pendingCount() > 0
+}
+
+func (s *rpcRunner) promptBlockedByCompaction() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.compacting || s.summarizing
 }
 
 // getState answers with the live runtime shape pi's wire format defines.
@@ -568,15 +594,12 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 		out := rpcErr(cmd.ID, "set_model", cand.authErr.Error())
 		return &out
 	}
-	if _, err := r.store.AppendModelChange(cand.ov.Provider, cand.ov.Model); err != nil {
+	// Publish the candidate without replacing the loop or losing its queues.
+	if err := r.selectModel(&cand); err != nil {
 		cand.prov.CloseIdle()
 		out := rpcErr(cmd.ID, "set_model", err.Error())
 		return &out
 	}
-	// The install publishes the candidate, so a running loop picks it up
-	// at its next turn boundary. The loop stays put: replacing it would
-	// drop queued steering and follow-ups.
-	r.installConfiguration(&cand)
 	out := rpcOK(cmd.ID, "set_model", rpcModel{Provider: providerID, ID: modelID, Name: rpcModelName(r.models, providerID, modelID)})
 	return &out
 }
@@ -599,13 +622,15 @@ func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
 		out := rpcOK(cmd.ID, "set_thinking_level", nil)
 		return &out
 	}
-	if _, err := r.store.AppendThinkingLevelChange(level); err != nil {
+	next := r.requestSettings()
+	next.Thinking = level
+	next.Overrides.Thinking = level
+	if err := r.commitThinking(next); err != nil {
 		out := rpcErr(cmd.ID, "set_thinking_level", err.Error())
 		return &out
 	}
 	r.ov.Thinking = level
 	r.cfg.Thinking = level
-	r.publishLive()
 	out := rpcOK(cmd.ID, "set_thinking_level", nil)
 	return &out
 }
@@ -664,8 +689,7 @@ func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWork
 		// no-work compact answers with the terminal response only.
 		// The terminal response precedes the release: shutdown waits on
 		// done, so done must not close before the response goes out.
-		s.emit(rpcErr(res.id, "compact", "compaction aborted"))
-		s.finishCompact(res)
+		s.finishCompact(res, rpcErr(res.id, "compact", "compaction aborted"))
 		return
 	}
 	s.mu.Lock()
@@ -685,8 +709,7 @@ func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWork
 			})
 			s.emit(map[string]any{"type": "agent_settled", "aborted": aborted})
 		}
-		s.emit(rpcErr(res.id, "compact", compactErr.Error()))
-		s.finishCompact(res)
+		s.finishCompact(res, rpcErr(res.id, "compact", compactErr.Error()))
 		return
 	}
 	s.emit(map[string]any{
@@ -694,17 +717,15 @@ func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWork
 		"aborted": false, "result": map[string]any{},
 	})
 	s.emit(map[string]any{"type": "agent_settled", "aborted": false})
-	s.emit(rpcOK(res.id, "compact", map[string]any{}))
-	s.finishCompact(res)
+	s.finishCompact(res, rpcOK(res.id, "compact", map[string]any{}))
 }
 
-// finishCompact ends the reservation after the terminal response goes out.
-// done closes first so a shutdown snapshot either waits on this worker or
-// observes a fully finished one; the reservation clears immediately after
-// so a client acting on the response never meets a stale refusal.
-func (s *rpcRunner) finishCompact(res *rpcCompactReservation) {
-	close(res.done)
+// Order the terminal response before worker completion, while preventing
+// commands acting on that response from observing the old reservation.
+func (s *rpcRunner) finishCompact(res *rpcCompactReservation, response rpcResponse) {
 	s.mu.Lock()
+	s.emit(response)
+	close(res.done)
 	if s.reservation == res {
 		s.reservation = nil
 		s.compacting = false

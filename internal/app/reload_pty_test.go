@@ -21,11 +21,18 @@ import (
 // reloads local instructions at settlement, then replays the original prompt
 // as a new turn with the updated system prompt.
 func TestActualAppReloadRetriesOriginalInput(t *testing.T) {
+	t.Run("original", func(t *testing.T) { runReloadReplay(t, false) })
+	t.Run("before startup and loop", func(t *testing.T) { runReloadReplay(t, true) })
+}
+
+func runReloadReplay(t *testing.T, queuedWork bool) {
+	t.Helper()
 	if goruntime.GOOS == "windows" {
 		t.Skip("reload replay needs a Unix PTY")
 	}
 	bodies := make(chan map[string]any, 8)
 	var mu sync.Mutex
+	releaseReplay := make(chan struct{})
 	reqCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var body map[string]any
@@ -52,13 +59,28 @@ func TestActualAppReloadRetriesOriginalInput(t *testing.T) {
 				return
 			}
 		case 2:
-			// Retry after reload: complete immediately.
+			if queuedWork {
+				select {
+				case <-releaseReplay:
+				case <-req.Context().Done():
+					return
+				}
+			}
 			fmt.Fprint(w, liveTextTurn("RETRIED DONE"))
+		case 3:
+			fmt.Fprint(w, liveTextTurn("STARTUP DONE"))
+		case 4:
+			fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"r4\",\"model\":\"local-model\",\"usage\":{\"input_tokens\":1}}}\n\n")
+			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"LOOP STARTED\"}}\n\n")
+			w.(http.Flusher).Flush()
+			<-req.Context().Done()
 		default:
 			fmt.Fprint(w, liveTextTurn("EXTRA"))
 		}
 	}))
-	defer server.Close()
+	// The child cleanup must cancel held requests before closing the server.
+	t.Cleanup(server.Close)
 	home, ws := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, ".pi", "agent")
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","compaction":{"enabled":false}}`)
@@ -73,16 +95,26 @@ func TestActualAppReloadRetriesOriginalInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	q := startReviewProcess(t, home, ws, agentDir, *reviewBinary, "", "--deny-project", "--session", store.File())
+	args := []string{"--deny-project", "--session", store.File()}
+	if queuedWork {
+		args = append(args, "original work", "queued startup work")
+	}
+	q := startReviewProcess(t, home, ws, agentDir, *reviewBinary, "", args...)
 	t.Cleanup(func() {
 		if output := q.raw.String(); strings.Contains(output, "WARNING: DATA RACE") {
 			t.Errorf("race detector report in app subprocess:\n%s", output)
 		}
 	})
-	q.prompt()
-	q.write("original work\r")
+	if !queuedWork {
+		q.prompt()
+		q.write("original work\r")
+	}
 	q.wait("original work")
 	q.wait("RELOAD_PARTIAL")
+	if queuedWork {
+		q.write("/loop goal deferred work\r")
+		q.wait("Loop queued until the active run settles.")
+	}
 	// Update local instructions before reload; the retry must see them.
 	writeAppFile(t, filepath.Join(ws, "AGENTS.md"), "# Instructions\n\nUPDATED_INSTRUCTIONS_MARKER\n")
 	q.write("/reload\r")
@@ -90,7 +122,36 @@ func TestActualAppReloadRetriesOriginalInput(t *testing.T) {
 	q.wait("interrupted")
 	q.wait("Reloaded")
 	q.wait("original work")
+	first, second := liveWaitBody(t, bodies), liveWaitBody(t, bodies)
+	if queuedWork {
+		if text := rpcLastBodyUserText(t, second); !strings.HasSuffix(text, "original work") {
+			t.Fatalf("request before replay settled = %q, want the original input last", text)
+		}
+		close(releaseReplay)
+	}
 	q.wait("RETRIED DONE")
+	if queuedWork {
+		third, fourth := liveWaitBody(t, bodies), liveWaitBody(t, bodies)
+		for _, check := range []struct {
+			body        map[string]any
+			user        string
+			priorAnswer string
+		}{
+			{third, "queued startup work", "RETRIED DONE"},
+			{fourth, "deferred work", "STARTUP DONE"},
+		} {
+			raw, err := json.Marshal(check.body["messages"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(rpcLastBodyUserText(t, check.body), check.user) || !strings.Contains(string(raw), check.priorAnswer) {
+				t.Fatalf("request for %q must follow the durable response %q: %s", check.user, check.priorAnswer, raw)
+			}
+		}
+		q.wait("LOOP STARTED")
+		q.write("\x18")
+		q.wait("Loop stopped")
+	}
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
@@ -98,11 +159,13 @@ func TestActualAppReloadRetriesOriginalInput(t *testing.T) {
 	mu.Lock()
 	got := reqCount
 	mu.Unlock()
-	if got != 2 {
-		t.Fatalf("request count = %d, want 2 (original + retry)", got)
+	want := 2
+	if queuedWork {
+		want = 4
 	}
-	first := <-bodies
-	second := <-bodies
+	if got != want {
+		t.Fatalf("request count = %d, want %d", got, want)
+	}
 	firstText := requestText(t, first)
 	secondText := requestText(t, second)
 	if !strings.Contains(firstText, "original work") {

@@ -9,15 +9,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"psi/internal/config"
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/session"
 )
@@ -180,6 +185,226 @@ func TestRPCSetThinkingDuringRunAppliesToNextRequest(t *testing.T) {
 		t.Fatalf("second request newest user message = %q, want %q", last, "queued follow-up")
 	}
 	rpcAssertUserTranscript(t, store, "hello", "queued follow-up")
+}
+
+// rpcRetirementGate holds set_model inside the synchronous dispatch while
+// it retires the old provider.
+type rpcRetirementGate struct {
+	provider.Fake
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *rpcRetirementGate) CloseIdle() {
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+}
+
+func TestRPCSignalWaitsForSynchronousSetter(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test")
+	synctest.Test(t, func(t *testing.T) {
+		gate := &rpcRetirementGate{entered: make(chan struct{}), release: make(chan struct{})}
+		var once sync.Once
+		release := func() { once.Do(func() { close(gate.release) }) }
+		defer release()
+		s, store, log := newRPCTestRunner(t, gate, nil)
+		s.shutdown = make(chan struct{})
+		in, client := io.Pipe()
+		defer client.Close()
+		signals := make(chan os.Signal, 1)
+		cleaned := make(chan struct{})
+		done := make(chan bool, 1)
+		go func() {
+			done <- s.serve(in, signals, func() {
+				store.Unlock()
+				close(cleaned)
+			})
+		}()
+		if _, err := io.WriteString(client, `{"type":"set_model","provider":"anthropic","modelId":"rpc-test-model-2"}`+"\n"); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		select {
+		case <-gate.entered:
+		default:
+			t.Fatal("setter did not reach provider retirement")
+		}
+		signals <- syscall.SIGTERM
+		<-s.shutdown
+		synctest.Wait()
+		select {
+		case <-cleaned:
+			t.Fatal("released the session lock while set_model was still dispatching")
+		default:
+		}
+		release()
+		if signalled := <-done; !signalled {
+			t.Fatal("shutdown lost the signal exit status")
+		}
+		select {
+		case <-cleaned:
+		default:
+			t.Fatal("signal shutdown did not release the lock")
+		}
+		frames := log.objects(t)
+		if len(frames) != 1 || frames[0]["command"] != "set_model" || frames[0]["success"] != true {
+			t.Fatalf("shutdown lost the setter response: %+v", frames)
+		}
+	})
+}
+
+func TestRPCFailedSelectionAppendDoesNotPublish(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test")
+	for _, cmd := range []rpcCommand{
+		{Type: "set_model", Provider: "anthropic", ModelID: "rpc-test-model-2"},
+		{Type: "set_thinking_level", Level: "high"},
+	} {
+		t.Run(cmd.Type, func(t *testing.T) {
+			fake := &provider.Fake{}
+			s, store, _ := newRPCTestRunner(t, fake, nil)
+			if _, err := store.AppendMessage(agentMessageUser("seed")); err != nil {
+				t.Fatal(err)
+			}
+			// Move the durable file away so the next append fails before
+			// updating any in-memory metadata. Both paths are test-owned.
+			if err := os.Rename(store.File(), store.File()+".backup"); err != nil {
+				t.Fatal(err)
+			}
+			if resp := s.handle(cmd); resp == nil || resp.Success || !strings.Contains(resp.Error, "cannot inspect active session") {
+				t.Fatalf("expected append failure, got %+v", resp)
+			}
+			live := s.r.live.snapshot()
+			if live.Model.ID != "rpc-test-model" || live.Thinking != "off" || live.Provider != fake || s.r.ov.Model != "rpc-test-model" || s.r.ov.Thinking != "off" {
+				t.Fatalf("failed selection reached live settings: %s/%s", live.Model.ID, live.Thinking)
+			}
+		})
+	}
+}
+
+// The final queue poll precedes RunEnd. A prompt acknowledged in that gap
+// must reach the provider before RPC emits agent_settled, not the next run.
+func TestRPCLateFollowUpSettlesWithItsRun(t *testing.T) {
+	fake := &provider.Fake{Responses: []*provider.Response{
+		{Text: "initial answer", StopReason: "stop"},
+		{Text: "follow-up answer", StopReason: "stop"},
+	}}
+	s, store, log := newRPCTestRunner(t, fake, nil)
+	polled, release := make(chan struct{}), make(chan struct{})
+	var unblock sync.Once
+	resume := func() { unblock.Do(func() { close(release) }) }
+	defer resume()
+	var firstEnd sync.Once
+	s.loop = s.r.newLoop(func(ev event.Event) {
+		if ev.Type == event.RunEnd {
+			firstEnd.Do(func() {
+				close(polled)
+				<-release
+			})
+		}
+		s.sink(ev)
+	})
+	if resp := s.handle(rpcCommand{Type: "prompt", Message: "initial question"}); resp == nil || !resp.Success {
+		t.Fatalf("initial prompt: %+v", resp)
+	}
+	select {
+	case <-polled:
+	case <-time.After(8 * time.Second):
+		t.Fatal("agent did not reach the final queue poll")
+	}
+	if resp := s.handle(rpcCommand{Type: "prompt", Message: "late question", StreamingBehavior: "followUp"}); resp == nil || !resp.Success {
+		t.Fatalf("late follow-up: %+v", resp)
+	}
+	resume()
+	frames := log.waitFor(t, "agent_settled", isType("agent_settled"))
+	starts := 0
+	for _, frame := range frames {
+		if frame["type"] == "agent_start" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("one RPC run should emit one agent_start, got %d", starts)
+	}
+	proj, err := store.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.CallCount(); n != 2 || len(s.loop.PendingFollowUp()) != 0 {
+		t.Fatalf("settled before draining the accepted follow-up: %d provider requests", n)
+	}
+	last := session.LastConversationalMessage(proj.Flat)
+	if last == nil || last.Assistant == nil || len(last.Assistant.Content) != 1 || last.Assistant.Content[0].Text == nil || last.Assistant.Content[0].Text.Text != "follow-up answer" {
+		t.Fatalf("late follow-up answer not durable at settlement: %+v", last)
+	}
+}
+
+// TestRPCSelectionSurvivesOlderRequestSettlement pauses after the worker has
+// taken its next-request snapshot but before it synchronizes selection metadata.
+// The acknowledged setting must survive even if this is the last response.
+func TestRPCSelectionSurvivesOlderRequestSettlement(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test")
+	fake := &provider.Fake{Responses: []*provider.Response{{Text: "complete", StopReason: "stop"}}}
+	s, store, _ := newRPCTestRunner(t, fake, nil)
+	cfg := s.runConfig()
+	dynamic := cfg.DynamicConfig
+	snapshotted, resume := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(resume) }) }
+	defer unblock()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	calls := 0
+	cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
+		calls++
+		if calls == 2 {
+			close(snapshotted)
+			select {
+			case <-resume:
+			case <-ctx.Done():
+			}
+		}
+		return dynamic()
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.loop.Submit(ctx, "hello", cfg) }()
+	select {
+	case <-snapshotted:
+	case <-ctx.Done():
+		t.Fatal("turn did not take a request snapshot")
+	}
+	for _, cmd := range []rpcCommand{
+		{Type: "set_model", Provider: "anthropic", ModelID: "rpc-test-model-2"},
+		{Type: "set_thinking_level", Level: "high"},
+	} {
+		if resp := s.handle(cmd); resp == nil || !resp.Success {
+			t.Fatalf("%s: %+v", cmd.Type, resp)
+		}
+	}
+	unblock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("turn did not settle")
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 1 || reqs[0].Model.ID != "rpc-test-model" || reqs[0].Thinking != "off" {
+		t.Fatalf("request snapshot changed: %+v", reqs)
+	}
+	reopened, err := session.OpenFile(store.File(), store.Cwd(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := reopened.ModelState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ModelID != "rpc-test-model-2" || state.ThinkingLevel != "high" {
+		t.Fatalf("reopened selection = %+v, want rpc-test-model-2/high", state)
+	}
 }
 
 // TestRPCSetModelDuringRunPreservesLoopAndQueue proves a model changed

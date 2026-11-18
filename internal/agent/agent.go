@@ -59,6 +59,9 @@ type Config struct {
 	// a snapshot without a provider or model, keeps the submitted
 	// configuration.
 	LiveSettings func() LiveSettings
+	// SyncModelSelection persists the host's latest selection, not the
+	// request snapshot. Hosts with live setters order this with publication.
+	SyncModelSelection func() error
 	// DynamicConfig returns the system prompt, its sections, and the tool set
 	// for each model request.
 	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
@@ -599,6 +602,9 @@ func (l *Loop) syncConfiguration(proj *session.Projection, cfg Config) error {
 			return err
 		}
 	}
+	if cfg.SyncModelSelection != nil {
+		return cfg.SyncModelSelection()
+	}
 	if proj.State.Provider != cfg.Model.ProviderID() || proj.State.ModelID != cfg.Model.ID {
 		if _, err := l.store.AppendModelChange(cfg.Model.ProviderID(), cfg.Model.ID); err != nil {
 			return err
@@ -623,6 +629,14 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 	defer func() {
 		if runErr != nil {
 			l.finalizeFailure(ctx, &cfg, &outcome, &runErr)
+		}
+		// A saved assistant response can restore its own model on replay.
+		// Reassert the selected model even when there is no next turn.
+		if cfg.SyncModelSelection != nil && outcome != event.OutcomeUnsaved {
+			if err := cfg.SyncModelSelection(); err != nil {
+				outcome = event.OutcomeUnsaved
+				runErr = errors.Join(runErr, err)
+			}
 		}
 		l.sink(event.Event{Type: event.RunEnd, Outcome: outcome, Err: runErr})
 	}()

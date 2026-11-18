@@ -34,8 +34,9 @@ level the model can apply and clamps it when the model does not advertise it.
 store, or provider side effect. An unknown, unreadable, or oversized skill
 returns an error response instead of submitting the unexpanded command.
 `set_model` and `set_thinking_level` also run mid-run; the change applies
-to the next provider request without restarting the run. A `compact`
-admitted mid-run cancels the run, waits for it to settle, then summarizes,
+to the next provider request without restarting the run. On a successful run,
+queued steering and follow-up prompts are processed before `agent_settled`.
+A `compact` admitted mid-run cancels the run, waits for it to settle, then summarizes,
 and answers with a terminal response correlated to the compact command id;
 the interrupted prompt is never replayed. While compaction runs, `prompt`
 is refused with `Cannot submit a prompt while compaction is in progress`

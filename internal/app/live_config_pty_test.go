@@ -46,7 +46,7 @@ func liveWaitBody(t *testing.T, bodies <-chan map[string]any) map[string]any {
 	}
 }
 
-func liveAssertOneUserTranscript(t *testing.T, ws, agentDir string) {
+func liveAssertOneUserTranscript(t *testing.T, ws, agentDir string) session.ModelState {
 	t.Helper()
 	var files []string
 	root := filepath.Join(agentDir, "sessions")
@@ -81,6 +81,7 @@ func liveAssertOneUserTranscript(t *testing.T, ws, agentDir string) {
 	if users != 1 || assistants != 2 || results != 1 {
 		t.Fatalf("users=%d assistants=%d results=%d, want 1/2/1", users, assistants, results)
 	}
+	return proj.State
 }
 
 // TestActualAppThinkingChangeAppliesToTheNextRequest proves that a thinking
@@ -224,7 +225,9 @@ func TestActualAppModelChangeAppliesToTheNextRequest(t *testing.T) {
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
-	liveAssertOneUserTranscript(t, ws, agentDir)
+	if state := liveAssertOneUserTranscript(t, ws, agentDir); state.ModelID != "local-next" {
+		t.Fatalf("reopened model = %q, want local-next", state.ModelID)
+	}
 	t.Logf("model live change: first=%v second=%v", first["model"], second["model"])
 }
 
@@ -385,6 +388,13 @@ func TestActualAppPickerSettlementPreservesDraft(t *testing.T) {
 // TestActualAppCompactWaitsForCancelledRun proves that /compact during a run
 // cancels, settles, then compacts without re-asking the cancelled prompt.
 func TestActualAppCompactWaitsForCancelledRun(t *testing.T) {
+	for _, mode := range []string{"compact", "reload before checkpoint", "reload after checkpoint"} {
+		t.Run(mode, func(t *testing.T) { runCompactAfterInterrupt(t, mode) })
+	}
+}
+
+func runCompactAfterInterrupt(t *testing.T, mode string) {
+	t.Helper()
 	if goruntime.GOOS == "windows" {
 		t.Skip("compact interrupt needs a Unix PTY")
 	}
@@ -416,17 +426,16 @@ func TestActualAppCompactWaitsForCancelledRun(t *testing.T) {
 			}
 			fmt.Fprint(w, liveTextTurn("FIRST DONE"))
 		case 2:
-			// Second run: stream a partial, then hold until /compact cancels it.
-			fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"r2\",\"model\":\"local-model\",\"usage\":{\"input_tokens\":5}}}\n\n")
-			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-			fmt.Fprint(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"PARTIAL\"}}\n\n")
-			w.(http.Flusher).Flush()
-			select {
-			case <-req.Context().Done():
+			liveHoldPartial(w, req, "ORIGINAL_PARTIAL")
+		case 3, 4:
+			if n == 3 && mode == "reload before checkpoint" {
+				<-req.Context().Done()
 				return
 			}
-		case 3:
-			// Summary request: hold until the test verifies settlement.
+			if n == 4 && mode == "reload after checkpoint" {
+				liveHoldPartial(w, req, "CONTINUATION_PARTIAL")
+				return
+			}
 			select {
 			case <-releaseSummary:
 			case <-req.Context().Done():
@@ -437,7 +446,7 @@ func TestActualAppCompactWaitsForCancelledRun(t *testing.T) {
 			fmt.Fprint(w, liveTextTurn("EXTRA"))
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	home, ws := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, ".pi", "agent")
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","compaction":{"enabled":false,"keepRecentTokens":50}}`)
@@ -478,24 +487,59 @@ func TestActualAppCompactWaitsForCancelledRun(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatalf("second request never arrived; output=%q", q.raw.String())
 	}
-	q.wait("PARTIAL")
-	q.write("/compact\r")
+	q.wait("ORIGINAL_PARTIAL")
+	q.write("/compact FOCUS_MARKER\r")
 	q.wait("Cancelling the run for compaction.")
 	// Summary request must arrive only after the cancelled run settles.
-	select {
-	case summaryBody := <-bodies:
-		_ = summaryBody
-	case <-time.After(8 * time.Second):
-		t.Fatalf("summary request never arrived; output=%q", q.raw.String())
+	firstSummary := liveWaitBody(t, bodies)
+	liveAssertCompactTranscript(t, store.File(), 0)
+	if mode == "reload before checkpoint" {
+		q.write("/reload\r")
+		q.wait("Reloaded")
+		secondSummary := liveWaitBody(t, bodies)
+		if got := requestText(t, secondSummary); !strings.Contains(got, "FOCUS_MARKER") || got != requestText(t, firstSummary) {
+			t.Fatal("reload did not retry the same summary with its original focus")
+		}
 	}
-	liveAssertCompactSettlement(t, ws, agentDir, "second work")
+	if mode == "reload after checkpoint" {
+		q.write("queued after summary\r")
+		q.wait("Steering: queued after summary")
+	}
 	close(releaseSummary)
-	q.wait("Compacted")
+	if mode == "reload after checkpoint" {
+		q.wait("CONTINUATION_PARTIAL")
+		body := liveWaitBody(t, bodies)
+		if !strings.HasSuffix(requestText(t, body), "queued after summary\n") {
+			t.Fatal("expected the post-checkpoint steering request")
+		}
+		q.write("/reload\r")
+		q.wait("Reloaded")
+		q.wait("Kept the saved compaction checkpoint.")
+	} else {
+		q.wait("Compacted")
+	}
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
-	liveAssertCompactNoReask(t, ws, agentDir, "second work")
-	return
+	liveAssertCompactTranscript(t, store.File(), 1)
+	want := 3
+	if mode != "compact" {
+		want++
+	}
+	mu.Lock()
+	got := reqCount
+	mu.Unlock()
+	if got != want {
+		t.Fatalf("provider requests = %d, want %d", got, want)
+	}
+}
+
+func liveHoldPartial(w http.ResponseWriter, req *http.Request, text string) {
+	fmt.Fprint(w, "event: message_start\ndata: {\"message\":{\"id\":\"r2\",\"model\":\"local-model\",\"usage\":{\"input_tokens\":5}}}\n\n")
+	fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+	fmt.Fprintf(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%q}}\n\n", text)
+	w.(http.Flusher).Flush()
+	<-req.Context().Done()
 }
 
 func liveTextTurn(text string) string {
@@ -505,75 +549,22 @@ func liveTextTurn(text string) string {
 		"event: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\nevent: message_stop\ndata: {}\n\n"
 }
 
-func liveAssertCompactSettlement(t *testing.T, ws, agentDir, prompt string) {
+func liveAssertCompactTranscript(t *testing.T, path string, wantCheckpoints int) {
 	t.Helper()
-	// Find the session file and check for the cancelled prompt.
-	dir := filepath.Join(agentDir, "sessions")
-	// The session dir may be under home, not agentDir; list both.
-	// For reviewPTY, sessions are under home/sessions by default.
-	// Try common locations.
-	homeDir := filepath.Dir(filepath.Dir(agentDir))
-	candidates := []string{dir, filepath.Join(filepath.Dir(agentDir), "sessions"), filepath.Join(homeDir, "sessions")}
-	var files []string
-	for _, d := range candidates {
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			continue
+	_, entries, _, err := session.ReadFileEntries(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts, checkpoints := 0, 0
+	for _, entry := range entries {
+		if entry.Message != nil && entry.Message.Message.User != nil && entry.Message.Message.User.Content == "second work" {
+			prompts++
 		}
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".jsonl") {
-				files = append(files, filepath.Join(d, e.Name()))
-			}
+		if entry.Compaction != nil {
+			checkpoints++
 		}
 	}
-	if len(files) == 0 {
-		t.Fatalf("no session files found")
-	}
-	found := 0
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		found += strings.Count(string(data), prompt)
-	}
-	if found == 0 {
-		t.Fatalf("cancelled prompt %q not found in session files", prompt)
-	}
-}
-
-func liveAssertCompactNoReask(t *testing.T, ws, agentDir, prompt string) {
-	t.Helper()
-	// After compaction, the cancelled prompt must not be duplicated.
-	// Compaction rewrites history with a summary; the original prompt may be
-	// summarized, not repeated as a new user message. Count user messages
-	// containing the prompt; it must be at most one.
-	candidates := []string{filepath.Join(agentDir, "sessions"), filepath.Join(filepath.Dir(agentDir), "sessions")}
-	var files []string
-	for _, d := range candidates {
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".jsonl") {
-				files = append(files, filepath.Join(d, e.Name()))
-			}
-		}
-	}
-	count := 0
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.Contains(line, "\"role\":\"user\"") && strings.Contains(line, prompt) {
-				count++
-			}
-		}
-	}
-	if count > 1 {
-		t.Fatalf("cancelled prompt %q re-asked %d times, want at most 1", prompt, count)
+	if prompts != 1 || checkpoints != wantCheckpoints {
+		t.Fatalf("durable prompts/checkpoints = %d/%d, want 1/%d", prompts, checkpoints, wantCheckpoints)
 	}
 }

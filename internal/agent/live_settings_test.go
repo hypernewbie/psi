@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"psi/internal/provider"
@@ -64,6 +66,75 @@ func TestLiveSettingsApplyAtTheNextTurnBoundary(t *testing.T) {
 	}
 	if users != 1 || assistants != 2 || results != 1 {
 		t.Errorf("users=%d assistants=%d results=%d", users, assistants, results)
+	}
+}
+
+func TestSplitCompactionAttributesUsageAcrossLiveModelSwitch(t *testing.T) {
+	for _, mode := range []string{"success", "incomplete prefix", "cancel before prefix"} {
+		t.Run(mode, func(t *testing.T) {
+			store, _, history, loop, _ := testSetup(t)
+			if _, err := store.AppendMessage(userMsg("older task")); err != nil {
+				t.Fatal(err)
+			}
+			appendAssistantText(t, store, "older progress")
+			if _, err := store.AppendMessage(userMsg("current task")); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 4; i++ {
+				appendAssistantText(t, store, strings.Repeat(string(rune('a'+i)), 80_000))
+			}
+			before := len(store.Entries())
+			oldModel, newModel := modelMeta(), modelMeta()
+			newModel.ID = "claude-prefix"
+			history.Responses = []*provider.Response{{Text: "history checkpoint", StopReason: "stop", Usage: provider.Usage{TotalTokens: 25}}}
+			prefixResponse := &provider.Response{Text: "prefix checkpoint", StopReason: "stop", Usage: provider.Usage{TotalTokens: 13}}
+			if mode == "incomplete prefix" {
+				prefixResponse.StopReason = "length"
+			}
+			prefix := &provider.Fake{Responses: []*provider.Response{prefixResponse}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			cfg := Config{Model: oldModel, KeepRecentTokens: 20_000, LiveSettings: func() LiveSettings {
+				if history.CallCount() == 0 {
+					return LiveSettings{Provider: history, Model: oldModel}
+				}
+				if mode == "cancel before prefix" {
+					cancel()
+				}
+				return LiveSettings{Provider: prefix, Model: newModel}
+			}}
+			err := loop.Compact(ctx, cfg, "")
+			if mode == "success" && err != nil || mode == "incomplete prefix" && !IsSummaryFailure(err) || mode == "cancel before prefix" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("compaction result: %v", err)
+			}
+			wantUsage := map[string]float64{oldModel.ID: 25}
+			if mode != "cancel before prefix" {
+				wantUsage[newModel.ID] = 13
+				if calls := prefix.Requests(); len(calls) != 1 || calls[0].Model.ID != newModel.ID {
+					t.Fatalf("prefix summary did not use the new model")
+				}
+			} else if prefix.CallCount() != 0 {
+				t.Fatal("prefix request started after cancellation")
+			}
+			checkpoints := 0
+			for _, entry := range store.Entries()[before:] {
+				if entry.Compaction != nil {
+					checkpoints++
+					if entry.Compaction.Usage != nil {
+						t.Fatal("checkpoint double-counts attributed usage")
+					}
+				}
+				if saved := entry.Usage; saved != nil {
+					if saved.Provider != oldModel.ProviderID() || wantUsage[saved.Model] != saved.Usage.TotalTokens {
+						t.Fatalf("unexpected or duplicate attributed usage: %+v", saved)
+					}
+					delete(wantUsage, saved.Model)
+				}
+			}
+			if len(wantUsage) != 0 || (checkpoints == 1) != (mode == "success") || checkpoints > 1 {
+				t.Fatalf("missing usage: %v; checkpoints: %d", wantUsage, checkpoints)
+			}
+		})
 	}
 }
 

@@ -52,9 +52,6 @@ func TestRPCResumedTranscriptNotReplayed(t *testing.T) {
 	}
 }
 
-// A model switch keeps the agent loop: queue and request preservation are
-// proven by TestRPCSetModelDuringRunPreservesLoopAndQueue.
-
 func TestRPCAutomaticCompactionPublishesCompletion(t *testing.T) {
 	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
 	s.sink(event.Event{Type: event.CompactionStart, State: event.CompactionThreshold})
