@@ -35,7 +35,15 @@ func (t *WriteTool) doWriteFile(abs, content string) error {
 		return t.WriteFile(abs, []byte(content), 0o666)
 	}
 	// Ordinary new tool files follow the Node default (0666 before umask).
-	return os.WriteFile(abs, []byte(content), 0o666)
+	f, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(content)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 // Prepare pre-registers the mutation slot in call order.
