@@ -67,9 +67,9 @@ func compactFixture(t *testing.T) (*runtime, *bridgePhi, *bridgeHandler, *int) {
 	r.state = StateIdle
 	f, h := startBridgeRuntime(t, r)
 	dispatched := new(int)
-	h.compactRun = func(string) error {
+	h.compactRun = func(string) (uint64, error) {
 		*dispatched++
-		return nil
+		return 0, nil
 	}
 	return r, f, h, dispatched
 }
@@ -92,7 +92,7 @@ func TestBridgeCompactRefusesDuplicateAndStale(t *testing.T) {
 	if *dispatched != 1 {
 		t.Fatalf("dispatched = %d, want 1", *dispatched)
 	}
-	h.resolveCompactRun(nil)
+	h.resolveCompactRun(nil, 0, false)
 	if got := nextCompactResult(t, f, &cursor); got.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED {
 		t.Fatalf("first result = %+v, want completed", got)
 	}
@@ -196,7 +196,7 @@ func TestBridgeCompactPendingBlocksSecondUntilResolved(t *testing.T) {
 	if refused.GetReason() != "pending" {
 		t.Fatalf("second op=%+v refused=%+v, want pending", second, refused)
 	}
-	h.resolveCompactRun(nil)
+	h.resolveCompactRun(nil, 0, false)
 	if r.compactPending {
 		t.Fatal("latch survived a terminal outcome")
 	}
@@ -228,7 +228,7 @@ func TestBridgeCompactOutcomesFollowTheRunResult(t *testing.T) {
 			if op == nil || refused != nil {
 				t.Fatalf("admit = %+v %+v", op, refused)
 			}
-			h.resolveCompactRun(tc.err)
+			h.resolveCompactRun(tc.err, 0, false)
 			got := nextCompactResult(t, f, &cursor)
 			if got.GetOutcome() != tc.want || got.GetReason() != tc.reason {
 				t.Fatalf("outcome = %v/%q, want %v/%q", got.GetOutcome(), got.GetReason(), tc.want, tc.reason)
@@ -239,7 +239,7 @@ func TestBridgeCompactOutcomesFollowTheRunResult(t *testing.T) {
 
 func TestBridgeCompactSynchronousFailureIsTerminal(t *testing.T) {
 	r, f, h, _ := compactFixture(t)
-	h.compactRun = func(string) error { return &agent.CompactionNoWorkError{} }
+	h.compactRun = func(string) (uint64, error) { return 0, &agent.CompactionNoWorkError{} }
 	cursor := 0
 
 	f.inject <- compactRequest("30", r.store.Header().ID, r.store.LeafID(), r.ov.Provider, r.ov.Model)
@@ -251,5 +251,33 @@ func TestBridgeCompactSynchronousFailureIsTerminal(t *testing.T) {
 	}
 	if h.compact != nil || r.compactPending {
 		t.Fatal("a refused dispatch must not leave the process latch pending")
+	}
+}
+
+// A receipt waits for the worker it started, and a committed checkpoint is
+// reported as completed even when the run was cancelled afterwards.
+func TestBridgeCompactReceiptBinding(t *testing.T) {
+	r, f, h, _ := compactFixture(t)
+	cursor := 0
+	op, refused := admitCompact(t, r, f, h, compactRequest("40", r.store.Header().ID, r.store.LeafID(), r.ov.Provider, r.ov.Model), &cursor)
+	if op == nil || refused != nil {
+		t.Fatalf("admit = %+v %+v", op, refused)
+	}
+	h.compact.op = 41
+
+	// A different worker's settlement cannot answer this receipt.
+	h.resolveCompactRun(context.Canceled, 42, false)
+	if h.compact == nil || !r.compactPending {
+		t.Fatal("foreign settlement released the receipt")
+	}
+
+	// The owned worker commits its checkpoint, then the reload cancels it.
+	h.resolveCompactRun(context.Canceled, 41, true)
+	got := nextCompactResult(t, f, &cursor)
+	if got.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED {
+		t.Fatalf("outcome = %v/%q, want completed", got.GetOutcome(), got.GetReason())
+	}
+	if h.compact != nil || r.compactPending {
+		t.Fatal("receipt survived its terminal answer")
 	}
 }

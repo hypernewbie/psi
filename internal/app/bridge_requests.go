@@ -96,10 +96,10 @@ type bridgeHandler struct {
 	searches   int
 
 	// Compact admission state. highWater rejects replay; compact is the one
-	// unresolved operation this process owns.
+	// unresolved operation this process owns, bound to the worker it started.
 	compactHigh uint64
 	compact     *bridgeCompact
-	compactRun  func(focus string) error
+	compactRun  func(focus string) (uint64, error)
 
 	// Reload admission state. Reload runs synchronously on the loop, so the
 	// latch only ever spans one handle call, but it is still published for
@@ -121,6 +121,8 @@ type bridgeCompact struct {
 	request pibridge.Request
 	session string
 	leaf    string
+	// op is the local worker token that actually started for this receipt.
+	op uint64
 }
 
 // bridgeReload is one admitted native reload. op is the TUI-local worker
@@ -336,11 +338,12 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
 		return
 	}
-	if err := h.compactRun(""); err != nil {
+	op, err := h.compactRun("")
+	if err != nil {
 		req.ReplyCompact(compactFailure(err))
 		return
 	}
-	h.compact = &bridgeCompact{id: id, request: req, session: expect.Session, leaf: expect.Leaf}
+	h.compact = &bridgeCompact{id: id, request: req, session: expect.Session, leaf: expect.Leaf, op: op}
 	h.r.compactPending = true
 	h.r.syncBridge()
 }
@@ -450,14 +453,20 @@ func (h *bridgeHandler) retireReload(op uint64) {
 
 // resolveCompactRun answers the outstanding compaction from the settled run.
 // Exactly one terminal answer is emitted per accepted request; the latch never
-// outlives the operation it describes.
-func (h *bridgeHandler) resolveCompactRun(err error) {
+// outlives the operation it describes. A receipt bound to another worker is
+// left for its own settlement. A committed checkpoint wins over the
+// cancellation that followed it.
+func (h *bridgeHandler) resolveCompactRun(err error, op uint64, committed bool) {
 	if h == nil || h.compact == nil {
+		return
+	}
+	if op != 0 && h.compact.op != 0 && h.compact.op != op {
 		return
 	}
 	outcome, reason := pibridge.CompactCompleted, ""
 	var noWork *agent.CompactionNoWorkError
 	switch {
+	case committed:
 	case errors.Is(err, context.Canceled):
 		outcome, reason = pibridge.CompactCancelled, "cancelled"
 	case errors.As(err, &noWork):

@@ -1654,6 +1654,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 		// op is the local worker token that owns this interruption. It never
 		// travels on the wire.
 		op uint64
+		// noReplay marks a resumed worker: it can be interrupted and
+		// reloaded, but it has no original prompt to replay.
+		noReplay bool
 	}
 	var activeReloadDesc *reloadDescriptor
 	// workerToken identifies one launched worker. A new worker always takes
@@ -2350,13 +2353,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		start(expanded, text, "", invocation, "skill", false)
 	}
-	startCompact := func(focus string) error {
+	startCompact := func(focus string) (uint64, error) {
 		if writeErr := r.store.WriteError(); writeErr != nil {
-			return writeErr
+			return 0, writeErr
 		}
 		resumeAfterCompaction = false
-		start("", "", focus, "", "", true)
-		return nil
+		if admitted, reason := startInput(agent.UserInput{}, focus, true); !admitted {
+			if reason == "" {
+				reason = "unavailable"
+			}
+			return 0, errors.New(reason)
+		}
+		return activeWorkerToken, nil
 	}
 	bridge.compactRun = startCompact
 	bridge.reloadRun = func() error {
@@ -2630,8 +2638,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			bumpAwaitingStart = false
 			cancel()
 			busy = false
-			bridge.resolveCompactRun(err)
 			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
+			bridge.resolveCompactRun(err, activeWorkerToken, compactionCommitted)
 			// Queued input can arrive after the run's last queue poll but before
 			// its settled event reaches this loop. Continue it after a clean run;
 			// on cancellation or failure, restore it to the editor instead.
@@ -2836,7 +2844,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 						break
 					}
-					if desc == nil || desc.op != activeWorkerToken || recoveredInFlight > 0 || !errors.Is(err, context.Canceled) {
+					if desc == nil || desc.noReplay || desc.op != activeWorkerToken || recoveredInFlight > 0 || !errors.Is(err, context.Canceled) {
 						r.draw(console)
 						break
 					}
@@ -2861,7 +2869,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 							r.draw(console)
 						}
 					case inputCompact:
-						if !desc.explicit {
+						if !desc.explicit || compactionCommitted {
+							// An automatic compaction only reloads, and a
+							// committed checkpoint is never redone.
 							r.draw(console)
 							break
 						}
@@ -2898,10 +2908,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 				start(message, message, "", "", "", false)
 			}
 			if lateQueueLoop != nil && r.state == StateIdle && len(initialMessages) == 0 && !exiting {
-				// A resumed loop is a new worker with no reload descriptor of
-				// its own, so the previous prompt cannot claim this run.
+				// A resumed loop is a new worker with no original to replay.
+				// Its own descriptor keeps a previous prompt from claiming it.
 				workerToken++
 				activeWorkerToken = workerToken
+				activeReloadDesc = &reloadDescriptor{
+					sessionID:  r.store.Header().ID,
+					generation: r.generation,
+					op:         activeWorkerToken,
+					noReplay:   true,
+				}
 				ctx, stop := context.WithCancel(context.Background())
 				cancel = stop
 				busy = true
