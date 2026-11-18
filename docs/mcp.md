@@ -1,9 +1,10 @@
 # MCP configuration and data handling
 
 This layer adds MCP configuration parsing and value resolution, tool-catalog
-mapping, result conversion, and a managed stdio transport. The application is
-not yet wired to load these files or connect to servers. This document describes
-data and library contracts; it does not claim that MCP tools are available.
+mapping, result conversion, a managed stdio transport, and a server manager.
+The application is not yet wired to load these files or expose MCP tools. This
+document describes data and library contracts; it does not claim that MCP tools
+are available.
 
 ## Configuration files
 
@@ -130,6 +131,30 @@ fails, the notice reports that the complete output was not saved and does not
 show a false path. A regression test reads the saved output through the actual
 `read` tool.
 
+## Manager and routing
+
+The manager connects configured servers and publishes immutable tool snapshots.
+A setup failure is isolated to its server; ready tools from other servers stay
+available. A call validates its captured route against the current publication
+before dispatch and after admission. A route made stale by reload, disablement,
+or retirement is rejected rather than sent to an obsolete connection.
+
+Tool names must also be unique across servers. If two servers produce the same
+model-facing name, the manager withholds that ambiguous name and marks both
+servers with `tool-name-collision`. Their nonconflicting tools remain available.
+When a conflicting route is hidden or removed, the name can be published again
+on the existing connection. Previously returned snapshots remain unchanged.
+
+Tool-list change notifications trigger coalesced, rate-limited catalog refreshes.
+A failed refresh keeps the previous catalog available and records a warning; a
+later successful refresh publishes the updated catalog and clears the warning.
+Changes to connection identity replace a session. Exposure and call timeout
+changes can take effect without replacing the connection.
+
+A configured HTTP server is rejected with the `unsupported` error class before
+the manager makes any request to its endpoint. The manager does not fall back
+to stdio. HTTP transport is added in a later layer.
+
 ## Stdio transport and process cleanup
 
 The stdio transport exchanges newline-delimited JSON-RPC messages over the
@@ -154,6 +179,6 @@ process; descendants can outlive cancellation. On either platform, a surviving
 descendant that inherited a pipe can delay the release of that pipe, but it does
 not prevent psi from reaping the launcher or closing the connection.
 
-The configuration API, catalog/result conversion, and stdio transport are not
-yet wired into application startup. HTTP transport, application lifecycle
-integration, and MCP tool availability are added in later layers.
+The configuration API, catalog/result conversion, manager, and stdio transport
+are not yet wired into application startup. HTTP transport, application
+lifecycle integration, and MCP tool availability are added in later layers.
