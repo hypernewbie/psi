@@ -172,3 +172,12 @@ Prices remain unknown because psi does not calculate costs.
 Skill paths resolve from their source configuration directory. User and project
 skill lists combine. An empty `defaultTools` list disables tools. Project `+`/`-`
 tool entries modify the inherited user selection.
+
+## MCP settings
+
+`mcp.allowProjectCommands` is a user-only boolean in
+`<agentDir>/settings.json`. It defaults to `false`. When true, a trusted
+project `mcp.json` may use whole-value `!command` interpolation in `env` and
+`headers`. A project settings file cannot set or override it. MCP server
+definitions themselves live in `mcp.json`, not in `settings.json`; see
+[MCP servers](mcp.md).

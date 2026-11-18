@@ -62,9 +62,9 @@ psi does not support Anthropic OAuth or execute `!command` credentials. Codex lo
 ## Documentation topics
 
 `psi --docs` serves the topics that describe psi: `index`, `quickstart`,
-`usage`, `cli`, `config`, `providers`, `sessions`, `compaction`, `skills`,
-`security`, `env`, `how-psi-works`, `keyboard`, `limitations`, `recovery`, and
-`bridge`.
+`usage`, `cli`, `config`, `web`, `mcp`, `providers`, `sessions`, `compaction`,
+`skills`, `security`, `env`, `how-psi-works`, `keyboard`, `limitations`,
+`recovery`, and `bridge`.
 
 Pi topics with no psi counterpart are intentionally absent. The other Markdown
 files in `docs/` are internal records and are not served by `--docs`.

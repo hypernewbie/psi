@@ -11,6 +11,7 @@ trust the working folder. The prompt lists what it would load.
 Trust gates:
 
 - `.pi/settings.json`
+- `.pi/mcp.json` (MCP application loading is not yet enabled at this layer)
 - `.pi/skills` and `.pi/SYSTEM.md` / `.pi/APPEND_SYSTEM.md`
 - `.pi/themes` and project theme paths
 - `.pi/packages`, if configured
@@ -35,6 +36,16 @@ Trust controls which resources load. It does not limit what a tool can do. The
 There is no per-tool approval, no permission-policy language, and no automatic
 Git checkpoint. Use a container, a dedicated user, or a throwaway checkout for
 untrusted or unattended work.
+
+## MCP project command interpolation
+
+The MCP configuration resolver refuses a project-sourced `!command` value in
+`env` or `headers` unless the user settings file sets
+`mcp.allowProjectCommands` to `true`. A project settings file cannot enable
+this option. Trust alone does not permit project command interpolation.
+
+This layer adds the configuration and policy code only. The application does
+not yet load MCP files or connect to MCP servers.
 
 ## Shell and environment
 
