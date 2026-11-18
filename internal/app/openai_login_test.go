@@ -890,6 +890,9 @@ func TestOpenAILoginActivationSelectsCurrentOpenAIModel(t *testing.T) {
 	if r.ov.Provider != "openai" || r.ov.Model != "gpt-6.1-sol" {
 		t.Fatalf("selection = %s/%s", r.ov.Provider, r.ov.Model)
 	}
+	if live := r.liveSettings(); live.Provider != r.prov || live.Model.ID != r.ov.Model || live.AuthErr != nil {
+		t.Fatal("unchanged activation did not publish the refreshed provider")
+	}
 	if r.store.EntryCount() != before {
 		t.Fatal("unchanged activation stored a model-change entry")
 	}
@@ -915,8 +918,14 @@ func TestOpenAILoginActivationSelectsDefaultForOfflineSelection(t *testing.T) {
 	if r.ov.Provider != "openai" || r.ov.Model != "gpt-6.1-sol" || r.authErr != nil {
 		t.Fatalf("selection = %s/%s (%v)", r.ov.Provider, r.ov.Model, r.authErr)
 	}
-	if r.store.EntryCount() != before+1 {
-		t.Fatalf("entries = %d, want one model-change entry", r.store.EntryCount()-before)
+	saved, err := r.store.ModelState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := r.liveSettings()
+	if r.store.EntryCount() <= before || saved.Provider != "openai" || saved.ModelID != r.ov.Model ||
+		live.Provider != r.prov || live.AuthErr != nil || live.Model.ID != saved.ModelID || live.Thinking != saved.ThinkingLevel {
+		t.Fatalf("activation did not publish the saved selection: saved=%+v, live=%s/%s at %s", saved, live.Model.ProviderID(), live.Model.ID, live.Thinking)
 	}
 }
 

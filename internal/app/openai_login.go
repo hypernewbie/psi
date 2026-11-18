@@ -171,14 +171,16 @@ func (r *runtime) activateOpenAILogin() (terminal.NoticeKind, string) {
 		return terminal.NoticeError, "Signed in to ChatGPT, but model activation failed: " + candidate.authErr.Error() + ". Use /model to select a model."
 	}
 	if candidate.ov.Provider != r.ov.Provider || candidate.ov.Model != r.ov.Model {
-		if _, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model); err != nil {
+		if err := r.selectModel(&candidate); err != nil {
 			if candidate.prov != nil {
 				candidate.prov.CloseIdle()
 			}
 			return terminal.NoticeError, "Signed in to ChatGPT, but the session update failed: " + err.Error()
 		}
+	} else {
+		r.adoptConfiguration(&candidate)
+		r.publishLive()
 	}
-	r.installConfiguration(&candidate)
 	if r.ac != nil {
 		r.ac.ResetGrowth()
 	}
