@@ -94,6 +94,10 @@ activating the model after cancellation. OpenAI sign-in and refresh refuse a
 symlinked `auth.json`. The user `settings.json` stores a stable installation
 UUID as `deviceId`; it is not a token.
 
+ChatGPT sign-in credentials work only with the official OpenAI endpoint
+(`https://api.openai.com/v1`). API keys can still use a configured endpoint.
+Built-in OpenAI requests do not follow redirects with either credential type.
+
 Credential values in `models.json` accept `$VAR`, `${VAR}`, `$$`, and `$!`
 escapes. `!command` values are rejected without being executed.
 

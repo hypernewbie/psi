@@ -52,8 +52,16 @@ func deliverOpenAILoginCallbacks(addr string, queries ...string) ([]int, error) 
 		if err != nil {
 			return nil, err
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		// The server can close as soon as the handler publishes its
+		// outcome. The page must not depend on a final chunk or EOF.
+		if resp.ContentLength != int64(len(body)) || len(body) == 0 {
+			return nil, errors.New("callback page did not have a complete fixed-length body")
+		}
 		statuses = append(statuses, resp.StatusCode)
 	}
 	return statuses, nil

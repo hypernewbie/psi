@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -295,6 +296,9 @@ func writeOpenAILoginPage(w http.ResponseWriter, status int, page string) {
 	header.Set("Content-Type", "text/html; charset=utf-8")
 	header.Set("Cache-Control", "no-store")
 	header.Set("Referrer-Policy", "no-referrer")
+	// The server may close immediately after the flush. A fixed length
+	// lets the browser finish reading the page without a final chunk.
+	header.Set("Content-Length", strconv.Itoa(len(page)))
 	w.WriteHeader(status)
 	_, _ = io.WriteString(w, page)
 	if flusher, ok := w.(http.Flusher); ok {
