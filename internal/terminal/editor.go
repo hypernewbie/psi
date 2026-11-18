@@ -20,7 +20,6 @@ const (
 
 type Editor struct {
 	buf            []rune
-	Masked         bool
 	pos            int // rune index (always on grapheme boundary)
 	history        []string
 	histIdx        int // -1 = current draft
@@ -138,17 +137,9 @@ func nextGraphemeBoundary(s string, boff int) int {
 func (e *Editor) Text() string { return string(e.buf) }
 func (e *Editor) Pos() int     { return e.pos }
 
-// DisplayBuffer returns the editor text for rendering without exposing a masked draft.
-func (e *Editor) DisplayBuffer() []rune {
-	if !e.Masked {
-		return e.buf
-	}
-	buf := make([]rune, len(e.buf))
-	for i := range buf {
-		buf[i] = '*'
-	}
-	return buf
-}
+// DisplayBuffer borrows the ordinary draft for rendering. Secret prompts use
+// secretEditor, which exposes only mask runes.
+func (e *Editor) DisplayBuffer() []rune { return e.buf }
 
 // DisplayPos returns the cursor index used with DisplayBuffer.
 func (e *Editor) DisplayPos() int { return e.pos }

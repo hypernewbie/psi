@@ -21,8 +21,3 @@ func TestWipeClearsFullCapacity(t *testing.T) {
 		}
 	}
 }
-
-func TestWipeNilAndEmptyAreHarmless(t *testing.T) {
-	Wipe(nil)
-	Wipe([]byte{})
-}

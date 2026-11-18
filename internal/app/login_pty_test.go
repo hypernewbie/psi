@@ -211,6 +211,45 @@ func assertAuthSymlink(t *testing.T, authPath, targetPath, wantLink string, want
 	}
 }
 
+func TestActualAppSecretNavigationMVP(t *testing.T) {
+	if *reviewBinary == "" {
+		t.Skip("requires -psi-test-binary for the delivered executable")
+	}
+
+	// The keycap starts the second navigation row. Up from its 78-cell end
+	// must stop before the first row's final character: the following source
+	// boundary belongs to the second row, not the first.
+	const keycap = "1\u20e3" // DIGIT ONE + COMBINING ENCLOSING KEYCAP
+	enteredKey := strings.Repeat("x", 78) + keycap + strings.Repeat("z", 76)
+	wantKey := strings.Repeat("x", 77) + "-x" + keycap + strings.Repeat("z", 76)
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	authPath := filepath.Join(agentDir, "auth.json")
+
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
+	closeLoginPTYWatch(t, q)
+	waitLoginReady(t, q, "initial prompt", "")
+	q.write("/login deepseek\r")
+	waitLoginScreen(t, q, "login key prompt", "API key for DeepSeek", "")
+	q.write(enteredKey + "\x1b[A-\r")
+	waitLoginOutput(t, q, "edited key saved", "Saved API key for DeepSeek", enteredKey)
+	q.write("/quit\r")
+	finishLoginPTY(t, q, enteredKey)
+
+	key, source, err := provider.SelectProviderAPIKey(map[string]string{}, authPath, "deepseek", "")
+	if err != nil || source != "auth.json:deepseek" || key != wantKey {
+		t.Fatal("saved key did not follow the editor's soft-wrap cursor ownership")
+	}
+	if strings.Contains(q.raw.String(), wantKey) {
+		t.Fatal("edited synthetic API key appeared in PTY output")
+	}
+	for _, canary := range []string{enteredKey, wantKey} {
+		if err := checkLoginSessions(agentDir, canary); err != nil {
+			t.Fatal("synthetic API key appeared in session output")
+		}
+	}
+}
+
 func TestActualAppLoginMVP(t *testing.T) {
 	if *reviewBinary == "" {
 		t.Skip("requires -psi-test-binary for the delivered executable")

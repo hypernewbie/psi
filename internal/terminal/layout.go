@@ -19,6 +19,19 @@ type Layout struct {
 	limit      int
 }
 
+// isSoftWrapSpace identifies spaces hidden at a soft cut, not deleted from
+// the source. Secret navigation shares this policy without rendering plaintext.
+func isSoftWrapSpace(r rune) bool {
+	// Keep nonbreaking spaces visible even at an emergency cut.
+	switch r {
+	case '\u00a0', // NO-BREAK SPACE
+		'\u2007', // FIGURE SPACE
+		'\u202f': // NARROW NO-BREAK SPACE
+		return false
+	}
+	return unicode.Is(unicode.Zs, r)
+}
+
 func LayoutDraft(buf []rune, pos int, width int) Layout {
 	width = max(1, width)
 	limit := max(1, width-1)
@@ -36,16 +49,7 @@ func LayoutDraft(buf []rune, pos int, width int) Layout {
 	// the breakable cluster, cells at that offset, and rendered bytes there.
 	wrapOpp, wrapOppCells, wrapOppLine := -1, 0, 0
 	trimSoftCut := func(s string) string {
-		return strings.TrimRightFunc(s, func(r rune) bool {
-			// Keep nonbreaking spaces visible even at an emergency cut.
-			switch r {
-			case '\u00a0', // NO-BREAK SPACE
-				'\u2007', // FIGURE SPACE
-				'\u202f': // NARROW NO-BREAK SPACE
-				return false
-			}
-			return unicode.Is(unicode.Zs, r)
-		})
+		return strings.TrimRightFunc(s, isSoftWrapSpace)
 	}
 	flush := func(trim bool) {
 		row := line.String()

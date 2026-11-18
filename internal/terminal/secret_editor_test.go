@@ -100,6 +100,18 @@ func TestSecretNavigationMatchesEditorLayout(t *testing.T) {
 		"a\tb\tc",
 		"wide 👍🏽 and 1\u20e3 keycap",
 		strings.Repeat("x", secretNavigationLimit-1) + "1\u20e3z",
+		strings.Repeat("alpha ", 14) + "omega",
+		strings.Repeat("x", 73) + "   def ghi",
+		strings.Repeat("x", 68) + " abcdefghi\tX",
+		strings.Repeat("x", 65) + " abc\t，，，，",
+		strings.Repeat("甲乙丙丁", 12) + "（版本）说明，。",
+		// U+3000 IDEOGRAPHIC SPACE is trimmed only at a soft cut.
+		strings.Repeat("x", 76) + "\u3000乙丙",
+		// Nonbreaking spaces stay visible at an emergency cut:
+		// NO-BREAK SPACE, FIGURE SPACE, and NARROW NO-BREAK SPACE.
+		strings.Repeat("x", 78) + "\u00a0b",
+		strings.Repeat("x", 78) + "\u2007b",
+		strings.Repeat("x", 78) + "\u202fb",
 		"line one\nline two\n",
 		strings.Repeat("0123456789", 50),
 	}

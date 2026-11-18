@@ -67,9 +67,12 @@ rule. `/logout` removes only the selected stored API key, not OAuth credentials,
 environment variables, or `models.json` credentials.
 
 Interactive key entry and selected auth writes keep secret data in mutable
-bytes where practical. psi wipes retired application-owned buffers with an
-explicit clear followed by `runtime.KeepAlive`, including vacated ranges and
-fully retired allocations. These wipes resist removal of the explicit clear in
+bytes where practical. Secret cursor navigation follows the normal editor's
+Unicode line-break and cursor-ownership rules without rendering plaintext.
+Only mask characters enter the secret display path. psi wipes retired
+application-owned buffers with an explicit clear followed by
+`runtime.KeepAlive`, including vacated ranges and fully retired allocations.
+These wipes resist removal of the explicit clear in
 the optimized path. They do not provide complete process-memory erasure. Go
 runtime, standard-library JSON, HTTP, provider credential strings, terminal
 mask rendering, and other required boundaries can retain copies outside psi's

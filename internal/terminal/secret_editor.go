@@ -311,7 +311,8 @@ func (e *secretEditor) moveUp() {
 		return
 	}
 	target := layout.rows[layout.cursorRow-1]
-	col := computeVerticalMoveColumn(&e.prefCol, layout.cursorCol, layout.rows[layout.cursorRow].width, target.width)
+	col := computeVerticalMoveColumn(&e.prefCol, layout.cursorCol,
+		layout.rows[layout.cursorRow].verticalMoveMaxCol(e.buf), target.verticalMoveMaxCol(e.buf))
 	e.pos = visualSecretPos(e.buf, target, col)
 }
 
@@ -321,7 +322,8 @@ func (e *secretEditor) moveDown() {
 		return
 	}
 	target := layout.rows[layout.cursorRow+1]
-	col := computeVerticalMoveColumn(&e.prefCol, layout.cursorCol, layout.rows[layout.cursorRow].width, target.width)
+	col := computeVerticalMoveColumn(&e.prefCol, layout.cursorCol,
+		layout.rows[layout.cursorRow].verticalMoveMaxCol(e.buf), target.verticalMoveMaxCol(e.buf))
 	e.pos = visualSecretPos(e.buf, target, col)
 }
 
@@ -394,9 +396,10 @@ func (e *secretEditor) handleKey(key []byte) {
 }
 
 type secretLayoutRow struct {
-	start int
-	end   int
-	width int
+	start    int
+	end      int
+	width    int
+	softWrap bool // the end boundary belongs to the following row
 }
 
 type secretLayout struct {
@@ -405,87 +408,180 @@ type secretLayout struct {
 	cursorCol int
 }
 
-// layoutSecret mirrors the 80-column navigation geometry used by Editor.
-// Rows contain byte ranges only; the draft is never converted to a string.
+// layoutSecret follows LayoutDraft's Unicode line breaks and cursor ownership.
+// It borrows buf without modifying it; only byte ranges and cell counts are
+// retained. No plaintext is rendered.
 func layoutSecret(buf []byte, pos int) secretLayout {
-	if pos < 0 {
-		pos = 0
-	}
-	if pos > len(buf) {
-		pos = len(buf)
-	}
+	pos = max(0, min(pos, len(buf)))
 	layout := secretLayout{rows: make([]secretLayoutRow, 0, 1)}
-	rowStart := 0
-	cells := 0
-	state := -1
-	flush := func(end int) {
-		layout.rows = append(layout.rows, secretLayoutRow{start: rowStart, end: end, width: cells})
-		rowStart = end
-		cells = 0
+	rowStart, cells, state := 0, 0, -1
+	cursorSet := false
+	// UAX #14's last legal break in this row, before trimming soft-cut spaces.
+	wrapOpp, wrapOppCells := -1, 0
+	flush := func(end, width int, softWrap bool) {
+		if softWrap {
+			row := buf[rowStart:end]
+			visible := bytes.TrimRightFunc(row, func(r rune) bool {
+				// Tabs render as spaces, so a soft cut trims them too.
+				return r == '\t' || isSoftWrapSpace(r)
+			})
+			if len(visible) != len(row) {
+				width, _, _ = measureSecretRow(visible, -1)
+			}
+		}
+		layout.rows = append(layout.rows, secretLayoutRow{
+			start: rowStart, end: end, width: width, softWrap: softWrap,
+		})
+		rowStart, cells, wrapOpp = end, 0, -1
 	}
 
 	for i := 0; i < len(buf); {
-		cluster, _, width, nextState := uniseg.FirstGraphemeCluster(buf[i:], state)
+		cluster, _, boundaries, nextState := uniseg.Step(buf[i:], state)
 		n := len(cluster)
-		if n == 0 {
-			break
-		}
 		if n == 1 && cluster[0] == '\n' {
 			if i == pos {
-				layout.cursorRow = len(layout.rows)
-				layout.cursorCol = cells
+				layout.cursorRow, layout.cursorCol = len(layout.rows), cells
+				cursorSet = true
 			}
-			flush(i)
+			flush(i, cells, false)
 			i++
-			rowStart = i
-			state = nextState
+			rowStart, state = i, nextState
 			continue
 		}
-		if n == 1 && cluster[0] == '\t' {
-			width = 8 - cells%8
-		} else {
-			width = secretGraphemeWidth(cluster, width)
-		}
+		// Step packs the terminal-cell width above ShiftWidth's boundary bits.
+		width := secretLayoutGraphemeWidth(cluster, boundaries>>uniseg.ShiftWidth, cells)
+		tab := n == 1 && cluster[0] == '\t'
 		if cells > 0 && cells+width > secretNavigationLimit {
-			flush(i)
-			if n == 1 && cluster[0] == '\t' {
+			wrapped := false
+			if wrapOpp > rowStart && wrapOpp <= i {
+				suffix := buf[wrapOpp:i]
+				suffixCells, candidateCursor, fits := cells-wrapOppCells, -1, true
+				tabSuffix := bytes.IndexByte(suffix, '\t') >= 0
+				if tabSuffix {
+					// Moving a tab changes its width; subtraction alone cannot
+					// recover the suffix's cells or the cursor's new column.
+					suffixCells, candidateCursor, fits = measureSecretRow(suffix, pos-wrapOpp)
+				}
+				candidateWidth := width
+				if tab {
+					candidateWidth = 8 - suffixCells%8
+				} else if width > secretNavigationLimit {
+					candidateWidth = 1
+				}
+				if fits && suffixCells+candidateWidth <= secretNavigationLimit {
+					cursorInSuffix := cursorSet && layout.cursorRow == len(layout.rows) && pos >= wrapOpp && pos < i
+					prefixCells := wrapOppCells
+					flush(wrapOpp, prefixCells, true)
+					cells = suffixCells
+					if cursorInSuffix {
+						layout.cursorRow = len(layout.rows)
+						if tabSuffix {
+							layout.cursorCol = candidateCursor
+						} else {
+							layout.cursorCol -= prefixCells
+						}
+					}
+					wrapped = true
+				}
+			}
+			if !wrapped {
+				flush(i, cells, true)
+			}
+			if tab {
 				width = 8 - cells%8
 			}
 		}
 		if i == pos {
-			layout.cursorRow = len(layout.rows)
-			layout.cursorCol = cells
+			layout.cursorRow, layout.cursorCol = len(layout.rows), cells
+			cursorSet = true
 		}
-		if n == 1 && cluster[0] == '\t' {
+		if tab {
 			width = min(width, secretNavigationLimit-cells)
 		} else if width > secretNavigationLimit {
-			// LayoutDraft uses a one-cell placeholder for a grapheme
-			// wider than the entire row.
+			// Match the normal editor's one-cell viewport placeholder.
 			width = 1
 		}
 		cells += width
 		i += n
 		state = nextState
+		if boundaries&uniseg.MaskLine == uniseg.LineCanBreak {
+			wrapOpp, wrapOppCells = i, cells
+		}
 	}
 	if pos == len(buf) {
-		layout.cursorRow = len(layout.rows)
-		layout.cursorCol = cells
+		layout.cursorRow, layout.cursorCol = len(layout.rows), cells
 	}
-	layout.rows = append(layout.rows, secretLayoutRow{start: rowStart, end: len(buf), width: cells})
+	flush(len(buf), cells, false)
 	return layout
 }
 
-// visualSecretPos maps a visual column on one row back to a source byte
-// offset. It uses the same grapheme and cell policy as layoutSecret.
+// secretLayoutGraphemeWidth matches LayoutDraft's eight-cell tab stops and
+// one-cell ASCII policy. It borrows cluster without modifying it.
+// Clipping and oversized-grapheme placeholders depend on the chosen row.
+func secretLayoutGraphemeWidth(cluster []byte, width, cells int) int {
+	if len(cluster) == 1 && cluster[0] < utf8.RuneSelf {
+		if cluster[0] == '\t' {
+			return 8 - cells%8
+		}
+		return 1
+	}
+	return secretGraphemeWidth(cluster, width)
+}
+
+// measureSecretRow checks a moved suffix at column zero without rendering it.
+// It borrows buf without modifying it and finds an optional byte cursor.
+// A cursor of -1 means none was requested or found.
+func measureSecretRow(buf []byte, pos int) (cells, cursor int, fits bool) {
+	cursor = -1
+	state := -1
+	for i := 0; i < len(buf); {
+		cluster, _, width, nextState := uniseg.FirstGraphemeCluster(buf[i:], state)
+		if len(cluster) == 1 && cluster[0] == '\n' {
+			return 0, -1, false
+		}
+		width = secretLayoutGraphemeWidth(cluster, width, cells)
+		if cells > 0 && cells+width > secretNavigationLimit {
+			return 0, -1, false
+		}
+		if i == pos {
+			cursor = cells
+		}
+		if len(cluster) == 1 && cluster[0] == '\t' {
+			width = min(width, secretNavigationLimit-cells)
+		} else if width > secretNavigationLimit {
+			width = 1
+		}
+		cells += width
+		i += len(cluster)
+		state = nextState
+	}
+	if pos == len(buf) {
+		cursor = cells
+	}
+	return cells, cursor, true
+}
+
+// verticalMoveMaxCol follows Layout.verticalMoveMaxCol: a soft cut's last
+// owned cursor boundary can precede the end of its visible text.
+func (row secretLayoutRow) verticalMoveMaxCol(buf []byte) int {
+	if !row.softWrap {
+		return row.width
+	}
+	_, col := visualSecretCursor(buf, row, row.width)
+	return col
+}
+
+// visualSecretPos maps a visual column to a byte boundary owned by the row.
 func visualSecretPos(buf []byte, row secretLayoutRow, col int) int {
-	cells := 0
-	pos := row.start
+	pos, _ := visualSecretCursor(buf, row, col)
+	return pos
+}
+
+func visualSecretCursor(buf []byte, row secretLayoutRow, col int) (pos, cells int) {
+	pos = row.start
 	state := -1
 	for pos < row.end {
-		cluster, _, width, nextState := uniseg.FirstGraphemeCluster(buf[pos:], state)
-		if len(cluster) == 0 {
-			break
-		}
+		cluster, _, width, nextState := uniseg.FirstGraphemeCluster(buf[pos:row.end], state)
 		if len(cluster) == 1 && cluster[0] == '\t' {
 			width = min(8-cells%8, secretNavigationLimit-cells)
 		} else {
@@ -494,14 +590,14 @@ func visualSecretPos(buf []byte, row secretLayoutRow, col int) int {
 				width = 1
 			}
 		}
-		if cells+width > col {
+		next := pos + len(cluster)
+		if cells+width > col || (row.softWrap && next == row.end) {
 			break
 		}
 		cells += width
-		pos += len(cluster)
-		state = nextState
+		pos, state = next, nextState
 	}
-	return pos
+	return pos, cells
 }
 
 func secretWordBackward(buf []byte, off int) int {
