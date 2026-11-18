@@ -14,7 +14,7 @@ footer shows the folder, session, model, and context usage.
 
 ## Enter a prompt
 
-Type a request and press `Enter`.
+Type a request and press `Enter`. An empty `Enter` retries an unfinished turn (failed, interrupted, or recovered from a crash) and is ignored otherwise. `/b` and `/bump` request another response from the current context, including after a completed or output-limited answer, without adding a prompt.
 
 - `Ctrl+J` inserts a newline. psi has no Shift+Enter detection.
 - Bracketed paste inserts up to 256 KiB as one literal edit; pasted newlines
@@ -50,6 +50,31 @@ trusted project `.pi/settings.json` can override it. If the window is unknown or
 the estimate is unavailable, psi omits the caption. A token count above the
 window is shown without text clamping, even though the bar and color use the
 clamped percentage.
+
+## Retry a failed turn or ask for another response
+
+If a model request fails or is interrupted before the turn finishes, psi can
+retry it without adding another prompt. Press `Enter` on an empty editor or use
+`/b` or `/bump`. Explicit commands can also request another response after a
+completed or output-limited answer. A successful bump uses the current
+model, thinking level, tools, system prompt, and compaction policy, and keeps
+saved answers in the transcript.
+
+Bump is available only while psi is idle, with no run, picker, or compaction
+active. It keeps the normal auth, storage, and continuation checks. Empty
+`Enter` works only for an unfinished turn; explicit commands bypass that gate
+but keep all safety checks. All admission refusals stay silent, and refused
+busy commands are discarded without a queue entry or restored draft. Once a
+run starts, failures, cancellation, partial output, and unsaved output use the
+normal message behavior.
+
+Visible partial output from the failed stream stays in the transcript. The
+saved failure record is hidden and omitted from ordinary continuation
+requests, though existing compaction can summarize visible partial progress.
+A crash can hide whether a tool already ran: the retry sends a synthetic
+missing-result marker for that call and never re-executes the old tool batch.
+A retry can duplicate provider work and billing. Bump is interactive-only; RPC
+and the Phi bridge do not expose it.
 
 ## Change direction while psi works
 

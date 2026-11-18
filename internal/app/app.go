@@ -452,6 +452,7 @@ Pi-compatible options:
   --version, -v              Show version
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
+Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect read,bash,edit,write only.
 loop_control and syncboard remain available when their separate availability checks pass.
@@ -741,6 +742,53 @@ func (r *runtime) liveToolRow(console *terminal.Console) (string, bool) {
 	}
 	active := r.activeTools[len(r.activeTools)-1]
 	return terminal.FormatToolRowWithDisplay(active.summary, active.name, "running", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme), true
+}
+
+// inputMode selects admission behavior for one run. Prompt and compaction keep
+// the existing submission path; bump retries without a user message.
+type inputMode int
+
+const (
+	inputPrompt inputMode = iota
+	inputCompact
+	inputBump
+)
+
+// checkBump reports whether an interactive bump may start. Sticky storage and
+// auth errors take precedence over a generic non-idle refusal. When
+// requireUnfinished is true the unfinished-turn eligibility check applies;
+// explicit commands bypass only that check and keep all safety checks. The
+// durable file is checked only after eligibility when required, so an empty
+// Enter on a completed session never reads the whole file.
+func (r *runtime) checkBump(unavailable bool, requireUnfinished bool) error {
+	if err := r.store.WriteError(); err != nil {
+		r.state = StateStorageBlocked
+		return fmt.Errorf("storage blocked: %w", err)
+	}
+	if r.authErr != nil {
+		return r.authErr
+	}
+	if r.state == StateStorageBlocked {
+		return errors.New("storage is blocked; open a checked copy or /new")
+	}
+	if unavailable || r.selector != nil || r.settingsPicker != nil || r.compactActive || r.compactPending || r.state != StateIdle {
+		return agent.ErrNotBumpable
+	}
+	proj, err := r.store.Projection()
+	if err != nil {
+		return err
+	}
+	if requireUnfinished && !session.CanBump(proj.Flat) {
+		return agent.ErrNotBumpable
+	}
+	if err := session.CheckContinuable(proj.Flat, proj.Entries); err != nil {
+		return err
+	}
+	if err := r.store.CheckWritable(); err != nil {
+		r.state = StateStorageBlocked
+		return fmt.Errorf("storage blocked: %w", err)
+	}
+	return nil
 }
 
 func (r *runtime) restore() error {
@@ -1475,6 +1523,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
+	var bumpAwaitingStart bool
 	var toolSpacing toolBatchSpacing
 	finishTools := func() {
 		if toolSpacing.pending {
@@ -1788,6 +1837,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			stream.Delta(ev.Text)
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
+			bumpAwaitingStart = false
 			r.clearInFlight()
 			r.bridgeRunStarted()
 		case event.SteeringDelivered, event.FollowUpDelivered:
@@ -1900,7 +1950,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var compactionCountAtStart uint64
 	var resumeAfterCompaction bool
 	var activeConfig agent.Config
-	startInput := func(input agent.UserInput, focus string, compact bool) (bool, string) {
+	startInputMode := func(input agent.UserInput, focus string, mode inputMode, silent bool) (bool, string) {
+		compact := mode == inputCompact
+		bump := mode == inputBump
 		resumeThisCompaction := compact && resumeAfterCompaction
 		if compact {
 			resumeAfterCompaction = false
@@ -1908,21 +1960,29 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cancelACEndTurn()
 		if err := r.store.WriteError(); err != nil {
 			r.state = StateStorageBlocked
-			notice(terminal.NoticeError, "Storage is blocked: "+err.Error()+" (open a checked copy or /new)")
+			if !silent {
+				notice(terminal.NoticeError, "Storage is blocked: "+err.Error()+" (open a checked copy or /new)")
+			}
 			return false, "storage"
 		}
 		if r.authErr != nil && !compact {
 			// A compaction resolves its provider after the preparation, like
 			// Pi: the session is checked before credentials are needed.
-			notice(terminal.NoticeError, r.authErr.Error())
+			if !silent {
+				notice(terminal.NoticeError, r.authErr.Error())
+			}
 			return false, "unavailable"
 		}
+		// A bump that never reaches RunStart is a silent admission refusal.
+		// Track it here, in the REPL goroutine; RunStart clears it.
+		bumpAwaitingStart = bump
 		// Every submitted message and every compaction boundary moves the
-		// reload fence, so a moved-on session reads stale.
-		if compact || !input.Empty() {
+		// reload fence, so a moved-on session reads stale. Bump adds no user
+		// message and must not move that fence.
+		if compact || (!bump && !input.Empty()) {
 			r.bumpContextRev()
 		}
-		if strings.TrimSpace(input.Display) != "" {
+		if !bump && strings.TrimSpace(input.Display) != "" {
 			display := input.Display
 			if input.Source == "skill" {
 				if _, ok := skills.ParseBlock(input.Text()); ok {
@@ -2006,24 +2066,38 @@ func (r *runtime) repl(console *terminal.Console) error {
 		// structured prompt touches the marker: a compaction start between
 		// admission and RunStart must not lose it. A native editor submission
 		// while a bridge prompt is in flight is refused, so a non-structured
-		// replacement cannot steal the marker either.
-		r.retainInFlight(input)
+		// replacement cannot steal the marker either. Bump adds no prompt and
+		// must not retain one.
+		if !bump {
+			r.retainInFlight(input)
+		}
 		go func() {
-			if compact {
+			switch {
+			case compact:
 				if resumeThisCompaction {
 					done <- loop.CompactAndResume(ctx, cfg, focus)
 				} else {
 					done <- loop.Compact(ctx, cfg, focus)
 				}
-			} else if input.Structured() {
+			case bump:
+				done <- loop.Bump(ctx, cfg)
+			case input.Structured():
 				done <- loop.SubmitContent(ctx, input, cfg)
-			} else if input.Invocation != "" {
+			case input.Invocation != "":
 				done <- loop.SubmitWithProvenance(ctx, input.Text(), input.Invocation, input.Source, cfg)
-			} else {
+			default:
 				done <- loop.Submit(ctx, input.Text(), cfg)
 			}
 		}()
 		return true, ""
+	}
+	// startInput keeps the original editor and bridge contract.
+	startInput := func(input agent.UserInput, focus string, compact bool) (bool, string) {
+		mode := inputPrompt
+		if compact {
+			mode = inputCompact
+		}
+		return startInputMode(input, focus, mode, false)
 	}
 	// start is the editor and command entry point: a refused submission is
 	// handed back to the user as a restored draft.
@@ -2323,6 +2397,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				ev := <-events
 				recordEventFrames(func() { applyEvent(ev) })
 			}
+			// A bump that never reached RunStart failed admission asynchronously.
+			// Suppress only its refusal notice; the original error still drives
+			// queue, bridge, and scheduling decisions below.
+			bumpBeforeStart := bumpAwaitingStart
+			bumpAwaitingStart = false
 			cancel()
 			busy = false
 			bridge.resolveCompactRun(err)
@@ -2380,7 +2459,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			} else {
 				activityText = ""
 			}
-			if errors.Is(err, context.Canceled) {
+			if bumpBeforeStart {
+				// Silent admission refusal before RunStart. Preserve the
+				// storage block without a notice; normal runs keep their
+				// failure, cancellation, and unsaved-output reports.
+				if runOutcome == event.OutcomeUnsaved {
+					r.state = StateStorageBlocked
+				}
+			} else if errors.Is(err, context.Canceled) {
 				if runOutcome == event.OutcomeUnsaved {
 					r.state = StateStorageBlocked
 					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new.")
@@ -2815,6 +2901,21 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if strings.TrimSpace(text) == "" {
+				// An empty Enter is silent unless it starts a real bump. Admission
+				// refusals (busy, picker, auth, storage, ineligible) stay invisible.
+				if err := r.checkBump(busy || compacting || exiting, true); err == nil {
+					startInputMode(agent.UserInput{}, "", inputBump, true)
+				}
+				r.draw(console)
+				continue
+			}
+			if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "b" || cmd.Name == "bump") {
+				// Explicit bumps are silent on admission refusal. A refused
+				// command is discarded without a notice, queue entry, or
+				// restored draft. Started runs keep normal failure reports.
+				if err := r.checkBump(busy || compacting || exiting, false); err == nil {
+					startInputMode(agent.UserInput{}, "", inputBump, true)
+				}
 				r.draw(console)
 				continue
 			}

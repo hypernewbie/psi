@@ -2,7 +2,8 @@
 
 Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 
-- `Enter` submit outside bracketed paste; pasted newlines are literal, never submit
+- `Enter` submit outside bracketed paste; pasted newlines are literal, never submit. When psi is idle, one empty `Enter` retries an unfinished turn (failed, interrupted, or recovered from a crash). Otherwise the empty submission is ignored silently.
+- `/b` and `/bump` request another response from the current context without adding a user message. They work after a completed or output-limited answer as well as after an unfinished turn, and use the current model, thinking level, tools, system prompt, and compaction policy. `/b anything` and `/bump anything` are ordinary prompt text.
 - `Ctrl+J` newline (reliable legacy binding)
 - `Left/Right` move by grapheme cluster (uniseg)
 - `Up/Down` first control an active completion or picker; otherwise they move through visual draft rows
@@ -34,6 +35,7 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 - `/clone` — duplicate the session at the current position
 - `/new` — start a session (keeps scrollback, resets recall)
 - `/compact [focus]` — create a cancellable compact summary
+- `/b`, `/bump` — request another response without adding a prompt. Available only while idle, outside pickers, runs, and compaction. Explicit commands bypass the unfinished-turn gate but keep storage, auth, and continuation checks. Empty `Enter` retries unfinished turns only. All admission refusals stay silent; started runs report failures, cancellation, partial output, and unsaved output normally.
 - `/resume` — search workspace sessions; same-session selection is a no-op
 - `/reload` — reload keybindings, extensions, skills, prompts, themes, and context files
 - `/quit` — settle work and restore the terminal
@@ -42,5 +44,6 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 
 `/help`, `/version`, and `/history` are not slash commands. Use `./psi --help` and `./psi --version` for CLI information. An unknown slash command is ordinary prompt text and is sent to the model, as in Pi. `/skill:` is the exception: an unknown skill is always refused, never sent as prompt text.
 
-Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. This includes `/skill:<name> [args]`, which queues the expanded block and keeps its invocation provenance. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft; queued skills restore as `/skill:name args`, not as expanded bodies. `/ac`, `/autocompact`, `/loop-stop`, and `/skill:` have busy-run handling; other slash commands return to the draft.
-Every command works after resume and after cancellation; draft preserved on errors.
+Busy: the editor stays active during a run, like Pi. `Enter` queues steering for the next turn boundary; `Alt+Enter` queues a follow-up until the current run ends. This includes `/skill:<name> [args]`, which queues the expanded block and keeps its invocation provenance. Dim `Steering: …` and `Follow-up: …` rows show pending text. Queues deliver one at a time in their respective modes. `Esc`/`Ctrl+C` cancel and restore undelivered queued text to the draft; queued skills restore as `/skill:name args`, not as expanded bodies. `/ac`, `/autocompact`, `/loop-stop`, and `/skill:` have busy-run handling; other slash commands return to the draft. `/b` and `/bump` are discarded during a run, never queued, steered, or restored to the draft; use them after the run settles.
+
+A bump keeps visible partial output and saved answers in the transcript. The persisted failure record stays invisible and is omitted from ordinary continuation requests. Existing compaction can still summarize visible partial progress. A failed crash can hide whether a tool already ran; bump sends synthetic missing-tool results in request context and never re-executes the old batch. A retry can bill the provider again.

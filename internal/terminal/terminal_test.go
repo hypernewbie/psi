@@ -112,7 +112,7 @@ func TestEditor(t *testing.T) {
 }
 
 func TestCommands(t *testing.T) {
-	for _, c := range []string{"/new", "/resume", "/model", "/thinking", "/compact", "/session", "/clone", "/hotkeys", "/reload", "/quit", "/ac status", "/autocompact help", "/loop goal fix tests", "/loop-stop", "/name foo", "/skill:do arg"} {
+	for _, c := range []string{"/new", "/resume", "/model", "/thinking", "/compact", "/b", "/bump", "/session", "/clone", "/hotkeys", "/reload", "/quit", "/ac status", "/autocompact help", "/loop goal fix tests", "/loop-stop", "/name foo", "/skill:do arg"} {
 		if _, ok := ParseCommand(c); !ok {
 			t.Errorf("command %q not parsed", c)
 		}
@@ -126,10 +126,16 @@ func TestCommands(t *testing.T) {
 	}
 	// Commands without an argument hint reject an argument, like Pi's
 	// exact-match dispatch.
-	for _, c := range []string{"/session all", "/clone extra", "/hotkeys now"} {
+	for _, c := range []string{"/session all", "/clone extra", "/hotkeys now", "/b anything", "/bump anything"} {
 		if _, ok := ParseCommand(c); ok {
 			t.Errorf("command %q takes no argument", c)
 		}
+	}
+	if cmd, ok := ParseCommand("/b"); !ok || cmd.Name != "b" || cmd.Arg != "" {
+		t.Fatalf("exact /b parse=%v %v", cmd, ok)
+	}
+	if cmd, ok := ParseCommand("/bump"); !ok || cmd.Name != "bump" || cmd.Arg != "" {
+		t.Fatalf("exact /bump parse=%v %v", cmd, ok)
 	}
 	if _, ok := ParseCommand("hello"); ok {
 		t.Errorf("plain text is not a command")
@@ -155,5 +161,18 @@ func TestStreamerNoRedraw(t *testing.T) {
 		if strings.Contains(out, f) {
 			t.Errorf("forbidden in stream")
 		}
+	}
+}
+
+func TestHotkeysMentionsBumpTriggers(t *testing.T) {
+	text := HotkeysText()
+	if !strings.Contains(text, "/bump") {
+		t.Fatalf("hotkeys missing /bump: %q", text)
+	}
+	if !strings.Contains(text, "/b,") && !strings.Contains(text, "/b ") {
+		t.Fatalf("hotkeys missing distinct /b token: %q", text)
+	}
+	if !strings.Contains(text, "empty") || !strings.Contains(text, "unfinished") {
+		t.Fatalf("hotkeys missing empty-Enter distinction: %q", text)
 	}
 }

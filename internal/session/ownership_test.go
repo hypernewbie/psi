@@ -82,30 +82,47 @@ func TestHardLinkedSessionRefusesPersistentContinuation(t *testing.T) {
 }
 
 func TestReplacementBetweenGenerationCheckAndOpenIsRefused(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "session.jsonl")
-	piFixture(t, path)
-	s, err := OpenFile(path, "/tmp/ws", true)
-	if err != nil {
-		t.Fatal(err)
+	operations := []struct {
+		name string
+		run  func(*Store) error
+	}{
+		{name: "append", run: func(s *Store) error {
+			_, err := s.AppendModelChange("anthropic", "m")
+			return err
+		}},
+		{name: "check writable", run: func(s *Store) error { return s.CheckWritable() }},
 	}
-	prefix, _ := os.ReadFile(path)
-	leaf, count := s.LeafID(), s.EntryCount()
-	s.storage = &storageOps{open: func(path string, flags int, mode os.FileMode) (durableFile, error) {
-		if err := os.WriteFile(path+".new", prefix, mode); err != nil {
-			return nil, err
-		}
-		if err := os.Rename(path+".new", path); err != nil {
-			return nil, err
-		}
-		return os.OpenFile(path, flags, mode)
-	}}
-	if _, err := s.AppendModelChange("anthropic", "m"); err == nil {
-		t.Fatal("replacement raced the pre-open generation check")
-	}
-	after, _ := os.ReadFile(path)
-	if !bytes.Equal(after, prefix) || s.LeafID() != leaf || s.EntryCount() != count {
-		t.Fatal("refused replacement received a logical or physical append")
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "session.jsonl")
+			piFixture(t, path)
+			s, err := OpenFile(path, "/tmp/ws", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix, _ := os.ReadFile(path)
+			leaf, count := s.LeafID(), s.EntryCount()
+			s.storage = &storageOps{open: func(path string, flags int, mode os.FileMode) (durableFile, error) {
+				if err := os.WriteFile(path+".new", prefix, mode); err != nil {
+					return nil, err
+				}
+				if err := os.Rename(path+".new", path); err != nil {
+					return nil, err
+				}
+				return os.OpenFile(path, flags, mode)
+			}}
+			if err := operation.run(s); err == nil {
+				t.Fatal("replacement raced the pre-open generation check")
+			}
+			after, _ := os.ReadFile(path)
+			if !bytes.Equal(after, prefix) || s.LeafID() != leaf || s.EntryCount() != count {
+				t.Fatal("refused replacement received a logical or physical append")
+			}
+			if s.WriteError() == nil {
+				t.Fatal("refused replacement did not set a sticky error")
+			}
+		})
 	}
 }
 
