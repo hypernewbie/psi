@@ -2,9 +2,11 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -316,5 +318,64 @@ func TestReadNonRegularFileAndCancellation(t *testing.T) {
 	})
 	if !resCancel.IsError || !strings.Contains(resCancel.Content[0].Text, "context canceled") {
 		t.Fatalf("expected context canceled result: %+v", resCancel)
+	}
+}
+
+func TestReadSkippedPrefixBoundaries(t *testing.T) {
+	wantPage := func(body string, next int) Result {
+		if next != 0 {
+			body += fmt.Sprintf("\n\n[Output truncated. Use offset=%d to continue; use bash for a line larger than 50 KiB.]", next)
+		}
+		return Result{Content: []Block{{Type: "text", Text: body}}, Details: map[string]any{"truncated": next != 0}}
+	}
+	wantError := func(text string) Result {
+		return Result{Content: []Block{{Type: "text", Text: text}}, IsError: true}
+	}
+	const bufferBytes = 4 * 1024 // bufio.NewReader's default buffer
+	boundaryContent := func(lfIndex int) string {
+		const first = "a\n"
+		return first + strings.Repeat("s", lfIndex-len(first)) + "\nchosen α\r\ntail\n"
+	}
+	const prefix = "first\nskip\n" // ReadSlice skips the first line, leaving the second for the batch.
+	const marker = "selected:"
+	selected := marker + strings.Repeat("z", DefaultMaxBytes-len(marker))
+	// Only twelve whole 4 KiB fragments fit before the 50 KiB byte cap.
+	const wholeFragments = 12 * bufferBytes
+	tests := []struct {
+		name          string
+		content       string
+		offset, limit int
+		want          Result
+	}{
+		{"target inside batch after NUL and blank lines", "first\nskip\x00\n\nc\nd\n", 4, 1, wantPage("c\n", 5)},
+		{"dense short prefix across refills", strings.Repeat("x\n", 2189) + "chosen\ntail\n", 2190, 1, wantPage("chosen\n", 2191)},
+		{"skipped LF one byte before buffer end", boundaryContent(bufferBytes - 2), 3, 1, wantPage("chosen α\r\n", 4)},
+		{"skipped LF at buffer end", boundaryContent(bufferBytes - 1), 3, 1, wantPage("chosen α\r\n", 4)},
+		{"skipped LF after buffer end", boundaryContent(bufferBytes), 3, 1, wantPage("chosen α\r\n", 4)},
+		{"partial skipped tail after batch", prefix + strings.Repeat("s", 3*bufferBytes) + "\nhéllo 🌍\r\ntail\n", 4, 1, wantPage("héllo 🌍\r\n", 5)},
+		{"selected line exactly at byte cap", prefix + selected[:DefaultMaxBytes-1] + "\ntail\n", 3, DefaultMaxLines, wantPage(selected[:DefaultMaxBytes-1]+"\n", 4)},
+		{"selected long line exceeds byte cap", prefix + selected + "\ntail\n", 3, DefaultMaxLines, wantPage(selected[:wholeFragments], 3)},
+		{"selected NUL beyond byte cap", prefix + selected + "\x00\n", 3, DefaultMaxLines, wantError("read: file contains binary data")},
+		{"unterminated selected final line", prefix + "last", 3, 1, wantPage("last", 0)},
+		{"offset beyond unterminated EOF", prefix + "last", 4, 1, wantError("read: offset 4 is beyond end of file")},
+	}
+	dir := t.TempDir()
+	tool := &ReadTool{Cwd: dir}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(dir, "target.txt"), []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			res := tool.ExecuteCtx(context.Background(), Invocation{
+				ID:   "inv",
+				Name: Read,
+				Arguments: map[string]any{
+					"path": "target.txt", "offset": tc.offset, "limit": tc.limit,
+				},
+			})
+			if !reflect.DeepEqual(res, tc.want) {
+				t.Fatalf("result = %+v, want %+v", res, tc.want)
+			}
+		})
 	}
 }
