@@ -62,6 +62,9 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 			block, notice, err := convertResource(item.Resource)
 			if notice != "" {
 				textParts = append(textParts, notice)
+				if block == nil {
+					content = append(content, tools.Block{Type: "text", Text: notice})
+				}
 			}
 			if err != nil {
 				notice := "MCP embedded resource could not be converted: " + err.Error()

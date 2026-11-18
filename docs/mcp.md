@@ -103,7 +103,11 @@ This key is user-only. A project settings file cannot enable it. The default is
 Tool names are `mcp__<server>__<tool>`. Characters outside `[A-Za-z0-9_]`
 become `_`. A name longer than 64 characters, or a sanitized-name collision,
 gets `_` plus eight SHA-256 hex characters. Collisions are resolved over the
-whole discovered list, so a list reorder does not rename a tool.
+whole discovered list, so a list reorder does not rename a tool. If tools from
+different servers still have the same model name, psi withholds all ambiguous
+routes and reports `tool-name-collision` in `/mcp`. Other tools remain usable.
+Captured and queued calls cannot use an ambiguous route. Rename a server or
+hide a conflicting tool, then reload to restore an unambiguous route.
 
 psi copies the server input schema. It adds `type: "object"` only when the root
 type is absent or null, and `properties: {}` only when that key is absent. It
@@ -162,10 +166,14 @@ requests, and tool declarations. `--no-tools` disables only the built-in
 `/reload` re-reads MCP configuration in the background. A malformed file keeps
 the previous accepted config. An invalid entry is withdrawn, not silently run
 with its old definition. A failed re-list keeps the last good catalog and
-reports a refresh warning. A lost connection withdraws its tools and may use at
+reports a refresh warning. Tool-list notifications received during discovery
+remain queued. Refresh attempts are coalesced and rate-limited to one per
+second, including failed attempts. A lost connection withdraws its tools and may use at
 most two reconnect cycles. A successful `/reload` accepts the config and starts
 a fresh reconnect allowance. An exposure-only reload updates declarations and
-live routes without reconnecting. Calls recheck exposure after admission, and
+live routes without reconnecting. Changes to connection fields replace the
+connection; `env` and `headers` are distinct even if their keys and values match.
+Calls recheck exposure after admission, and
 setup that finishes after the reload uses the latest accepted exposure policy.
 
 A queued call that has not reached the server reports caller cancellation,
@@ -239,7 +247,15 @@ and admission fairness between servers. Queued-call checks cover cancellation,
 caller deadlines, idle deadlines, and connection withdrawal at both admission
 stages. Exposure-reload checks require withdrawn tools to send no request,
 re-enabled tools to work on the same connection, and pending setup to publish
-the latest policy. A gated SDK check retires a connection before callers consume
+the latest policy. Cross-server name-collision checks require ambiguous routes
+to disappear, captured and queued calls to send no request, healthy tools to
+remain usable, and resolved routes to recover without reconnecting. Reload
+checks distinguish environment values from HTTP headers. Real HTTP/SSE checks
+preserve notifications that arrive before discovery completes. Fake-time SDK
+checks cover coalesced notifications after failed refreshes, retained catalogs,
+and warning clearance. Result checks preserve embedded-resource omission
+notices beside other text and read the complete saved output with `read`.
+A gated SDK check retires a connection before callers consume
 their completed replies. A separate check requires Stop to release an unfinished
 call while its handler ignores cancellation. HTTP checks use request-entry events
 for cancellation and stalled DELETE.

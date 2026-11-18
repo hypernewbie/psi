@@ -33,8 +33,10 @@ func TestQueuedCallReportsCancellationOrigin(t *testing.T) {
 					}
 					manager.servers["fixture"] = &serverState{
 						cfg:    Server{Name: "fixture", Enabled: true, Timeout: timeout},
-						status: serverStateReady, epoch: 1, conn: conn,
+						status: serverStateReady, epoch: 1, conn: conn, catalog: conn.catalog,
 					}
+					manager.order = []string{"fixture"}
+					manager.publishLocked()
 					parent, cancel := context.WithTimeout(context.Background(), time.Minute)
 					defer cancel()
 					done := make(chan tools.Result, 1)

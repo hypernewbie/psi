@@ -132,7 +132,35 @@ func TestResultRejectsUnsupportedImages(t *testing.T) {
 	}
 }
 
-func TestResultTruncatesAndSavesFullOutput(t *testing.T) {
+func TestResultPreservesEmbeddedResourceOmissionNotices(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		resource *sdk.ResourceContents
+		want     string
+	}{
+		{name: "unsupported-image", resource: &sdk.ResourceContents{MIMEType: "image/bmp", Blob: []byte("image")}, want: "embedded image omitted"},
+		{name: "oversize-image", resource: &sdk.ResourceContents{MIMEType: "image/png", Blob: make([]byte, maxResultImage+1)}, want: "embedded image omitted"},
+		{name: "invalid-text", resource: &sdk.ResourceContents{MIMEType: "text/plain", Blob: []byte{0xff}}, want: "not valid UTF-8"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, withSibling := range []bool{false, true} {
+				content := []sdk.Content{&sdk.EmbeddedResource{Resource: test.resource}}
+				if withSibling {
+					content = append(content, &sdk.TextContent{Text: "sibling"})
+				}
+				result := Convert(&sdk.CallToolResult{Content: content, IsError: true}, ConvertOptions{Server: "fixture", Tool: "resource"})
+				if !result.IsError || len(result.Content) != len(content) || !strings.Contains(result.Content[0].Text, test.want) {
+					t.Fatalf("sibling=%t: omission notice missing or error flag changed: %+v", withSibling, result)
+				}
+				if withSibling && result.Content[1].Text != "sibling" {
+					t.Fatalf("sibling content changed: %+v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestResultTruncatesAndSavesReadableFullOutput(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TMPDIR", dir)
 	full := strings.Repeat("start-", 5000) + "middle" + strings.Repeat("-end", 5000)
@@ -162,9 +190,14 @@ func TestResultTruncatesAndSavesFullOutput(t *testing.T) {
 	if err != nil || string(data) != full {
 		t.Errorf("full output mismatch: err=%v, len=%d", err, len(data))
 	}
+	registry := tools.NewRegistry(dir)
+	read := registry.Dispatch(tools.Invocation{Name: tools.Read, Arguments: map[string]any{"path": details.FullOutputPath, "limit": 2000}})
+	if read.IsError || len(read.Content) != 1 || read.Content[0].Text != full {
+		t.Fatalf("read tool could not reach the complete saved output: %+v", read)
+	}
 }
 
-func TestResultStructuredAndNeedsInput(t *testing.T) {
+func TestResultStructuredContent(t *testing.T) {
 	result := &sdk.CallToolResult{StructuredContent: map[string]any{"ok": true}}
 	converted := Convert(result, ConvertOptions{Server: "s", Tool: "t"})
 	if len(converted.Content) != 1 || !strings.Contains(converted.Content[0].Text, `"ok":true`) {
@@ -175,28 +208,13 @@ func TestResultStructuredAndNeedsInput(t *testing.T) {
 	}
 }
 
-func TestResultResourceLinkDoesNotFetch(t *testing.T) {
+func TestResultFormatsResourceLinkAsText(t *testing.T) {
 	result := &sdk.CallToolResult{Content: []sdk.Content{
 		&sdk.ResourceLink{URI: "http://127.0.0.1:1/never", Name: "example"},
 	}}
 	converted := Convert(result, ConvertOptions{Server: "s", Tool: "t"})
 	if len(converted.Content) != 1 || !strings.Contains(converted.Content[0].Text, "example") {
 		t.Errorf("resource link = %+v", converted.Content)
-	}
-}
-
-func TestResultFullOutputIsReadableByReadTool(t *testing.T) {
-	full := strings.Repeat("alpha ", 6000) + "omega"
-	converted := Convert(&sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: full}}}, ConvertOptions{Server: "s", Tool: "t", ReadAvailable: true})
-	details := converted.Details.(toolDetails)
-	registry := tools.NewRegistry(t.TempDir())
-	result := registry.Dispatch(tools.Invocation{Name: tools.Read, Arguments: map[string]any{"path": details.FullOutputPath, "limit": 2000}})
-	if result.IsError {
-		t.Fatalf("read full output: %+v", result)
-	}
-	text := result.Content[0].Text
-	if !strings.HasPrefix(text, "alpha") || !strings.Contains(text, "omega") {
-		t.Fatalf("read tool could not reach the saved output: %q", text)
 	}
 }
 

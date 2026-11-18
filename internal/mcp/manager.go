@@ -10,8 +10,7 @@ import (
 	"maps"
 	"math"
 	"net"
-	"sort"
-	"strings"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -340,7 +339,7 @@ func (m *Manager) prepareReloadResolutions(cfg *Config, input Input) map[string]
 	resolutions := make(map[string]reloadResolution)
 	for _, server := range cfg.Servers {
 		old, ok := previous[server.Name]
-		if !ok || !old.Enabled || !server.Enabled || connectionKey(old) != connectionKey(server) {
+		if !ok || !old.Enabled || !server.Enabled || !sameConnectionConfig(old, server) {
 			continue
 		}
 		if serverUsesCommand(server) || !serverNeedsInterpolation(server) {
@@ -415,7 +414,7 @@ func (m *Manager) acceptConfigLocked(cfg *Config, input Input, resolutions map[s
 			continue
 		}
 		hasCommand := serverUsesCommand(server)
-		changed := connectionKey(old.cfg) != connectionKey(server) || hasCommand || old.status == serverStateFailed ||
+		changed := !sameConnectionConfig(old.cfg, server) || hasCommand || old.status == serverStateFailed ||
 			(!input.ProjectTrusted && old.cfg.Source == "project") ||
 			(!input.AllowProjectCommands && old.cfg.ProjectCommand)
 		if changed {
@@ -516,47 +515,12 @@ func recomputeExposure(catalog []Tool, server Server) []Tool {
 	return out
 }
 
-func connectionKey(server Server) string {
-	var b strings.Builder
-	b.WriteString(string(server.Transport))
-	b.WriteByte(0)
-	b.WriteString(server.Command)
-	b.WriteByte(0)
-	for _, arg := range server.Args {
-		b.WriteString(arg)
-		b.WriteByte(0)
-	}
-	b.WriteString(server.Cwd)
-	b.WriteByte(0)
-	b.WriteString(server.URL)
-	b.WriteByte(0)
-	for _, key := range sortedKeys(server.Env) {
-		b.WriteString(key)
-		b.WriteByte('=')
-		b.WriteString(server.Env[key])
-		b.WriteByte(0)
-	}
-	for _, key := range sortedKeys(server.Headers) {
-		b.WriteString(strings.ToLower(key))
-		b.WriteByte('=')
-		b.WriteString(server.Headers[key])
-		b.WriteByte(0)
-	}
-	b.WriteString(server.Source)
-	b.WriteByte(0)
-	if server.ProjectCommand {
-		b.WriteByte('1')
-	}
-	return b.String()
-}
-
-func sortedKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+// Exposure and call timeouts can change without replacing a connection.
+// Keep connection-defining fields separate: env and headers are not interchangeable.
+func sameConnectionConfig(a, b Server) bool {
+	return a.Transport == b.Transport && a.Command == b.Command && slices.Equal(a.Args, b.Args) &&
+		a.Cwd == b.Cwd && a.URL == b.URL && maps.Equal(a.Env, b.Env) && maps.Equal(a.Headers, b.Headers) &&
+		a.Source == b.Source && a.ProjectCommand == b.ProjectCommand
 }
 
 func (m *Manager) scheduleSetupLocked(state *serverState) {
@@ -791,7 +755,6 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 	conn.session = session
 	conn.catalog = catalog
 	conn.setupDisarm = disarm
-	conn.listCh = make(chan struct{}, 1)
 	m.mu.Lock()
 	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch {
 		m.mu.Unlock()
@@ -1014,6 +977,8 @@ func (c *connection) signalListChanged() {
 }
 
 func (c *connection) refreshCatalog() error {
+	// Failed refreshes also consume the notification rate-limit interval.
+	c.lastList = c.manager.opts.now()
 	ctx, cancel := context.WithTimeout(c.ctx, c.manager.serverTimeout(c.server))
 	defer cancel()
 	raw, err := listWithRetry(ctx, c.session, c)
@@ -1035,7 +1000,6 @@ func (c *connection) refreshCatalog() error {
 	}
 	state.catalog = catalog
 	c.catalog = catalog
-	c.lastList = c.manager.opts.now()
 	state.refreshWarning = ""
 	c.manager.publishLocked()
 	c.manager.mu.Unlock()
@@ -1098,6 +1062,16 @@ func (m *Manager) serverTimeout(name string) time.Duration {
 
 func (m *Manager) publishLocked() {
 	snap := &Snapshot{Revision: m.generation, ReloadError: m.reloadErr}
+	// Per-server naming cannot detect collisions across server/tool boundaries.
+	// Withhold every ambiguous route rather than choosing a server by order.
+	nameCounts := make(map[string]int)
+	for _, state := range m.servers {
+		for _, tool := range state.catalog {
+			if declared(tool) {
+				nameCounts[tool.Name]++
+			}
+		}
+	}
 	if len(m.warnings) > 0 {
 		warnings := m.warnings
 		if len(warnings) > maxConfigWarnings {
@@ -1128,6 +1102,10 @@ func (m *Manager) publishLocked() {
 		}
 		for _, tool := range state.catalog {
 			if declared(tool) {
+				if nameCounts[tool.Name] > 1 {
+					status.ErrorClass = "tool-name-collision"
+					continue
+				}
 				status.Exposed++
 				snap.Tools = append(snap.Tools, tool)
 			}
@@ -1197,7 +1175,8 @@ func (m *Manager) Call(ctx context.Context, tool Tool, inv tools.Invocation) too
 	}
 	conn := state.conn
 	live, ok := findCatalogTool(conn.catalog, tool.Name)
-	if !ok || !declared(live) || live.RawName != tool.RawName {
+	_, published := m.snapshot.Load().Find(tool.Name)
+	if !published || !ok || !declared(live) || live.RawName != tool.RawName {
 		m.mu.Unlock()
 		return callError("stale", tool)
 	}
@@ -1277,7 +1256,8 @@ func (m *Manager) routeLive(tool Tool, conn *connection) bool {
 		return false
 	}
 	live, ok := findCatalogTool(conn.catalog, tool.Name)
-	return ok && declared(live) && live.RawName == tool.RawName
+	_, published := m.snapshot.Load().Find(tool.Name)
+	return published && ok && declared(live) && live.RawName == tool.RawName
 }
 
 // Admission can end because of the caller, a timeout, or connection withdrawal.

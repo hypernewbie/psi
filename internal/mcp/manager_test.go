@@ -124,7 +124,7 @@ func connectInMemoryServer(t *testing.T, manager *Manager, name string, server *
 	t.Helper()
 	ctx, cancel := context.WithCancel(manager.ctx)
 	conn := &connection{manager: manager, server: name, epoch: 1, ctx: ctx, cancel: cancel,
-		permits: make(chan struct{}, maxCallsPerServer), tokens: map[string]*callState{}}
+		permits: make(chan struct{}, maxCallsPerServer), tokens: map[string]*callState{}, listCh: make(chan struct{}, 1)}
 	clientTransport, serverTransport := sdk.NewInMemoryTransports()
 	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
 	if err != nil {
@@ -132,6 +132,9 @@ func connectInMemoryServer(t *testing.T, manager *Manager, name string, server *
 	}
 	t.Cleanup(func() { _ = serverSession.Close() })
 	client := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "1"}, &sdk.ClientOptions{
+		ToolListChangedHandler: func(context.Context, *sdk.ToolListChangedRequest) {
+			conn.signalListChanged()
+		},
 		ProgressNotificationHandler: func(_ context.Context, req *sdk.ProgressNotificationClientRequest) {
 			conn.noteProgress(req.Params.ProgressToken, req.Params.Progress)
 		},
@@ -145,6 +148,7 @@ func connectInMemoryServer(t *testing.T, manager *Manager, name string, server *
 	if err != nil {
 		t.Fatal(err)
 	}
+	conn.lastList = manager.opts.now()
 	cfg := Server{Name: name, Enabled: true, Exposure: ExposureDirect, Timeout: timeout}
 	conn.catalog, err = buildCatalog(cfg, conn.epoch, raw)
 	if err != nil {
@@ -749,7 +753,9 @@ func TestManagerRouteLiveRechecksRawName(t *testing.T) {
 	conn := &connection{}
 	tool := Tool{Name: "mcp__s__t", RawName: "t", Server: "s", Epoch: 1, Exposure: ExposureDirect}
 	conn.catalog = []Tool{tool}
-	manager.servers["s"] = &serverState{cfg: Server{Name: "s", Enabled: true}, status: serverStateReady, epoch: 1, conn: conn}
+	manager.servers["s"] = &serverState{cfg: Server{Name: "s", Enabled: true}, status: serverStateReady, epoch: 1, conn: conn, catalog: conn.catalog}
+	manager.order = []string{"s"}
+	manager.publishLocked()
 	if !manager.routeLive(tool, conn) {
 		t.Fatal("declared route was rejected")
 	}
