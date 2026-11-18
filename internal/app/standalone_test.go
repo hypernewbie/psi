@@ -26,6 +26,12 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// 2,189 skipped lines put the chosen text at the recorded p95 offset.
+	// The NUL bytes verify that skipped text is not treated as binary.
+	readWindowContent := strings.Repeat("skip\x00\r\n", 2189) + "chosen α\r\nchosen β\r\nunreturned\r\n"
+	if err := os.WriteFile(filepath.Join(work, "read-window.txt"), []byte(readWindowContent), 0600); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(*reviewBinary)
 	if err != nil {
 		t.Fatal(err)
@@ -47,24 +53,26 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 	}
 	const initialContent = "printf 'broken\\n'\n# remove me\n"
 	const finalContent = "printf 'SYNTHETIC_TOOL_BODY_FIXED\\n'\n"
-	checkResults := func(request map[string]any, wantIDs ...string) {
+	const wantReadText = "chosen α\r\nchosen β\r\n\n\n[Output truncated. Use offset=2192 to continue; use bash for a line larger than 50 KiB.]"
+	checkResults := func(request map[string]any, wantIDs ...string) map[string]map[string]any {
 		t.Helper()
 		messages, ok := request["messages"].([]any)
 		if !ok || len(messages) == 0 {
 			t.Error("request has no messages")
-			return
+			return nil
 		}
 		last, ok := messages[len(messages)-1].(map[string]any)
 		if !ok || last["role"] != "user" {
 			t.Error("last message must contain tool results")
-			return
+			return nil
 		}
 		results, ok := last["content"].([]any)
 		if !ok || len(results) != len(wantIDs) {
 			t.Errorf("expected %d tool results, got: %+v", len(wantIDs), last["content"])
-			return
+			return nil
 		}
 		pending := make(map[string]bool, len(wantIDs))
+		settled := make(map[string]map[string]any, len(wantIDs))
 		for _, id := range wantIDs {
 			pending[id] = true
 		}
@@ -80,10 +88,12 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 				continue
 			}
 			delete(pending, id)
+			settled[id] = result
 		}
 		if len(pending) != 0 {
 			t.Errorf("missing tool results: %+v", pending)
 		}
+		return settled
 	}
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,14 +141,21 @@ func TestActualCopiedBinaryWithoutNodeUsesAllFourTools(t *testing.T) {
 			}}}
 		case 3:
 			calls = []toolCall{
-				{"read", map[string]any{"path": "standalone.sh"}},
+				{"read", map[string]any{"path": "read-window.txt", "offset": 2190, "limit": 2}},
 				{"bash", map[string]any{"command": "bash standalone.sh"}},
 			}
 		default:
 			if turn != 4 {
 				t.Error("unexpected provider retry")
 			}
-			checkResults(request, "synthetic_call_3_0", "synthetic_call_3_1")
+			settled := checkResults(request, "synthetic_call_3_0", "synthetic_call_3_1")
+			readResult := settled["synthetic_call_3_0"]
+			content, ok := readResult["content"].([]any)
+			if !ok || len(content) != 1 {
+				t.Errorf("read result must contain one text block: %+v", readResult)
+			} else if block, ok := content[0].(map[string]any); !ok || block["type"] != "text" || block["text"] != wantReadText {
+				t.Errorf("read result text = %+v, want %q", content[0], wantReadText)
+			}
 			fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"STANDALONE_DONE\"}}\n\nevent: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n")
 		}
 		if len(calls) > 0 {

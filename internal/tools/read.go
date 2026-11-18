@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -73,6 +74,29 @@ func (t *ReadTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	for {
 		if err := ctx.Err(); err != nil {
 			return errResult(err.Error())
+		}
+		// Consume only complete skipped lines already in the reader. Leave
+		// partial lines and selected output to ReadSlice so the byte cap
+		// still applies to the same fragments.
+		if lineNumber < offset && br.Buffered() > 0 {
+			buffered, _ := br.Peek(br.Buffered()) // Already buffered; cannot refill or fail.
+			availableLines := bytes.Count(buffered, []byte{'\n'})
+			if availableLines > 0 {
+				skipped := min(offset-lineNumber, availableLines)
+				consumed := 0
+				if skipped == availableLines {
+					consumed = bytes.LastIndexByte(buffered, '\n') + 1
+				} else {
+					for range skipped {
+						consumed += bytes.IndexByte(buffered[consumed:], '\n') + 1
+					}
+				}
+				if _, err := br.Discard(consumed); err != nil {
+					return errResult(fmt.Sprintf("read: %v", err))
+				}
+				lineNumber += skipped
+				continue
+			}
 		}
 		part, err := br.ReadSlice('\n')
 		if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
