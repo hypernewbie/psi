@@ -366,6 +366,39 @@ func TestOpenAILoginCancelBrowserWaitThenRetry(t *testing.T) {
 	}
 }
 
+// A browser callback can finish while the launcher is still returning. If
+// login was cancelled by then, the queued code must not be exchanged.
+func TestOpenAILoginCancelWithCallbackReady(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := &openAIFakeToken{}
+	var addr string
+	login := &OpenAILogin{
+		Path:     authPath,
+		DeviceID: openAILoginTestDeviceID,
+		Bind:     openAILoginEphemeralBind(&addr),
+		HTTP:     &http.Client{Transport: transport},
+	}
+	err := login.Run(ctx, func(rawURL string) {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		statuses, err := deliverOpenAILoginCallbacks(addr, "state="+parsed.Query().Get("state")+"&code=queued-code&client_id=issued-client")
+		if err != nil || len(statuses) != 1 || statuses[0] != http.StatusOK {
+			t.Fatalf("callback delivery: statuses=%v, err=%v", statuses, err)
+		}
+		cancel()
+	})
+	if calls := transport.calls.Load(); !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Fatalf("login returned %v after %d exchanges; want cancellation without exchange", err, calls)
+	}
+	if _, err := os.Stat(authPath); !os.IsNotExist(err) {
+		t.Fatalf("cancelled sign-in did not leave auth absent: %v", err)
+	}
+}
+
 // Cancelling during the exchange writes nothing. L5.
 func TestOpenAILoginCancelDuringExchange(t *testing.T) {
 	authPath := filepath.Join(t.TempDir(), "auth.json")

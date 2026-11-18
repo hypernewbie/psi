@@ -137,6 +137,11 @@ func (l *OpenAILogin) Run(ctx context.Context, ready func(authURL string)) error
 	if err != nil {
 		return err
 	}
+	// The callback can win the select even if cancellation is already
+	// ready. Do not start exchanging the code after that cancellation.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	exchangeCtx, cancel := context.WithTimeout(ctx, openAILoginExchangeTimeout)
 	defer cancel()
 	token, err := l.exchangeCode(exchangeCtx, code, verifier, clientID)
