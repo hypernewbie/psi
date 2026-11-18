@@ -813,3 +813,39 @@ func TestBatchFetchMarksPreviewTruncation(t *testing.T) {
 		t.Fatalf("continuation missing:\n%s", text)
 	}
 }
+
+func TestInlineContentUsesPageHeaderProfile(t *testing.T) {
+	const language = "en-US,en;q=0.9"
+	var server *httptest.Server
+	server = batchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		ua, accept, lang := r.UserAgent(), r.Header.Get("Accept"), r.Header.Get("Accept-Language")
+		if r.URL.Path == "/search" {
+			if ua != userAgent || accept != "application/json" || lang != "" {
+				t.Errorf("SearXNG User-Agent, Accept, Accept-Language = %q, %q, %q", ua, accept, lang)
+			}
+			fmt.Fprintf(w, `{"results":[{"url":%q}]}`, server.URL+"/page")
+			return
+		}
+		if !strings.Contains(ua, "Firefox/") || accept != browserAccept || lang != language {
+			t.Errorf("page User-Agent, Accept, Accept-Language = %q, %q, %q", ua, accept, lang)
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "full inline body")
+	})
+	cfg := searxConfig(t, server.URL)
+	cfg.FetchHeaderProfile = "firefox"
+	cfg.FetchAcceptLanguage = language
+	client := testClient(cfg)
+	defer client.CloseIdle()
+	result := client.Dispatch(context.Background(), toolsInvocation(ToolSearch, map[string]any{"query": "q", "includeContent": true}))
+	if result.IsError {
+		t.Fatalf("search: %s", result.Content[0].Text)
+	}
+	page := getContent(t, client, map[string]any{"responseId": extractResponseID(t, result.Content[0].Text), "urlIndex": 0})
+	if page.IsError {
+		t.Fatalf("stored content: %s", page.Content[0].Text)
+	}
+	if got := extractPayload(t, page.Content[0].Text); got != "full inline body" {
+		t.Fatalf("stored page text = %q", got)
+	}
+}

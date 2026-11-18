@@ -52,9 +52,11 @@ type Config struct {
 	SearXNGRequested bool // endpoint present, even if invalid
 	ExaAvailable     bool
 
-	FetchMode      string
-	FetchModes     []string
-	MaxInlineChars int
+	FetchMode           string
+	FetchModes          []string
+	FetchHeaderProfile  string // psi|chrome|edge|firefox|safari
+	FetchAcceptLanguage string // optional Accept-Language, empty omits the header
+	MaxInlineChars      int
 
 	AllowRanges []netip.Prefix
 
@@ -154,17 +156,18 @@ func Load(env Env) (Config, []string) {
 
 func defaultConfig() (Config, []string) {
 	cfg := Config{
-		Provider:        "auto",
-		ExaBaseURL:      "https://api.exa.ai",
-		SearchEnabled:   true,
-		FetchEnabled:    true,
-		ContentEnabled:  true,
-		FetchMode:       "readable",
-		FetchModes:      []string{"readable", "raw"},
-		MaxInlineChars:  DefaultInlineChars,
-		CacheMaxEntries: DefaultCacheEntries,
-		CacheMaxBytes:   DefaultCacheBytes,
-		ExaAvailable:    true,
+		Provider:           "auto",
+		ExaBaseURL:         "https://api.exa.ai",
+		SearchEnabled:      true,
+		FetchEnabled:       true,
+		ContentEnabled:     true,
+		FetchMode:          "readable",
+		FetchModes:         []string{"readable", "raw"},
+		FetchHeaderProfile: "psi",
+		MaxInlineChars:     DefaultInlineChars,
+		CacheMaxEntries:    DefaultCacheEntries,
+		CacheMaxBytes:      DefaultCacheBytes,
+		ExaAvailable:       true,
 	}
 	return cfg, nil
 }
@@ -266,24 +269,28 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 		}
 	}
 
-	// Fetch modes.
+	// Fetch modes and page headers.
 	if raw, ok := root["fetch"]; ok {
-		modes, mode, modeSet, err := decodeFetch(raw)
+		settings, err := decodeFetch(raw)
 		if err != nil {
 			fetchErrs = append(fetchErrs, err.Error())
 		} else {
-			effective := intersectModes(modes)
+			effective := intersectModes(settings.modes)
 			if len(effective) == 0 {
 				fetchErrs = append(fetchErrs, "web access: fetch.allowedModes has no supported mode")
-			} else if modeSet && !contains(effective, mode) {
+			} else if settings.defSet && !contains(effective, settings.def) {
 				fetchErrs = append(fetchErrs, "web access: fetch.defaultMode is not in the allowed modes")
 			} else {
 				cfg.FetchModes = effective
-				if modeSet {
-					cfg.FetchMode = mode
+				if settings.defSet {
+					cfg.FetchMode = settings.def
 				} else if !contains(effective, cfg.FetchMode) {
 					cfg.FetchMode = effective[0]
 				}
+				if settings.profile != "" {
+					cfg.FetchHeaderProfile = settings.profile
+				}
+				cfg.FetchAcceptLanguage = settings.language
 			}
 		}
 	}
@@ -502,32 +509,62 @@ func applyCache(cfg *Config, raw json.RawMessage) error {
 	return nil
 }
 
-func decodeFetch(raw json.RawMessage) (modes []string, def string, defSet bool, err error) {
+type fetchSettings struct {
+	modes    []string
+	def      string
+	defSet   bool
+	profile  string
+	language string
+}
+
+func decodeFetch(raw json.RawMessage) (fetchSettings, error) {
+	var out fetchSettings
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-		return nil, "", false, errors.New("web access: fetch must be an object")
+		return fetchSettings{}, errors.New("web access: fetch must be an object")
 	}
-	modes = []string{"readable", "raw"}
+	out.modes = []string{"readable", "raw"}
 	if value, ok := obj["allowedModes"]; ok {
 		if jsonNull(value) {
-			return nil, "", false, errors.New("web access: fetch.allowedModes must be a string array")
+			return fetchSettings{}, errors.New("web access: fetch.allowedModes must be a string array")
 		}
 		var list []string
 		if err := json.Unmarshal(value, &list); err != nil {
-			return nil, "", false, errors.New("web access: fetch.allowedModes must be a string array")
+			return fetchSettings{}, errors.New("web access: fetch.allowedModes must be a string array")
 		}
-		modes = list
+		out.modes = list
 	}
 	if value, ok := obj["defaultMode"]; ok {
 		if jsonNull(value) {
-			return nil, "", false, errors.New("web access: fetch.defaultMode must be one string")
+			return fetchSettings{}, errors.New("web access: fetch.defaultMode must be one string")
 		}
-		if err := json.Unmarshal(value, &def); err != nil {
-			return nil, "", false, errors.New("web access: fetch.defaultMode must be one string")
+		if err := json.Unmarshal(value, &out.def); err != nil {
+			return fetchSettings{}, errors.New("web access: fetch.defaultMode must be one string")
 		}
-		defSet = true
+		out.defSet = true
 	}
-	return modes, def, defSet, nil
+	if value, ok := obj["headerProfile"]; ok {
+		if jsonNull(value) || json.Unmarshal(value, &out.profile) != nil {
+			return fetchSettings{}, errors.New("web access: fetch.headerProfile must be one string")
+		}
+		if !validHeaderProfile(out.profile) {
+			return fetchSettings{}, errors.New("web access: fetch.headerProfile must be psi, chrome, edge, firefox, or safari")
+		}
+	}
+	if value, ok := obj["acceptLanguage"]; ok {
+		var lang string
+		if jsonNull(value) || json.Unmarshal(value, &lang) != nil {
+			return fetchSettings{}, errors.New("web access: fetch.acceptLanguage must be one string")
+		}
+		if httpguts.ValidHeaderFieldValue(lang) {
+			// Trim HTTP optional whitespace: spaces and horizontal tabs.
+			out.language = strings.Trim(lang, " \t")
+		}
+		if out.language == "" {
+			return fetchSettings{}, errors.New("web access: fetch.acceptLanguage must be one valid header value")
+		}
+	}
+	return out, nil
 }
 
 func intersectModes(modes []string) []string {

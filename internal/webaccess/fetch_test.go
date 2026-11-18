@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -211,6 +212,25 @@ func TestFetchStatusErrors(t *testing.T) {
 	_, err := testClient(testConfig()).fetchPage(context.Background(), server.URL, "raw")
 	if err == nil || !strings.Contains(err.Error(), classStatus) || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFetchRejectsUnsolicitedPartialContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Range"); got != "" {
+			t.Errorf("full-page fetch sent Range: %q", got)
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Range", "bytes 0-7/100")
+		w.WriteHeader(http.StatusPartialContent)
+		io.WriteString(w, "fragment")
+	}))
+	defer server.Close()
+	client := testClient(testConfig())
+	defer client.CloseIdle()
+	result := client.Dispatch(t.Context(), toolsInvocation(ToolFetch, map[string]any{"url": server.URL}))
+	if text := result.Content[0].Text; !result.IsError || !strings.Contains(text, classStatus+": 206") || strings.Contains(text, "fragment") || strings.Contains(text, "responseId:") {
+		t.Fatalf("expected HTTP 206 error without page text; got %q", text)
 	}
 }
 
@@ -566,5 +586,53 @@ func TestErrorResultsAreBounded(t *testing.T) {
 	text := result.Content[0].Text
 	if len(text) > resultMaxBytes || !strings.HasSuffix(text, "[truncated]") {
 		t.Fatalf("error result not bounded: len=%d", len(text))
+	}
+}
+
+func TestFetchHeaderProfiles(t *testing.T) {
+	const psiReadable = "text/markdown;q=1.0, text/html;q=0.9, text/plain;q=0.5, */*;q=0.1"
+	const psiRaw = "text/plain;q=1.0, text/html;q=0.9, */*;q=0.1"
+	const psiUA = "psi-web-access/1.0 (+https://github.com/hypernewbie/psi)"
+	cases := []struct {
+		name, profile, lang, mode, uaToken, wantAccept string
+	}{
+		{"default readable", "", "", "readable", psiUA, psiReadable},
+		{"psi raw with language", "psi", "en-US,en;q=0.9", "raw", psiUA, psiRaw},
+		{"chrome", "chrome", "", "readable", "Chrome/", browserAccept},
+		{"edge raw", "edge", "fr-CA,fr;q=0.8", "raw", "Edg/", browserAccept},
+		{"firefox", "firefox", "", "readable", "Firefox/", browserAccept},
+		{"safari", "safari", "", "readable", "Version/", browserAccept},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.FetchHeaderProfile = tc.profile
+			cfg.FetchAcceptLanguage = tc.lang
+			client := testClient(cfg)
+			var wantLanguage []string
+			if tc.lang != "" {
+				wantLanguage = []string{tc.lang}
+			}
+			client.page = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				ua := req.UserAgent()
+				if !strings.Contains(ua, tc.uaToken) || (tc.profile == "chrome" && strings.Contains(ua, "Edg/")) {
+					t.Errorf("User-Agent for %q = %q, want %q", tc.profile, ua, tc.uaToken)
+				}
+				if got := req.Header.Get("Accept"); got != tc.wantAccept {
+					t.Errorf("Accept = %q, want %q", got, tc.wantAccept)
+				}
+				if got := req.Header.Values("Accept-Language"); !slices.Equal(got, wantLanguage) {
+					t.Errorf("Accept-Language = %q, want %q", got, wantLanguage)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("page")),
+					Request:    req,
+				}, nil
+			})}
+			if _, err := client.fetchPage(t.Context(), "https://example.com/", tc.mode); err != nil {
+				t.Fatalf("fetch: %v", err)
+			}
+		})
 	}
 }

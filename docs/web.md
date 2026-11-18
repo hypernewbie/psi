@@ -124,6 +124,7 @@ Supported keys:
 | `webSearch.enabled` | Disable `web_search` |
 | `tools.webSearch.enabled`, `tools.fetchContent.enabled`, `tools.getSearchContent.enabled` | Per-tool overrides |
 | `fetch.defaultMode`, `fetch.allowedModes` | Fetch mode defaults and the effective allowed set |
+| `fetch.headerProfile`, `fetch.acceptLanguage` | Page header profile and optional language |
 | `maxInlineContentChars` | Inline character limit (default 30000; below 1000 resets to the default; capped at 200000) |
 | `ssrf.allowRanges` | CIDR exemptions from the private-address block |
 | `cache.maxEntries`, `cache.maxBytes` | In-memory store limits (default 64 and 64 MiB) |
@@ -150,6 +151,29 @@ A configured `searxngBaseUrl` must be an absolute HTTP(S) URL with a host and
 without credentials, query, or fragment. Plain HTTP requires loopback or
 `allowHttpBaseUrls`.
 
+Fetch page headers come from `fetch.headerProfile` and `fetch.acceptLanguage`:
+
+```json
+{
+  "fetch": {
+    "headerProfile": "chrome",
+    "acceptLanguage": "en-US,en;q=0.9"
+  }
+}
+```
+
+`headerProfile` accepts `psi`, `chrome`, `edge`, `firefox`, or `safari`. An
+absent value means `psi`. Browser profiles send a fixed desktop User-Agent
+and a page-oriented Accept header for direct, batch, and inline page
+requests. These settings do not apply to SearXNG or Exa API requests.
+`acceptLanguage` is optional and applies to any profile, including `psi`.
+Omit `acceptLanguage` to send no language preference. If you set it, use a
+nonempty header value. psi removes spaces and tabs at the ends of the value.
+
+psi reads the file once at startup. Restart psi to apply changes. Profiles
+change only HTTP request headers, not TLS fingerprints. They do not run
+JavaScript.
+
 ## Enablement
 
 psi tool selection wins first: `defaultTools`, `--tools`, `--exclude-tools`, and
@@ -163,7 +187,8 @@ Failures are scoped:
 - An unreadable or invalid shared configuration disables every web tool. Shared
   values include HTTP permission, address exemptions, cache limits, inline
   limits, and enablement objects.
-- Invalid fetch mode settings disable `fetch_content` only.
+- Invalid fetch settings disable `fetch_content` and inline page fetching.
+  Metadata-only search and access to stored content stay available.
 - Invalid routing disables `web_search` only.
 - Invalid provider settings disable that provider only.
 
@@ -198,7 +223,8 @@ network requests.
 - Each HTTP pool keeps at most 32 idle connections across hosts. Idle
   connections expire after 90 seconds.
 - One fetch call: 30 seconds, including redirects and body reads. A batch runs
-  at most three fetches at a time.
+  at most three fetches at a time. A fetch rejects an unsolicited `206 Partial
+  Content` response instead of returning it as a complete page.
 - A search without content: one provider request per query. With content: 90
   seconds total, at most three page fetches at a time, and at most 60 pages.
 - No application retries and no provider fallback.

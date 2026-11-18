@@ -481,3 +481,55 @@ func TestEnvironmentHTTPPermissionOverridesMalformedFileValue(t *testing.T) {
 		t.Fatalf("override not applied: %+v", cfg)
 	}
 }
+
+func TestInvalidFetchHeaderSettingsDisableFetchOnly(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	bad := []struct {
+		name, body, wantDiag, forbidden string
+	}{
+		{"unknown profile", `{"fetch":{"headerProfile":"opera"}}`, "fetch.headerProfile", "opera"},
+		{"profile type", `{"fetch":{"headerProfile":123}}`, "fetch.headerProfile must be one string", "123"},
+		{"profile null", `{"fetch":{"headerProfile":null}}`, "fetch.headerProfile must be one string", "null"},
+		{"profile empty", `{"fetch":{"headerProfile":""}}`, "fetch.headerProfile", ""},
+		{"language type", `{"fetch":{"acceptLanguage":123}}`, "fetch.acceptLanguage must be one string", "123"},
+		{"language null", `{"fetch":{"acceptLanguage":null}}`, "fetch.acceptLanguage must be one string", "null"},
+		{"language control", `{"fetch":{"acceptLanguage":"en-US\r\nX: evil"}}`, "fetch.acceptLanguage", "evil"},
+		{"language blank", `{"fetch":{"acceptLanguage":" \t "}}`, "fetch.acceptLanguage", ""},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, diags := ParseConfig([]byte(tc.body), env)
+			if cfg.FetchEnabled {
+				t.Fatalf("%s: fetch must be disabled", tc.body)
+			}
+			if !cfg.SearchEnabled || !cfg.ContentEnabled {
+				t.Fatalf("%s: search and content must stay enabled", tc.body)
+			}
+			joined := strings.Join(diags, "\n")
+			if !strings.Contains(joined, tc.wantDiag) {
+				t.Fatalf("%s: diagnostic %q missing %q", tc.body, joined, tc.wantDiag)
+			}
+			if tc.forbidden != "" && strings.Contains(joined, tc.forbidden) {
+				t.Fatalf("%s: diagnostic leaked value: %q", tc.body, joined)
+			}
+		})
+	}
+}
+
+func TestFetchHeaderSettingsPreserveModeConfig(t *testing.T) {
+	env, _ := newEnv(t, nil, nil)
+	cfg, diags := ParseConfig([]byte(`{"fetch":{"allowedModes":["raw"],"headerProfile":"chrome","acceptLanguage":" \ten-US  "}}`), env)
+	if len(diags) != 0 || !cfg.FetchEnabled || cfg.FetchMode != "raw" {
+		t.Fatalf("fetch enabled=%v, mode=%q, diagnostics=%v", cfg.FetchEnabled, cfg.FetchMode, diags)
+	}
+	if cfg.FetchHeaderProfile != "chrome" || cfg.FetchAcceptLanguage != "en-US" {
+		t.Fatalf("headers = %q %q", cfg.FetchHeaderProfile, cfg.FetchAcceptLanguage)
+	}
+	cfg, diags = ParseConfig([]byte(`{"fetch":{"defaultMode":"raw"}}`), env)
+	if len(diags) != 0 || !cfg.FetchEnabled || cfg.FetchMode != "raw" {
+		t.Fatalf("fetch enabled=%v, mode=%q, diagnostics=%v", cfg.FetchEnabled, cfg.FetchMode, diags)
+	}
+	if cfg.FetchHeaderProfile != "psi" || cfg.FetchAcceptLanguage != "" {
+		t.Fatalf("defaults = %q %q", cfg.FetchHeaderProfile, cfg.FetchAcceptLanguage)
+	}
+}

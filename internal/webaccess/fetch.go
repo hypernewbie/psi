@@ -14,10 +14,28 @@ import (
 )
 
 const (
-	maxBodyBytes = 5 << 20
-	maxURLBytes  = 8 << 10
-	userAgent    = "psi-web-access/1.0 (+https://github.com/n0mad/psi)"
+	maxBodyBytes  = 5 << 20
+	maxURLBytes   = 8 << 10
+	userAgent     = "psi-web-access/1.0 (+https://github.com/hypernewbie/psi)"
+	browserAccept = "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8,text/markdown;q=0.7,*/*;q=0.1"
 )
+
+// browserUserAgents maps opt-in fetch.headerProfile values to fixed desktop
+// User-Agent strings. The map is also the allowlist for profile names.
+var browserUserAgents = map[string]string{
+	"chrome":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+	"edge":    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+	"firefox": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+	"safari":  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+}
+
+func validHeaderProfile(name string) bool {
+	if name == "psi" {
+		return true
+	}
+	_, ok := browserUserAgents[name]
+	return ok
+}
 
 // pageData is one fetched document. Text is decoded and converted but not
 // preview-truncated; Truncated records a deliberate 5 MiB source cap.
@@ -93,11 +111,19 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 	if err != nil {
 		return pageData{}, fmt.Errorf("%s: url is invalid", classValidation)
 	}
-	req.Header.Set("User-Agent", userAgent)
-	if mode == "readable" {
-		req.Header.Set("Accept", "text/markdown;q=1.0, text/html;q=0.9, text/plain;q=0.5, */*;q=0.1")
+	if browserUA, ok := browserUserAgents[c.cfg.FetchHeaderProfile]; ok {
+		req.Header.Set("User-Agent", browserUA)
+		req.Header.Set("Accept", browserAccept)
 	} else {
-		req.Header.Set("Accept", "text/plain;q=1.0, text/html;q=0.9, */*;q=0.1")
+		req.Header.Set("User-Agent", userAgent)
+		if mode == "readable" {
+			req.Header.Set("Accept", "text/markdown;q=1.0, text/html;q=0.9, text/plain;q=0.5, */*;q=0.1")
+		} else {
+			req.Header.Set("Accept", "text/plain;q=1.0, text/html;q=0.9, */*;q=0.1")
+		}
+	}
+	if lang := c.cfg.FetchAcceptLanguage; lang != "" {
+		req.Header.Set("Accept-Language", lang)
 	}
 
 	resp, err := c.page.Do(req)
@@ -109,7 +135,8 @@ func (c *Client) fetchPage(ctx context.Context, rawURL, mode string) (pageData, 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return pageData{}, fmt.Errorf("%s: 429", classRateLimit)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	// A range response cannot satisfy a full-page request.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 || resp.StatusCode == http.StatusPartialContent {
 		return pageData{}, fmt.Errorf("%s: %d", classStatus, resp.StatusCode)
 	}
 	if err := checkContentEncoding(resp); err != nil {
