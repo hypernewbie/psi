@@ -163,8 +163,8 @@ func TestActualAppContextUsageConfig(t *testing.T) {
 		mode    string
 		caption string
 	}{
-		{name: "absent", caption: "~40.0% / 200k"},
-		{name: "tokens", mode: "tokens", caption: "~80k / 200k"},
+		{name: "absent", caption: "40.0%/200k"},
+		{name: "tokens", mode: "tokens", caption: "80k/200k"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newContextUsageFixture(t, tc.mode)
@@ -191,7 +191,7 @@ func TestActualAppContextUsageSettingsReload(t *testing.T) {
 	q := f.start(t)
 	waitScreenState(q, "ready editor", semanticEditorReady)
 	q.write("show context usage\r")
-	waitScreenState(q, "default percent caption", completedContextUsageScreen("~40.0% / 200k"))
+	waitScreenState(q, "default percent caption", completedContextUsageScreen("40.0%/200k"))
 	if got := f.requests.Load(); got != 1 {
 		t.Fatalf("provider requests = %d, want 1", got)
 	}
@@ -199,7 +199,9 @@ func TestActualAppContextUsageSettingsReload(t *testing.T) {
 
 	q.write("/settings\r")
 	q.wait("Enter/Space change")
-	q.write(strings.Repeat("\x1b[B", 9))
+	// Move from Hide thinking to Context usage. The Soft wrap row above it
+	// makes this the tenth row in the picker.
+	q.write(strings.Repeat("\x1b[B", 10))
 	q.waitScreen("→ Context usage")
 	q.write("\r")
 	waitScreenState(q, "selected tokens row", func(screen *testutil.VTModel) bool {
@@ -208,7 +210,7 @@ func TestActualAppContextUsageSettingsReload(t *testing.T) {
 	q.write("\x1b")
 	waitScreenState(q, "token caption after picker", func(screen *testutil.VTModel) bool {
 		text := screen.Text()
-		return strings.Contains(text, "~80k / 200k") && semanticEditorReady(screen) &&
+		return strings.Contains(text, "80k/200k") && semanticEditorReady(screen) &&
 			!strings.Contains(text, "Enter/Space change") && !strings.Contains(text, "Working")
 	})
 
@@ -229,14 +231,14 @@ func TestActualAppContextUsageSettingsReload(t *testing.T) {
 
 	q = f.start(t)
 	waitScreenState(q, "token caption at startup", func(screen *testutil.VTModel) bool {
-		return strings.Contains(screen.Text(), "~80k / 200k") && semanticEditorReady(screen)
+		return strings.Contains(screen.Text(), "80k/200k") && semanticEditorReady(screen)
 	})
 
 	f.writeSettings(t, "percent")
 	q.write("/reload\r")
 	waitScreenState(q, "percent caption after reload", func(screen *testutil.VTModel) bool {
 		text := screen.Text()
-		return strings.Contains(text, "~40.0% / 200k") &&
+		return strings.Contains(text, "40.0%/200k") &&
 			strings.Contains(text, "Reloaded keybindings") && semanticEditorReady(screen)
 	})
 
@@ -245,7 +247,7 @@ func TestActualAppContextUsageSettingsReload(t *testing.T) {
 	waitScreenState(q, "invalid display reload error", func(screen *testutil.VTModel) bool {
 		text := screen.Text()
 		return strings.Contains(text, "contextUsageDisplay") &&
-			strings.Contains(text, "~40.0% / 200k") && semanticEditorReady(screen)
+			strings.Contains(text, "40.0%/200k") && semanticEditorReady(screen)
 	})
 
 	f.writeSettings(t, "percent")

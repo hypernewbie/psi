@@ -12,6 +12,38 @@ The transcript shows your prompts, psi's responses, tool calls, tool results,
 and errors. You write prompts and slash commands in the editor below it. The
 footer shows the folder, session, model, and context usage.
 
+## Read context usage
+
+When a context estimate and window are available, the second footer row shows
+stored usage counters first, then a compact estimate such as `5.7%/1.0M`. A
+width-adaptive bar can sit between them.
+
+- The bar has 4 to 16 track cells between two brackets. With the brackets it
+  uses 6 to 18 cells. It grows continuously and does not snap to preset
+  lengths.
+- Green marks less than 40%, yellow marks 40% to less than 70%, and red marks
+  70% or more. Empty track cells stay dim.
+- Usage, brackets, track, caption, and the ` (auto)` marker must fit in the
+  left half of the terminal. If they do not, psi omits the bar.
+- `contextUsageDisplay: "percent"` (default) shows `40.0%/200k`. Set it to
+  `"tokens"` to show a compact estimate such as `80k/200k`. Both modes omit
+  the `~` and use no spaces around `/`. The token count is an estimate, not an
+  exact tokenizer result.
+- The bar still fills and changes color by percentage in both modes. A token
+  count above the window is shown without text clamping.
+- Change the setting in `/settings` under `Context usage`, or in the user
+  `settings.json` followed by `/reload`. A trusted project `.pi/settings.json`
+  can override it. If the window is unknown or the estimate is unavailable,
+  psi omits the caption.
+- The text-only footer keeps the complete estimate even when it extends past
+  the midpoint. At 80 columns the bar uses a 16-cell track, for example
+  `↑57k [▉░░░░░░░░░░░░░░░] 5.7%/1.0M (auto)`. At 40 columns the bar is omitted
+  and the 21-cell text `↑57k 5.7%/1.0M (auto)` ends one cell past the midpoint.
+- Counters stay first. At the full wrap-safe row width, they can use the room
+  that the context label needs, so the context label can disappear.
+- Sizing uses only the terminal width. psi does not request provider data to
+  draw the bar.
+
 ## Enter a prompt
 
 Type a request and press `Enter`. An empty `Enter` retries an unfinished turn (failed, interrupted, or recovered from a crash) and is ignored otherwise. `/b` and `/bump` request another response from the current context, including after a completed or output-limited answer, without adding a prompt.
@@ -32,24 +64,6 @@ changes are not approved one by one; review the transcript and the diff.
 - `Esc` cancels the current run.
 - `/session` prints the session file, workspace, provider, model, thinking
   level, and usage counters.
-
-## Read context usage
-
-When psi knows both the context estimate and the model's context window, the
-footer shows a bar and a caption. The default setting
-`contextUsageDisplay: "percent"` shows `~40.0% / 200k`: the estimate is about
-80,000 tokens, 80,000 / 200,000 = 40.0%, and 200k is the window. Set
-`contextUsageDisplay: "tokens"` to show `~80k / 200k`. The token count uses the
-same compact formatting as the usage counters and is an estimate, not an exact
-tokenizer result. Both modes keep the leading `~`.
-
-The bar still fills and changes color by percentage, so the caption choice does
-not change the percentage used for the bar. Change the setting in `/settings`
-under `Context usage`, or in the user `settings.json` followed by `/reload`. A
-trusted project `.pi/settings.json` can override it. If the window is unknown or
-the estimate is unavailable, psi omits the caption. A token count above the
-window is shown without text clamping, even though the bar and color use the
-clamped percentage.
 
 ## Retry a failed turn or ask for another response
 

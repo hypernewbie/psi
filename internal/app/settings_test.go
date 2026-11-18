@@ -297,8 +297,8 @@ func TestContextUsageDisplaySaveFailureKeepsSessionChange(t *testing.T) {
 	if got := r.footerSnapshot.ContextUsageLabel; got != "80k" {
 		t.Fatalf("session caption after save failure = %q, want 80k", got)
 	}
-	if got := r.footerSnapshot.ContextEstimate; got != "~80k/200k" {
-		t.Fatalf("session estimate after save failure = %q, want ~80k/200k", got)
+	if got := r.footerSnapshot.ContextEstimate; got != "80k/200k" {
+		t.Fatalf("session estimate after save failure = %q, want 80k/200k", got)
 	}
 	if r.footerSnapshot.ContextPercent != 40 || r.contextTokens != 80000 || r.contextWindow != 200000 {
 		t.Fatalf("save failure changed context telemetry: percent=%v tokens=%v window=%v",

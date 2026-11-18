@@ -322,7 +322,7 @@ type PresentationSnapshot struct {
 	SessionName        string
 	GitBranch          string
 	Usage              string  // only locally stored counters; empty means unavailable
-	ContextEstimate    string  // explicitly marked approximation, e.g. ~8%/100k
+	ContextEstimate    string  // compact estimate label, e.g. 8%/100k or 80k/200k
 	ContextPercent     float64 // numeric estimate used to fill the inline bar
 	ContextUsageLabel  string  // preformatted percentage (2.4%) or compact token count (80k)
 	ContextWindowLabel string  // preformatted context window, e.g. 1.0M
@@ -379,8 +379,10 @@ func truncateFooterText(text string, width int, ellipsis string) string {
 }
 
 const (
-	footerBarMinWidth  = 9 // brackets plus a track wide enough for three bands
-	footerBarMaxWidth  = 24
+	// Brackets add two cells, leaving a 4-16 cell track. The bar uses every
+	// intermediate length so it absorbs whatever width remains.
+	footerBarMinWidth  = 6
+	footerBarMaxWidth  = 18
 	footerBarGreenEnd  = 40
 	footerBarYellowEnd = 70
 )
@@ -473,16 +475,19 @@ func footerBarSpans(percent float64, width int) []StyledSpan {
 }
 
 // footerStatsRow prefers the inline context bar, then falls back to Pi's
-// textual estimate when the bar and its label cannot fit.
-func footerStatsRow(snapshot PresentationSnapshot, width int) StyledRow {
+// textual estimate when the bar and its label cannot fit. width is the
+// wrap-safe budget for the textual fallback. barStatsWidth is the left
+// half-row budget for usage, brackets, track, caption, and auto marker; the
+// bar disappears rather than stretching past that budget.
+func footerStatsRow(snapshot PresentationSnapshot, width, barStatsWidth int) StyledRow {
 	usage := SanitizeStatusRow(snapshot.Usage)
 	auto := ""
 	if snapshot.AutoCompact && snapshot.ContextEstimate != "" {
 		auto = " (auto)"
 	}
 	if snapshot.ContextUsageLabel != "" && snapshot.ContextWindowLabel != "" {
-		label := "~" + SanitizeStatusRow(snapshot.ContextUsageLabel) + " / " + SanitizeStatusRow(snapshot.ContextWindowLabel)
-		avail := width - CellWidth(label) - CellWidth(auto) - 1
+		label := SanitizeStatusRow(snapshot.ContextUsageLabel) + "/" + SanitizeStatusRow(snapshot.ContextWindowLabel)
+		avail := barStatsWidth - CellWidth(label) - CellWidth(auto) - 1
 		if usage != "" {
 			avail -= CellWidth(usage) + 1
 		}
@@ -499,7 +504,7 @@ func footerStatsRow(snapshot PresentationSnapshot, width int) StyledRow {
 				spans = append(spans, StyledSpan{Text: auto, Token: TokenMuted})
 			}
 			row := StyledRow{Spans: spans}
-			if row.Width() <= width {
+			if row.Width() <= barStatsWidth {
 				return row
 			}
 		}
@@ -512,6 +517,9 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 	if height <= 0 || width <= 0 {
 		return nil, nil
 	}
+	// Bar-mode stats stay inside the left half of the original terminal.
+	// The textual fallback may still use the full wrap-safe row.
+	barStatsWidth := width / 2
 	width = max(1, width-1) // reserve the final cell against terminal autowrap
 	path := homeAbbreviated(snapshot.WorkingDirectory, snapshot.HomeDirectory)
 	if snapshot.GitBranch != "" {
@@ -521,7 +529,7 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 		path += " • " + SanitizeStatusRow(snapshot.SessionName)
 	}
 	path = truncateFooterText(path, width, "...")
-	leftRow := ClipStyledRow(footerStatsRow(snapshot, width), width)
+	leftRow := ClipStyledRow(footerStatsRow(snapshot, width, barStatsWidth), width)
 	statsWidth := leftRow.Width()
 	modelSide := SanitizeStatusRow(snapshot.Model)
 	if snapshot.Thinking != "" {

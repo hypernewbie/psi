@@ -390,7 +390,7 @@ func TestFooterContextUsageDisplay(t *testing.T) {
 	}
 
 	r.draw(console)
-	assertCaption("zero-value", "40.0%", "~40.0%/200k")
+	assertCaption("zero-value", "40.0%", "40.0%/200k")
 	firstPercent := r.footerSnapshot.ContextPercent
 	firstTokens, firstWindow := r.contextTokens, r.contextWindow
 	firstLeaf := r.store.LeafID()
@@ -405,8 +405,8 @@ func TestFooterContextUsageDisplay(t *testing.T) {
 
 	r.settings.ContextUsageDisplay = "tokens"
 	r.draw(console)
-	assertCaption("tokens", "80k", "~80k/200k")
-	if !strings.Contains(terminal.Sanitize(output.String()), "~80k / 200k") {
+	assertCaption("tokens", "80k", "80k/200k")
+	if !strings.Contains(terminal.Sanitize(output.String()), "80k/200k") {
 		t.Fatal("token caption was not drawn")
 	}
 	key, snapshot := r.footerKey, r.footerSnapshot
@@ -427,7 +427,7 @@ func TestFooterContextUsageDisplay(t *testing.T) {
 
 	r.settings.ContextUsageDisplay = "percent"
 	r.draw(console)
-	assertCaption("explicit percent", "40.0%", "~40.0%/200k")
+	assertCaption("explicit percent", "40.0%", "40.0%/200k")
 	accounting, err = r.store.Accounting()
 	if err != nil {
 		t.Fatal(err)
@@ -505,7 +505,7 @@ func TestFooterContextUsageAfterInterruptedTurn(t *testing.T) {
 		t.Fatalf("token toggle changed context telemetry: percent=%v tokens=%v/%v calls=%d",
 			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, fake.CallCount())
 	}
-	if r.footerSnapshot.ContextUsageLabel != "80k" || r.footerSnapshot.ContextEstimate != "~80k/200k" {
+	if r.footerSnapshot.ContextUsageLabel != "80k" || r.footerSnapshot.ContextEstimate != "80k/200k" {
 		t.Fatalf("interrupted-turn token caption = %q, estimate = %q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextEstimate)
 	}
 	r.settings.ContextUsageDisplay = "percent"
@@ -515,7 +515,7 @@ func TestFooterContextUsageAfterInterruptedTurn(t *testing.T) {
 		t.Fatalf("percent toggle changed context telemetry: percent=%v tokens=%v/%v calls=%d",
 			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, fake.CallCount())
 	}
-	if r.footerSnapshot.ContextUsageLabel != "40.0%" || r.footerSnapshot.ContextEstimate != "~40.0%/200k" {
+	if r.footerSnapshot.ContextUsageLabel != "40.0%" || r.footerSnapshot.ContextEstimate != "40.0%/200k" {
 		t.Fatalf("interrupted-turn percent caption = %q, estimate = %q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextEstimate)
 	}
 }
@@ -549,7 +549,7 @@ func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
 			} else if got, want := r.footerSnapshot.ContextUsageLabel, formatFooterTokens(r.contextTokens); got != want {
 				t.Fatalf("footer token label=%q, want %q", got, want)
 			}
-			if got, want := r.footerSnapshot.ContextEstimate, "~"+r.footerSnapshot.ContextUsageLabel+"/100k"; got != want {
+			if got, want := r.footerSnapshot.ContextEstimate, r.footerSnapshot.ContextUsageLabel+"/100k"; got != want {
 				t.Fatalf("footer estimate=%q; want %q", got, want)
 			}
 			if r.store.ProjectionIfCached() != nil {
@@ -918,7 +918,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	write("hello\r")
 	wait("APP_OK")
 	waitEditor()
-	if footer := screen.Text(); !strings.Contains(footer, "% / 8.2k") || !strings.Contains(footer, "[") || !strings.Contains(footer, "░") {
+	if footer := screen.Text(); !strings.Contains(footer, "%/8.2k") || !strings.Contains(footer, "[") || !strings.Contains(footer, "░") {
 		t.Fatalf("actual app footer lacks the inline context bar: %q", footer)
 	}
 	body := <-requests
@@ -1476,13 +1476,13 @@ func TestReplUpdatesFooterContextDuringToolLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-prov.toolStarted
-	for !strings.Contains(out.String(), "~42.0% / 100k") {
+	for !strings.Contains(out.String(), "42.0%/100k") {
 		<-out.notify
 	}
 	// The footer row is rendered from the presentation snapshot's
 	// ContextUsageLabel, so the observed string pins the mid-run value.
 	close(prov.releaseSecond)
-	for !strings.Contains(out.String(), "~51.0% / 100k") {
+	for !strings.Contains(out.String(), "51.0%/100k") {
 		<-out.notify
 	}
 	if err := inputWrite.Close(); err != nil {
