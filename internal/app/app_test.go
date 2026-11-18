@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -356,9 +357,10 @@ func TestFooterSnapshotIncludesGitBranch(t *testing.T) {
 	}
 }
 
-func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
+func TestFooterContextUsageDisplay(t *testing.T) {
 	r := testRuntime(t)
-	r.cfg.Model.ContextWindow = 100000
+	r.cfg.Model.ContextWindow = 200000
+	r.cfg.AutoCompact = false
 	var output bytes.Buffer
 	input, err := os.Open(os.DevNull)
 	if err != nil {
@@ -368,46 +370,244 @@ func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
 	console := terminal.NewConsole(input, &output)
 	defer console.Close()
 
-	r.refreshPresentation(console)
-	if r.footerSnapshot.ContextEstimate == "" {
-		t.Fatal("empty session lost the baseline estimate")
-	}
-	if r.footerSnapshot.ContextPercentLabel == "" || r.footerSnapshot.ContextWindowLabel != "100k" {
-		t.Fatalf("footer context bar labels=%q/%q; want a formatted percent and 100k", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextWindowLabel)
-	}
-	if got := formatFooterFixedOneDecimal(r.footerSnapshot.ContextPercent, "%"); got != r.footerSnapshot.ContextPercentLabel {
-		t.Fatalf("footer bar percent=%q but label=%q", got, r.footerSnapshot.ContextPercentLabel)
-	}
-	if got, want := r.footerSnapshot.ContextEstimate, "~"+r.footerSnapshot.ContextPercentLabel+"/100k"; got != want {
-		t.Fatalf("footer estimate=%q; want %q", got, want)
-	}
-	if r.store.ProjectionIfCached() != nil {
-		t.Fatal("footer built a projection for an empty session")
-	}
-
-	if _, err := r.store.AppendMessage(agentMessageUser("one prompt")); err != nil {
+	fake := &provider.Fake{Responses: []*provider.Response{{
+		Text:       "context usage answer",
+		Usage:      provider.Usage{Input: 79000, Output: 1000, TotalTokens: 80000},
+		StopReason: "end_turn",
+	}}}
+	if err := agent.New(r.store, r.reg, fake, nil).Submit(context.Background(), "show the context usage", r.cfg); err != nil {
 		t.Fatal(err)
 	}
-	r.refreshPresentation(console)
-	if r.footerSnapshot.ContextEstimate != "" {
-		t.Fatalf("existing session without usage fabricated an estimate: %q", r.footerSnapshot.ContextEstimate)
-	}
-	if r.footerSnapshot.ContextPercentLabel != "" || r.footerSnapshot.ContextWindowLabel != "" {
-		t.Fatalf("footer fabricated context bar labels without an estimate: %q/%q", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextWindowLabel)
-	}
-	if r.store.ProjectionIfCached() != nil {
-		t.Fatal("footer built a projection for an existing session")
+
+	assertCaption := func(mode, label, estimate string) {
+		t.Helper()
+		if got := r.footerSnapshot.ContextUsageLabel; got != label {
+			t.Fatalf("%s label = %q, want %q", mode, got, label)
+		}
+		if got := r.footerSnapshot.ContextEstimate; got != estimate {
+			t.Fatalf("%s estimate = %q, want %q", mode, got, estimate)
+		}
 	}
 
-	if _, err := r.store.Projection(); err != nil {
+	r.draw(console)
+	assertCaption("zero-value", "40.0%", "~40.0%/200k")
+	firstPercent := r.footerSnapshot.ContextPercent
+	firstTokens, firstWindow := r.contextTokens, r.contextWindow
+	firstLeaf := r.store.LeafID()
+	firstAccounting, err := r.store.Accounting()
+	if err != nil {
 		t.Fatal(err)
 	}
-	r.refreshPresentation(console)
-	if r.footerSnapshot.ContextEstimate == "" {
-		t.Fatal("footer ignored a projection cached after the last redraw")
+	firstCalls := fake.CallCount()
+	if firstPercent != 40.0 || firstTokens != 80000 || firstWindow != 200000 {
+		t.Fatalf("initial context values: percent=%v tokens=%v window=%v", firstPercent, firstTokens, firstWindow)
 	}
-	if r.footerSnapshot.ContextPercentLabel == "" || r.footerSnapshot.ContextWindowLabel != "100k" {
-		t.Fatalf("footer context bar labels missing after projection: %q/%q", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextWindowLabel)
+
+	r.settings.ContextUsageDisplay = "tokens"
+	r.draw(console)
+	assertCaption("tokens", "80k", "~80k/200k")
+	if !strings.Contains(terminal.Sanitize(output.String()), "~80k / 200k") {
+		t.Fatal("token caption was not drawn")
+	}
+	key, snapshot := r.footerKey, r.footerSnapshot
+	bytesBeforeRedraw := output.Len()
+	r.draw(console)
+	if r.footerKey != key || r.footerSnapshot != snapshot || output.Len() != bytesBeforeRedraw {
+		t.Fatalf("identical token redraw was not cached: key changed=%t bytes=%d", r.footerKey != key, output.Len()-bytesBeforeRedraw)
+	}
+	accounting, err := r.store.Accounting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.footerSnapshot.ContextPercent != firstPercent || r.contextTokens != firstTokens || r.contextWindow != firstWindow ||
+		r.store.LeafID() != firstLeaf || !reflect.DeepEqual(accounting, firstAccounting) || fake.CallCount() != firstCalls {
+		t.Fatalf("tokens mode changed context telemetry: percent=%v tokens=%v/%v leaf=%q calls=%d accounting=%v",
+			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, r.store.LeafID(), fake.CallCount(), accounting)
+	}
+
+	r.settings.ContextUsageDisplay = "percent"
+	r.draw(console)
+	assertCaption("explicit percent", "40.0%", "~40.0%/200k")
+	accounting, err = r.store.Accounting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.footerSnapshot.ContextPercent != firstPercent || r.contextTokens != firstTokens || r.contextWindow != firstWindow ||
+		r.store.LeafID() != firstLeaf || !reflect.DeepEqual(accounting, firstAccounting) || fake.CallCount() != firstCalls {
+		t.Fatalf("percent mode changed context telemetry: percent=%v tokens=%v/%v leaf=%q calls=%d accounting=%v",
+			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, r.store.LeafID(), fake.CallCount(), accounting)
+	}
+}
+
+func TestFooterContextUsageAfterInterruptedTurn(t *testing.T) {
+	const interruptedInputTokens = 180000
+	r := testRuntime(t)
+	r.cfg.Model.ContextWindow = 200000
+	r.cfg.AutoCompact = false
+	var output bytes.Buffer
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	console := terminal.NewConsole(input, &output)
+	defer console.Close()
+
+	fake := &provider.Fake{
+		Responses: []*provider.Response{{
+			Text:       "completed answer",
+			Usage:      provider.Usage{Input: 79000, Output: 1000, TotalTokens: 80000},
+			StopReason: "end_turn",
+		}},
+		Errors: []error{nil, &provider.StreamInterrupt{
+			Partial: &provider.Response{Usage: provider.Usage{Input: interruptedInputTokens}},
+			Err:     errors.New("synthetic stream interrupted"),
+		}},
+		TextDeltas: [][]string{nil, {"partial"}},
+	}
+	loop := agent.New(r.store, r.reg, fake, nil)
+	if err := loop.Submit(context.Background(), "first prompt", r.cfg); err != nil {
+		t.Fatal(err)
+	}
+	usage, anchor, ok := r.store.LastContextUsage()
+	if !ok || usage != 80000 || anchor == "" {
+		t.Fatalf("completed anchor = %d/%q/%t, want 80000 with an id", usage, anchor, ok)
+	}
+	if err := loop.Submit(context.Background(), "interrupted prompt", r.cfg); err == nil {
+		t.Fatal("interrupted submit succeeded")
+	}
+	usage, anchorAfter, ok := r.store.LastContextUsage()
+	if !ok || usage != 80000 || anchorAfter != anchor {
+		t.Fatalf("interrupted turn replaced the anchor: %d/%q/%t, want 80000/%q", usage, anchorAfter, ok, anchor)
+	}
+
+	r.refreshPresentation(console)
+	beforePercent := r.footerSnapshot.ContextPercent
+	beforeTokens := r.contextTokens
+	beforeWindow := r.contextWindow
+	beforeCalls := fake.CallCount()
+	// The completed usage plus short trailing messages must remain below the
+	// interrupted stream's input count; partial accounting is not an anchor.
+	if beforeTokens <= float64(usage) || beforeTokens >= interruptedInputTokens || beforeWindow != 200000 {
+		t.Fatalf("footer lost the completed usage anchor: tokens=%v window=%v", beforeTokens, beforeWindow)
+	}
+	if beforePercent != 40 || r.footerSnapshot.ContextUsageLabel != "40.0%" {
+		t.Fatalf("interrupted-turn percent caption = %q (%v), want 40.0%%", r.footerSnapshot.ContextUsageLabel, beforePercent)
+	}
+	if beforeCalls != 2 {
+		t.Fatalf("provider calls before display toggle = %d, want 2", beforeCalls)
+	}
+
+	r.settings.ContextUsageDisplay = "tokens"
+	r.refreshPresentation(console)
+	if r.footerSnapshot.ContextPercent != beforePercent || r.contextTokens != beforeTokens ||
+		r.contextWindow != beforeWindow || fake.CallCount() != beforeCalls {
+		t.Fatalf("token toggle changed context telemetry: percent=%v tokens=%v/%v calls=%d",
+			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, fake.CallCount())
+	}
+	if r.footerSnapshot.ContextUsageLabel != "80k" || r.footerSnapshot.ContextEstimate != "~80k/200k" {
+		t.Fatalf("interrupted-turn token caption = %q, estimate = %q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextEstimate)
+	}
+	r.settings.ContextUsageDisplay = "percent"
+	r.refreshPresentation(console)
+	if r.footerSnapshot.ContextPercent != beforePercent || r.contextTokens != beforeTokens ||
+		r.contextWindow != beforeWindow || fake.CallCount() != beforeCalls {
+		t.Fatalf("percent toggle changed context telemetry: percent=%v tokens=%v/%v calls=%d",
+			r.footerSnapshot.ContextPercent, r.contextTokens, r.contextWindow, fake.CallCount())
+	}
+	if r.footerSnapshot.ContextUsageLabel != "40.0%" || r.footerSnapshot.ContextEstimate != "~40.0%/200k" {
+		t.Fatalf("interrupted-turn percent caption = %q, estimate = %q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextEstimate)
+	}
+}
+
+func TestFooterEstimateDoesNotBuildProjection(t *testing.T) {
+	for _, mode := range []string{"percent", "tokens"} {
+		t.Run(mode, func(t *testing.T) {
+			r := testRuntime(t)
+			r.settings.ContextUsageDisplay = mode
+			r.cfg.Model.ContextWindow = 100000
+			var output bytes.Buffer
+			input, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			console := terminal.NewConsole(input, &output)
+			defer console.Close()
+
+			r.refreshPresentation(console)
+			if r.footerSnapshot.ContextEstimate == "" {
+				t.Fatal("empty session lost the baseline estimate")
+			}
+			if r.footerSnapshot.ContextUsageLabel == "" || r.footerSnapshot.ContextWindowLabel != "100k" {
+				t.Fatalf("footer context bar labels=%q/%q; want a formatted caption and 100k", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextWindowLabel)
+			}
+			if mode == "percent" {
+				if got := formatFooterFixedOneDecimal(r.footerSnapshot.ContextPercent, "%"); got != r.footerSnapshot.ContextUsageLabel {
+					t.Fatalf("footer bar percent=%q but label=%q", got, r.footerSnapshot.ContextUsageLabel)
+				}
+			} else if got, want := r.footerSnapshot.ContextUsageLabel, formatFooterTokens(r.contextTokens); got != want {
+				t.Fatalf("footer token label=%q, want %q", got, want)
+			}
+			if got, want := r.footerSnapshot.ContextEstimate, "~"+r.footerSnapshot.ContextUsageLabel+"/100k"; got != want {
+				t.Fatalf("footer estimate=%q; want %q", got, want)
+			}
+			if r.store.ProjectionIfCached() != nil {
+				t.Fatal("footer built a projection for an empty session")
+			}
+
+			if _, err := r.store.AppendMessage(agentMessageUser("one prompt")); err != nil {
+				t.Fatal(err)
+			}
+			r.refreshPresentation(console)
+			if r.footerSnapshot.ContextEstimate != "" {
+				t.Fatalf("existing session without usage fabricated an estimate: %q", r.footerSnapshot.ContextEstimate)
+			}
+			if r.footerSnapshot.ContextUsageLabel != "" || r.footerSnapshot.ContextWindowLabel != "" {
+				t.Fatalf("footer fabricated context bar labels without an estimate: %q/%q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextWindowLabel)
+			}
+			if r.store.ProjectionIfCached() != nil {
+				t.Fatal("footer built a projection for an existing session")
+			}
+
+			if _, err := r.store.Projection(); err != nil {
+				t.Fatal(err)
+			}
+			r.refreshPresentation(console)
+			if r.footerSnapshot.ContextEstimate == "" {
+				t.Fatal("footer ignored a projection cached after the last redraw")
+			}
+			if r.footerSnapshot.ContextUsageLabel == "" || r.footerSnapshot.ContextWindowLabel != "100k" {
+				t.Fatalf("footer context bar labels missing after projection: %q/%q", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextWindowLabel)
+			}
+		})
+	}
+
+	for _, mode := range []string{"percent", "tokens"} {
+		t.Run("unknown-window-"+mode, func(t *testing.T) {
+			r := testRuntime(t)
+			r.settings.ContextUsageDisplay = mode
+			r.cfg.Model.ContextWindow = 0
+			var output bytes.Buffer
+			input, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			console := terminal.NewConsole(input, &output)
+			defer console.Close()
+
+			r.refreshPresentation(console)
+			if r.footerSnapshot.ContextUsageLabel != "" || r.footerSnapshot.ContextWindowLabel != "" || r.footerSnapshot.ContextEstimate != "" || r.footerSnapshot.ContextPercent != 0 {
+				t.Fatalf("unknown window produced context labels: %+v", r.footerSnapshot)
+			}
+			if r.contextTokens != 0 || r.contextWindow != 0 {
+				t.Fatalf("unknown window produced numerical context: tokens=%v window=%v", r.contextTokens, r.contextWindow)
+			}
+			if r.store.ProjectionIfCached() != nil {
+				t.Fatal("unknown window built a projection")
+			}
+		})
 	}
 }
 
@@ -1120,7 +1320,7 @@ func TestFooterContextTracksProviderUsageAcrossProjectionCacheAndCompaction(t *t
 		t.Fatal("expected Submit to cache the session projection")
 	}
 	r.refreshPresentation(console)
-	if got := r.footerSnapshot.ContextPercentLabel; got != "16.6%" {
+	if got := r.footerSnapshot.ContextUsageLabel; got != "16.6%" {
 		t.Fatalf("turn 1 percent label = %q; want 16.6%% (provider usage must not be replaced by character estimate when projection is cached)", got)
 	}
 
@@ -1128,7 +1328,7 @@ func TestFooterContextTracksProviderUsageAcrossProjectionCacheAndCompaction(t *t
 		t.Fatal(err)
 	}
 	r.refreshPresentation(console)
-	if got := r.footerSnapshot.ContextPercentLabel; got != "42.0%" {
+	if got := r.footerSnapshot.ContextUsageLabel; got != "42.0%" {
 		t.Fatalf("turn 2 percent label = %q; want 42.0%%", got)
 	}
 
@@ -1145,7 +1345,7 @@ func TestFooterContextTracksProviderUsageAcrossProjectionCacheAndCompaction(t *t
 	r.store = reopened
 	r.footerKey = ""
 	r.refreshPresentation(console)
-	if got := r.footerSnapshot.ContextPercentLabel; got != "42.0%" {
+	if got := r.footerSnapshot.ContextUsageLabel; got != "42.0%" {
 		t.Fatalf("reopened percent label = %q; want 42.0%%", got)
 	}
 
@@ -1154,7 +1354,7 @@ func TestFooterContextTracksProviderUsageAcrossProjectionCacheAndCompaction(t *t
 		t.Fatal(err)
 	}
 	r.refreshPresentation(console)
-	if got := r.footerSnapshot.ContextPercentLabel; got != "65.0%" {
+	if got := r.footerSnapshot.ContextUsageLabel; got != "65.0%" {
 		t.Fatalf("turn 3 after reopen percent label = %q; want 65.0%%", got)
 	}
 
@@ -1164,15 +1364,15 @@ func TestFooterContextTracksProviderUsageAcrossProjectionCacheAndCompaction(t *t
 		t.Fatal(err)
 	}
 	r.refreshPresentation(console)
-	if r.footerSnapshot.ContextPercentLabel == "" || r.footerSnapshot.ContextPercent >= 65.0 {
-		t.Fatalf("after compaction: label=%q percent=%v; want non-empty compacted estimate below 65%%", r.footerSnapshot.ContextPercentLabel, r.footerSnapshot.ContextPercent)
+	if r.footerSnapshot.ContextUsageLabel == "" || r.footerSnapshot.ContextPercent >= 65.0 {
+		t.Fatalf("after compaction: label=%q percent=%v; want non-empty compacted estimate below 65%%", r.footerSnapshot.ContextUsageLabel, r.footerSnapshot.ContextPercent)
 	}
 
 	if err := loop.Submit(context.Background(), "post-compaction question", r.cfg); err != nil {
 		t.Fatal(err)
 	}
 	r.refreshPresentation(console)
-	if got := r.footerSnapshot.ContextPercentLabel; got != "12.5%" {
+	if got := r.footerSnapshot.ContextUsageLabel; got != "12.5%" {
 		t.Fatalf("post-compaction turn percent label = %q; want 12.5%%", got)
 	}
 }
@@ -1280,7 +1480,7 @@ func TestReplUpdatesFooterContextDuringToolLoop(t *testing.T) {
 		<-out.notify
 	}
 	// The footer row is rendered from the presentation snapshot's
-	// ContextPercentLabel, so the observed string pins the mid-run value.
+	// ContextUsageLabel, so the observed string pins the mid-run value.
 	close(prov.releaseSecond)
 	for !strings.Contains(out.String(), "~51.0% / 100k") {
 		<-out.notify

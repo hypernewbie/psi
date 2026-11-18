@@ -455,6 +455,8 @@ Positional messages are sent in order after the terminal starts. Options can app
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect read,bash,edit,write only.
 loop_control and syncboard remain available when their separate availability checks pass.
+Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
+Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version)
 }
@@ -1158,7 +1160,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 	}
 	projection := r.store.ProjectionIfCached()
 	branch := r.gitBranchFor(r.store.Cwd())
-	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t/%t/%q", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, r.settings.HideThinkingBlock, projection != nil, r.skillExpanded, branch)
+	key := fmt.Sprintf("%s/%s/%d/%s/%s/%s/%s/%t/%d/%d/%d/%q/%t/%t/%t/%q/%s", r.store.Header().ID, r.store.LeafID(), r.store.EntryCount(), r.ov.Provider, r.ov.Model, r.ov.Thinking, r.store.Cwd(), r.cfg.AutoCompact, r.settings.OutputPad, r.settings.EditorPaddingX, r.settings.AutocompleteMaxVisible, r.settings.MarkdownCodeBlockIndent, r.settings.HideThinkingBlock, projection != nil, r.skillExpanded, branch, r.settings.ContextUsageDisplay)
 	if key != r.footerKey {
 		home := os.Getenv("HOME")
 		if home == "" {
@@ -1214,17 +1216,21 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 				r.contextWindow = float64(r.cfg.Model.ContextWindow)
 				percent := 100 * float64(estimated) / float64(r.cfg.Model.ContextWindow)
 				percentLabel := formatFooterFixedOneDecimal(percent, "%")
-				// Keep the bar's fill and color thresholds on the same rounded value
-				// that the footer prints.
+				// The bar's fill and color thresholds stay on the same rounded
+				// percentage even when the caption shows a token count.
 				displayPercent := percent
 				if rounded, err := strconv.ParseFloat(strings.TrimSuffix(percentLabel, "%"), 64); err == nil {
 					displayPercent = rounded
 				}
+				usageLabel := percentLabel
+				if r.settings.ContextUsageDisplay == "tokens" {
+					usageLabel = formatFooterTokens(float64(estimated))
+				}
 				windowLabel := formatFooterTokens(float64(r.cfg.Model.ContextWindow))
 				snapshot.ContextPercent = displayPercent
-				snapshot.ContextPercentLabel = percentLabel
+				snapshot.ContextUsageLabel = usageLabel
 				snapshot.ContextWindowLabel = windowLabel
-				snapshot.ContextEstimate = "~" + percentLabel + "/" + windowLabel
+				snapshot.ContextEstimate = "~" + usageLabel + "/" + windowLabel
 			}
 		}
 		r.footerKey, r.footerSnapshot = key, snapshot

@@ -33,6 +33,24 @@ changes are not approved one by one; review the transcript and the diff.
 - `/session` prints the session file, workspace, provider, model, thinking
   level, and usage counters.
 
+## Read context usage
+
+When psi knows both the context estimate and the model's context window, the
+footer shows a bar and a caption. The default setting
+`contextUsageDisplay: "percent"` shows `~40.0% / 200k`: the estimate is about
+80,000 tokens, 80,000 / 200,000 = 40.0%, and 200k is the window. Set
+`contextUsageDisplay: "tokens"` to show `~80k / 200k`. The token count uses the
+same compact formatting as the usage counters and is an estimate, not an exact
+tokenizer result. Both modes keep the leading `~`.
+
+The bar still fills and changes color by percentage, so the caption choice does
+not change the percentage used for the bar. Change the setting in `/settings`
+under `Context usage`, or in the user `settings.json` followed by `/reload`. A
+trusted project `.pi/settings.json` can override it. If the window is unknown or
+the estimate is unavailable, psi omits the caption. A token count above the
+window is shown without text clamping, even though the bar and color use the
+clamped percentage.
+
 ## Change direction while psi works
 
 The editor stays active during a run:

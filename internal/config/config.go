@@ -85,9 +85,12 @@ type Settings struct {
 	OutputPad               int
 	AutocompleteMaxVisible  int
 	MarkdownCodeBlockIndent string
-	DefaultProvider         string
-	DefaultModel            string
-	DefaultThinking         string
+	// ContextUsageDisplay selects the footer context caption: "percent" or
+	// "tokens". The bar keeps percentage-based fill and color either way.
+	ContextUsageDisplay string
+	DefaultProvider     string
+	DefaultModel        string
+	DefaultThinking     string
 	// DefaultThinkingSet reports that a settings file provided
 	// defaultThinkingLevel. Pi uses that value when the model changes.
 	DefaultThinkingSet bool
@@ -125,6 +128,7 @@ func defaultSettings() Settings {
 		OutputPad:               1,
 		AutocompleteMaxVisible:  5,
 		MarkdownCodeBlockIndent: "  ",
+		ContextUsageDisplay:     "percent",
 		DefaultThinking:         "off",
 		ModelThinkingLevels:     map[string]string{},
 		SteeringMode:            "one-at-a-time",
@@ -153,6 +157,7 @@ type rawSettings struct {
 	Markdown               *struct {
 		CodeBlockIndent *string `json:"codeBlockIndent"`
 	} `json:"markdown"`
+	ContextUsageDisplay *string           `json:"contextUsageDisplay"`
 	DefaultProvider     *string           `json:"defaultProvider"`
 	DefaultModel        *string           `json:"defaultModel"`
 	DefaultThinking     *string           `json:"defaultThinkingLevel"`
@@ -409,6 +414,18 @@ func applyRaw(data map[string]any, out *Settings, sources map[string]string, src
 		if raw.Markdown.CodeBlockIndent != nil {
 			out.MarkdownCodeBlockIndent = *raw.Markdown.CodeBlockIndent
 			sources["markdown.codeBlockIndent"] = src
+		}
+	}
+	if _, present := data["contextUsageDisplay"]; present && raw.ContextUsageDisplay == nil {
+		return fmt.Errorf("contextUsageDisplay must be a string")
+	}
+	if raw.ContextUsageDisplay != nil {
+		switch *raw.ContextUsageDisplay {
+		case "percent", "tokens":
+			out.ContextUsageDisplay = *raw.ContextUsageDisplay
+			sources["contextUsageDisplay"] = src
+		default:
+			return fmt.Errorf("contextUsageDisplay must be \"percent\" or \"tokens\"")
 		}
 	}
 	if raw.DefaultProvider != nil {
