@@ -8,7 +8,7 @@ model layer. `models.json` can add providers of its own; see
 | Provider ID | Name | Protocol | Credential |
 |---|---|---|---|
 | `anthropic` | Anthropic | `anthropic-messages` | `ANTHROPIC_API_KEY` |
-| `openai` | OpenAI | `openai-responses` | Pi OAuth session or `OPENAI_API_KEY` |
+| `openai` | OpenAI | `openai-responses` | ChatGPT sign-in in psi or `OPENAI_API_KEY` |
 | `openai-codex` | OpenAI Codex | `openai-codex-responses` | Pi OAuth session |
 | `minimax` | MiniMax | `anthropic-messages` | `MINIMAX_API_KEY` |
 | `opencode-go` | OpenCode Go | per model (see below) | `OPENCODE_API_KEY` |

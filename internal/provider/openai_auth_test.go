@@ -737,10 +737,13 @@ func TestOpenAIInvalidRequestFailsBeforeAuth(t *testing.T) {
 		client.ResolveAuth = auth.Get
 		return client
 	}
-	// Invalid endpoint: the client base URL fails validation before auth.
-	goodModel := ModelMeta{ID: "gpt-6.1-sol", API: "openai-responses", Provider: "openai", BaseURL: "https://api.openai.com/v1", MaxTokens: 128, ContextWindow: 1024}
-	if _, err := newClient("invalid-endpoint").Send(context.Background(), Request{Model: goodModel, Thinking: "off"}, nil); err == nil {
-		t.Fatal("invalid endpoint was accepted")
+	// Even an empty query or fragment would put the appended route outside
+	// the URL path. Refuse both before resolving (and rotating) auth.
+	goodModel := ModelMeta{ID: "gpt-6.1-sol", API: "openai-responses", Provider: "openai", BaseURL: openAIResource, MaxTokens: 128, ContextWindow: 1024}
+	for _, base := range []string{"invalid-endpoint", openAIResource + "?", openAIResource + "#"} {
+		if _, err := newClient(base).Send(context.Background(), Request{Model: goodModel, Thinking: "off"}, nil); err == nil || err.Error() != "invalid OpenAI Responses endpoint" {
+			t.Errorf("endpoint %q: got %v, want endpoint validation error", base, err)
+		}
 	}
 	// Invalid request: unsupported thinking level.
 	if _, err := newClient("").Send(context.Background(), Request{Model: goodModel, Thinking: "invalid-level"}, nil); err == nil {

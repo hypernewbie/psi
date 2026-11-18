@@ -116,7 +116,7 @@ func isOpenAISubscriptionRequest(model ModelMeta, baseURL, token string) bool {
 	if model.Custom || model.ProviderID() != "openai" {
 		return false
 	}
-	if strings.TrimRight(strings.TrimSpace(baseURL), "/") != "https://api.openai.com/v1" {
+	if !openAIOfficialBase(baseURL) {
 		return false
 	}
 	return token != "" && !strings.HasPrefix(token, "sk-")
@@ -131,11 +131,14 @@ func clampResponsesCacheKey(value string) string {
 }
 
 func responsesEndpoint(baseURL string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
+	baseURL = strings.TrimSpace(baseURL)
+	parsed, err := url.Parse(baseURL)
+	// Even bare query (?) or fragment (#) delimiters would put the
+	// appended /responses route outside the path.
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil || strings.ContainsAny(baseURL, "?#") || parsed.Opaque != "" {
 		return "", fmt.Errorf("invalid OpenAI Responses endpoint")
 	}
-	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/responses", nil
+	return strings.TrimRight(baseURL, "/") + "/responses", nil
 }
 
 func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, compat responsesCompat, body []byte, token string, req Request, onDelta func(Delta)) (*Response, error) {
@@ -152,10 +155,17 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 	if token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+token)
 	}
+	builtInOpenAI := !req.Model.Custom && req.Model.ProviderID() == "openai"
 	if c.SessionID != "" {
 		switch compat.sessionAffinityFormat {
 		case "openai":
-			httpReq.Header.Set("session_id", c.SessionID)
+			// The official OpenAI endpoint uses an underscore. Keep the
+			// existing header for other providers and endpoint overrides.
+			if builtInOpenAI && openAIOfficialBase(baseURL) {
+				httpReq.Header.Set("session_id", c.SessionID)
+			} else {
+				httpReq.Header.Set("session-id", c.SessionID)
+			}
 			httpReq.Header.Set("x-client-request-id", c.SessionID)
 		case "openai-nosession":
 			httpReq.Header.Set("x-client-request-id", c.SessionID)
@@ -181,7 +191,7 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 		classified := classifyHTTPError(resp)
 		classified.Detail = c.redact(classified.Detail, token)
 		classified.Reason = c.redact(classified.Reason, token)
-		if !req.Model.Custom && req.Model.ProviderID() == "openai" {
+		if builtInOpenAI {
 			// Built-in OpenAI never displays a provider body, even when
 			// the shared classifier preserves Zhipu's raw 1308 payload
 			// for other providers.
@@ -203,7 +213,7 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 		// An OpenAI stream can embed provider-controlled values in parser or
 		// body-read errors. Keep partial output, but not that diagnostic text.
 		var wrapped error
-		if !req.Model.Custom && req.Model.ProviderID() == "openai" {
+		if builtInOpenAI {
 			wrapped = errors.New("OpenAI Responses stream interrupted (not retried)")
 		} else {
 			wrapped = fmt.Errorf("OpenAI Responses stream interrupted (not retried): %s", c.redact(err.Error(), token))

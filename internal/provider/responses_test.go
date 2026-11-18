@@ -305,7 +305,7 @@ func TestResponsesSessionAffinityHeaders(t *testing.T) {
 	for _, tc := range []struct {
 		format, hyphen, underscore, client, router string
 	}{
-		{"openai", "", "session-default", "session-default", ""},
+		{"openai", "session-default", "", "session-default", ""},
 		{"openai-nosession", "", "", "session-default", ""},
 		{"openrouter", "", "", "", "session-default"},
 	} {

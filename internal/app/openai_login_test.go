@@ -1020,8 +1020,11 @@ func TestOpenAISubmitAllowsAPIKeyOverride(t *testing.T) {
 		t.Fatal("override did not configure a Responses client")
 	}
 	responses.HTTP.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "override.example" || req.Header.Get("Authorization") != "Bearer direct-key" {
+		if req.URL.String() != "https://override.example/v1/responses" || req.Header.Get("Authorization") != "Bearer direct-key" {
 			return nil, &provider.ProviderError{Kind: provider.ErrInvalid, Message: "unexpected override request"}
+		}
+		if req.Header.Get("session-id") != r.store.Header().ID || req.Header.Get("session_id") != "" {
+			t.Error("endpoint override did not retain the existing Responses session header")
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(openAISyntheticStream("override-reply"))), Header: make(http.Header)}, nil
 	})
