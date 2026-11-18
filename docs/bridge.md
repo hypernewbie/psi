@@ -61,13 +61,14 @@ eleven otherwise.
   with a usable handoff root.
 
 **Model and thinking changes.** Phi can change either setting while the pane
-is idle or a run is active. Psi saves the selection before acknowledging it.
-The next provider request uses the new selection. An in-flight request and
-its transport retries keep their original settings. The change does not
-cancel the run or clear queued input. Psi prepares one bridge request at a
-time. If another request is being prepared, a picker is open, or the run is
-cancelling, Psi refuses the change rather than queueing it. A stale candidate
-or a failed session write does not change the selection.
+is idle or a run is active. Psi records the selection before acknowledging
+it. If changing the model also changes the effective thinking level, Psi
+records that level too. The next provider request uses the new selection.
+An in-flight request and its transport retries keep their original settings.
+This does not cancel the run or clear queued input. Psi prepares one bridge
+request at a time. If another request is being prepared, a picker is open,
+or the run is cancelling, Psi refuses the change rather than queueing it.
+A stale candidate or a failed session write does not change the live selection.
 
 Phi keeps its own fallbacks for the capabilities a pane does not advertise.
 `pi.reload.v1` and `pi.syncboard.v1` are existing capabilities that predate

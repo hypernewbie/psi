@@ -18,6 +18,7 @@ import (
 	"psi/internal/pibridge"
 	pibridgepb "psi/internal/pibridge/pb"
 	"psi/internal/provider"
+	"psi/internal/session"
 	"psi/internal/terminal"
 )
 
@@ -221,10 +222,13 @@ func TestBridgeSetModelPersistsThenAcknowledges(t *testing.T) {
 	r := testRuntime(t)
 	addModel(r, "anthropic", config.ModelMeta{ID: "m2", Reasoning: true, MaxTokens: 16384})
 	r.settings.ModelThinkingLevels = map[string]string{"anthropic/m2": "medium"}
+	// Use an existing session so the ack must survive a restart even if no
+	// subsequent provider request ever runs.
+	if _, err := r.store.AppendMessage(agentMessageUser("earlier prompt")); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic-bridge-test")
 	f, h := startBridgeRuntime(t, r)
-
-	before := countEntries(t, r)
 
 	f.inject <- &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_SetModelRequest{
 		SetModelRequest: &pibridgepb.SetModelRequest{RequestId: "req-set", Provider: "anthropic", Model: "m2"},
@@ -253,16 +257,24 @@ func TestBridgeSetModelPersistsThenAcknowledges(t *testing.T) {
 	if r.ov.Thinking != "medium" {
 		t.Fatalf("installed thinking = %q, want per-model medium", r.ov.Thinking)
 	}
-	if got := countEntries(t, r) - before; got != 1 {
-		t.Fatalf("switch persisted %d entries, want 1", got)
+	reopened, err := session.OpenFile(r.store.File(), r.store.Cwd(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := reopened.ModelState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Provider != "anthropic" || saved.ModelID != "m2" || saved.ThinkingLevel != "medium" {
+		t.Fatalf("restored after successful ack: %+v, want anthropic/m2 at medium", saved)
 	}
 
 	// The bridge snapshot follows the session without a separate publish.
 	snap := f.waitFrame(t, "model snapshot", func(frame *pibridgepb.PiToPhi) bool {
 		return frame.GetStateSnapshot().GetModel().GetModel() == "m2"
-	})
-	if snap.GetStateSnapshot().GetModel().GetProvider() != "anthropic" {
-		t.Fatalf("published provider mismatch: %+v", snap.GetStateSnapshot())
+	}).GetStateSnapshot()
+	if snap.GetModel().GetProvider() != saved.Provider || snap.GetThinkingLevel() != saved.ThinkingLevel {
+		t.Fatalf("published selection does not match the session: %v", snap)
 	}
 }
 

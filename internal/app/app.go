@@ -1313,9 +1313,22 @@ func (r *runtime) commitSelection(next agent.LiveSettings, persist func() error)
 }
 
 func (r *runtime) selectModel(candidate *runtime) error {
-	err := r.commitSelection(candidate.requestSettings(), func() error {
-		_, err := r.store.AppendModelChange(candidate.ov.Provider, candidate.ov.Model)
-		return err
+	next := candidate.requestSettings()
+	err := r.commitSelection(next, func() error {
+		state, err := r.store.ModelState()
+		if err != nil {
+			return err
+		}
+		if _, err := r.store.AppendModelChange(next.Model.ProviderID(), next.Model.ID); err != nil {
+			return err
+		}
+		// A model change can also resolve a different thinking level. Save
+		// it now rather than relying on a later run to sync the session.
+		if state.ThinkingLevel != next.Thinking {
+			_, err := r.store.AppendThinkingLevelChange(next.Thinking)
+			return err
+		}
+		return nil
 	})
 	if err == nil {
 		r.adoptConfiguration(candidate)
