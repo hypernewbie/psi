@@ -53,17 +53,19 @@ func readSSEEnvelope(body io.Reader, requestID string, limit int) ([]byte, error
 		if total > limit {
 			return nil, fmt.Errorf("%s: provider response exceeds 5 MiB", classInvalid)
 		}
+		// A read failure is not the blank line that ends an event.
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("%s: stream read failed", classInvalid)
+		}
 		if payload, ok := readLine(strings.TrimSuffix(chunk, "\n")); ok {
 			return payload, nil
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				if payload, ok := match(); ok {
-					return payload, nil
-				}
-				return nil, fmt.Errorf("%s: no matching provider response", classInvalid)
+			// Keep accepting a matching final event at a clean EOF.
+			if payload, ok := match(); ok {
+				return payload, nil
 			}
-			return nil, fmt.Errorf("%s: stream read failed", classInvalid)
+			return nil, fmt.Errorf("%s: no matching provider response", classInvalid)
 		}
 	}
 }

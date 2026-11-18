@@ -41,8 +41,9 @@ omitted count instead of silently ending at `[truncated]`.
   provider errors and never falls back. Exa with a key uses `POST /search`;
   without a key it uses the keyless `mcp.exa.ai` JSON-RPC endpoint. A failed
   keyed request does not retry keyless. Keyed search skips malformed entries
-  in a valid results array. Keyless prose without a parseable result is an
-  invalid response, not an empty search.
+  in a valid results array. A keyless stream that fails before a matching
+  event is complete returns an error. Keyless prose without a parseable
+  result is an invalid response, not an empty search.
 - `domainFilter`: up to 20 ASCII hostnames. A leading `-` excludes. Filtering
   applies before the per-query result limit.
 - `recencyFilter`: `day`, `month`, or `year`.
