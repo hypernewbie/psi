@@ -31,8 +31,11 @@ type bridgePhi struct {
 	mu     sync.Mutex
 	hellos []*pibridgepb.PiToPhi
 	frames []*pibridgepb.PiToPhi
-	inject chan *pibridgepb.PhiToPi
-	notify chan struct{}
+	// cutRecv closes the current stream after this many more received
+	// frames. Zero leaves the stream alone.
+	cutRecv int
+	inject  chan *pibridgepb.PhiToPi
+	notify  chan struct{}
 }
 
 func startBridgePhi(t *testing.T) *bridgePhi {
@@ -102,10 +105,18 @@ func (f *bridgePhi) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		case frame := <-frames:
 			f.mu.Lock()
 			f.frames = append(f.frames, frame)
+			cutNow := false
+			if f.cutRecv > 0 {
+				f.cutRecv--
+				cutNow = f.cutRecv == 0
+			}
 			f.mu.Unlock()
 			select {
 			case f.notify <- struct{}{}:
 			default:
+			}
+			if cutNow {
+				return nil
 			}
 		case msg := <-f.inject:
 			msg.PaneId, msg.ProcessId = hello.GetPaneId(), hello.GetProcessId()

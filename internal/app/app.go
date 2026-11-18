@@ -2928,7 +2928,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				_, doneFramesAfter, _, _ := console.FrameStats()
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 			}
-			if pendingInterrupt == nil && len(initialMessages) > 0 {
+			// A retry owns the worker first; startup messages wait for it.
+			if pendingInterrupt == nil && !busy && len(initialMessages) > 0 {
 				message := initialMessages[0]
 				initialMessages = initialMessages[1:]
 				start(message, message, "", "", "", false)
@@ -2957,7 +2958,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
 				r.draw(console)
 			}
-			for len(deferredFIFO) > 0 && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
+			for len(deferredFIFO) > 0 && !busy && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting {
 				action := deferredFIFO[0]
 				deferredFIFO = deferredFIFO[1:]
 				switch action.kind {

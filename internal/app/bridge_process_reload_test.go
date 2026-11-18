@@ -533,3 +533,195 @@ func TestBridgeProcessBusyReloadOwnedCompactReceipt(t *testing.T) {
 		t.Fatalf("summary requests = %d, want the compact and its restart", got)
 	}
 }
+
+// A reload whose stream dies after entry still settles, retries once, and
+// reconnects with readiness and the high-water mark instead of a replay.
+func TestBridgeProcessReloadLostReceiptReconnects(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("busy reload needs a Unix PTY")
+	}
+	bodies := make(chan map[string]any, 4)
+	release := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests.Add(1)
+		bodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		if requests.Load() == 1 {
+			<-req.Context().Done()
+			return
+		}
+		select {
+		case <-release:
+		case <-req.Context().Done():
+			return
+		}
+		fmt.Fprint(w, liveTextTurn("LOST_RETRY_DONE"))
+	}))
+	t.Cleanup(server.Close)
+
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","defaultTools":[],"compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"models":[{"id":"local-model","api":"anthropic-messages","baseUrl":"`+server.URL+`","contextWindow":65536,"maxTokens":16384,"input":["text"]}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+
+	f := startBridgePhi(t)
+	q := startReviewProcessEnv(t, home, ws, agentDir, *reviewBinary, "", bridgeChildEnv(t, f), "--deny-project", "--no-tools")
+	t.Cleanup(func() {
+		if output := q.raw.String(); strings.Contains(output, "WARNING: DATA RACE") {
+			t.Errorf("race detector report in app subprocess:\n%s", output)
+		}
+	})
+
+	q.prompt()
+	q.write("original work\r")
+	liveWaitBody(t, bodies)
+	f.waitFrame(t, "active run", func(frame *pibridgepb.PiToPhi) bool {
+		return bridgeRunID(frame) != 0
+	})
+	held := bridgeState(t, f, "lost-held")
+	runID := held.GetReloadReadiness().GetRunId()
+
+	// Cut the stream as the dispatch frames go out, so the receipt is lost.
+	f.mu.Lock()
+	f.cutRecv = 1
+	f.mu.Unlock()
+	f.inject <- reloadRequest("71", held.GetSessionId(), held.GetLeafId(), held.GetModel().GetProvider(), held.GetModel().GetModel(), &runID, nil)
+
+	retry := liveWaitBody(t, bodies)
+	if len(retry) == 0 {
+		t.Fatal("lost receipt stopped the retry")
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		f.mu.Lock()
+		hellos := len(f.hellos)
+		f.mu.Unlock()
+		if hellos >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client did not reconnect after the cut")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	reconnected := bridgeState(t, f, "lost-reconnected")
+	if reconnected.GetReloadReadiness().GetReloadPending() {
+		t.Fatal("reconnect still reports reload-pending")
+	}
+	if got := reconnected.GetReloadReadiness().GetHighWater(); got < 71 {
+		t.Fatalf("reconnect high water = %d, want at least 71", got)
+	}
+	// The lost ack is never retransmitted.
+	f.mu.Lock()
+	sent := 0
+	for _, frame := range f.frames {
+		if ack := frame.GetReloadAck(); ack != nil && ack.GetRequestId() == "71" {
+			sent++
+		}
+	}
+	f.mu.Unlock()
+	if sent > 1 {
+		t.Fatalf("reload ack sent %d times, want at most the lost one", sent)
+	}
+
+	release <- struct{}{}
+	q.wait("LOST_RETRY_DONE")
+	waitBridgeIdle(t, f)
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("provider requests = %d, want original plus one retry", got)
+	}
+}
+
+// A reload retry starts before queued startup messages, which wait for the
+// retry to settle instead of starting a second worker beside it.
+func TestBridgeProcessReloadRetryPrecedesStartupMessages(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("busy reload needs a Unix PTY")
+	}
+	bodies := make(chan map[string]any, 4)
+	releaseRetry := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		n := requests.Add(1)
+		bodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		switch n {
+		case 1:
+			<-req.Context().Done()
+			return
+		case 2:
+			select {
+			case <-releaseRetry:
+			case <-req.Context().Done():
+				return
+			}
+		}
+		fmt.Fprint(w, liveTextTurn("TURN_DONE"))
+	}))
+	t.Cleanup(server.Close)
+
+	home, ws := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","defaultThinkingLevel":"off","defaultTools":[],"compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"models":[{"id":"local-model","api":"anthropic-messages","baseUrl":"`+server.URL+`","contextWindow":65536,"maxTokens":16384,"input":["text"]}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"file-test-key"}}`)
+
+	f := startBridgePhi(t)
+	q := startReviewProcessEnv(t, home, ws, agentDir, *reviewBinary, "", bridgeChildEnv(t, f), "--deny-project", "--no-tools", "STARTUP_A", "STARTUP_B")
+	t.Cleanup(func() {
+		if output := q.raw.String(); strings.Contains(output, "WARNING: DATA RACE") {
+			t.Errorf("race detector report in app subprocess:\n%s", output)
+		}
+	})
+
+	q.prompt()
+	first := liveWaitBody(t, bodies)
+	if !strings.Contains(requestText(t, first), "STARTUP_A") {
+		t.Fatalf("first startup message = %q", requestText(t, first))
+	}
+	f.waitFrame(t, "active run", func(frame *pibridgepb.PiToPhi) bool {
+		return bridgeRunID(frame) != 0
+	})
+	held := bridgeState(t, f, "startup-held")
+	runID := held.GetReloadReadiness().GetRunId()
+	f.inject <- reloadRequest("81", held.GetSessionId(), held.GetLeafId(), held.GetModel().GetProvider(), held.GetModel().GetModel(), &runID, nil)
+	cursor := 0
+	if ack := nextBridgeReload(t, f, &cursor); ack.GetOutcome() != pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED {
+		t.Fatalf("startup reload = %+v, want DISPATCHED", ack)
+	}
+	retry := liveWaitBody(t, bodies)
+	if !strings.Contains(requestText(t, retry), "STARTUP_A") {
+		t.Fatalf("retry request = %q, want the interrupted startup message", requestText(t, retry))
+	}
+	select {
+	case body := <-bodies:
+		t.Fatalf("second startup message ran beside the retry: %q", requestText(t, body))
+	default:
+	}
+	releaseRetry <- struct{}{}
+	next := liveWaitBody(t, bodies)
+	if !strings.Contains(requestText(t, next), "STARTUP_B") {
+		t.Fatalf("after the retry = %q, want STARTUP_B", requestText(t, next))
+	}
+	waitBridgeIdle(t, f)
+	q.prompt()
+	q.write("/quit\r")
+	q.finish()
+}
