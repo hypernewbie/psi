@@ -3,6 +3,8 @@ package mcp
 import (
 	"encoding/base64"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -161,8 +163,10 @@ func TestResultPreservesEmbeddedResourceOmissionNotices(t *testing.T) {
 }
 
 func TestResultTruncatesAndSavesReadableFullOutput(t *testing.T) {
+	// The product writes to os.TempDir(), which ignores TMPDIR outside Unix-like
+	// systems. Assert the parent os.TempDir() reports instead of redirecting the
+	// file into t.TempDir(), and delete the shared-root file explicitly.
 	dir := t.TempDir()
-	t.Setenv("TMPDIR", dir)
 	full := strings.Repeat("start-", 5000) + "middle" + strings.Repeat("-end", 5000)
 	result := &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: full}, &sdk.ImageContent{Data: []byte("img"), MIMEType: "image/webp"}}}
 	converted := Convert(result, ConvertOptions{Server: "s", Tool: "t", ReadAvailable: true})
@@ -183,9 +187,10 @@ func TestResultTruncatesAndSavesReadableFullOutput(t *testing.T) {
 	if !ok || details.FullOutputPath == "" {
 		t.Fatalf("missing full output path: %+v", converted.Details)
 	}
-	if !strings.HasPrefix(details.FullOutputPath, dir) {
-		t.Errorf("full output escaped the owned temporary parent: %s", details.FullOutputPath)
+	if parent, want := filepath.Dir(details.FullOutputPath), filepath.Clean(os.TempDir()); parent != want {
+		t.Errorf("full output parent = %s, want the OS temporary directory %s", parent, want)
 	}
+	t.Cleanup(func() { _ = os.Remove(details.FullOutputPath) })
 	data, err := os.ReadFile(details.FullOutputPath)
 	if err != nil || string(data) != full {
 		t.Errorf("full output mismatch: err=%v, len=%d", err, len(data))
@@ -239,7 +244,9 @@ func TestEmbeddedBinaryResourceFileIsPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows reports 0666 for every regular file and maps chmod to the
+	// read-only attribute, so POSIX permission bits carry no meaning there.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("resource mode = %o", info.Mode().Perm())
 	}
 	data, err := os.ReadFile(path)

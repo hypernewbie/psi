@@ -105,7 +105,8 @@ JPEG, GIF, and WebP, up to 3 MiB of decoded data. Unsupported or oversized
 images become text notices. Audio and unknown content become text placeholders.
 Resource links are text only; psi does not fetch their URIs. Embedded binary
 resources are written to mode-0600 `psi-mcp-resource-*` files, which are not
-removed automatically.
+removed automatically. The mode applies on Linux and macOS; on Windows the
+operating system applies its own file permissions.
 
 Combined text over 20 KiB keeps its beginning and end. psi writes the full text
 to a mode-0600 `psi-mcp-*` file. When the read tool is available, the result
