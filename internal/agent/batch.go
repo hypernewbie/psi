@@ -194,7 +194,11 @@ func (b *batch) runBuiltinCall(ctx context.Context, plan *batchPlan, runner func
 		}
 	}()
 	if err := ctx.Err(); err != nil {
-		if runner != nil {
+		// Prepared built-in runners release mutation slots acquired during
+		// preparation, so they still run for an already-cancelled batch.
+		// External handlers never started; invoking one here would perform
+		// an unadmitted side effect.
+		if runner != nil && plan.kind == batchBuiltin {
 			_ = runner(ctx)
 		}
 		b.completions <- batchCompletion{index: index, started: false, result: notStartedResult()}

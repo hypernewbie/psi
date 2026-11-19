@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"psi/internal/event"
 	"psi/internal/provider"
@@ -14,59 +17,114 @@ func externalToolDef(name string) provider.ToolDef {
 	return provider.ToolDef{Name: name, Description: "external", Schema: map[string]any{"type": "object", "properties": map[string]any{}}}
 }
 
-// TestConcurrentExternalToolUsesParallelPath: an enabled external tool runs
-// through the same worker/completion path as built-ins, and an undeclared name
-// never reaches the lookup.
-func TestConcurrentExternalToolUsesParallelPath(t *testing.T) {
+// TestConcurrentExternalToolsOverlap: two enabled external tools reach their
+// handlers before either is released, so they use the parallel worker path,
+// and both results settle durably.
+func TestConcurrentExternalToolsOverlap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		first, second := "mcp__fixture__echo", "mcp__fixture__ping"
+		response := batchResponse(
+			provider.Block{Type: "toolCall", ID: "e1", Name: first, Arguments: map[string]any{}},
+			provider.Block{Type: "toolCall", ID: "e2", Name: second, Arguments: map[string]any{}},
+		)
+		h := newParallelHarness(t, []*provider.Response{response, {Text: "done", StopReason: "stop"}})
+		cfg := h.config()
+		cfg.Tools = append(cfg.Tools, externalToolDef(first), externalToolDef(second))
+		entered := make(chan struct{}, 2)
+		release := make(chan struct{})
+		var lookups atomic.Int32
+		cfg.ConcurrentTools = func(name string) (InternalToolHandler, bool) {
+			lookups.Add(1)
+			if name != first && name != second {
+				return nil, false
+			}
+			return func(_ context.Context, invocation tools.Invocation) tools.Result {
+				entered <- struct{}{}
+				<-release
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: invocation.ID}}}
+			}, true
+		}
+		done := make(chan error, 1)
+		go func() { done <- h.loop.Submit(context.Background(), "go", cfg) }()
+
+		synctest.Wait()
+		if got := len(entered); got != 2 {
+			t.Fatalf("external handlers entered before release = %d, want 2", got)
+		}
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if lookups.Load() != 2 {
+			t.Fatalf("lookup count = %d, want 2", lookups.Load())
+		}
+
+		projection, err := h.store.Projection()
+		if err != nil {
+			t.Fatal(err)
+		}
+		results := map[string]string{}
+		for _, message := range projection.Flat {
+			if message.Role != "toolResult" || message.ToolResult == nil {
+				continue
+			}
+			results[message.ToolResult.ToolCallID] = message.ToolResult.Content[0].Text.Text
+		}
+		if results["e1"] != "e1" || results["e2"] != "e2" {
+			t.Fatalf("persisted results = %v, want e1 and e2", results)
+		}
+	})
+}
+
+// TestConcurrentExternalToolCancelledBeforeDispatchDoesNotRun: a batch that is
+// already cancelled must not invoke an external handler. The call still settles
+// in assistant order as not started.
+func TestConcurrentExternalToolCancelledBeforeDispatchDoesNotRun(t *testing.T) {
 	external := "mcp__fixture__echo"
-	response := batchResponse(provider.Block{Type: "toolCall", ID: "e1", Name: external, Arguments: map[string]any{"text": "hi"}})
-	h := newParallelHarness(t, []*provider.Response{response, {Text: "done", StopReason: "stop"}})
+	h := newParallelHarness(t, nil)
 	cfg := h.config()
 	cfg.Tools = append(cfg.Tools, externalToolDef(external))
-	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
-	var lookups atomic.Int32
+	var calls atomic.Int32
 	cfg.ConcurrentTools = func(name string) (InternalToolHandler, bool) {
-		lookups.Add(1)
 		if name != external {
 			return nil, false
 		}
-		return func(ctx context.Context, invocation tools.Invocation) tools.Result {
-			entered <- struct{}{}
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return tools.Result{IsError: true}
-			}
-			return tools.Result{Content: []tools.Block{{Type: "text", Text: "external result"}}}
+		return func(context.Context, tools.Invocation) tools.Result {
+			calls.Add(1)
+			return tools.Result{Content: []tools.Block{{Type: "text", Text: "external handler ran"}}}
 		}, true
 	}
-	done := make(chan error, 1)
-	go func() { done <- h.loop.Submit(context.Background(), "go", cfg) }()
-	<-entered
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := h.loop.runBatch(ctx, []provider.Block{
+		{Type: "toolCall", ID: "e1", Name: external, Arguments: map[string]any{}},
+	}, cfg)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runBatch error = %v, want context.Canceled", err)
 	}
-	if lookups.Load() != 1 {
-		t.Fatalf("lookup count = %d", lookups.Load())
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("external handler calls = %d, want 0", n)
 	}
+
 	projection, err := h.store.Projection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
 	for _, message := range projection.Flat {
-		if message.Role == "toolResult" && message.ToolResult != nil && message.ToolResult.ToolCallID == "e1" {
-			found = true
-			if message.ToolResult.Content[0].Text.Text != "external result" {
-				t.Errorf("result = %+v", message.ToolResult.Content)
-			}
+		if message.Role != "toolResult" || message.ToolResult == nil || message.ToolResult.ToolCallID != "e1" {
+			continue
 		}
+		var details map[string]json.RawMessage
+		if err := json.Unmarshal(message.ToolResult.Details, &details); err != nil {
+			t.Fatalf("details = %q: %v", message.ToolResult.Details, err)
+		}
+		if got := string(details["psiOutcome"]); got != `"not_started"` {
+			t.Fatalf("psiOutcome = %s, want \"not_started\"", got)
+		}
+		return
 	}
-	if !found {
-		t.Fatal("external result was not persisted")
-	}
+	t.Fatal("cancelled external call was not persisted")
 }
 
 func TestConcurrentExternalToolDisabledNameNeverLooksUp(t *testing.T) {
