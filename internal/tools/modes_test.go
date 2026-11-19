@@ -3,12 +3,11 @@
 package tools
 
 // Phase D regression for PLAN3 F13: ordinary new tool files and directories
-// follow the Node creation defaults (0666 files, 0777 directories) with the
-// process umask applied. Existing targets keep their mode.
+// follow the conventional creation defaults (0666 files, 0777 directories)
+// with the process umask applied. Existing targets keep their mode.
 //
 // The umask is process-wide, so each case runs in a child process under
-// `sh -c 'umask ...'`. A pinned-behavior Node script creates reference
-// shapes under the same umask; psi modes must match.
+// `sh -c 'umask ...'`. The parent process umask is never changed.
 
 import (
 	"fmt"
@@ -69,7 +68,7 @@ func TestUmaskChild(t *testing.T) {
 	}
 }
 
-func TestF13NodeDefaultModes(t *testing.T) {
+func TestF13DefaultModes(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -134,33 +133,6 @@ func TestF13NodeDefaultModes(t *testing.T) {
 			check("keep0600.txt", 0o600)
 			check("keep0755.txt", 0o755)
 			check("link.txt", 0o640) // write through symlink preserves target
-			nodeRef(t, ws, c.umask, c.file, c.dir)
 		})
-	}
-}
-
-// nodeRef creates the same shapes with Node defaults under the same umask
-// and requires agreement. Skipped when node is unavailable.
-func nodeRef(t *testing.T, ws, umask string, file, dir os.FileMode) {
-	t.Helper()
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node unavailable: reference comparison blocked")
-	}
-	script := `const fs=require('fs'),p=require('path');
-const ws=process.argv[1];
-fs.writeFileSync(p.join(ws,'n-new.txt'),'x');
-fs.mkdirSync(p.join(ws,'n-nested','n-deep'),{recursive:true});
-fs.writeFileSync(p.join(ws,'n-nested','n-deep','n-file.txt'),'x');`
-	// umask applies via shell wrapper to mirror the psi child setup.
-	sh := exec.Command("/bin/sh", "-c", "umask "+umask+"; exec \"$0\" \"$@\"", node, "-e", script, ws)
-	if out, err := sh.CombinedOutput(); err != nil {
-		t.Fatalf("node reference: %v\n%s", err, out)
-	}
-	stFile, _ := os.Stat(filepath.Join(ws, "n-new.txt"))
-	stDir, _ := os.Stat(filepath.Join(ws, "n-nested"))
-	if stFile.Mode().Perm() != file || stDir.Mode().Perm() != dir {
-		t.Fatalf("node produced %04o/%04o, table expects %04o/%04o",
-			stFile.Mode().Perm(), stDir.Mode().Perm(), file, dir)
 	}
 }

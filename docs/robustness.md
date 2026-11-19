@@ -40,7 +40,7 @@ Reference provenance and optional test inputs are in [reference-manifest.md](ref
 | F10 | Multiline status breaks row accounting | Corrected. Console and VT helpers cover single-row status and a committed scrollback sentinel. The provider-to-app journey remains unrun. |
 | F11 | Recall bypasses the editor limit | Corrected. Whole-draft admission covers history installation and recall. Oversized prompts produce a notice without a truncated replacement. |
 | F12 | Stream failure discards known usage | Corrected after review. Cancellation retains typed partial metadata. An HTTP fixture proves durable usage exactly once, correct provider identity, and no tool execution. |
-| F13 | Tool modes differ from Node defaults | Corrected. Child-process umask tests cover 0002/0022/0077 and Node agreement. Existing-file and symlink cases retain their behavior. |
+| F13 | Tool modes differ from conventional defaults | Corrected. Child-process umask tests cover 0002/0022/0077. Existing-file and symlink cases retain their behavior. |
 | F14 | Compaction threshold addition can overflow | Corrected after review. Subtraction preserves strict comparison, including empty context with reserve above the window. Boundary and monotonicity tests pass. |
 | F15 | Discovery retains skill bodies | Corrected. Discovery retains metadata. Tests cover 16/256 skills, retained heap, invocation after file changes, and symlink cycles. |
 
@@ -60,7 +60,7 @@ Reference provenance and optional test inputs are in [reference-manifest.md](ref
 ## Local measurement record
 
 Host: Linux amd64, WSL2 kernel `6.6.87.2-microsoft-standard-WSL2`, ext4, AMD Ryzen 9 3950X.
-Toolchain: Go 1.26.4, module Go 1.24.2, Node v24.11.1.
+Toolchain: Go 1.26.4, module Go 1.24.2. Node v24.11.1 was used only for the retired reference probes.
 Review implementation revision: `414202c`, followed by test and ledger corrections.
 Absolute performance measurements exclude race instrumentation.
 Helper timings do not establish actual-app latency budgets.
@@ -89,9 +89,9 @@ Helper timings do not establish actual-app latency budgets.
 |---|---|---|
 | `./scripts/check.sh` | Pass | Local formatting, vet, ordinary tests, and race tests. |
 | Semantic session fuzzing | Pass, 6394895 executions over 300 seconds | Eager/indexed agreement across retained semantic state, not just record identity. |
-| Targeted auth and shell race suites | Pass, ten repetitions | Includes explicit public `proper-lockfile@4.1.2` input. |
-| Pinned Pi session matrix | Pass, two repetitions | Both continuation directions and both supported provider families. |
-| Pinned Pi word navigation | Pass, three repetitions | 24 supported cases. CJK dictionary segmentation remains a documented exception. |
+| Targeted auth and shell race suites | Pass, ten repetitions | The historical mixed-auth run included explicit public `proper-lockfile@4.1.2` input. |
+| Pinned Pi session matrix | Pass, two repetitions | Retired reference; historical. Both continuation directions and both supported provider families. |
+| Pinned Pi word navigation | Pass, three repetitions | Retired reference; historical. 24 supported cases. CJK dictionary segmentation remains a documented exception. |
 | Actual-app executable suite | Pass, three repetitions | Explicit binary input, including copied-executable four-tool coverage without Node on PATH. |
 | Vci | Blocked | No client configuration. All reported checks ran locally. |
 

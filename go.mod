@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/charmbracelet/x/vt v0.1.0
 	github.com/creack/pty v1.1.24
-	github.com/dlclark/regexp2 v1.11.5
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/rivo/uniseg v0.4.7
 	github.com/yuin/goldmark v1.7.13

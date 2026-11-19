@@ -26,6 +26,9 @@ jobs:
           Add-Content $env:GITHUB_PATH 'C:\Program Files\Git\usr\bin'
           Add-Content $env:GITHUB_PATH 'C:\Program Files\Git\bin'
           where.exe bash
+      - name: no-javascript
+        shell: bash
+        run: sh scripts/check.sh --no-js-only
       - name: gofmt
         shell: bash
         run: |

@@ -123,6 +123,46 @@ The bridge `pi.models.v1` list and the RPC `get_available_models` command apply 
 
 Provider model lists change over time. Use `/model` to select a model in the local catalog. Do not assume that an example model ID is present or available. OpenCode Go models select their own registered API and catalog endpoint.
 
+### Catalog bake (developer)
+
+A separate, manually run developer command produces a candidate embedded
+catalog. It requires network access and explicit catalog review; no build,
+install, or startup step runs it, and the agent has no tool for it.
+
+```sh
+go run ./cmd/catalog-bake <new-output-directory>
+```
+
+The command fetches two unauthenticated public inputs, in this order:
+`https://models.dev/experimental/v2.0/api.json` and
+`https://openrouter.ai/api/v1/models`. It sends no project content or
+credentials and ignores ambient proxy settings. The total budget is 120 seconds,
+with at most 30 seconds per attempt. Each input allows at most three attempts,
+32 MiB after decompression, and one complete JSON document. It
+retries only transient failures and HTTP 408, 429, 500, 502, 503, and 504.
+Redirects, TLS certificate failures, other HTTP statuses, malformed or oversized
+bodies, and invalid shapes fail immediately. Invalid data is never replaced with
+a stale copy.
+
+`<new-output-directory>` is one path. Its parent must already exist, and the
+target must not exist, including as a symlink or empty directory. The command
+validates the complete catalog first, then writes `catalog.json` and
+`catalog-source.json` into a sibling staging directory and publishes that
+directory with one rename. A failure removes only its own staging directory and
+leaves the requested path untouched. Errors name the failing source and HTTP
+status or error category; response bodies are not printed. Help works without
+network access.
+
+`catalog-source.json` records the generator, the catalog rule revision, the
+separate session-protocol reference, UTC generation and fetch times, both input
+URLs and SHA-256 digests, each provider's source kind, and the catalog digest.
+The two files are byte-identical when the input bytes and provenance values are
+identical. A live run uses new timestamps.
+
+The command does not modify `internal/config/data/`. Replacing the embedded
+catalog is a separate reviewed change that checks the generated output,
+resolved defaults, and the tracked data diff.
+
 Existing `modelOverrides` apply without a duplicate `models[]` entry.
 
 Codex uses the `openai-codex` OAuth credential in `auth.json`, including token
