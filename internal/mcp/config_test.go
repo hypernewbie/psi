@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -155,7 +157,8 @@ func TestConfigExposureOrder(t *testing.T) {
 	if got := effectiveExposure(server, "write_file"); got != ExposureDirect {
 		t.Errorf("fallback wildcard = %q", got)
 	}
-	if got := effectiveExposure(server, "other"); got != ExposureDirect {
+	server.ToolRules = server.ToolRules[:1]
+	if got := effectiveExposure(server, "other"); got != ExposureCodemode {
 		t.Errorf("server default = %q", got)
 	}
 }
@@ -233,29 +236,80 @@ func TestConfigRejectsTrailingData(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsHeaderCRLF(t *testing.T) {
-	dir := t.TempDir()
-	path := writeTestFile(t, dir, "headers.json", `{"mcpServers": {
-		"bad": {"url": "http://127.0.0.1:1/mcp", "headers": {"X-Test": "ok\r\nInjected: yes"}},
-		"good": {"command": "node"}
+func TestConfigRejectsUnsendableHTTPHeaders(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value string
+	}{
+		{"CRLF", "a\r\nb"},
+		{"vertical tab", "a\vb"},
+		{"DEL", "a\x7fb"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			value, err := json.Marshal(tt.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := writeTestFile(t, t.TempDir(), "headers.json", `{"mcpServers": {
+				"literal": {"url": "https://example.invalid/mcp", "headers": {"X-Test": `+string(value)+`}},
+				"interpolated": {"url": "https://example.invalid/mcp", "headers": {"X-Test": "${MCP_HEADER_VALUE}"}}
+			}}`)
+			cfg, err := LoadConfig(path, "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if names := cfg.SortedNames(); !reflect.DeepEqual(names, []string{"interpolated"}) {
+				t.Fatalf("server names = %v, want only interpolated", names)
+			}
+			t.Setenv("MCP_HEADER_VALUE", tt.value)
+			if _, err := Resolve(t.Context(), cfg.Servers[0], false); ErrorClass(err) != "config" {
+				t.Fatalf("resolving invalid header returned %v, want config error", err)
+			}
+			t.Setenv("MCP_HEADER_VALUE", "a\tb")
+			if _, err := Resolve(t.Context(), cfg.Servers[0], false); err != nil {
+				t.Fatalf("legal horizontal tab was rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfigRejectsCaseInsensitiveDuplicateHeaders(t *testing.T) {
+	path := writeTestFile(t, t.TempDir(), "mcp.json", `{"mcpServers": {
+		"duplicate": {"url": "https://example.invalid/mcp", "headers": {"X-Example": "1", "x-example": "2"}},
+		"distinct": {"url": "https://example.invalid/mcp", "headers": {"X-Example": "1", "x-other": "2"}}
 	}}`)
 	cfg, err := LoadConfig(path, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Servers) != 1 || cfg.Servers[0].Name != "good" {
-		t.Fatalf("header injection entry was not rejected: %+v", cfg.Servers)
+	if names := cfg.SortedNames(); !reflect.DeepEqual(names, []string{"distinct"}) {
+		t.Fatalf("server names = %v, want only distinct", names)
 	}
 }
 
-func TestResolveRejectsInterpolatedHeaderCRLF(t *testing.T) {
-	t.Setenv("MCP_HEADER_VALUE", "a\r\nb")
-	server := Server{
-		Name:         "header-env",
-		Headers:      map[string]string{"X-Test": "${MCP_HEADER_VALUE}"},
-		HeaderSource: map[string]string{"X-Test": "user"},
+func TestConfigRequiresUsableHTTPEndpointAuthority(t *testing.T) {
+	path := writeTestFile(t, t.TempDir(), "mcp.json", `{"mcpServers": {
+		"missing_host": {"url": "http://:8080/mcp"},
+		"port_zero": {"url": "http://example.invalid:0/mcp"},
+		"port_overflow": {"url": "http://example.invalid:65536/mcp"},
+		"valid_ipv6": {"url": "http://[::1]:65535/mcp"}
+	}}`)
+	cfg, err := LoadConfig(path, "", false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := Resolve(context.Background(), server, true); err == nil {
-		t.Fatal("interpolated header CRLF was accepted")
+	if names := cfg.SortedNames(); !reflect.DeepEqual(names, []string{"valid_ipv6"}) {
+		t.Fatalf("server names = %v, want only valid_ipv6", names)
+	}
+}
+
+func TestResolveDoesNotStartPreCancelledCommand(t *testing.T) {
+	// If cancellation is checked before launch, shell lookup cannot mask it.
+	t.Setenv("PSI_SHELL", filepath.Join(t.TempDir(), "missing-shell"))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	server := Server{Env: map[string]string{"TOKEN": "!printf token"}}
+	if _, err := Resolve(ctx, server, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Resolve returned %v, want context.Canceled", err)
 	}
 }

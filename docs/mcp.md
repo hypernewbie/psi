@@ -28,7 +28,9 @@ the later conflicting entry is rejected.
 An entry must define either `command` or `url`, but not both:
 
 - `command` selects stdio. `args`, `cwd`, and `env` configure the command.
-- `url` selects streamable HTTP. `headers` configure HTTP requests.
+- `url` selects streamable HTTP. Use an absolute `http` or `https` URL with a
+  hostname. If you specify a port number, use 1 through 65535. Do not include
+  user information or a fragment. `headers` configure HTTP requests.
 - `type` is optional. It accepts `stdio`, `http`, or `streamable-http` and
   must agree with the selected connection fields. Legacy `sse` is rejected.
 - `enabled` defaults to `true`.
@@ -59,6 +61,10 @@ The resolver processes values in `env` and `headers`:
   `PSI_SHELL`, or `bash` when it is unset or blank, and passes the command to `-c`.
   Each command has a 10-second deadline, a 64 KiB stdout limit, and a bounded
   64 KiB retained stderr tail. Trailing CR and LF characters are removed.
+  If cancellation occurs before the command starts, the resolver does not run it.
+
+The loader rejects invalid HTTP header names and values. The resolver also
+rejects header values that are invalid after interpolation.
 
 Other fields are not interpolated. A project-sourced `!command` is refused
 unless the user settings file sets `mcp.allowProjectCommands` to `true`. The

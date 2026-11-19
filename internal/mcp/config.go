@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -557,25 +559,25 @@ func parseTransportEntry(raw *rawServer) (Server, error) {
 		if value.kind != jsonObject || value.dup {
 			return Server{}, configErr("config", "headers must be an object with unique string values")
 		}
+		headerNames := make(map[string]bool, len(value.members))
 		for _, member := range value.members {
 			if member.value.kind != jsonString {
 				return Server{}, configErr("config", "headers must be an object with unique string values")
 			}
-			if !validHeaderName(member.key) {
+			if !httpguts.ValidHeaderFieldName(member.key) {
 				return Server{}, configErr("config", "invalid header name")
 			}
 			if !validHeaderValue(member.value.str) {
 				return Server{}, configErr("config", "header %q contains an invalid value", member.key)
 			}
-			if reservedHeaders[strings.ToLower(member.key)] {
+			lower := strings.ToLower(member.key)
+			if reservedHeaders[lower] {
 				return Server{}, configErr("config", "header %q is reserved by the MCP transport", member.key)
 			}
-			lower := strings.ToLower(member.key)
-			for existing := range server.Headers {
-				if strings.ToLower(existing) == lower {
-					return Server{}, configErr("config", "duplicate header name")
-				}
+			if headerNames[lower] {
+				return Server{}, configErr("config", "duplicate header name")
 			}
+			headerNames[lower] = true
 			server.Headers[member.key] = member.value.str
 			server.HeaderSource[member.key] = raw.source
 		}
@@ -653,27 +655,8 @@ func parseTransportEntry(raw *rawServer) (Server, error) {
 
 func isCommand(value string) bool { return strings.HasPrefix(strings.TrimSpace(value), "!") }
 
-func validHeaderName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		if c <= ' ' || c >= 0x7f || strings.ContainsRune("()<>@,;:\\\"/[]?={}", rune(c)) {
-			return false
-		}
-	}
-	return true
-}
-
-func validHeaderValue(value string) bool {
-	for i := 0; i < len(value); i++ {
-		if value[i] == '\r' || value[i] == '\n' || value[i] == 0 {
-			return false
-		}
-	}
-	return true
-}
+// validHeaderValue uses the same field-value rules as Go's HTTP client.
+func validHeaderValue(value string) bool { return httpguts.ValidHeaderFieldValue(value) }
 
 func isPartialEntry(raw *rawServer) bool {
 	if raw.has("command") || raw.has("url") || raw.has("type") {
@@ -831,11 +814,17 @@ func resolveValue(ctx context.Context, value string, fromProject, allowProjectCo
 func runInterpolationCommand(parent context.Context, command string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, commandTimeout)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	shell := os.Getenv("PSI_SHELL")
 	if strings.TrimSpace(shell) == "" {
 		shell = "bash"
 	}
-	cmd := exec.Command(shell, "-c", command)
+	cmd := exec.CommandContext(ctx, shell, "-c", command)
+	// Start checks the context. This function owns cancellation after start
+	// so it can terminate the whole process group on Unix.
+	cmd.Cancel = nil
 	cmd.Env = os.Environ()
 	stdout := &limitedBuffer{limit: maxCommandOutput}
 	stderr := &ringBuffer{limit: maxCommandStderr}
@@ -843,6 +832,9 @@ func runInterpolationCommand(parent context.Context, command string) (string, er
 	cmd.Stderr = stderr
 	prepareCommand(cmd)
 	if err := cmd.Start(); err != nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		return "", configErr("command", "cannot start interpolation command")
 	}
 	done := make(chan error, 1)
@@ -855,7 +847,7 @@ func runInterpolationCommand(parent context.Context, command string) (string, er
 	case <-ctx.Done():
 		terminateCommand(cmd)
 		<-done
-		return "", configErr("timeout", "interpolation command timed out")
+		return "", ctx.Err()
 	}
 	out := strings.TrimRight(stdout.String(), "\r\n")
 	if stdout.overflow {
