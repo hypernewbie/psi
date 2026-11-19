@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -87,69 +85,5 @@ func TestToolArgumentsPreserveLargeIntegers(t *testing.T) {
 	n := m.Assistant.Content[0].Call.Arguments["n"]
 	if n != json.Number("9007199254740993") {
 		t.Fatalf("integer rounded: %#v", n)
-	}
-}
-
-// Optional differential check against a real Pi session-manager module. The
-// default suite remains Go-only; no ignored checkout is required.
-func TestReferencePiProjection(t *testing.T) {
-	module := os.Getenv("PSI_PI_SESSION_MODULE")
-	if module == "" {
-		t.Skip("set PSI_PI_SESSION_MODULE to a pinned Pi dist/core/session-manager.js")
-	}
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	piFixture(t, path)
-	s, err := OpenFile(path, "/tmp/ws", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keptID, err := s.AppendMessage(AgentMessage{Role: "user", User: &UserMessage{Role: "user", Content: "psi continues", Timestamp: 20}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertReferenceProjection(t, module, path, s)
-	// Check a new Go-written compaction and complete system checkpoint too.
-	instruction := "updated psi instruction"
-	if _, err := s.AppendMessage(AgentMessage{Role: "system", System: &SystemMessage{Role: "system", Content: "", Sections: map[string]*string{"psi": &instruction}, Timestamp: 21}}); err != nil {
-		t.Fatal(err)
-	}
-	proj, err := s.Projection()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.AppendCompaction("summary written by psi", keptID, 100, ReplaySystem(proj.Flat).Checkpoint); err != nil {
-		t.Fatal(err)
-	}
-	assertReferenceProjection(t, module, path, s)
-}
-
-func assertReferenceProjection(t *testing.T, module, path string, s *Store) {
-	t.Helper()
-	projection, err := s.Projection()
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := `const m = await import(process.argv[1]); const entries = m.loadEntriesFromFile(process.argv[2]); const p = m.buildSessionProjection(entries.filter(e => e.type !== "session")); console.log(JSON.stringify(p.messages));`
-	cmd := exec.Command("node", "--no-warnings", "--input-type=module", "-e", script, module, path)
-	home := t.TempDir()
-	cmd.Dir = home
-	cmd.Env = []string{"HOME=" + home, "PATH=/usr/local/bin:/usr/bin:/bin", "PI_CODING_AGENT_DIR=" + filepath.Join(home, "agent"), "PI_CODING_AGENT_SESSION_DIR=" + filepath.Join(home, "sessions")}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("real Pi reader: %v: %s", err, out)
-	}
-	want, err := json.Marshal(projection.Flat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var a, b any
-	if err := json.Unmarshal(out, &a); err != nil {
-		t.Fatalf("Pi output: %s: %v", out, err)
-	}
-	if err := json.Unmarshal(want, &b); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(a, b) {
-		t.Fatalf("real Pi projection differs:\nPi: %s\nGo: %s", out, want)
 	}
 }

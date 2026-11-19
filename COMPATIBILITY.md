@@ -162,8 +162,9 @@ server. It covers prompt/configuration wiring, stored credentials, skill
 submission, session replacement, and cancellation. A synthetic Codex OAuth
 workflow checks a complete model/tool/model round trip and encrypted replay.
 OAuth refresh, rotation, cancellation, and concurrent access use dummy tokens
-and local HTTP servers. The optional `PSI_PI_SESSION_MODULE` suite exercises a configured Pi reader and
-writer across both continuation directions and the supported provider/API pairs.
+and local HTTP servers. A former optional `PSI_PI_SESSION_MODULE` suite exercised
+a configured Pi reader and writer across both continuation directions and the
+supported provider/API pairs. It was retired with the Node reference harness.
 The recorded run used the installed Pi 1.4.0 package adapter, not a verified
 build from the pinned source revision. Exact executable Pi parity remains
 unclaimed. A JSON-shape test alone is not evidence of complete Pi interchange.

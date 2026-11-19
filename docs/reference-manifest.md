@@ -1,5 +1,10 @@
 # Reference manifest (PLAN3 P3-006)
 
+> Historical record. The Node reference adapter, its build scripts, and the
+> opt-in comparison tests were retired. The commands that built and ran them no
+> longer exist. The results and hashes below describe past runs and are not
+> current instructions.
+
 ## Pinned revisions
 
 - Pi: `c3cc91632d0a1950fb122605b190233f2aa0006e` (`temp/pi-mono`).
@@ -9,13 +14,15 @@
 ## Toolchain
 
 - Go: `go1.26.4 linux/amd64`. The module declares `go 1.24.2`.
-- Node: `v24.11.1`, for reference probes only. Node is not a psi runtime dependency.
-- Public `proper-lockfile`: `4.1.2`. The mixed-auth test checks the package name and version.
+- Node: `v24.11.1` was used for the retired reference probes. It is not a psi
+  runtime or build dependency, and no reference probe remains in the tree.
+- Public `proper-lockfile`: `4.1.2` was an explicit input to the retired
+  mixed-auth comparison.
 
 ## Reference adapter
 
-`scripts/build-reference.mjs` requires the pinned revision and a checkout without tracked changes.
-It imports unmodified Pi source through a TypeScript loader, including the session reader and compaction preparation/generation.
+The retired `scripts/build-reference.mjs` required the pinned revision and a checkout without tracked changes.
+It imported unmodified Pi source through a TypeScript loader, including the session reader and compaction preparation/generation.
 It does not load agent configuration, credentials, extensions, or provider factories. The optional compact-flow comparison injects a synthetic stream; the `completeSimple` stub throws if a provider call is attempted.
 Public dependencies come from the installed coding-agent package, never an agent data directory.
 
@@ -34,52 +41,27 @@ Session reference tests use the public `cross-spawn` dependency.
 Word-navigation reference tests also use public `get-east-asian-width`.
 Agent-loop reference tests also use public `typebox`.
 
-### Optional reference checks
+### Retired reference checks
 
-Build the adapter:
+These opt-in comparisons are no longer available:
 
-```sh
-node scripts/build-reference.mjs temp/pi-mono temp/pi-reference.mjs
-```
+- the Pi session continuation and projection matrix;
+- compaction preparation and split-summary comparisons;
+- parallel and sequential batch traces;
+- word-navigation parity;
+- mixed-auth contention against public `proper-lockfile`;
+- optional PLAN6 payload comparisons and the Responses input comparison.
 
-Run the session, compaction, and word-navigation reference checks:
-
-```sh
-PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
-  go test ./internal/session -run '^TestReferencePi' -count=2
-
-PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
-  go test ./internal/agent -run '^TestPiCompaction(CutPointDifferential|SummaryUsesInjectedStream)$' -count=1
-
-PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
-  go test ./internal/agent -run '^TestPi(Parallel|Sequential)BatchTrace$' -count=1
-
-go test ./internal/terminal -run '^TestF09WordParityWithPi$' -count=3 \
-  -args -psi-test-pi-word-module="file://$PWD/temp/pi-reference.mjs"
-```
-
-Resolve the public dependency path:
-
-```sh
-PROPER_LOCKFILE="$(node -p 'require("node:path").join(require("node:path").dirname(process.execPath), "..", "lib/node_modules/@earendil-works/pi-coding-agent/node_modules/proper-lockfile")')"
-```
-
-Run the mixed-auth checks:
-
-```sh
-go test ./internal/provider -run '^TestMixedPi' -count=3 \
-  -args -psi-test-proper-lockfile="$PROPER_LOCKFILE"
-```
-
-The word-navigation and mixed-auth checks skip without their explicit flags.
-A requested reference check fails if its dependency is absent or invalid.
-Reference subprocesses use isolated environments without inherited Node loader flags.
+Go-only coverage remains for session interchange, lease contention and
+abandoned-holder recovery, provider request payloads, word navigation, and
+Markdown parity. No live Pi reader or Node adapter is available, so exact
+executable parity with the pinned source remains unclaimed.
 
 ## Session format
 
 Pi JSONL v3. Continuation preserves the existing JSONL prefix, including its opaque fields.
 The semantic fuzzer compares eager and indexed state, including usage, tool calls, provenance, and headers.
-This comparison is not a substitute for the pinned Pi interchange matrix.
+The former pinned Pi interchange matrix was retired; its recorded results are historical.
 
 ## Fixture policy
 

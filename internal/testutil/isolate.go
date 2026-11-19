@@ -35,7 +35,7 @@ func IsolatedEnv(t *testing.T) (home, work, agent, sessions string) {
 	// Strip parent secrets/proxy/live flags from child env allowlist.
 	for _, k := range []string{
 		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "PSI_LIVE_PROVIDER",
-		"PSI_PI_SESSION_MODULE", "PI_CODING_AGENT_DIR",
+		"PI_CODING_AGENT_DIR",
 		"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
 		"ALL_PROXY", "all_proxy",
 	} {
@@ -52,7 +52,7 @@ func IsolatedEnv(t *testing.T) (home, work, agent, sessions string) {
 
 // ChildEnv returns the allowlisted env for a regression subprocess.
 // Only PATH, HOME, and explicit synthetic vars pass through. Windows has
-// no fixed coreutils path, so children there inherit PATH for node/bash.
+// no fixed coreutils path, so children there inherit PATH for bash.
 func ChildEnv(home string, extra map[string]string) []string {
 	path := "/usr/local/bin:/usr/bin:/bin"
 	if runtime.GOOS == "windows" {

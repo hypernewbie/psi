@@ -1,5 +1,9 @@
 # PLAN6 acceptance ledger
 
+> Historical record. The Node reference adapter, the optional Pi payload and
+> session comparisons, and the `snapshot-models.mjs` generator were retired.
+> The commands below are past evidence, not current instructions.
+
 ## Scope and references
 
 - Plan: `temp/PLAN6.md`; it remains an untracked planning input.
@@ -22,7 +26,7 @@
 
 ### Slice 1 evidence
 
-- `node --check scripts/snapshot-models.mjs` passed.
+- Before the generator was retired, `node --check scripts/snapshot-models.mjs` passed.
 - Regenerated `catalog.json` and `catalog-source.json` from installed public `@earendil-works/pi-ai` 1.4.0; both matched the checked-in files byte-for-byte.
 - A synthetic package with a non-public name was rejected by the generator.
 - Registry tests assert exactly seven provider IDs and the allowed API pairs. Cache tests cover missing, malformed, stale, oversized, valid multi-provider, unsupported-API, malicious metadata, and OpenCode endpoint cases.
@@ -64,8 +68,8 @@ G6-04 is locally supported by synthetic evidence and pinned-source review. This 
 - `internal/provider/responses.go` uses bounded HTTP/SSE parsing, pre-stream retries only, `prompt_cache_key`, `openai-nosession` affinity, and the case-insensitive OpenCode session header. Loopback tests cover request route/headers/body, text/reasoning/function calls, IDs/phases, usage, explicit header precedence, malformed/interrupted/incomplete streams, and safe tool-call settlement.
 - `internal/agent/responses_cycle_test.go` runs a synthetic OpenCode Responses read-tool round trip, reopens the JSONL v3 session, and checks same-model reasoning item, function call/result IDs, provider/model/response identity, usage, and final answer replay.
 - `internal/app/responses_test.go` exercises runtime API dispatch and provider-key selection. `internal/app/completions_test.go` checks request-builder/thinking capability across all bundled OpenCode Responses models.
-- `PSI_PI_RESPONSES_MODULE=/home/hypernewbie/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js go test ./internal/provider -run TestResponsesRequestMatchesOptionalPiReference -count=1 -v` passed. It differentially compares normalized Responses input and tool/system changes with the installed Pi 1.4.0 adapter.
-- `PSI_PI_SESSION_MODULE=file:///tmp/psi-pi-1.4-session-adapter.mjs go test ./internal/session -run TestReferencePiContinuationMatrix -count=1 -v` passed all 20 directions (ten provider/API cases in both Pi→psi and psi→Pi order) using the installed Pi 1.4.0 session manager. Both optional references use installed package artifacts, not verified builds from the pinned source revision; exact executable Pi parity remains unclaimed.
+- Historical run. `PSI_PI_RESPONSES_MODULE=/home/hypernewbie/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js go test ./internal/provider -run TestResponsesRequestMatchesOptionalPiReference -count=1 -v` passed. It differentially compares normalized Responses input and tool/system changes with the installed Pi 1.4.0 adapter.
+- Historical run. `PSI_PI_SESSION_MODULE=file:///tmp/psi-pi-1.4-session-adapter.mjs go test ./internal/session -run TestReferencePiContinuationMatrix -count=1 -v` passed all 20 directions (ten provider/API cases in both Pi→psi and psi→Pi order) using the installed Pi 1.4.0 session manager. Both optional references use installed package artifacts, not verified builds from the pinned source revision; exact executable Pi parity remains unclaimed.
 - `go test ./internal/provider ./internal/agent ./internal/app ./internal/session -count=1` passed after this slice. No live provider request ran.
 
 ### Slice 6 progress
@@ -117,8 +121,8 @@ The review started at `b7a5ec6`. Pinned Pi source informed the corrections. Opti
 - Cross-builds passed for Linux, macOS, and Windows, each on amd64 and arm64. These results do not establish native runtime acceptance.
 - The full app suite passed with `-psi-test-binary="$PWD/psi"`. This includes provider PTY journeys and the no-Node four-tool journey.
 - The review binary uses `CGO_ENABLED=0 go build -trimpath -buildvcs=false -o ./psi ./cmd/psi`. Its SHA-256 is `0c374055184e6a43af674275d29436003a2039e99d163ffcb5b17fbee16b4779`. Earlier release hashes remain historical.
-- New regression files are `internal/provider/plan6_review_test.go`, `plan6_accumulation_test.go`, `plan6_reference_test.go`, and `internal/agent/plan6_review_test.go`.
-- Optional payload comparisons require `-psi-test-pi-ai-api-dir=<public-pi-ai-dist/api>`. Ordinary runs skip them. Requested references require Node and valid module files.
+- New regression files were `internal/provider/plan6_review_test.go`, `plan6_accumulation_test.go`, `plan6_reference_test.go`, and `internal/agent/plan6_review_test.go`. `plan6_reference_test.go` was later retired with the Node harness.
+- The retired optional payload comparisons required `-psi-test-pi-ai-api-dir=<public-pi-ai-dist/api>`; that flag no longer exists.
 
 No live provider request ran during this review. Vci remains unavailable because no client profile exists. No coordinator configuration changed.
 

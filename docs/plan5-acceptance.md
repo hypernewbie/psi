@@ -21,7 +21,7 @@ Manual `/compact` performs read-only preparation before showing a spinner or req
 | Component | `TestPrepareCompactionReportsNoWorkOutcomes`, `TestPrepareCompactionSplitsLongAssistantSpanAtPiCutPoint`, `TestLongSingleUserSpanCompactsAtOrdinaryRetentionBudget` | Pass; the long-span fixture uses the ordinary 20,000-token retention budget. |
 | Agent/storage | Two-stage split summary, previous-summary update, aggregate usage, failure/incomplete/cancelled-summary usage, failed-checkpoint append, no-checkpoint, threshold/overflow no-ops, one-provider-call automatic no-op, retain-none, projected replacement, omitted recovery suffix, and tool-call/result boundary regressions | Pass with fake providers and storage fault injection. |
 | Actual app | Empty, offline short-session, authenticated short-session, and already-compacted `/compact` no-ops; authenticated no-ops make zero loopback requests and both persisted-session cases preserve exact bytes. A real-PTY ordinary-budget long-span summary runs through a loopback Anthropic server, is cancelled in a separate actual-app journey without changing session bytes, then is reopened in a second process. | Pass; the summary request, saved `firstKeptEntryId`, collapsed compaction marker, and hidden stored summary are checked. |
-| Reference | Pinned Pi `prepareCompaction`/`findCutPoint` compared against Go for a default-budget long-assistant span, a prior summary with adjacent metadata, and a tool-call/result boundary; Pi `compact()` split-summary calls run with an injected synthetic stream; the unmodified Pi session reader compares Anthropic and Codex continuation/projection fixtures | Pass through the pinned Node 24 adapter. Pi source revision and hashes are recorded in `docs/reference-manifest.md`; the `completeSimple` stub prevents provider requests. |
+| Reference | Pinned Pi `prepareCompaction`/`findCutPoint` compared against Go for a default-budget long-assistant span, a prior summary with adjacent metadata, and a tool-call/result boundary; Pi `compact()` split-summary calls run with an injected synthetic stream; the unmodified Pi session reader compares Anthropic and Codex continuation/projection fixtures | Pass through the pinned Node 24 adapter (retired; historical). Pi source revision and hashes are recorded in `docs/reference-manifest.md`; the `completeSimple` stub prevents provider requests. |
 | Human | Visual review, selection/copy, flicker, macOS and Windows Terminal acceptance | Not performed. |
 
 ## Theme and presentation implementation checkpoint
@@ -85,8 +85,9 @@ Corrections:
 
 The stale-tool regression failed on 4 of 10 baseline runs. It dispatches no tool and runs no shell command.
 The new regression group passed ten repeated race runs. The full local check also passed, including all package and race tests.
-Pinned Pi compaction, session continuation, and word-navigation comparisons passed twice. Both compaction stages retain the requested focus.
-An explicitly requested reference check now fails when Node is absent. Ordinary tests still skip optional references without the opt-in.
+The retired pinned Pi compaction, session continuation, and word-navigation comparisons passed twice before removal. Both compaction stages retain the requested focus.
+The retired reference checks failed when Node was absent. The optional tests and
+their opt-in flags were later removed.
 
 The candidate executable passed the full app suite with `-psi-test-binary`, including isolated loopback-provider PTYs.
 Decoder and indexed-session fuzz runs passed with 41,048 and 18,834 executions.

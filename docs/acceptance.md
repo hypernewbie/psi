@@ -120,13 +120,10 @@ Run routine checks:
 ./scripts/check.sh
 ```
 
-Build the adapter and run actual pinned interchange:
-
-```sh
-node scripts/build-reference.mjs temp/pi-mono temp/pi-reference.mjs
-PSI_PI_SESSION_MODULE="file://$PWD/temp/pi-reference.mjs" \
-  go test ./internal/session -run '^TestReferencePi' -count=2 -v
-```
+The former Node reference adapter and the optional Pi interchange checks were
+retired with the scripts that built them. Recorded comparisons above are
+historical. No live Pi comparison is available; the Go-only session interchange,
+lease, provider-payload, word-navigation, and Markdown checks remain.
 
 Run the explicit resource gates:
 
