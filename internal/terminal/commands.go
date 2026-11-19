@@ -138,7 +138,7 @@ func HotkeysText() string {
 		"  Enter submit (empty retries an unfinished turn) · /b, /bump request another response · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows",
 		"  Ctrl+P cycle model · Ctrl+L select model · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
 		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
-		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+O expand/collapse skill blocks (not saved) · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+O expand/collapse skill blocks and web cards (not saved) · Ctrl+C cancels run (idle: clear draft, empty exits)",
 		"  In /thinking: Ctrl+S saves the highlighted level as the global default",
 		"  Ctrl+D delete/exit · paste literal, no submit",
 	}, "\n")

@@ -111,8 +111,12 @@ type WebResult struct {
 	HasChars bool  `json:"charsKnown,omitempty"`
 	// Truncated reports source or output truncation, not preview clipping.
 	Truncated bool `json:"truncated,omitempty"`
+	// PagePreview is the single-fetch prefix, with source line breaks and
+	// whitespace included in the budget. Chars identifies an omitted suffix.
+	PagePreview string `json:"pagePreview,omitempty"`
 	// Preview holds at most WebMaxPreviewLines single-line rows, with at most
-	// WebMaxPreviewUnits UTF-16 units in total.
+	// WebMaxPreviewUnits UTF-16 units in total. Older single-fetch cards used
+	// this field too.
 	Preview []string `json:"preview,omitempty"`
 	// Expanded holds extra rows shown only when the card is expanded, such as
 	// batch page snippets or the returned retrieval slice.

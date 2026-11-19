@@ -307,6 +307,7 @@ func TestWebCardHistoryBounds(t *testing.T) {
 		`{"callId":"c","result":{"chars":5}}`,
 		`{"callId":"c","result":{"kind":"batch","countsKnown":true,"ok":0,"total":0}}`,
 		`{"callId":"c","result":{"preview":["1","2","3","4","5","6","7","8","9","10","11","12","13"]}}`,
+		`{"callId":"c","result":{"kind":"page","charsKnown":true,"chars":20,"pagePreview":"\n\n\n\n\n\n\n\n\n\n\n\nextra"}}`,
 	} {
 		if decodeWebMeta([]byte(raw)) != nil {
 			t.Fatalf("invalid display payload accepted: %s", raw)

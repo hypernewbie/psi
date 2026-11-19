@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf16"
 
 	"psi/internal/event"
@@ -236,7 +237,7 @@ func (c *Client) pageResultDisplay(page pageData, truncated bool, duration time.
 		Chars:       int64(utf16Units(page.Text)),
 		HasChars:    true,
 		Truncated:   truncated,
-		Preview:     previewLines(page.Text, event.WebMaxPreviewUnits, event.WebMaxPreviewLines),
+		PagePreview: pagePreview(page.Text),
 		DurationMs:  max(0, duration.Milliseconds()),
 		HasDuration: true,
 	}
@@ -381,6 +382,21 @@ func contentResultDisplay(title string, length, start, next int, truncated bool,
 // utf16Units counts UTF-16 code units, the display unit Pi uses. A character
 // outside the Basic Multilingual Plane, such as an emoji, counts as two.
 func utf16Units(s string) int { return len(utf16.Encode([]rune(s))) }
+
+// pagePreview retains a prefix, not a list of trimmed lines: whitespace and
+// line breaks count toward Pi's UTF-16 preview budget. Keep psi's source line
+// cap and fold controls other than line separators and tabs before storage.
+// A tab still counts as one unit; the renderer expands it after clipping.
+func pagePreview(text string) string {
+	lines := strings.SplitN(utf16Prefix(text, event.WebMaxPreviewUnits), "\n", event.WebMaxPreviewLines+1)
+	prefix := strings.Join(lines[:min(len(lines), event.WebMaxPreviewLines)], "\n")
+	return strings.Clone(strings.Map(func(r rune) rune {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, prefix))
+}
 
 // previewLines keeps at most maxLines non-empty source lines and at most
 // maxUnits UTF-16 units. Control characters are folded here, before the
