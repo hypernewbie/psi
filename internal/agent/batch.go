@@ -63,8 +63,12 @@ type batchCompletion struct {
 
 type batch struct {
 	loop        *Loop
+	webDisplay  bool
 	plans       []*batchPlan
 	completions chan batchCompletion
+	// progress carries display-only web progress to the coordinator. Sends
+	// are non-blocking; the coordinator alone emits the sink event.
+	progress    chan event.WebProgress
 	outstanding int
 }
 
@@ -74,7 +78,7 @@ var onPrepareHook func(tools.Invocation)
 // runBatch preflights calls in order, executes them concurrently, and settles
 // results in order. The next model request waits behind this settlement
 // barrier; the caller only proceeds when runBatch returns.
-func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config) error {
+func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config, webCalls map[string]event.WebCall) error {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -89,7 +93,11 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 	batchCtx, stopBatch := context.WithCancel(ctx)
 	defer stopBatch()
 
-	b := &batch{loop: l, completions: make(chan batchCompletion, len(calls))}
+	b := &batch{
+		loop: l, webDisplay: cfg.WebDisplay != nil,
+		completions: make(chan batchCompletion, len(calls)),
+		progress:    make(chan event.WebProgress, 8),
+	}
 	b.plans = make([]*batchPlan, len(calls))
 
 	// Preflight phase: populate plans, prepare builtin tools, and emit ToolStart in call order.
@@ -97,6 +105,9 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 		plan := &batchPlan{
 			invocation: tools.Invocation{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments},
 			summary:    tools.SummarizeArguments(tc.Name, tc.Arguments, l.store.Cwd(), home),
+		}
+		if call, ok := webCalls[tc.ID]; ok {
+			plan.summary.Web = &event.WebDisplay{Call: call}
 		}
 		if handler, ok := cfg.InternalTools[tc.Name]; ok && enabled[tc.Name] {
 			plan.kind = batchInternal
@@ -230,8 +241,29 @@ func (b *batch) runInternalCall(ctx context.Context, plan *batchPlan, wait, done
 		b.completions <- batchCompletion{index: index, started: false, result: notStartedResult()}
 		return
 	}
-	res := plan.internal(ctx, plan.invocation)
+	res := plan.internal(ctx, invocationWithProgress(b.webDisplay, plan.invocation, b.progress, ctx))
 	b.completions <- batchCompletion{index: index, started: true, result: res}
+}
+
+// invocationWithProgress adds the optional display-only progress callback for
+// a web call. Interactive hosts set WebDisplay; RPC and other internal tools
+// never receive the callback.
+func invocationWithProgress(webDisplay bool, inv tools.Invocation, progress chan<- event.WebProgress, ctx context.Context) tools.Invocation {
+	if !webDisplay || !event.IsWebTool(inv.Name) {
+		return inv
+	}
+	inv.Report = func(update event.WebProgress) {
+		if ctx.Err() != nil {
+			return
+		}
+		update.ToolCallID = inv.ID
+		// Drop excess progress instead of blocking a worker or the terminal.
+		select {
+		case progress <- update:
+		default:
+		}
+	}
+	return inv
 }
 
 func notStartedResult() tools.Result {
@@ -239,13 +271,14 @@ func notStartedResult() tools.Result {
 }
 
 // coordinate receives worker completions, settles contiguous results in call
-// order, and joins every dispatched worker before returning.
+// order, and joins every dispatched worker before returning. Display-only web
+// progress is emitted only by this coordinator and never delays a completion.
 func (b *batch) coordinate(ctx context.Context, stopBatch context.CancelFunc) error {
 	next := 0
 	for next < len(b.plans) {
 		// Settle every result that is complete and whose predecessors settled.
 		for next < len(b.plans) && b.plans[next].completed {
-			if err := b.loop.settleBatchCall(ctx, b.plans[next]); err != nil {
+			if err := b.settleBatchCall(ctx, b.plans[next]); err != nil {
 				// Storage failure: stop admission, join active workers, and
 				// report. Completed mutations cannot be rolled back.
 				stopBatch()
@@ -257,9 +290,29 @@ func (b *batch) coordinate(ctx context.Context, stopBatch context.CancelFunc) er
 		if next >= len(b.plans) {
 			break
 		}
-		completion := <-b.completions
-		b.apply(completion)
-		b.outstanding--
+		// A ready completion always wins over queued progress.
+		select {
+		case completion := <-b.completions:
+			b.apply(completion)
+			b.outstanding--
+			continue
+		default:
+		}
+		select {
+		case completion := <-b.completions:
+			b.apply(completion)
+			b.outstanding--
+		case update := <-b.progress:
+			// Recheck completions before emitting, so a finished call does not
+			// show progress after settlement.
+			select {
+			case completion := <-b.completions:
+				b.apply(completion)
+				b.outstanding--
+			default:
+				b.loop.sink(event.Event{Type: event.WebProgressUpdate, ToolCallID: update.ToolCallID, State: "running", Progress: &update})
+			}
+		}
 	}
 	return nil
 }
@@ -283,7 +336,8 @@ func (b *batch) drain() {
 // row. Not-started calls record psiOutcome
 // "not_started"; started calls keep their truthful result and cancellation
 // state.
-func (l *Loop) settleBatchCall(ctx context.Context, plan *batchPlan) error {
+func (b *batch) settleBatchCall(ctx context.Context, plan *batchPlan) error {
+	l := b.loop
 	tc := plan.invocation
 	state := "done"
 	if plan.result.IsError {
@@ -318,10 +372,21 @@ func (l *Loop) settleBatchCall(ctx context.Context, plan *batchPlan) error {
 		}
 	}
 	msg := session.AgentMessage{Role: "toolResult", ToolResult: &session.ToolResultMessage{Role: "toolResult", ToolCallID: tc.ID, ToolName: tc.Name, Content: content, Details: details, IsError: plan.result.IsError, Timestamp: time.Now().UnixMilli()}}
-	if _, err := l.store.AppendMessage(msg); err != nil {
+	var webMeta *event.WebMeta
+	if b.webDisplay && plan.result.Web != nil {
+		webMeta = &event.WebMeta{CallID: tc.ID, Result: plan.result.Web}
+	}
+	if _, err := l.store.AppendMessageDisplay(msg, webMeta); err != nil {
 		return fmt.Errorf("storage failure, stopping: %w", err)
 	}
 	summary := plan.summary
+	if plan.result.Web != nil {
+		web := event.WebDisplay{Result: plan.result.Web}
+		if plan.summary.Web != nil {
+			web.Call = plan.summary.Web.Call
+		}
+		summary.Web = &web
+	}
 	tools.SetExitCode(&summary, plan.result.Details)
 	l.sink(event.Event{Type: event.ToolEnd, ToolName: tc.Name, ToolCallID: tc.ID, State: state, Summary: summary})
 	return nil

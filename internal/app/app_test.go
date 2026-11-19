@@ -949,12 +949,12 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	}
 	callsBeforeToggle := providerCalls.Load()
 	write("\x0f")
-	view = waitScreen("Skill blocks: expanded", "SKILL_BODY", "References are relative to")
+	view = waitScreen("Skill and web cards: expanded", "SKILL_BODY", "References are relative to")
 	if !strings.Contains(view, "draft-keep") {
 		t.Fatalf("expanding skill blocks lost the draft: %q", view)
 	}
 	write("\x0f")
-	view = waitScreen("Skill blocks: collapsed", "[skill] doer (ctrl+o to expand)")
+	view = waitScreen("Skill and web cards: collapsed", "[skill] doer (ctrl+o to expand)")
 	if strings.Contains(view, "SKILL_BODY") {
 		t.Fatalf("collapsing skill blocks left the body visible: %q", view)
 	}
@@ -1030,7 +1030,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	write("\x0f")
 	// Confirmations are output events: a later spinner frame can replace them
 	// within one PTY read. Check retained screen state separately.
-	waitForAppOutput(t, chunks, screen, &pending, "Skill blocks: expanded")
+	waitForAppOutput(t, chunks, screen, &pending, "Skill and web cards: expanded")
 	view = screenView()
 	if !strings.Contains(view, "SLOW_PART") || !strings.Contains(view, "draft-during-stream") || screen.CursorVisible {
 		t.Fatalf("Ctrl+O during a run disturbed output/draft/cursor: cursor=%v %q", screen.CursorVisible, view)
@@ -1062,7 +1062,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	waitForAppOutput(t, chunks, screen, &pending, "Thinking blocks: visible")
 	assertThinkingSetting(false)
 	write("\x0f")
-	waitForAppOutput(t, chunks, screen, &pending, "Skill blocks: collapsed")
+	waitForAppOutput(t, chunks, screen, &pending, "Skill and web cards: collapsed")
 	if !strings.Contains(screenView(), "draft-during-stream") {
 		t.Fatalf("busy skill toggles lost the draft: %q", screen.Text())
 	}

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"psi/internal/provider"
@@ -283,8 +284,10 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 	}
 
 	// Phase 1: queries, at most three workers, results kept in input order.
+	reportWebProgress(inv.Report, "searching", 0, len(args.queries), "")
 	outcomes := make([]searchResponse, len(args.queries))
 	queryErrs := make([]error, len(args.queries))
+	var completed atomic.Int32
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxWorkers)
 	for i, query := range args.queries {
@@ -301,13 +304,14 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 			response, err := c.runSearch(searchCtx, providerName, query, args)
 			if err != nil {
 				queryErrs[i] = err
-				return
+			} else {
+				response.results = filterHits(response.results, args.domains)
+				if len(response.results) > args.numResults {
+					response.results = response.results[:args.numResults]
+				}
+				outcomes[i] = response
 			}
-			response.results = filterHits(response.results, args.domains)
-			if len(response.results) > args.numResults {
-				response.results = response.results[:args.numResults]
-			}
-			outcomes[i] = response
+			reportWebProgress(inv.Report, "searching", int(completed.Add(1)), len(args.queries), "\""+c.displayText(query, 64)+"\"")
 		}(i, query)
 	}
 	wg.Wait()
@@ -363,8 +367,10 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 		}
 	}
 	if args.includeContent && len(refs) > 0 {
+		reportWebProgress(inv.Report, "fetching pages", 0, len(refs), "")
 		var fetchWG sync.WaitGroup
 		fetchSem := make(chan struct{}, maxWorkers)
+		var fetched atomic.Int32
 		children := make([]storedResult, len(refs))
 		childErrs := make([]error, len(refs))
 		for i, ref := range refs {
@@ -382,11 +388,12 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 				page, err := c.fetchPage(searchCtx, target, c.cfg.FetchMode)
 				if err != nil {
 					childErrs[i] = err
-					return
+				} else {
+					children[i] = storedResult{
+						Title: page.Title, URL: page.FinalURL, Content: page.Text, Engines: "page", Truncated: page.Truncated,
+					}
 				}
-				children[i] = storedResult{
-					Title: page.Title, URL: page.FinalURL, Content: page.Text, Engines: "page", Truncated: page.Truncated,
-				}
+				reportWebProgress(inv.Report, "fetching pages", int(fetched.Add(1)), len(refs), "")
 			}(i, outcomes[ref.q].results[ref.r].URL)
 		}
 		fetchWG.Wait()
@@ -474,7 +481,8 @@ func (c *Client) handleSearch(ctx context.Context, inv tools.Invocation) tools.R
 		}
 		details["fetched"] = fetched
 	}
-	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details}
+	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details,
+		Web: c.searchResultDisplay(ctx, okQueries, len(args.queries), resultCount, responseID, entry.Results)}
 }
 
 func (c *Client) runSearch(ctx context.Context, providerName, query string, args searchArgs) (searchResponse, error) {

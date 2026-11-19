@@ -65,10 +65,13 @@ func (r *runtime) webHandlers() map[string]agent.InternalToolHandler {
 	client := r.web
 	definitions := r.webDefinitions()
 	fetchEnabled := false
+	retrievalAdvertised := false
 	for _, def := range definitions {
-		if def.Name == webaccess.ToolFetch {
+		switch def.Name {
+		case webaccess.ToolFetch:
 			fetchEnabled = true
-			break
+		case webaccess.ToolContent:
+			retrievalAdvertised = true
 		}
 	}
 	out := map[string]agent.InternalToolHandler{}
@@ -81,7 +84,9 @@ func (r *runtime) webHandlers() map[string]agent.InternalToolHandler {
 					Type: "text", Text: "web_search failed: validation: includeContent requires fetch_content to be enabled",
 				}}}
 			}
-			return client.Dispatch(ctx, invocation)
+			// The advertised retrieval tool is a display fact for this request;
+			// it never changes admission or the model-facing result.
+			return client.Dispatch(webaccess.WithRetrievalDisplay(ctx, retrievalAdvertised), invocation)
 		}
 	}
 	return out

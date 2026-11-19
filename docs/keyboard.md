@@ -15,7 +15,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+L` opens the model picker; `Shift+Tab` cycles the selected model's supported thinking levels
 - In `/thinking`, `Ctrl+S` saves the highlighted level as the global `defaultThinkingLevel`. `Enter` changes only the current session. The per-model level picker in `/settings` does not use `Ctrl+S`.
 - `Ctrl+T` hides or shows reasoning blocks. The toggle works during a run, repaints the transcript, and is saved as `hideThinkingBlock` in the agent `settings.json`
-- `Ctrl+O` expands or collapses all skill blocks, also during a run. It changes only the transcript display: it does not submit a message or call a provider, and it leaves the draft and cursor position intact. The state is not saved; a restart starts collapsed. psi has no expandable tool-output panels, so this key affects skill blocks only
+- `Ctrl+O` expands or collapses all skill blocks and web tool cards, also during a run. It changes only the transcript display: it does not submit a message or call a provider, and it leaves the draft and cursor position intact. The state is not saved; a restart starts collapsed. It affects skill blocks and the `web_search`, `fetch_content`, and `get_search_content` cards only
 - Completion and picker search never scan files or call a provider; picker queries are not conversation messages
 - `Ctrl+C` cancels a picker; during a run it cancels the run. When idle it clears the draft first and exits only when the draft is empty
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty

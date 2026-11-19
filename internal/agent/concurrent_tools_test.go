@@ -102,7 +102,7 @@ func TestConcurrentExternalToolCancelledBeforeDispatchDoesNotRun(t *testing.T) {
 	cancel()
 	err := h.loop.runBatch(ctx, []provider.Block{
 		{Type: "toolCall", ID: "e1", Name: external, Arguments: map[string]any{}},
-	}, cfg)
+	}, cfg, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("runBatch error = %v, want context.Canceled", err)
 	}
@@ -148,12 +148,12 @@ func TestBatchCancelledBeforeDispatchReleasesMutationSlots(t *testing.T) {
 		cancel()
 		calls := []provider.Block{writeCall("w1", file, "cancelled write\n"), editCall("e1", "cancelled edit")}
 		cfg := h.config()
-		if err := h.loop.runBatch(ctx, calls, cfg); !errors.Is(err, context.Canceled) {
+		if err := h.loop.runBatch(ctx, calls, cfg, nil); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled batch = %v, want context.Canceled", err)
 		}
 
 		// This edit needs an empty mutation queue and the unchanged input text.
-		if err := h.loop.runBatch(t.Context(), []provider.Block{editCall("e2", "updated text")}, cfg); err != nil {
+		if err := h.loop.runBatch(t.Context(), []provider.Block{editCall("e2", "updated text")}, cfg, nil); err != nil {
 			t.Fatal(err)
 		}
 		content, err := os.ReadFile(filepath.Join(h.ws, file))

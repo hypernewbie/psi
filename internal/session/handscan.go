@@ -541,6 +541,7 @@ func handScanRecord(data []byte) (entry *Entry, header *SessionHeader, err error
 	}
 	if kind == "message" {
 		e.toolSummaries = metadataToolSummaries(obj, obj["message"])
+		e.web = metadataWebMeta(obj)
 	}
 	return e, nil, nil
 }
