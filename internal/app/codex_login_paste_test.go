@@ -160,6 +160,11 @@ func TestCodexLoginManualPasteREPL(t *testing.T) {
 	exchange := &codexPasteExchange{}
 	r.codexTransport = exchange
 	console, out, inputs, bindAddr, state, stop := startCodexPasteLogin(t, r, "manual-paste-reply")
+	sendCodexInput(t, inputs, terminal.Input{Paste: true, PasteStart: true})
+	sendCodexInput(t, inputs, terminal.Input{Paste: true, Key: []byte("multiline-sentinel\nsecond line")})
+	sendCodexInput(t, inputs, terminal.Input{Paste: true, PasteEnd: true})
+	waitAppOutput(t, out, "Paste must be on one line.")
+
 	paste := "http://" + bindAddr + "/auth/callback?code=manual-app-code&state=" + state
 	sendCodexInput(t, inputs, terminal.Input{Paste: true, PasteStart: true})
 	sendCodexInput(t, inputs, terminal.Input{Paste: true, Key: []byte(paste)})
@@ -192,7 +197,7 @@ func TestCodexLoginManualPasteREPL(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(out.String(), "manual-app-code") {
+	if screen := out.String(); strings.Contains(screen, "manual-app-code") || strings.Contains(screen, "multiline-sentinel") {
 		t.Fatal("pasted value reached terminal output")
 	}
 }

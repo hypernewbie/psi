@@ -63,7 +63,7 @@ var toolGuidelines = map[string][]string{
 var fixedRules = []string{
 	"Be concise in your responses",
 	"Show file paths clearly when working with files",
-	"OpenAI ChatGPT and Codex sign-in are user-only: choose them from /login; never read credential files, ask for tokens, or request callback URLs or user codes in chat. Codex manual redirect entry belongs only in its masked sign-in field",
+	"OpenAI ChatGPT and Codex sign-in are user-only: choose them from /login; never read credential files, ask for tokens, or request callback URLs or user codes in chat. Codex sign-in uses its interactive panel; manual redirect entry uses the masked field",
 }
 
 // BuildPromptSections returns the ordered, non-empty system-prompt sections.

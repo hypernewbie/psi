@@ -9,7 +9,7 @@ import (
 
 const (
 	secretPasteTooLarge = "Paste exceeds 256 KiB. Draft unchanged."
-	secretPasteNewline  = "Pasted API key must be on one line. Draft unchanged."
+	secretPasteNewline  = "Paste must be on one line. Draft unchanged."
 	secretInputTooLarge = "Input exceeds 256 KiB. Draft unchanged."
 )
 

@@ -72,7 +72,7 @@ func codexLoginMethodSelector() *Selector {
 		{ID: "browser", Name: "Browser login (default)"},
 		{ID: "device", Name: "Device code login (headless)"},
 	}
-	selector := NewSelector(items, "browser")
+	selector := NewSelector(items, "")
 	selector.AuthMode = AuthCodexMethods
 	return selector
 }

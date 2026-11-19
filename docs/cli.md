@@ -84,19 +84,25 @@ noninteractive clients must use environment variables or pre-written credentials
 Use `/login [provider]` in an interactive session. With no provider argument,
 psi opens a searchable provider picker. Select OpenAI (or enter `/login openai`)
 to sign in with a ChatGPT subscription. Select OpenAI Codex (or enter
-`/login openai-codex`) to choose **Browser login** or **Device code login**.
+`/login openai-codex`) to choose **Browser login (default)** or **Device code
+login (headless)** with the arrow keys and `Enter`. The login panel replaces
+the editor until the attempt finishes or you cancel.
 
-Codex browser login binds `127.0.0.1:1455`, then `127.0.0.1:1457` if that port
-is busy, then one OS-assigned port. If the browser cannot return to psi, paste
-the redirect URL, `code#state`, query string, or bare code into the masked
-sign-in field. The paste must be one line of at most 8 KiB. If it includes
-a state value, that value must match the current attempt. The paste never
+Codex browser login tries `127.0.0.1:1455`, then `127.0.0.1:1457`, then one
+OS-assigned port. It tries the next port only if the previous one is busy.
+If the browser does not open, open the link in the panel. Enlarge the
+terminal if the panel cannot show the complete link.
+If the browser cannot return to psi, paste the redirect URL, `code#state`,
+query string, or bare code into the masked field. The paste must be one line
+of at most 8 KiB. If it includes a state value, that value must match the
+current attempt. The paste never
 enters chat or recall. An OS-assigned port is a best-effort fallback: OpenAI
 can reject that redirect. If it does, close the tab, cancel, and choose
-device code. Device code shows a user code and
-`https://auth.openai.com/codex/device`; availability depends on the account.
-While psi waits for approval, press `Esc` to cancel sign-in or `Ctrl+D` to
-cancel and quit psi.
+device code. The device-code panel shows a user code and
+`https://auth.openai.com/codex/device`. Press `Enter` to open the page, or
+visit it on another device. psi does not copy the code to the clipboard.
+Availability depends on the account. Press `Esc` to cancel sign-in or
+`Ctrl+D` to cancel and quit psi.
 
 For other supported providers, the prompt masks the API key; do not put keys
 in command arguments. API-key login supports `deepseek`, `google`, `groq`,

@@ -21,6 +21,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
 - On Unix, `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
+- Codex login panel: `Esc` cancels and `Ctrl+D` cancels and quits. In browser mode, `Enter` submits an optional masked redirect URL or code. In device-code mode, `Enter` opens the verification page.
 - Secret prompt: keys are masked and never enter prompt recall. `Enter` saves, `Esc` or `Ctrl+C` cancels. Paste must fit within 256 KiB and contain no newline. `Ctrl+J` does not submit.
 - Draft budget 256 KiB UTF-8, never splits grapheme
 

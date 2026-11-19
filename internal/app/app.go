@@ -457,7 +457,7 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
-Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in, and other supported providers use a masked API-key prompt. Codex browser sign-in also accepts a masked redirect URL or code. During Codex sign-in, Esc cancels and Ctrl+D cancels and quits. /logout removes a stored API key. See docs/security.md for credential handling.
+Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in in a dedicated panel, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code; in device code mode, Enter opens the verification page. Esc cancels Codex sign-in, and Ctrl+D cancels and quits. /logout removes a stored API key. See docs/security.md for credential handling.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
@@ -727,6 +727,7 @@ type runtime struct {
 	codexBrowser   func(context.Context, string) error
 	codexRename    func(string, string) error
 	codexWait      func(context.Context, time.Duration) error
+	codexLogin     *oauthLoginSession // non-nil while the Codex panel owns the editor
 	// live holds the mutable request configuration a running loop reads at
 	// each turn boundary. It is a pointer because the runtime is copied by
 	// value.
@@ -1815,12 +1816,23 @@ func (r *runtime) draw(console *terminal.Console) {
 }
 
 func (r *runtime) refreshPickerRows(console *terminal.Console) {
-	if r.settingsPicker != nil {
+	if login := r.codexLogin; login != nil {
+		width, budget := console.PickerSize()
+		mode := terminal.PickerChoice
+		if login.secretActive {
+			mode = terminal.PickerSecret
+		}
+		console.SetPicker(login.panel.rows(width, budget, r.footerSnapshot.NoColor, r.footerSnapshot.Theme), mode)
+	} else if r.settingsPicker != nil {
 		width, rows := console.PickerSize()
 		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else if r.selector != nil {
 		width, rows := console.PickerSize()
-		console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
+		if r.selector.AuthMode == AuthCodexMethods {
+			console.SetPickerChoiceRows(r.selector.RenderPickerRows(width, max(1, rows), r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
+		} else {
+			console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
+		}
 	} else {
 		console.ClearPickerRows()
 	}
@@ -1980,8 +1992,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.SetThinking(false)
 		cancel()
 	}
-	// cancelLogin asks the owned sign-in to stop. Ownership clears only
-	// when the worker's terminal result arrives and settles.
+	showLoginStatus := func(text string) {
+		if login.panel != nil {
+			*login.panel = codexLoginPanel{status: text}
+		} else {
+			console.Status(text)
+		}
+	}
+	// cancelLogin asks the owned sign-in to stop. It remains active until
+	// the worker returns and the REPL settles the result.
 	cancelLogin := func() {
 		if login == nil || login.cancelled {
 			return
@@ -2009,6 +2028,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		login, loginDone, loginUpdates = nil, nil, nil
 		if owned == nil {
 			return
+		}
+		if owned.panel != nil {
+			r.codexLogin = nil
+			console.ClearPickerRows()
 		}
 		cancelledText := owned.label + " sign-in cancelled."
 		if owned.closeBrowser {
@@ -2680,7 +2703,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// worker reports through channels; only the REPL goroutine mutates
 	// runtime state. The two grants share ownership and launch behavior but
 	// keep separate worker constructors and credential entries.
-	startOAuthLogin := func(label string, closeBrowser bool, activate func() (terminal.NoticeKind, string), run func(context.Context, chan<- oauthLoginUpdate) oauthLoginResult) error {
+	startOAuthLogin := func(label string, closeBrowser bool, panel *codexLoginPanel, activate func() (terminal.NoticeKind, string), run func(context.Context, chan<- oauthLoginUpdate) oauthLoginResult) error {
 		if err := r.authCommandAvailable(console, "login"); err != nil {
 			return err
 		}
@@ -2697,7 +2720,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		ctx, stop := context.WithCancel(context.Background())
 		updates := make(chan oauthLoginUpdate)
 		done := make(chan oauthLoginResult, 1)
-		login = &oauthLoginSession{cancel: stop, done: done, store: r.store, label: label, activate: activate, closeBrowser: closeBrowser}
+		login = &oauthLoginSession{cancel: stop, done: done, store: r.store, label: label, activate: activate, closeBrowser: closeBrowser, panel: panel}
+		if panel != nil {
+			r.codexLogin = login
+		}
 		loginDone, loginUpdates = done, updates
 		r.state = StateAuthenticating
 		r.syncBridge()
@@ -2707,19 +2733,19 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	startOpenAILogin := func() error {
 		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.openAITransport, bind: r.openAIBind, browser: r.openAIBrowser, rename: r.openAIRename}
-		return startOAuthLogin("ChatGPT", true, r.activateOpenAILogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+		return startOAuthLogin("ChatGPT", true, nil, r.activateOpenAILogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runOpenAILogin(ctx, req, updates)
 		})
 	}
 	startCodexBrowserLogin := func() error {
 		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, codexBind: r.codexBind, browser: r.codexBrowser, rename: r.codexRename}
-		return startOAuthLogin("OpenAI Codex", true, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+		return startOAuthLogin("OpenAI Codex", true, &codexLoginPanel{}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runCodexLogin(ctx, req, updates)
 		})
 	}
 	startCodexDeviceLogin := func() error {
-		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, rename: r.codexRename, wait: r.codexWait}
-		return startOAuthLogin("OpenAI Codex", false, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, browser: r.codexBrowser, rename: r.codexRename, wait: r.codexWait}
+		return startOAuthLogin("OpenAI Codex", false, &codexLoginPanel{}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runCodexDeviceLogin(ctx, req, updates)
 		})
 	}
@@ -3077,24 +3103,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if login.cancelled {
 				continue
 			}
-			if update.link != "" {
-				notice(terminal.NoticeInfo, "Complete "+login.label+" sign-in in your browser: "+update.link)
-			}
-			if update.manualOpen {
-				notice(terminal.NoticeInfo, "The browser did not open automatically. Open the sign-in link above on this machine.")
-			}
-			if update.osPort {
-				notice(terminal.NoticeWarning, "The usual OpenAI Codex callback ports are busy; the callback uses a temporary port. If OpenAI rejects the redirect, close the tab, cancel, and choose device code login.")
-			}
-			if update.submit != nil {
-				login.submit = update.submit
-				login.secretActive = true
-				console.BeginSecret()
-				console.Status("OpenAI Codex sign-in · paste redirect URL, code#state, query, or code · Enter submit · Esc cancel")
-			}
-			if update.deviceCode != "" {
-				notice(terminal.NoticeInfo, "OpenAI Codex device sign-in: open "+update.deviceURL+" and enter code "+update.deviceCode+".")
-				console.Status("OpenAI Codex device code: " + update.deviceCode + " · " + update.deviceURL)
+			if panel := login.panel; panel != nil {
+				if update.link != "" {
+					panel.link = update.link
+					panel.temporaryPort = update.osPort
+				}
+				panel.manualOpen = panel.manualOpen || update.manualOpen
+				if update.submit != nil {
+					login.submit = update.submit
+					login.secretActive = true
+					console.BeginSecret()
+				}
+				if update.deviceCode != "" {
+					panel.code, panel.link, panel.openDevice = update.deviceCode, update.deviceURL, update.openDevice
+				}
+			} else {
+				if update.link != "" {
+					notice(terminal.NoticeInfo, "Complete "+login.label+" sign-in in your browser: "+update.link)
+				}
+				if update.manualOpen {
+					notice(terminal.NoticeInfo, "The browser did not open automatically. Open the sign-in link above on this machine.")
+				}
 			}
 			r.draw(console)
 			if update.shown != nil {
@@ -3392,13 +3421,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 				input.Release()
 				lastInput = terminal.Input{}
 				if err != nil {
-					notice(terminal.NoticeError, err.Error())
+					login.panel.inputError = err.Error()
 					r.draw(console)
 					continue
 				}
 				if cancelled {
 					cancelLogin()
-					console.Status("Cancelling " + login.label + " sign-in…")
+					showLoginStatus("Cancelling " + login.label + " sign-in…")
 					r.draw(console)
 					continue
 				}
@@ -3415,16 +3444,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 					secretmem.Wipe(secret[:cap(secret)])
 					switch {
 					case submitErr == nil:
-						console.Status("OpenAI Codex sign-in accepted; finishing…")
+						showLoginStatus("OpenAI Codex sign-in accepted; finishing…")
 					case errors.Is(submitErr, provider.ErrCodexLoginClaimed):
-						notice(terminal.NoticeInfo, "OpenAI Codex sign-in is already completing.")
+						showLoginStatus("OpenAI Codex sign-in is already completing.")
 					default:
 						// Invalid input does not cancel the listener. Reopen the
 						// masked field so another paste can still finish.
 						console.BeginSecret()
 						login.secretActive = true
-						console.Status("OpenAI Codex sign-in · paste redirect URL, code#state, query, or code · Enter submit · Esc cancel")
-						notice(terminal.NoticeError, submitErr.Error())
+						login.panel.inputError = submitErr.Error()
 					}
 					r.draw(console)
 					continue
@@ -3468,14 +3496,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if login != nil {
 				// Login mode never reaches the editor: Esc and Ctrl+C
 				// cancel, Ctrl+D cancels and exits, Ctrl+Z cancels,
-				// settles, then suspends. Every other key is ignored
-				// without echo; the user cancels first, then runs /quit.
+				// settles, then suspends. In device mode Enter requests the
+				// verification page. Other keys are ignored without echo.
 				if !input.Paste {
 					switch key := string(input.Key); {
+					case key == "\r" && !login.cancelled && login.panel != nil && login.panel.openDevice != nil:
+						open := login.panel.openDevice
+						login.panel.openDevice = nil
+						open()
+						login.closeBrowser = true
+						r.draw(console)
 					case key == "\x1b" || key == "\x03":
 						if !login.cancelled {
 							cancelLogin()
-							console.Status("Cancelling " + login.label + " sign-in…")
+							showLoginStatus("Cancelling " + login.label + " sign-in…")
 							r.draw(console)
 						}
 					case key == "\x04":
@@ -3752,6 +3786,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 						closeSelector(false)
 						continue
 					}
+				}
+				if r.selector.AuthMode == AuthCodexMethods {
+					continue // The two-choice picker has no editable query.
 				}
 				before := console.Editor.Text()
 				if key == "\x04" {

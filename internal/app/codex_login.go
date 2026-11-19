@@ -22,9 +22,8 @@ func runCodexLogin(ctx context.Context, req oauthLoginRequest, updates chan<- oa
 	return runBrowserOAuthLogin(ctx, login, req.browser, updates)
 }
 
-// runCodexDeviceLogin runs one headless attempt. It never binds a listener or
-// launches a browser. The user code is sent to the interactive sign-in view
-// before the first poll; no session or bridge data receives it.
+// runCodexDeviceLogin runs one headless attempt. It never binds a listener;
+// only an explicit Enter in the login panel can open the verification page.
 func runCodexDeviceLogin(ctx context.Context, req oauthLoginRequest, updates chan<- oauthLoginUpdate) oauthLoginResult {
 	login := &provider.CodexDeviceLogin{
 		Path:   filepath.Join(req.agentDir, "auth.json"),
@@ -32,12 +31,46 @@ func runCodexDeviceLogin(ctx context.Context, req oauthLoginRequest, updates cha
 		Rename: req.rename,
 		Wait:   req.wait,
 	}
+	launchCtx, cancelLaunch := context.WithCancel(ctx)
+	var launcherDone chan struct{}
 	err := login.Run(ctx, func(userCode, verificationURL string) {
+		open := make(chan struct{}, 1)
+		launcherDone = make(chan struct{})
+		go func(done chan struct{}) {
+			defer close(done)
+			select {
+			case <-launchCtx.Done():
+				return
+			case <-open:
+			}
+			if launchCtx.Err() != nil {
+				return
+			}
+			if err := launchOAuthLoginBrowser(launchCtx, req.browser, verificationURL); err != nil {
+				select {
+				case updates <- oauthLoginUpdate{manualOpen: true}:
+				case <-launchCtx.Done():
+				}
+			}
+		}(launcherDone)
+		update := oauthLoginUpdate{
+			deviceCode: userCode, deviceURL: verificationURL,
+			openDevice: func() {
+				select {
+				case open <- struct{}{}:
+				default:
+				}
+			},
+		}
 		select {
-		case updates <- oauthLoginUpdate{deviceCode: userCode, deviceURL: verificationURL}:
+		case updates <- update:
 		case <-ctx.Done():
 		}
 	})
+	cancelLaunch()
+	if launcherDone != nil {
+		<-launcherDone
+	}
 	return oauthLoginResult{err: err}
 }
 

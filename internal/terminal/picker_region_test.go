@@ -111,6 +111,32 @@ func TestPickerRegionHonorsNoColor(t *testing.T) {
 	}
 }
 
+func TestMaskedPickerPanelReplacesTheEditor(t *testing.T) {
+	c, vt, _ := newTestConsole(80, 24)
+	c.BeginSecret()
+	// BeginSecret clears the editor. Simulate a draft recovered while the
+	// panel is open to check that the panel doesn't render or modify it.
+	c.Editor.RestoreDraft("draft to restore", 3)
+	if _, _, err := c.HandleSecret(Input{Key: []byte("masked-value")}); err != nil {
+		t.Fatal(err)
+	}
+	c.SetPicker([]string{"Paste below"}, PickerSecret)
+	c.Draw()
+	text := vt.Text()
+	heading := strings.Index(text, "Paste below")
+	mask := strings.Index(text, "> ************")
+	if heading < 0 || mask <= heading || !vt.CursorVisible || strings.Contains(text, "draft to restore") || strings.Contains(text, "masked-value") {
+		t.Fatalf("masked panel did not replace the editor: %q", text)
+	}
+	c.ClearPickerRows()
+	c.DiscardSecret()
+	c.Draw()
+	text = vt.Text()
+	if !strings.Contains(text, "draft to restore") || strings.Contains(text, "Paste below") || strings.Contains(text, "> ************") {
+		t.Fatalf("panel survived editor restoration: %q", text)
+	}
+}
+
 // The choice picker has no search query, so it renders only its own rows.
 func TestChoicePickerRegionHasNoQueryRow(t *testing.T) {
 	choice := &ChoicePicker{Title: "Project trust", Context: "/work", Selected: 0, Options: []ChoiceOption{

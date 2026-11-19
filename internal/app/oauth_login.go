@@ -37,8 +37,8 @@ type oauthLoginSession struct {
 	// cancelled is set by the REPL when it cancels first. A save already
 	// admitted then still settles, but it never activates a model.
 	cancelled bool
-	// closeBrowser tells cancellation text to mention the browser tab. Device
-	// sign-in has no browser tab to close.
+	// closeBrowser tells cancellation text to mention the browser tab. In
+	// device mode it is set only after the user requests a browser launch.
 	closeBrowser bool
 	// secretActive is true while the masked manual-input field owns the
 	// editor. submit is the provider's nonblocking one-shot claim.
@@ -47,6 +47,8 @@ type oauthLoginSession struct {
 	// pasteOpen tracks a paste transaction that started during manual input,
 	// so settlement can discard the rest through PasteEnd.
 	pasteOpen bool
+	// panel is non-nil only for Codex; ChatGPT retains its existing UI.
+	panel *codexLoginPanel
 }
 
 // oauthLoginRequest carries one sign-in attempt's shared dependencies.
@@ -79,6 +81,7 @@ type oauthLoginUpdate struct {
 	// cleared when the attempt settles and never enter session or bridge data.
 	deviceCode string
 	deviceURL  string
+	openDevice func() // queues one user-requested browser launch
 	// osPort warns of a best-effort callback port. The REPL closes shown
 	// after drawing the warning so the browser cannot open ahead of it.
 	osPort bool
@@ -113,10 +116,6 @@ type codexBrowserOAuthLogin interface {
 // the provider's terminal result. Browser launch happens after the update is
 // queued and never delays the callback server.
 func runBrowserOAuthLogin(ctx context.Context, login browserOAuthLogin, browser func(context.Context, string) error, updates chan<- oauthLoginUpdate) oauthLoginResult {
-	launch := browser
-	if launch == nil {
-		launch = openOAuthLoginBrowser
-	}
 	ready := func(authURL string, osAssigned bool, submit func([]byte) error) {
 		update := oauthLoginUpdate{link: authURL, osPort: osAssigned, submit: submit}
 		if osAssigned {
@@ -137,9 +136,7 @@ func runBrowserOAuthLogin(ctx context.Context, login browserOAuthLogin, browser 
 		if ctx.Err() != nil {
 			return
 		}
-		launchCtx, stop := context.WithTimeout(ctx, oauthLoginBrowserTimeout)
-		defer stop()
-		if err := launch(launchCtx, authURL); err != nil {
+		if err := launchOAuthLoginBrowser(ctx, browser, authURL); err != nil {
 			select {
 			case updates <- oauthLoginUpdate{manualOpen: true}:
 			case <-ctx.Done():
@@ -155,6 +152,15 @@ func runBrowserOAuthLogin(ctx context.Context, login browserOAuthLogin, browser 
 		})
 	}
 	return oauthLoginResult{err: err}
+}
+
+func launchOAuthLoginBrowser(ctx context.Context, browser func(context.Context, string) error, target string) error {
+	if browser == nil {
+		browser = openOAuthLoginBrowser
+	}
+	launchCtx, cancel := context.WithTimeout(ctx, oauthLoginBrowserTimeout)
+	defer cancel()
+	return browser(launchCtx, target)
 }
 
 // oauthHTTPClient returns the transport override as a client, or nil so the

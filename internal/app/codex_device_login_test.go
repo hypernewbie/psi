@@ -18,6 +18,7 @@ import (
 	"psi/internal/config"
 	"psi/internal/provider"
 	"psi/internal/terminal"
+	"psi/internal/testutil"
 )
 
 // Each exit path cancels and joins an in-flight poll without saving credentials.
@@ -35,6 +36,14 @@ func TestCodexDeviceLoginREPLStopPolling(t *testing.T) {
 			r := testRuntime(t)
 			polling := make(chan struct{})
 			stopped := make(chan struct{})
+			browserStarted := make(chan string, 1)
+			browserStopped := make(chan struct{})
+			r.codexBrowser = func(ctx context.Context, target string) error {
+				browserStarted <- target
+				<-ctx.Done()
+				close(browserStopped)
+				return ctx.Err()
+			}
 			r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 				switch req.URL.Path {
 				case "/api/accounts/deviceauth/usercode":
@@ -54,6 +63,10 @@ func TestCodexDeviceLoginREPLStopPolling(t *testing.T) {
 			sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login openai-codex")})
 			sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
 			waitAppOutput(t, out, "Device code login (headless)")
+			if tc.name == "escape" {
+				// Typing must not turn the choice picker into a search.
+				sendCodexInput(t, inputs, terminal.Input{Key: []byte("no-matching-method")})
+			}
 			sendCodexInput(t, inputs, terminal.Input{Key: []byte("\x1b[B")})
 			sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
 			watchdog := time.NewTimer(60 * time.Second)
@@ -63,12 +76,34 @@ func TestCodexDeviceLoginREPLStopPolling(t *testing.T) {
 			case <-watchdog.C:
 				t.Fatal("device poll did not start")
 			}
+			if tc.name == "escape" {
+				waitAppOutput(t, out, "Enter open browser")
+				sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
+				select {
+				case target := <-browserStarted:
+					if target != "https://auth.openai.com/codex/device" {
+						t.Fatalf("wrong verification target: %q", target)
+					}
+				case <-watchdog.C:
+					t.Fatal("Enter did not open the verification page")
+				}
+			}
 			sendCodexInput(t, inputs, tc.input)
 			if tc.name == "escape" {
 				waitAppOutput(t, out, "OpenAI Codex sign-in cancelled")
+				select {
+				case <-browserStopped:
+				default:
+					t.Fatal("REPL settled before the requested browser launcher stopped")
+				}
 				sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login")})
 				sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
 				waitAppOutput(t, out, "Providers")
+				screen := testutil.NewVTModel(80, 24)
+				screen.Feed([]byte(out.String()))
+				if strings.Contains(screen.Text(), "ABCD-EFGH") || !screen.CursorVisible {
+					t.Fatalf("device panel remained visible after cancellation: %q", screen.Text())
+				}
 			} else {
 				select {
 				case <-finished:
@@ -91,8 +126,9 @@ func TestCodexDeviceLoginREPLStopPolling(t *testing.T) {
 
 // A cold REPL picks device sign-in from the Codex method picker, receives the
 // user code in the interactive view, completes a synthetic reply, and saves
-// the credential. Device mode never opens a browser or binds a listener. The
-// user code is not stored in the session, recall, or bridge state. L1-L4, L7-L9.
+// the credential. Device mode does not open a browser without Enter and
+// never binds a listener. The user code is not stored in the session,
+// recall, or bridge state. L1-L4, L7-L9.
 func TestCodexDeviceLoginREPL(t *testing.T) {
 	clearProviderAPIKeys(t)
 	r := testRuntime(t)

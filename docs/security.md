@@ -107,9 +107,10 @@ runtime, standard-library JSON, HTTP, provider credential strings, terminal
 mask rendering, and other required boundaries can retain copies outside psi's
 control. Manual callback parsing necessarily makes string copies for `net/url`,
 the query parser, and the form-encoded exchange request. The callback listener
-is loopback-only; the browser authorization link and device user code are shown
-in the terminal, but never in chat or session data. The system does not lock memory or protect against a hostile local
-process inspecting the process.
+is loopback-only. Codex authorization links and device codes appear only in
+the login panel, not in chat or session data. The device code is not copied
+to the clipboard. The system does not lock memory or protect against a
+hostile local process inspecting the process.
 
 Session files record prompts, tool calls, tool output, and file contents shown
 to the model. Treat a session file as sensitive as the work it describes.

@@ -15,6 +15,8 @@ const (
 	PickerSearch PickerMode = iota
 	// PickerChoice renders only the supplied rows, like Pi's startup selector.
 	PickerChoice
+	// PickerSecret puts a masked input after the supplied panel rows.
+	PickerSecret
 )
 
 // ChoiceOption is one bounded option in an editor-tail choice picker.

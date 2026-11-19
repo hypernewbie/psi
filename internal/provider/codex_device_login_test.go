@@ -154,7 +154,7 @@ func TestCodexLoginDeviceStartFailures(t *testing.T) {
 	}{
 		{name: "unavailable", status: http.StatusNotFound, body: "", want: errCodexDeviceUnavailable},
 		{name: "other status", status: http.StatusBadGateway, body: "", want: errCodexDeviceNetwork},
-		{name: "rate limited", status: http.StatusTooManyRequests, body: "", want: errCodexDeviceRateLimited},
+		{name: "rate limited", status: http.StatusTooManyRequests, body: strings.Repeat("x", codexDeviceBodyLimit+1), want: errCodexDeviceRateLimited},
 		{name: "malformed", status: http.StatusOK, body: `{"user_code":`, want: errCodexDeviceInvalid},
 		{name: "missing user code", status: http.StatusOK, body: `{"device_auth_id":"d","interval":1}`, want: errCodexDeviceInvalid},
 		{name: "missing device id", status: http.StatusOK, body: `{"user_code":"u","interval":1}`, want: errCodexDeviceInvalid},

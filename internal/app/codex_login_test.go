@@ -143,6 +143,7 @@ func TestCodexLoginREPL(t *testing.T) {
 	case <-time.After(60 * time.Second):
 		t.Fatal("browser never opened")
 	}
+	waitAppOutput(t, out, "Open the link below manually.")
 	parsed, err := url.Parse(authURL)
 	if err != nil {
 		t.Fatal(err)

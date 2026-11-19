@@ -309,8 +309,8 @@ func parseCodexDeviceError(data []byte) (pending, slow bool) {
 }
 
 // doCodexDeviceJSON sends one bounded JSON POST on a client copy that refuses
-// redirects. Forbidden and not-found need only their status. Other bodies
-// are bounded, and transport or bound failures never expose response details.
+// redirects. A start failure, or a forbidden or not-found poll, needs only
+// its status. Other bodies are bounded; errors never expose response details.
 func doCodexDeviceJSON(ctx context.Context, client *http.Client, endpoint string, payload any) (int, []byte, error) {
 	if client == nil {
 		client = http.DefaultClient
@@ -336,15 +336,17 @@ func doCodexDeviceJSON(ctx context.Context, client *http.Client, endpoint string
 		return 0, nil, errCodexDeviceNetwork
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
-		return resp.StatusCode, nil, nil
+	status := resp.StatusCode
+	startFailure := endpoint == codexDeviceUserCodeURL && status != http.StatusOK
+	if startFailure || status == http.StatusForbidden || status == http.StatusNotFound {
+		return status, nil, nil
 	}
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, codexDeviceBodyLimit+1))
 	if readErr != nil || len(data) > codexDeviceBodyLimit {
 		secretmem.Wipe(data[:cap(data)])
 		return 0, nil, errCodexDeviceNetwork
 	}
-	return resp.StatusCode, data, nil
+	return status, data, nil
 }
 
 func minTime(a, b time.Time) time.Time {
