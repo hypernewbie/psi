@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"golang.org/x/term"
@@ -385,6 +387,113 @@ func testPickerConsole(t *testing.T) (*terminal.Console, *os.File, *terminalLife
 	return console, inW, lifecycle, cleanup
 }
 
+// The startup picker shares one coalescing resize owner. A redundant
+// notification must not rebuild the picker or its retained rows, while a real
+// geometry change still draws. The searchable picker has a byte-silent frame
+// when nothing changed; choice pickers repaint a cursor mode every frame.
+func TestResizeRedrawWaitPreservesSameSizePicker(t *testing.T) {
+	t.Cleanup(func() {
+		leakcheck.Verify(t)
+	})
+	console, _, _, cleanup := testPickerConsole(t)
+	t.Cleanup(cleanup)
+
+	width, height := 80, 24
+	console.SizeFunc = func() (int, int) { return width, height }
+	console.SetPickerRows([]string{"choice one", "choice two"})
+	console.Draw()
+
+	resizeWait := newResizeRedrawWait(console)
+	t.Cleanup(resizeWait.Close)
+	beforeWrites, _, beforeBytes, _ := console.FrameStats()
+
+	resizeWait.Request()
+	resizeWait.Fallback()
+	console.Draw()
+	writes, _, written, _ := console.FrameStats()
+	if writes != beforeWrites || written != beforeBytes {
+		t.Fatalf("same-size notification repainted the picker: writes %d→%d bytes %d→%d",
+			beforeWrites, writes, beforeBytes, written)
+	}
+
+	width = 100
+	resizeWait.Request()
+	resizeWait.Fallback()
+	console.Draw()
+	writes, _, written, _ = console.FrameStats()
+	if written == beforeBytes {
+		t.Fatalf("real geometry change did not redraw the picker: bytes stayed %d", written)
+	}
+}
+
+type resizeErrorWriter struct{ err error }
+
+func (w *resizeErrorWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
+func TestStartupPickerResizeReturnsWriteError(t *testing.T) {
+	type result struct {
+		cancelled bool
+		err       error
+	}
+	for _, tc := range []struct {
+		name string
+		run  func(*terminal.Console, *terminalLifecycle) result
+	}{
+		{"choice", func(console *terminal.Console, lifecycle *terminalLifecycle) result {
+			picker := &terminal.ChoicePicker{Options: []terminal.ChoiceOption{{Label: "Continue"}}}
+			index, cancelled, err := runChoicePicker(console, lifecycle, picker)
+			return result{cancelled && index == -1, err}
+		}},
+		{"session", func(console *terminal.Console, lifecycle *terminalLifecycle) result {
+			selector := NewSelector([]session.SessionInfo{{ID: "synthetic"}}, "")
+			selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
+			return result{cancelled && selected == nil, err}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, keepOpen, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			defer keepOpen.Close()
+			out := &resizeErrorWriter{}
+			console := terminal.NewConsole(in, out)
+			defer console.Close()
+			// Use synthetic input in the fake-clock bubble, with no pipe reads.
+			console.Pause()
+			synctest.Test(t, func(t *testing.T) {
+				inputs := make(chan terminal.Input, 1)
+				defer close(inputs)
+				console.Inputs = inputs
+				width := 80
+				console.SizeFunc = func() (int, int) { return width, 24 }
+				lifecycle := &terminalLifecycle{console: console, signals: make(chan os.Signal)}
+				finished := make(chan result, 1)
+				go func() { finished <- tc.run(console, lifecycle) }()
+				synctest.Wait() // Initial draw succeeded and the picker is waiting for input.
+
+				width = 60
+				out.err = io.ErrClosedPipe
+				inputs <- terminal.Input{Resize: true}
+				select {
+				case got := <-finished:
+					if !got.cancelled || !errors.Is(got.err, io.ErrClosedPipe) {
+						t.Fatalf("resize returned %+v; want cancellation with the write error", got)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("resize write failed to terminate the picker without further input")
+				}
+			})
+		})
+	}
+}
+
 func TestStartupPickerBootstrapSignal(t *testing.T) {
 	t.Cleanup(func() {
 		leakcheck.Verify(t)
@@ -555,26 +664,6 @@ func TestStartupPickerSessionNavigationAndPaging(t *testing.T) {
 		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
 		if err != nil || !cancelled || selected != nil {
 			t.Fatalf("expected cancel: cancelled=%v err=%v selected=%v", cancelled, err, selected)
-		}
-	})
-
-	t.Run("resize event preserves state and does not exit", func(t *testing.T) {
-		console, inW, lifecycle, cleanup := testPickerConsole(t)
-		defer cleanup()
-
-		selector := NewSelector(makeSessions(5), "")
-		// Send resize signal, then Enter
-		lifecycle.signals <- syscall.SIGWINCH
-		if _, err := inW.Write([]byte("\r")); err != nil {
-			t.Fatal(err)
-		}
-
-		selected, cancelled, err := runSessionPicker(console, lifecycle, selector)
-		if err != nil || cancelled || selected == nil {
-			t.Fatalf("runSessionPicker failed after resize: cancelled=%v err=%v", cancelled, err)
-		}
-		if selected.ID != "session-00" {
-			t.Errorf("selected ID = %q, want session-00", selected.ID)
 		}
 	})
 
