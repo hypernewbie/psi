@@ -25,18 +25,6 @@ func metadataWebMeta(root metadataObjectView) *event.WebMeta {
 	return decodeWebMeta(root["psiWeb"])
 }
 
-// entryWebMeta extracts `psiWeb` from a loaded record's raw bytes.
-func entryWebMeta(e *Entry) *event.WebMeta {
-	if e == nil || len(e.Raw) == 0 {
-		return nil
-	}
-	obj, err := exactObject(e.Raw)
-	if err != nil {
-		return nil
-	}
-	return decodeWebMeta(obj["psiWeb"])
-}
-
 // decodeWebMeta decodes one bounded payload. Wrong shapes, out-of-range
 // numbers, and over-limit arrays are ignored as a whole, leaving the message
 // and its outcome untouched.
