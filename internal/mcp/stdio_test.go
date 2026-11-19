@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"io"
@@ -167,5 +169,77 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("transport close left Read blocked on an open peer")
+	}
+}
+
+func TestMCPStdioRoundTripHelper(t *testing.T) {
+	if os.Getenv("PSI_MCP_ROUNDTRIP_HELPER") != "1" || flag.Lookup("test.run").Value.String() != "^TestMCPStdioRoundTripHelper$" {
+		return
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadBytes('\n')
+	if err != nil {
+		os.Exit(2)
+	}
+	line = bytes.TrimSuffix(line, []byte("\n"))
+	line = bytes.TrimSuffix(line, []byte("\r"))
+	msg, err := jsonrpc.DecodeMessage(line)
+	if err != nil {
+		os.Exit(2)
+	}
+	req, ok := msg.(*jsonrpc.Request)
+	if !ok {
+		os.Exit(2)
+	}
+	data, err := jsonrpc.EncodeMessage(&jsonrpc.Response{ID: req.ID, Result: req.Params})
+	if err != nil {
+		os.Exit(2)
+	}
+	data = append(data, '\n')
+	if _, err := os.Stdout.Write(data); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestStdioRoundTrip(t *testing.T) {
+	id, err := jsonrpc.MakeID("round-trip-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := json.RawMessage(`{"ping":"hello"}`)
+	want := &jsonrpc.Request{ID: id, Method: "echo", Params: params}
+	transport := newStdioTransport(Server{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=^TestMCPStdioRoundTripHelper$"},
+		Env: map[string]string{
+			"PSI_MCP_ROUNDTRIP_HELPER": "1",
+		},
+	}, t.TempDir())
+	connection, err := transport.Connect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := connection.Write(ctx, want); err != nil {
+		t.Fatalf("stdio round trip write: %v", err)
+	}
+	msg, err := connection.Read(ctx)
+	if err != nil {
+		t.Fatalf("stdio round trip read: %v", err)
+	}
+	got, ok := msg.(*jsonrpc.Response)
+	if !ok {
+		t.Fatalf("round trip reply = %T; want *jsonrpc.Response", msg)
+	}
+	if got.Error != nil {
+		t.Fatalf("round trip reply error = %v", got.Error)
+	}
+	if !reflect.DeepEqual(got.ID, want.ID) {
+		t.Fatalf("round trip id = %#v; want %#v", got.ID, want.ID)
+	}
+	if string(got.Result) != string(params) {
+		t.Fatalf("round trip result = %s; want %s", got.Result, params)
 	}
 }
