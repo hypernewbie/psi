@@ -151,7 +151,7 @@ Sessions are saved automatically unless `--no-session` is used.
 - `/resume [filter]` opens the workspace session picker.
 - `/name [name]` sets or shows the session display name.
 - `/clone` copies the current branch into a new session file.
-- `/quit` settles work and restores the terminal.
+- `/quit` releases the terminal first, then settles and exits.
 
 After leaving psi, run `psi --continue` from the same folder to resume the most
 recent session. See [Sessions](sessions.md).

@@ -52,9 +52,12 @@ type Console struct {
 	// use the terminal descriptor size.
 	SizeFunc func() (int, int)
 
-	stop               context.CancelFunc
-	done               chan struct{}
-	closed             bool
+	stop   context.CancelFunc
+	done   chan struct{}
+	closed bool
+	// released permanently blocks every write after the terminal is handed
+	// back for process exit. Restoration output flushes before it engages.
+	released           bool
 	err                error
 	hidden             bool
 	deferDraw          bool
@@ -215,13 +218,30 @@ func (c *Console) resetPaste() {
 	c.pasteActive = false
 }
 
+// Release permanently retires the console for process exit. It runs the
+// normal Close (stop input, restore cursor and paste modes, leave the
+// retained transcript in scrollback) and then drops every further write,
+// so settlement after terminal release stays silent. Unlike Pause, a
+// released console never resumes; Suspend keeps using Pause/Resume.
+// Release is idempotent with Close and the Run cleanup defers.
+func (c *Console) Release() {
+	c.Close()
+	c.released = true
+}
+
 func (c *Console) mode(s string) {
+	if c.released {
+		return
+	}
 	if err := WriteBounded(c.Out, []byte(s)); c.err == nil {
 		c.err = err
 	}
 }
 
 func (c *Console) emit(f Frame) error {
+	if c.released {
+		return nil
+	}
 	if c.err == nil {
 		c.err = c.writer.Emit(f)
 		if c.err == nil {
@@ -407,6 +427,9 @@ func (c *Console) SetTerminalColorSchemeNotifications(enabled bool) {
 }
 
 func (c *Console) QueryTerminalColors() error {
+	if c.released {
+		return nil
+	}
 	return WriteBounded(c.Out, pitheme.ColorQuery())
 }
 
