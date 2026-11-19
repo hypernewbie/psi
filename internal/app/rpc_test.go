@@ -160,7 +160,7 @@ func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.S
 // repeat, so a test can call this before its registered cleanup.
 func closeRPCTestRunner(s *rpcRunner, prov provider.Provider) {
 	s.cancelActive()
-	s.waitIdle(10 * time.Second)
+	s.waitWorkers()
 	if s.r.store != nil {
 		s.r.store.Unlock()
 	}
@@ -524,8 +524,14 @@ func TestRPCCompactEmptyThenAfterExchange(t *testing.T) {
 	}
 	s, _, log := newRPCTestRunner(t, fake, nil, 64)
 	empty := s.handle(rpcCommand{ID: strptr("c0"), Type: "compact"})
-	if empty == nil || empty.Success {
-		t.Fatalf("compact of empty session should fail, got %+v", empty)
+	if empty != nil {
+		t.Fatalf("compact admission must be asynchronous, got %+v", empty)
+	}
+	log.waitFor(t, "empty compact response", func(obj map[string]any) bool {
+		return obj["type"] == "response" && obj["id"] == "c0"
+	})
+	if got := responseByID(log.objects(t), "c0"); got == nil || got["success"] != false {
+		t.Fatalf("compact of empty session should fail, got %+v", got)
 	}
 	for i, id := range []string{"c1a", "c1b"} {
 		started := s.handle(rpcCommand{ID: strptr(id), Type: "prompt", Message: long})
@@ -547,8 +553,14 @@ func TestRPCCompactEmptyThenAfterExchange(t *testing.T) {
 		})
 	}
 	done := s.handle(rpcCommand{ID: strptr("c2"), Type: "compact", CustomInstructions: "focus"})
-	if done == nil || !done.Success {
-		t.Fatalf("compact = %+v", done)
+	if done != nil {
+		t.Fatalf("compact admission must be asynchronous, got %+v", done)
+	}
+	log.waitFor(t, "compact response c2", func(obj map[string]any) bool {
+		return obj["type"] == "response" && obj["id"] == "c2"
+	})
+	if got := responseByID(log.objects(t), "c2"); got == nil || got["success"] != true {
+		t.Fatalf("compact = %+v", got)
 	}
 	objs := log.objects(t)
 	if !hasEvent(objs, "compaction_start", map[string]any{"reason": "manual"}) {

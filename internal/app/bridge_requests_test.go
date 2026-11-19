@@ -34,6 +34,20 @@ type bridgePhi struct {
 	frames []*pibridgepb.PiToPhi
 	inject chan *pibridgepb.PhiToPi
 	notify chan struct{}
+	omitV2 bool
+}
+
+func (f *bridgePhi) acceptedCaps(offered []string) []string {
+	if !f.omitV2 {
+		return offered
+	}
+	caps := make([]string, 0, len(offered))
+	for _, name := range offered {
+		if name != "pi.compact.v2" {
+			caps = append(caps, name)
+		}
+	}
+	return caps
 }
 
 func startBridgePhi(t *testing.T) *bridgePhi {
@@ -68,7 +82,7 @@ func (f *bridgePhi) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		RuntimeGeneration: hello.GetRuntimeGeneration(),
 		Payload: &pibridgepb.PhiToPi_Accepted{Accepted: &pibridgepb.Accepted{
 			ProtocolVersion:   1,
-			Capabilities:      hello.GetHello().GetCapabilities(),
+			Capabilities:      f.acceptedCaps(hello.GetHello().GetCapabilities()),
 			RuntimeGeneration: hello.GetRuntimeGeneration(),
 			RuntimeId:         hello.GetHello().GetRuntimeId(),
 		}},
@@ -142,7 +156,20 @@ func (f *bridgePhi) waitFrame(t *testing.T, what string, pred func(*pibridgepb.P
 // startBridgeRuntime wires a provisioned client to r, the way Run does.
 func startBridgeRuntime(t *testing.T, r *runtime) (*bridgePhi, *bridgeHandler) {
 	t.Helper()
+	return startBridgeRuntimeCaps(t, r, false)
+}
+
+// startBridgeRuntimeV1 negotiates only the v1 compact capability, so legacy
+// admission tests keep their unfenced behavior.
+func startBridgeRuntimeV1(t *testing.T, r *runtime) (*bridgePhi, *bridgeHandler) {
+	t.Helper()
+	return startBridgeRuntimeCaps(t, r, true)
+}
+
+func startBridgeRuntimeCaps(t *testing.T, r *runtime, v1Compact bool) (*bridgePhi, *bridgeHandler) {
+	t.Helper()
 	f := startBridgePhi(t)
+	f.omitV2 = v1Compact
 	t.Setenv("PHI_PI_BRIDGE_ENDPOINT", f.target)
 	t.Setenv("PHI_PI_BRIDGE_PANE_ID", "pane-app")
 	t.Setenv("PHI_PI_BRIDGE_PROCESS_ID", "proc-app")

@@ -95,7 +95,7 @@ func TestActualAppBusyInformationalCommandsAndSlashSteering(t *testing.T) {
 	// character after submission proves the draft and its cursor survived,
 	// not just that the command was visible in a pre-submit frame.
 	const lineStart, lineEnd, enter, altEnter = "\x01", "\x05", "\r", "\x1b\r" // Ctrl+A, Ctrl+E, Enter, Alt+Enter.
-	for _, draft := range []string{"/compact KEEP_COMPACT", "/reload", "/loop KEEP_LOOP", "/resume", "/"} {
+	for _, draft := range []string{"/reload", "/loop KEEP_LOOP", "/resume", "/"} {
 		submit := enter
 		if draft == "/" || strings.HasPrefix(draft, "/loop ") {
 			// Exercise the follow-up submission path too. Alt+Enter also

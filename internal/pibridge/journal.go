@@ -2,9 +2,10 @@
 //
 // It publishes lifecycle edges and authoritative state snapshots to a Phi
 // server over one bidirectional gRPC stream. The wire contract is Phi's
-// bonus/pi-phi/PROTOCOL.md, pinned at revision a207d6b4; the bindings in
-// pb/ are generated from proto/bridge.proto and must be regenerated from
-// the same Phi revision.
+// bonus/pi-phi/PROTOCOL.md, pinned at revision
+// 66e2db0c63060f40fbbdff7cb7b4bb109d6ac0ef; the bindings in pb/ are
+// generated from proto/bridge.proto and must be regenerated from the same
+// Phi revision.
 package pibridge
 
 import (

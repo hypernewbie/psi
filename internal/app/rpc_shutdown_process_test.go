@@ -25,9 +25,9 @@ type rpcChildProcess struct {
 	joined bool
 }
 
-func startRPCChild(t *testing.T, f *quitFixture) *rpcChildProcess {
+func startRPCChild(t *testing.T, f *quitFixture, extra ...string) *rpcChildProcess {
 	t.Helper()
-	args := []string{"--mode", "rpc", "--deny-project", "--no-tools"}
+	args := append([]string{"--mode", "rpc", "--deny-project", "--no-tools"}, extra...)
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReviewAppProcess$")
 	env := appTestEnv(f.home, f.agentDir)
 	if *reviewBinary != "" {

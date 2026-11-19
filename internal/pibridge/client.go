@@ -50,6 +50,7 @@ const (
 	capSkills       = "pi.skills.v1"
 	capTranscript   = "pi.transcript-search.v2"
 	capCompact      = "pi.compact.v1"
+	capCompactV2    = "pi.compact.v2"
 	capReload       = "pi.reload.v1"
 	capSyncboard    = "pi.syncboard.v1"
 	capAttachments  = "pi.attachments.v3"
@@ -78,7 +79,7 @@ const (
 // baseCapabilities is advertised by every bridge client. Attachments are added
 // per client only when Phi's handoff root opens safely; a capability is listed
 // only once its handler answers every host path.
-var baseCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact, capSyncboard, capReload}
+var baseCapabilities = []string{capLifecycle, capState, capModels, capThinking, capHistory, capContext, capSkills, capTranscript, capCompact, capCompactV2, capSyncboard, capReload}
 
 var (
 	errAcceptTimeout = errors.New("pibridge: attach not accepted")
@@ -569,6 +570,23 @@ func (c *Client) runOnce(parent context.Context) (served bool, err error) {
 			if !caps[capabilityOf(req.kind)] {
 				req.ReplyUnavailable()
 				continue
+			}
+			if req.kind == RequestCompact {
+				req.compactV2 = caps[capCompactV2]
+				switch {
+				case len(req.compactInstructions) > maxCompactInstructionBytes:
+					req.ReplyCompact(CompactRefused, "unavailable")
+					continue
+				case req.compactV2 && req.compactRunID == nil:
+					// A v2 compact must carry the run id from the same
+					// snapshot; absence is unavailable, never bare compact.
+					req.ReplyCompact(CompactRefused, "unavailable")
+					continue
+				case !req.compactV2 && (req.compactInstructions != "" || req.compactRunID != nil):
+					// Never let a v1 peer silently ignore v2 fields.
+					req.ReplyCompact(CompactRefused, "unavailable")
+					continue
+				}
 			}
 			select {
 			case c.requests <- req:
