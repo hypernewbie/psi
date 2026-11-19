@@ -11,14 +11,16 @@ psi [options] [messages...]
 Positional arguments are prompts. They are sent in order after the terminal
 starts. Use `--` before a prompt that begins with `-`.
 
-ChatGPT sign-in is interactive-only: select OpenAI from `/login` or enter
-`/login openai` directly. The built-in `openai-codex` provider periodically
-reads its used primary ChatGPT quota and shows the remaining percentage in
-unused footer space when available. It backs off after failed reads. The
-reading is best effort: it uses the existing local OAuth entry without signing
-in, refreshing credentials, or changing inference.
-Positional messages and RPC `prompt` commands never sign in; they keep their
-existing prompt-data contract.
+ChatGPT and OpenAI Codex sign-in are interactive-only: select OpenAI or
+OpenAI Codex from `/login`, or enter `/login openai` / `/login openai-codex`
+directly. Positional messages and RPC `prompt` commands never sign in; they
+keep their existing prompt-data contract.
+
+The built-in `openai-codex` provider periodically reads its used primary
+ChatGPT quota and shows the remaining percentage in unused footer space when
+available. It backs off after failed reads. The reading is best effort: it uses
+the existing local OAuth entry without signing in, refreshing credentials, or
+changing inference.
 
 ## Invocation
 
@@ -81,14 +83,26 @@ noninteractive clients must use environment variables or pre-written credentials
 
 Use `/login [provider]` in an interactive session. With no provider argument,
 psi opens a searchable provider picker. Select OpenAI (or enter `/login openai`)
-to sign in with a ChatGPT subscription in your browser. For other supported
-providers, the prompt masks the API key; do not put keys in command arguments.
-API-key login supports `deepseek`, `google`, `groq`,
+to sign in with a ChatGPT subscription. Select OpenAI Codex (or enter
+`/login openai-codex`) to choose **Browser login** or **Device code login**.
+
+Codex browser login binds `127.0.0.1:1455`, then `127.0.0.1:1457` if that port
+is busy, then one OS-assigned port. If the browser cannot return to psi, paste
+the redirect URL, `code#state`, query string, or bare code into the masked
+sign-in field. The paste must be one line of at most 8 KiB. If it includes
+a state value, that value must match the current attempt. The paste never
+enters chat or recall. An OS-assigned port is a best-effort fallback: OpenAI
+can reject that redirect. If it does, close the tab, cancel, and choose
+device code. Device code shows a user code and
+`https://auth.openai.com/codex/device`; availability depends on the account.
+
+For other supported providers, the prompt masks the API key; do not put keys
+in command arguments. API-key login supports `deepseek`, `google`, `groq`,
 `kimi-coding`, `minimax`, `mistral`, `moonshotai`, `opencode-go`, `openrouter`,
 `qwen-token-plan`, `xai`, `xiaomi`, `xiaomi-token-plan-ams`,
 `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, and `zai`. It does not support
-Anthropic API-key login or OpenAI Codex OAuth. Use an environment variable or
-`models.json` for Anthropic; use Pi's `/login openai-codex` for Codex OAuth.
+Anthropic API-key login. Use an environment variable or `models.json` for
+Anthropic. OpenAI Codex has no API-key fallback.
 
 API-key login stores the key in `<agentDir>/auth.json`. The agent directory is
 `PSI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR`, then

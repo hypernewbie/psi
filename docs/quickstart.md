@@ -14,6 +14,11 @@ go build -o psi ./cmd/psi
 For ChatGPT subscription access, start psi, enter `/login`, and select
 **OpenAI**. Finish signing in in your browser. No API key or Pi is required.
 
+For OpenAI Codex subscription access, enter `/login openai-codex` and choose
+**Browser login** or **Device code login**. Browser login opens a local callback
+on port 1455 (1457, then an OS-assigned port if busy); if the callback cannot
+return, paste the redirect URL or code into the masked sign-in field.
+
 For API-key setup without Pi:
 
 1. Start `./psi`.
@@ -25,10 +30,10 @@ psi saves a Pi-compatible API-key entry in `<agentDir>/auth.json`. Login does
 not check the key with the provider. If the session is offline and the provider
 has a default model, psi selects that model and saves the defaults.
 
-Login supports 16 built-in API-key providers, excluding Anthropic and OpenAI
-Codex. For Anthropic, set `ANTHROPIC_API_KEY` or configure an API key in
-`auth.json` or `models.json`. For Codex OAuth, use Pi's `/login openai-codex`.
-See [Providers](providers.md) for the supported login providers and credential
+Login supports 16 built-in API-key providers, excluding Anthropic. For
+Anthropic, set `ANTHROPIC_API_KEY` or configure an API key in `auth.json` or
+`models.json`. OpenAI Codex uses its own OAuth sign-in, not an API key. See
+[Providers](providers.md) for the supported login providers and credential
 precedence.
 
 API-key providers also accept their own environment variables. For example:

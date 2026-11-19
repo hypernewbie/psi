@@ -19,6 +19,8 @@ const (
 	AuthNone AuthMode = iota
 	AuthLogin
 	AuthLogout
+	// AuthCodexMethods is the browser-or-device picker for OpenAI Codex.
+	AuthCodexMethods
 )
 
 type Selector struct {
@@ -184,6 +186,8 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		label, noMatch = "Providers", "  No matching providers"
 	} else if s.AuthMode == AuthLogout {
 		label, noMatch = "Stored API keys", "  No matching providers"
+	} else if s.AuthMode == AuthCodexMethods {
+		label, noMatch = "Sign-in method", "  No matching sign-in methods"
 	}
 	var rows []string
 	appendRow := func(text string, token terminal.ThemeToken) {
@@ -325,6 +329,9 @@ func pickerHelpText(width int) string {
 }
 
 func (s *Selector) pickerText(item session.SessionInfo, now time.Time) (string, string) {
+	if s.AuthMode == AuthCodexMethods {
+		return item.Name, ""
+	}
 	if s.AuthMode != AuthNone {
 		return item.ID, item.FirstMessage
 	}

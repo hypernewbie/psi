@@ -9,7 +9,7 @@ model layer. `models.json` can add providers of its own; see
 |---|---|---|---|
 | `anthropic` | Anthropic | `anthropic-messages` | `ANTHROPIC_API_KEY` |
 | `openai` | OpenAI | `openai-responses` | ChatGPT sign-in in psi or `OPENAI_API_KEY` |
-| `openai-codex` | OpenAI Codex | `openai-codex-responses` | Pi OAuth session |
+| `openai-codex` | OpenAI Codex | `openai-codex-responses` | Codex sign-in in psi or Pi OAuth session |
 | `minimax` | MiniMax | `anthropic-messages` | `MINIMAX_API_KEY` |
 | `opencode-go` | OpenCode Go | per model (see below) | `OPENCODE_API_KEY` |
 | `deepseek` | DeepSeek | `openai-completions` | `DEEPSEEK_API_KEY` |
@@ -58,11 +58,15 @@ fields, and unrelated entries stay unchanged. Broken, cyclic, and nonregular
 targets fail closed. A link retargeted before a final recheck is refused; the
 final rename remains subject to filesystem races.
 
-`openai-codex` uses the ChatGPT OAuth entry from Pi instead. psi refreshes an
-expired Codex token, preserves unrelated fields, and never substitutes a billed
-OpenAI API key for Codex OAuth. Run `/login openai-codex` in Pi to sign in. An
-`auth.json` symlink is preserved during refresh; the logical path remains the
-lock target, while the resolved regular file receives the atomic replacement.
+`openai-codex` uses a separate ChatGPT OAuth grant. Run `/login openai-codex`
+in psi and choose **Browser login** or **Device code login**. Browser login
+tries `127.0.0.1:1455`, then `1457`, then one OS-assigned port; the masked
+sign-in field also accepts a redirect URL, `code#state`, query string, or bare
+code. Device-code availability depends on the account. psi refreshes an expired
+Codex token, preserves unrelated fields, and never substitutes a billed OpenAI
+API key for Codex OAuth. An `auth.json` symlink is preserved during login and
+refresh; the logical path remains the lock target, while the resolved regular
+file receives the atomic replacement.
 
 By default, Codex credential checks and refreshes wait up to thirty seconds for
 each shared lock, matching Pi. API-key writes from `/login` and `/logout` wait
@@ -121,9 +125,8 @@ Pi-compatible `api_key` entry to `auth.json`; key values are not accepted as
 command arguments. The login flow does not validate the key against the
 provider. If an offline session has a default model for the provider, psi
 selects that model and saves the new defaults. Otherwise, it keeps the current
-model. Anthropic API-key login and OpenAI Codex OAuth login are not available
-in psi. Use the matching environment variable or `models.json` for Anthropic,
-and Pi's `/login openai-codex` for Codex OAuth.
+model. Anthropic API-key login is not available in psi; use the matching
+environment variable or `models.json`. OpenAI Codex uses `/login openai-codex`.
 
 Use `/logout` to select and remove a stored built-in API key. It includes
 Anthropic API keys, but does not remove OAuth credentials, environment

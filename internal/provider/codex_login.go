@@ -30,11 +30,12 @@ import (
 // authorization endpoint is Pi 1.5.2's public-client contract; psi binds its
 // own IPv4 loopback listener and derives the redirect from it.
 const (
-	codexLoginAuthorizeURL = "https://auth.openai.com/oauth/authorize"
-	codexLoginCallbackAddr = "127.0.0.1:1455"
-	codexLoginCallbackPath = "/auth/callback"
-	codexLoginScope        = "openid profile email offline_access"
-	codexLoginOriginator   = "psi"
+	codexLoginAuthorizeURL  = "https://auth.openai.com/oauth/authorize"
+	codexLoginCallbackAddr  = "127.0.0.1:1455"
+	codexLoginCallbackRetry = "127.0.0.1:1457"
+	codexLoginCallbackPath  = "/auth/callback"
+	codexLoginScope         = "openid profile email offline_access"
+	codexLoginOriginator    = "psi"
 	// codexLoginExchangeTimeout bounds the single authorization-code
 	// exchange, including its response body read.
 	codexLoginExchangeTimeout = 15 * time.Second
@@ -43,15 +44,23 @@ const (
 	codexLoginServerTimeout = 5 * time.Second
 	// codexLoginQueryLimit and codexLoginHeaderLimit bound unsolicited
 	// local input. A valid callback carries one state and one code.
-	codexLoginQueryLimit  = 8 * 1024
+	codexLoginQueryLimit = 8 * 1024
+	// codexLoginPasteLimit is the same bound for one manual-input line.
+	codexLoginPasteLimit  = codexLoginQueryLimit
 	codexLoginHeaderLimit = 16 * 1024
 )
 
 // Static Codex sign-in failures. None echoes a code, verifier, token, query,
 // response body, or transport error.
 var (
-	errCodexLoginConflict = errors.New("OpenAI Codex credentials changed during sign-in; refusing overwrite")
-	errCodexLoginLockLost = errors.New("auth.json lock changed during sign-in; refusing overwrite")
+	errCodexLoginPasteEmpty   = errors.New("paste the OpenAI Codex redirect URL, code#state, query string, or code")
+	errCodexLoginPasteInvalid = errors.New("invalid OpenAI Codex sign-in input; paste the redirect URL, code#state, query string, or code")
+	errCodexLoginPasteState   = errors.New("OpenAI Codex sign-in state does not match; paste the current redirect")
+	errCodexLoginConflict     = errors.New("OpenAI Codex credentials changed during sign-in; refusing overwrite")
+	errCodexLoginLockLost     = errors.New("auth.json lock changed during sign-in; refusing overwrite")
+	// ErrCodexLoginClaimed means a callback or a previous manual submission
+	// already claimed this attempt. The winning input still finishes.
+	ErrCodexLoginClaimed = errors.New("OpenAI Codex sign-in is already completing")
 )
 
 // CodexLogin runs one interactive Codex sign-in: it captures the stored
@@ -61,14 +70,14 @@ var (
 // while the listener serves callbacks and must return before the exchange
 // starts.
 //
-// Bind, Chmod, and Rename are test seams. Nil bind selects the fixed
-// production IPv4 loopback address; nil filesystem hooks use os defaults.
-// There is deliberately no per-instance mutex: one Run owns one attempt,
-// and a cancelled attempt is never resumed.
+// Bind, Chmod, and Rename are test seams. Bind receives the requested
+// loopback address; nil uses net.Listen. Nil filesystem hooks use os
+// defaults. There is deliberately no per-instance mutex: one Run owns one
+// attempt, and a cancelled attempt is never resumed.
 type CodexLogin struct {
 	Path   string
 	HTTP   *http.Client
-	Bind   func() (net.Listener, error)
+	Bind   func(addr string) (net.Listener, error)
 	Chmod  func(string, os.FileMode) error
 	Rename func(string, string) error
 	// now selects the clock for the saved expiry. Nil means time.Now.
@@ -95,6 +104,23 @@ func (l *CodexLogin) client() *http.Client {
 // the caller starts a fresh Run rather than reusing the consumed code. The
 // browser wait has no new overall deadline; cancellation is the only bound.
 func (l *CodexLogin) Run(ctx context.Context, ready func(authURL string)) error {
+	return l.run(ctx, func(authURL string, _ bool, _ func([]byte) error) {
+		if ready != nil {
+			ready(authURL)
+		}
+	})
+}
+
+// RunInteractive is the browser path with the method-specific details the
+// REPL needs: whether the OS assigned the callback port, and a nonblocking
+// submit that parses one pasted redirect or code and offers it to the same
+// one-shot gate as the browser callback. submit never makes a network request
+// and borrows its input only for the call.
+func (l *CodexLogin) RunInteractive(ctx context.Context, ready func(authURL string, osAssigned bool, submit func([]byte) error)) error {
+	return l.run(ctx, ready)
+}
+
+func (l *CodexLogin) run(ctx context.Context, ready func(authURL string, osAssigned bool, submit func([]byte) error)) error {
 	if l.Path == "" {
 		return fmt.Errorf("cannot save the OpenAI Codex login without an auth path")
 	}
@@ -110,24 +136,19 @@ func (l *CodexLogin) Run(ctx context.Context, ready func(authURL string)) error 
 	if err != nil {
 		return fmt.Errorf("cannot start the OpenAI Codex sign-in")
 	}
-	bind := l.Bind
-	if bind == nil {
-		bind = func() (net.Listener, error) {
-			return net.Listen("tcp4", codexLoginCallbackAddr)
-		}
-	}
-	listener, err := bind()
+	listener, osAssigned, err := l.bind()
 	if err != nil {
-		return fmt.Errorf("cannot start the OpenAI Codex sign-in on port 1455; cancel any other sign-in and try again")
+		return fmt.Errorf("cannot start the OpenAI Codex browser sign-in; choose device code login instead")
 	}
 	redirectURI, host, err := codexLoginRedirect(listener)
 	if err != nil {
 		_ = listener.Close()
 		return err
 	}
-	code, err := waitCodexLoginCallback(ctx, listener, host, state, func() {
+	gate := newCodexLoginCallbackGate(host, state)
+	code, err := waitCodexLoginCallback(ctx, listener, gate, func() {
 		if ready != nil {
-			ready(codexLoginAuthURL(challenge, state, redirectURI))
+			ready(codexLoginAuthURL(challenge, state, redirectURI), osAssigned, gate.submit)
 		}
 	})
 	if err != nil {
@@ -148,6 +169,34 @@ func (l *CodexLogin) Run(ctx context.Context, ready func(authURL string)) error 
 		return err
 	}
 	return l.commit(ctx, baseline, token)
+}
+
+// bind tries the two documented Codex callback ports in order. Only a real
+// address-in-use failure advances to the next choice; a permission or other
+// bind failure is terminal. If both ports are busy, one OS-assigned port is
+// the final best-effort choice. The incumbent listener is never probed or
+// stopped.
+func (l *CodexLogin) bind() (net.Listener, bool, error) {
+	bind := l.Bind
+	if bind == nil {
+		bind = func(addr string) (net.Listener, error) {
+			return net.Listen("tcp4", addr)
+		}
+	}
+	for _, addr := range []string{codexLoginCallbackAddr, codexLoginCallbackRetry} {
+		listener, err := bind(addr)
+		if err == nil {
+			return listener, false, nil
+		}
+		if !codexLoginAddrInUse(err) {
+			return nil, false, err
+		}
+	}
+	listener, err := bind("127.0.0.1:0")
+	if err != nil {
+		return nil, false, err
+	}
+	return listener, true, nil
 }
 
 // codexLoginRedirect derives the callback URL and Host authority from the
@@ -263,6 +312,105 @@ func parseCodexLoginCallback(r *http.Request, host, expectedState string) (codex
 	return outcome, http.StatusOK, true
 }
 
+// parseCodexLoginPaste accepts the four Pi manual-input forms: a full
+// redirect URL, code#state, a query string, or a bare code. It checks a
+// supplied state without claiming the attempt on invalid input. The input is
+// bounded to one line. The conversion to string is a required copy for
+// net/url and strings; the caller keeps ownership of the byte slice and wipes
+// it after this call. The returned code is later copied into the exchange
+// form, which is another unavoidable string boundary.
+func parseCodexLoginPaste(input []byte, expectedState string) (codexLoginOutcome, error) {
+	if len(input) > codexLoginPasteLimit || bytes.ContainsAny(input, "\r\n") {
+		return codexLoginOutcome{}, errCodexLoginPasteInvalid
+	}
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 {
+		return codexLoginOutcome{}, errCodexLoginPasteEmpty
+	}
+	for _, b := range trimmed {
+		if b < 0x20 || b == 0x7f {
+			return codexLoginOutcome{}, errCodexLoginPasteInvalid
+		}
+	}
+	text := string(trimmed)
+	if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") {
+		parsed, err := url.Parse(text)
+		if err != nil || parsed.Host == "" || parsed.RawQuery == "" {
+			return codexLoginOutcome{}, errCodexLoginPasteInvalid
+		}
+		return parseCodexLoginQuery(parsed.RawQuery, expectedState)
+	}
+	if strings.HasPrefix(text, "?") {
+		return parseCodexLoginQuery(text[1:], expectedState)
+	}
+	if before, query, found := strings.Cut(text, "?"); found && strings.Contains(before, "/auth/callback") {
+		return parseCodexLoginQuery(query, expectedState)
+	}
+	if strings.Contains(text, "#") {
+		code, state, _ := strings.Cut(text, "#")
+		if !validCodexManualCode(code) || state == "" || strings.Contains(state, "#") {
+			return codexLoginOutcome{}, errCodexLoginPasteInvalid
+		}
+		if state != expectedState {
+			return codexLoginOutcome{}, errCodexLoginPasteState
+		}
+		return codexLoginOutcome{code: code}, nil
+	}
+	if strings.Contains(text, "=") {
+		return parseCodexLoginQuery(text, expectedState)
+	}
+	if !validCodexManualCode(text) || strings.ContainsAny(text, "?#&") {
+		return codexLoginOutcome{}, errCodexLoginPasteInvalid
+	}
+	return codexLoginOutcome{code: text}, nil
+}
+
+// Validate the decoded code as well as the input line: URL escapes can
+// introduce spaces or control bytes after the initial line check.
+func validCodexManualCode(code string) bool {
+	for i := range len(code) {
+		// Exclude ASCII space, control bytes, DEL, and non-ASCII bytes.
+		if code[i] <= ' ' || code[i] >= 0x7f {
+			return false
+		}
+	}
+	return code != ""
+}
+
+// parseCodexLoginQuery validates one pasted query. A supplied state must
+// be nonempty and match this attempt; an omitted state is allowed.
+func parseCodexLoginQuery(raw, expectedState string) (codexLoginOutcome, error) {
+	if raw == "" || len(raw) > codexLoginPasteLimit {
+		return codexLoginOutcome{}, errCodexLoginPasteInvalid
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return codexLoginOutcome{}, errCodexLoginPasteInvalid
+	}
+	for _, name := range []string{"code", "state", "error"} {
+		if len(values[name]) > 1 {
+			return codexLoginOutcome{}, errCodexLoginPasteInvalid
+		}
+	}
+	if values.Has("error") {
+		return codexLoginOutcome{}, errCodexLoginPasteInvalid
+	}
+	code := values.Get("code")
+	if !validCodexManualCode(code) {
+		return codexLoginOutcome{}, errCodexLoginPasteInvalid
+	}
+	if values.Has("state") {
+		state := values.Get("state")
+		if state == "" || state != strings.TrimSpace(state) {
+			return codexLoginOutcome{}, errCodexLoginPasteInvalid
+		}
+		if state != expectedState {
+			return codexLoginOutcome{}, errCodexLoginPasteState
+		}
+	}
+	return codexLoginOutcome{code: code}, nil
+}
+
 // writeCodexLoginPage sends one static browser page. The caller ignores
 // write errors: a disconnected browser does not invalidate an accepted code.
 func writeCodexLoginPage(w http.ResponseWriter, status int, page string) {
@@ -311,15 +459,41 @@ func (g *codexLoginCallbackGate) handler() http.Handler {
 		} else {
 			writeCodexLoginPage(w, http.StatusOK, codexLoginSuccessPage)
 		}
+		// Publish after the response is written so server shutdown cannot
+		// truncate the browser page when the wait returns immediately.
 		g.result <- outcome
 	})
+}
+
+// claim publishes exactly one outcome. The buffered result send is
+// nonblocking because only the first claimant can send.
+func (g *codexLoginCallbackGate) claim(outcome codexLoginOutcome) bool {
+	if !g.claimed.CompareAndSwap(false, true) {
+		return false
+	}
+	g.result <- outcome
+	return true
+}
+
+// submit validates one pasted redirect or code and offers it to the same
+// one-shot gate as the browser callback. Invalid input does not claim the
+// attempt, so a valid callback can still finish. The input is borrowed for
+// this call only.
+func (g *codexLoginCallbackGate) submit(input []byte) error {
+	outcome, err := parseCodexLoginPaste(input, g.state)
+	if err != nil {
+		return err
+	}
+	if !g.claim(outcome) {
+		return ErrCodexLoginClaimed
+	}
+	return nil
 }
 
 // waitCodexLoginCallback serves the bound listener until one valid callback,
 // denial, or cancellation. The listener and all accepted connections close on
 // every path, and the owned Serve goroutine is joined before return.
-func waitCodexLoginCallback(ctx context.Context, listener net.Listener, host, state string, ready func()) (string, error) {
-	gate := newCodexLoginCallbackGate(host, state)
+func waitCodexLoginCallback(ctx context.Context, listener net.Listener, gate *codexLoginCallbackGate, ready func()) (string, error) {
 	server := &http.Server{
 		Handler:           gate.handler(),
 		ReadTimeout:       codexLoginServerTimeout,

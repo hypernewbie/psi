@@ -47,17 +47,17 @@ A storage failure stops the batch without rolling back completed mutations, and 
 These deviations are the only intentional differences from Pi in this area.
 
 Measured profile on the recorded Linux host: a 200-call read batch (4 KiB files) settled all calls in 31 ms with about 10.9 MiB of total allocation.
-The six Linux/macOS/Windows amd64/arm64 cross-builds pass; macOS and Windows binaries were not executed.
+The six Linux/macOS/Windows amd64/arm64 cross-builds pass. Native test suites were also run on macOS, Linux, and Windows; the measured batch profile above remains Linux-only.
 
 ## Authentication
 
-Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Kimi For Coding, Qwen Token Plan, OpenRouter, xAI, Groq, Mistral, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses existing ChatGPT OAuth credentials with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.
+Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Kimi For Coding, Qwen Token Plan, OpenRouter, xAI, Groq, Mistral, and Google use provider-specific API keys from `auth.json`, `models.json`, or their exact environment variable. Codex uses the separate ChatGPT OAuth credential created by `/login openai-codex`, with refresh and a Pi-compatible directory lock. Refresh preserves unrelated fields and existing permission bits. It persists credential changes through atomic replacement.
 
 A provider that `models.json` declares uses an API key from `auth.json` or from its own `apiKey` entry. It has no environment variable, and an unsupported stored credential stops the selection.
 
-Interactive `/login` supports OpenAI ChatGPT sign-in and 16 built-in API-key providers, excluding Anthropic and OpenAI Codex. `/logout` removes stored built-in API keys, including Anthropic, but never OAuth credentials, environment variables, or `models.json` credentials. Login stores the key without a provider request. See [Providers](providers.md) for the supported login providers.
+Interactive `/login` supports OpenAI ChatGPT sign-in, OpenAI Codex browser or device-code sign-in, and 16 built-in API-key providers. Anthropic API-key login is unavailable. `/logout` removes stored built-in API keys, including Anthropic, but never OAuth credentials, environment variables, or `models.json` credentials. API-key login stores the key without a provider request. See [Providers](providers.md) for the supported login providers.
 
-psi does not support Anthropic OAuth or execute `!command` credentials. Codex login remains Pi `/login openai-codex`. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
+psi does not support Anthropic OAuth or execute `!command` credentials. OpenAI Codex sign-in is native, but device-code availability depends on the account. An OS-assigned callback port is best-effort because OpenAI can reject its redirect; use 1455/1457 or device code when possible. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
 
 ## Documentation topics
 

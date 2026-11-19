@@ -28,7 +28,7 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 
 - `/settings` — change supported live settings, including during a run. Display changes apply immediately. Request settings apply to the next request. Persisted values merge into the user `settings.json`.
 - `/trust` — save a project trust decision for future sessions; restart psi for the decision to take effect
-- `/login [provider]` — pick a provider; OpenAI opens ChatGPT sign-in and other supported providers open a masked key prompt. Anthropic and Codex login are unavailable in psi
+- `/login [provider]` — pick a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device-code sign-in, and other supported providers open a masked key prompt. Anthropic API-key login is unavailable in psi
 - `/logout` — remove a stored built-in API key, including Anthropic; leave OAuth, environment variables, and `models.json` unchanged
 - `/model [provider/model]` — open the model picker or set a model directly
 - `/thinking [level]` — open the supported-level picker or set a level directly; `Ctrl+S` saves the highlighted level as the global default

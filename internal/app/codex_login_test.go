@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -112,7 +113,7 @@ func TestCodexLoginREPL(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexAppTestTokenBody(access, refresh))), Header: make(http.Header)}, nil
 	})
 	var bindAddr string
-	r.codexBind = func() (net.Listener, error) {
+	r.codexBind = func(string) (net.Listener, error) {
 		listener, err := net.Listen("tcp4", "127.0.0.1:0")
 		if err != nil {
 			return nil, err
@@ -123,7 +124,7 @@ func TestCodexLoginREPL(t *testing.T) {
 	browserURLs := make(chan string, 1)
 	r.codexBrowser = func(_ context.Context, authURL string) error {
 		browserURLs <- authURL
-		return nil
+		return errors.New("synthetic launcher failure")
 	}
 	if err := r.configure(config.StartupOverrides{Provider: "openai-codex", Model: "gpt-5.6-luna", Thinking: "off", ThinkingExplicit: true}); err != nil {
 		t.Fatal(err)
@@ -133,9 +134,10 @@ func TestCodexLoginREPL(t *testing.T) {
 	}
 	console, out, inputWrite, result := startLoginTestREPL(t, r)
 	waitAppOutput(t, out, "gpt-5.6-luna")
-	if _, err := inputWrite.Write([]byte("/login openai-codex\r")); err != nil {
+	if _, err := inputWrite.Write([]byte("/login openai-codex\r\r")); err != nil {
 		t.Fatal(err)
 	}
+	waitAppOutput(t, out, "Complete OpenAI Codex sign-in in your browser")
 	var authURL string
 	select {
 	case authURL = <-browserURLs:
@@ -357,7 +359,7 @@ func TestCodexLoginCommitAdmittedSettlesWithoutActivation(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexAppTestTokenBody(access, "admitted-refresh"))), Header: make(http.Header)}, nil
 	})
 	var bindAddr string
-	r.codexBind = func() (net.Listener, error) {
+	r.codexBind = func(string) (net.Listener, error) {
 		listener, err := net.Listen("tcp4", "127.0.0.1:0")
 		if err != nil {
 			return nil, err
@@ -388,7 +390,7 @@ func TestCodexLoginCommitAdmittedSettlesWithoutActivation(t *testing.T) {
 	releaseSave := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(releaseSave)
 	waitAppOutput(t, out, "(anthropic) m")
-	if _, err := inputWrite.Write([]byte("/login openai-codex\r")); err != nil {
+	if _, err := inputWrite.Write([]byte("/login openai-codex\r\r")); err != nil {
 		t.Fatal(err)
 	}
 	var authURL string

@@ -63,8 +63,8 @@ func deliverCodexLoginCallbacks(addr string, queries ...string) ([]int, error) {
 
 // codexLoginEphemeralBind is the test listener seam: an ephemeral IPv4
 // loopback listener whose address the test reads after Run binds it.
-func codexLoginEphemeralBind(addr *string) func() (net.Listener, error) {
-	return func() (net.Listener, error) {
+func codexLoginEphemeralBind(addr *string) func(string) (net.Listener, error) {
+	return func(string) (net.Listener, error) {
 		listener, err := net.Listen("tcp4", "127.0.0.1:0")
 		if err != nil {
 			return nil, err
@@ -364,7 +364,7 @@ func TestCodexLoginCancelAndBindFailure(t *testing.T) {
 	ready := false
 	failing := &CodexLogin{
 		Path: authPath,
-		Bind: func() (net.Listener, error) {
+		Bind: func(string) (net.Listener, error) {
 			return nil, errors.New("synthetic bind failure")
 		},
 	}

@@ -29,7 +29,7 @@ func loginProviderIDs() []string {
 		if !ok {
 			continue
 		}
-		if id != "openai" && (spec.Auth != providerregistry.AuthAPIKey || id == "anthropic") {
+		if id != "openai" && id != "openai-codex" && (spec.Auth != providerregistry.AuthAPIKey || id == "anthropic") {
 			continue
 		}
 		ids = append(ids, id)
@@ -46,8 +46,11 @@ func loginSelector(r *runtime) *Selector {
 			continue
 		}
 		method := spec.Environment
-		if id == "openai" {
+		switch id {
+		case "openai":
 			method = "ChatGPT browser sign-in"
+		case "openai-codex":
+			method = "browser or device code sign-in"
 		}
 		parts := []string{spec.Name, method}
 		if r.models != nil {
@@ -60,6 +63,28 @@ func loginSelector(r *runtime) *Selector {
 	selector := NewSelector(items, r.ov.Provider)
 	selector.AuthMode = AuthLogin
 	return selector
+}
+
+// codexLoginMethodSelector offers browser sign-in first. Choosing a row starts
+// that method immediately; Escape has no network or credential effect.
+func codexLoginMethodSelector() *Selector {
+	items := []session.SessionInfo{
+		{ID: "browser", Name: "Browser login (default)"},
+		{ID: "device", Name: "Device code login (headless)"},
+	}
+	selector := NewSelector(items, "browser")
+	selector.AuthMode = AuthCodexMethods
+	return selector
+}
+
+// openCodexLoginMethodSelector rechecks admission before showing the method
+// picker. The chosen method is admitted again after the picker closes.
+func (r *runtime) openCodexLoginMethodSelector(console *terminal.Console) error {
+	if err := r.authCommandAvailable(console, "login"); err != nil {
+		return err
+	}
+	r.openAuthSelector(codexLoginMethodSelector(), console)
+	return nil
 }
 
 func logoutSelector(providers []string, activeID string) *Selector {
@@ -120,6 +145,8 @@ func (r *runtime) loginCommand(arg string, console *terminal.Console) error {
 	switch providerID {
 	case "anthropic":
 		return fmt.Errorf("Anthropic login is not available; set ANTHROPIC_API_KEY or add an api_key entry to %s.", authPath)
+	case "openai-codex":
+		return r.openCodexLoginMethodSelector(console)
 	}
 	spec, ok := providerregistry.Lookup(providerID)
 	if !ok {

@@ -64,9 +64,11 @@ them. Codex and OpenAI OAuth tokens refresh in place with a Pi-compatible
 directory lock. OpenAI refresh can update the shared `auth.json` through that
 lock and atomic replacement. ChatGPT sign-in stores a stable installation UUID
 as `deviceId` in the user `settings.json`; it identifies the installation to
-OpenAI and is not a token. The authorization link, codes, and tokens never
-enter session files or chat; only the harmless `/login openai` command itself
-can remain in editor recall.
+OpenAI and is not a token. The authorization link is printed in the terminal.
+Callback codes, manual pasted redirects and codes, device user codes, and
+tokens never enter session files or chat; only the harmless `/login openai` or
+`/login openai-codex` command can remain in editor recall. The Codex manual
+field is masked, and pasted bytes are wiped after the submit call.
 
 Interactive API-key login masks the key and excludes it from conversation history
 and prompt recall. It does not check the key with the provider. Keys remain
@@ -78,14 +80,15 @@ unrelated entries, and unknown fields. Broken, cyclic, and nonregular targets
 fail closed. psi rechecks the logical target and file identity before staging
 and immediately before replacement. It refuses a change observed by those
 checks; a retarget after the final check remains a filesystem race and is not
-made atomic. Codex OAuth refresh uses the same logical-lock and resolved-target
-rule. `/logout` removes only the selected stored API key, not OAuth credentials,
-environment variables, or `models.json` credentials. OpenAI ChatGPT sign-in
-and refresh require a regular `auth.json` and refuse symlink writes. The
-`openai-codex` quota indicator reads the selected OAuth entry locally and makes
-periodic best-effort usage requests to the fixed ChatGPT endpoint. It never
-refreshes or writes credentials, and it never uses direct-use OpenAI credentials
-or an API-key fallback.
+made atomic. Codex login and refresh use the same logical-lock and
+resolved-target rule. `/logout` removes only the selected stored API key, not
+OAuth credentials, environment variables, or `models.json` credentials.
+ChatGPT sign-in and refresh refuse to write through an `auth.json` symlink.
+
+The `openai-codex` quota indicator reads the selected OAuth entry locally and
+makes periodic best-effort usage requests to the fixed ChatGPT endpoint. It
+never refreshes or writes credentials, and it never uses direct-use OpenAI
+credentials or an API-key fallback.
 
 Windows identity checks use an open handle to capture the file ID before a
 replacement can affect a later comparison. The file must allow read access.
@@ -102,7 +105,10 @@ These wipes resist removal of the explicit clear in
 the optimized path. They do not provide complete process-memory erasure. Go
 runtime, standard-library JSON, HTTP, provider credential strings, terminal
 mask rendering, and other required boundaries can retain copies outside psi's
-control. The system does not lock memory or protect against a hostile local
+control. Manual callback parsing necessarily makes string copies for `net/url`,
+the query parser, and the form-encoded exchange request. The callback listener
+is loopback-only; the browser authorization link and device user code are shown
+in the terminal, but never in chat or session data. The system does not lock memory or protect against a hostile local
 process inspecting the process.
 
 Session files record prompts, tool calls, tool output, and file contents shown
@@ -114,8 +120,8 @@ modes stay unchanged.
 ## What leaves the process
 
 Model requests contain the system prompt, the active branch, and the tool
-definitions. Codex OAuth refresh, OpenAI code exchange, and OpenAI OAuth
-refresh contact their providers. The web tools contact the configured SearXNG
+definitions. OpenAI Codex and ChatGPT sign-in and OAuth refresh contact
+OpenAI. The web tools contact the configured SearXNG
 or Exa endpoint and fetch requested pages directly. A readable fetch may also
 send the validated target URL to a configured self-hosted Crawl4AI service.
 Query strings and fragments reach that service. It resolves and fetches the

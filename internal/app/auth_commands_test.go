@@ -120,7 +120,7 @@ func TestBareLoginOpensProviderPicker(t *testing.T) {
 	for _, item := range r.selector.Items {
 		got = append(got, item.ID)
 	}
-	want := []string{"deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
+	want := []string{"deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("login providers=%v want %v", got, want)
 	}
@@ -409,4 +409,17 @@ func authCommandConsole(t *testing.T) *terminal.Console {
 	console := terminal.NewConsole(input, io.Discard)
 	t.Cleanup(console.Close)
 	return console
+}
+
+func TestCodexLoginMethodSelectorOrder(t *testing.T) {
+	selector := codexLoginMethodSelector()
+	if selector.AuthMode != AuthCodexMethods || selector.SelectedID != "browser" {
+		t.Fatalf("selector = %+v", selector)
+	}
+	if len(selector.Items) != 2 || selector.Items[0].ID != "browser" || selector.Items[1].ID != "device" {
+		t.Fatalf("methods = %+v", selector.Items)
+	}
+	if selector.Items[0].Name != "Browser login (default)" || selector.Items[1].Name != "Device code login (headless)" {
+		t.Fatalf("labels = %q %q", selector.Items[0].Name, selector.Items[1].Name)
+	}
 }

@@ -37,26 +37,55 @@ type oauthLoginSession struct {
 	// cancelled is set by the REPL when it cancels first. A save already
 	// admitted then still settles, but it never activates a model.
 	cancelled bool
+	// closeBrowser tells cancellation text to mention the browser tab. Device
+	// sign-in has no browser tab to close.
+	closeBrowser bool
+	// secretActive is true while the masked manual-input field owns the
+	// editor. submit is the provider's nonblocking one-shot claim.
+	secretActive bool
+	submit       func([]byte) error
+	// pasteOpen tracks a paste transaction that started during manual input,
+	// so settlement can discard the rest through PasteEnd.
+	pasteOpen bool
 }
 
-// oauthLoginRequest carries one browser sign-in attempt's shared
-// dependencies. transport, bind, browser, and rename are test seams and stay
-// nil in production: the default HTTP client, the fixed loopback listener,
-// the platform browser launcher, and the real filesystem rename.
+// oauthLoginRequest carries one sign-in attempt's shared dependencies.
+// transport, bind, codexBind, browser, rename, and wait are test seams and
+// stay nil in production: the default HTTP client, the fixed loopback
+// listener, the platform browser launcher, the real filesystem rename, and
+// the real device-code timer.
 type oauthLoginRequest struct {
 	agentDir  string
 	transport http.RoundTripper
 	bind      func() (net.Listener, error)
 	browser   func(context.Context, string) error
 	rename    func(string, string) error
+	// codexBind is the Codex callback bind seam. It receives the requested
+	// loopback address so the fallback order is testable.
+	codexBind func(string) (net.Listener, error)
+	// wait is the device-code polling timer seam. Nil uses a real timer.
+	wait func(context.Context, time.Duration) error
 }
 
 // oauthLoginUpdate is one worker-to-REPL notification. link presents the
 // authorization URL once; manualOpen asks the user to open that displayed
-// link by hand after the launcher failed.
+// link by hand after the launcher failed. osPort warns about an OS-assigned
+// callback; submit and deviceCode/deviceURL present the two method-specific
+// sign-in views.
 type oauthLoginUpdate struct {
 	link       string
 	manualOpen bool
+	// deviceCode and deviceURL present the headless sign-in view. They are
+	// cleared when the attempt settles and never enter session or bridge data.
+	deviceCode string
+	deviceURL  string
+	// osPort warns of a best-effort callback port. The REPL closes shown
+	// after drawing the warning so the browser cannot open ahead of it.
+	osPort bool
+	shown  chan struct{}
+	// submit accepts one masked manual redirect or code. It is only present
+	// for browser sign-in.
+	submit func([]byte) error
 }
 
 // oauthLoginResult is the terminal outcome. A nil error means the credential
@@ -72,6 +101,13 @@ type browserOAuthLogin interface {
 	Run(context.Context, func(string)) error
 }
 
+// codexBrowserOAuthLogin is the Codex browser extension. It also reports
+// whether the callback port was OS-assigned and provides the manual submit
+// function. The OpenAI grant keeps the smaller browserOAuthLogin contract.
+type codexBrowserOAuthLogin interface {
+	RunInteractive(context.Context, func(authURL string, osAssigned bool, submit func([]byte) error)) error
+}
+
 // runBrowserOAuthLogin runs one browser attempt: it presents the
 // authorization URL, launches the browser with a bounded wait, and returns
 // the provider's terminal result. Browser launch happens after the update is
@@ -81,10 +117,22 @@ func runBrowserOAuthLogin(ctx context.Context, login browserOAuthLogin, browser 
 	if launch == nil {
 		launch = openOAuthLoginBrowser
 	}
-	err := login.Run(ctx, func(authURL string) {
+	ready := func(authURL string, osAssigned bool, submit func([]byte) error) {
+		update := oauthLoginUpdate{link: authURL, osPort: osAssigned, submit: submit}
+		if osAssigned {
+			update.shown = make(chan struct{})
+		}
 		select {
-		case updates <- oauthLoginUpdate{link: authURL}:
+		case updates <- update:
 		case <-ctx.Done():
+			return
+		}
+		if update.shown != nil {
+			select {
+			case <-update.shown:
+			case <-ctx.Done():
+				return
+			}
 		}
 		if ctx.Err() != nil {
 			return
@@ -97,7 +145,15 @@ func runBrowserOAuthLogin(ctx context.Context, login browserOAuthLogin, browser 
 			case <-ctx.Done():
 			}
 		}
-	})
+	}
+	var err error
+	if interactive, ok := login.(codexBrowserOAuthLogin); ok {
+		err = interactive.RunInteractive(ctx, ready)
+	} else {
+		err = login.Run(ctx, func(authURL string) {
+			ready(authURL, false, nil)
+		})
+	}
 	return oauthLoginResult{err: err}
 }
 
