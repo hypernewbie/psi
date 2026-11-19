@@ -467,7 +467,7 @@ Inline search content requires selected and enabled fetch_content.
 loop_control and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
-OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY.
+OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. The built-in openai-codex provider periodically reads its primary ChatGPT quota, backs off after failures, and shows the remaining percentage in unused footer space when available.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }
@@ -719,7 +719,20 @@ type runtime struct {
 	// live holds the mutable request configuration a running loop reads at
 	// each turn boundary. It is a pointer because the runtime is copied by
 	// value.
-	live                     *liveConfig
+	live *liveConfig
+	// codexQuotaAuthOverride marks a configured Authorization header or
+	// authHeader. It hides quota UI without changing inference behavior.
+	codexQuotaAuthOverride bool
+	// codexQuotaCheck is a test seam for the background usage read. Nil uses
+	// the read-only Codex credential and private HTTP path.
+	codexQuotaCheck codexQuotaCheck
+	// codexQuotaSuccessDelay and codexQuotaRendered are test seams for
+	// deterministic scheduling and footer observations. Nil keeps production
+	// behavior.
+	codexQuotaSuccessDelay func(float64) time.Duration
+	codexQuotaRendered     func(string)
+	// quota is REPL-owned quota state. It is nil outside an active REPL.
+	quota                    *codexQuotaOwner
 	generation               int64
 	state                    State
 	bridge                   *pibridge.Client
@@ -939,6 +952,19 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		}
 		headers[name] = resolved
 	}
+	// Quota eligibility treats any Authorization header entry, even an
+	// empty one, and a configured authHeader as an override. This is a
+	// quota-only flag; request headers keep their existing behavior.
+	codexQuotaAuthOverride := meta.AuthHeader
+	if configured, ok := r.models.Providers[ov.Provider]; ok && configured.AuthHeader {
+		codexQuotaAuthOverride = true
+	}
+	for name := range meta.Headers {
+		if strings.EqualFold(name, "Authorization") {
+			codexQuotaAuthOverride = true
+			break
+		}
+	}
 	authPath := filepath.Join(r.agentDir, "auth.json")
 	idle := time.Duration(max(r.settings.HTTPIdleTimeoutMs, 0)) * time.Millisecond
 	var client provider.Provider
@@ -1037,6 +1063,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr = ov, cfg, client, authErr
+	r.codexQuotaAuthOverride = codexQuotaAuthOverride
 	r.reg = tools.NewRegistry(r.store.Cwd())
 	r.reg.Bash.ShellPath = r.settings.ShellPath
 	r.reg.Bash.ShellPrefix = r.settings.ShellPrefix
@@ -1272,6 +1299,7 @@ func (r *runtime) adoptConfiguration(candidate *runtime) {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
+	r.codexQuotaAuthOverride = candidate.codexQuotaAuthOverride
 }
 
 // publishLive stores the mutable request configuration that a running loop
@@ -1500,7 +1528,14 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		r.footerKey, r.footerSnapshot = key, snapshot
 	}
 	r.footerSnapshot.Theme = r.theme
-	console.SetPresentation(r.footerSnapshot)
+	presentation := r.footerSnapshot
+	if r.quota != nil {
+		presentation.Quota, presentation.QuotaToken, presentation.QuotaDeadline = r.quota.presentation(r)
+	}
+	if r.codexQuotaRendered != nil {
+		r.codexQuotaRendered(presentation.Quota)
+	}
+	console.SetPresentation(presentation)
 	r.syncBridge()
 }
 
@@ -1752,6 +1787,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var login *openAILoginSession
 	var loginDone <-chan openAILoginResult
 	var loginUpdates <-chan openAILoginUpdate
+	quota := newCodexQuotaOwner(r.codexQuotaCheck)
+	if r.codexQuotaSuccessDelay != nil {
+		quota.successDelay = r.codexQuotaSuccessDelay
+	}
+	r.quota = quota
+	defer func() {
+		quota.close()
+		if r.quota == quota {
+			r.quota = nil
+		}
+	}()
 	var suppressPaste bool
 	var pendingACCompactFocus *string
 	var outputErr error
@@ -2622,7 +2668,38 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.SetLoopStatus(r.loops.StatusLine())
 		r.draw(console)
 	}
+	quotaTimer := time.NewTimer(time.Hour)
+	if !quotaTimer.Stop() {
+		<-quotaTimer.C
+	}
+	defer quotaTimer.Stop()
+	var quotaTick <-chan time.Time
+	stopQuotaTimer := func() {
+		if !quotaTimer.Stop() {
+			select {
+			case <-quotaTimer.C:
+			default:
+			}
+		}
+		quotaTick = nil
+	}
+	armQuotaTimer := func() {
+		if quotaTick != nil {
+			return
+		}
+		due, ok := quota.due()
+		if !ok {
+			return
+		}
+		delay := time.Until(due)
+		if delay < 0 {
+			delay = 0
+		}
+		quotaTimer.Reset(delay)
+		quotaTick = quotaTimer.C
+	}
 	suspend := func() error {
+		stopQuotaTimer()
 		if err := r.lifecycle.Suspend(); err != nil {
 			return err
 		}
@@ -2634,6 +2711,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	console.SetDeferDraw(false)
 	if r.loops != nil {
 		console.SetLoopStatus(r.loops.StatusLine())
+	}
+	if quota.observe(r) {
+		stopQuotaTimer()
 	}
 	r.draw(console)
 	if len(initialMessages) > 0 {
@@ -2660,6 +2740,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	for {
 		lastInput.Release()
+		if quota.observe(r) {
+			stopQuotaTimer()
+		}
 		if exiting && !busy && login == nil {
 			if count := len(r.recovery); count > 0 {
 				fmt.Fprintln(out, terminal.Sanitize(fmt.Sprintf("%d undelivered attachment prompt(s) were not sent; Phi keeps a saved copy.", count)))
@@ -2682,6 +2765,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			cancelLogin()
 		}
+		if exiting {
+			stopQuotaTimer()
+		} else {
+			quota.pump(r)
+			armQuotaTimer()
+		}
 		inputSource := inputs
 		fromPendingInput := len(pendingInputs) > 0
 		if fromPendingInput {
@@ -2699,6 +2788,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			frameTick = frameTimer.C
 		}
 		select {
+		case <-quotaTick:
+			quotaTick = nil
 		case <-resizeTimeout:
 			resizeTimeout = nil
 			r.draw(console)
@@ -2791,6 +2882,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.draw(console)
 		case result := <-loginDone:
 			settleLogin(result)
+		case result := <-quota.done:
+			if quota.handleResult(result) {
+				r.draw(console)
+			}
 		case ev := <-events:
 			recordEventFrames(func() { applyEvent(ev) })
 		case err := <-done:

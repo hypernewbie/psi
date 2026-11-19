@@ -39,6 +39,9 @@ func TestActualOfflineModelPickerThinkingAndRestart(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	reviewSettings(t, agentDir, "http://127.0.0.1:1")
+	// Keep the synthetic Codex client on loopback too: this test exercises the
+	// picker and must not start a usage read against the real service.
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"http://127.0.0.1:1/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":100000}]},"openai-codex":{"baseUrl":"http://127.0.0.1:1"}}}`)
 	// The picker offers only providers with a stored login. Keep the Anthropic
 	// key and add a synthetic Codex OAuth entry so the served model stays usable
 	// offline while the uncredentialed providers stay hidden.

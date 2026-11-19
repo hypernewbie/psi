@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStyledRowsSanitizeBeforeSemanticStyle(t *testing.T) {
@@ -727,6 +728,139 @@ func TestIndexedFallbackMatchesPiPaletteSlots(t *testing.T) {
 	for token, want := range cases {
 		if got := tokenSGR(token); got != want {
 			t.Fatalf("token %s: got %q, want %q", token, got, want)
+		}
+	}
+}
+
+func TestFooterQuotaSuffixUsesOnlyUnusedGap(t *testing.T) {
+	quota := "[████▎░░░░░] Codex: 58% Left"
+	without, withoutWidths := formatFooter(PresentationSnapshot{
+		ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+		Model: "m", NoColor: true,
+	}, 120, 3, true)
+	with, withWidths := formatFooter(PresentationSnapshot{
+		ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+		Model: "m", Quota: quota, QuotaToken: TokenSuccess, NoColor: true,
+	}, 120, 3, true)
+	if len(with) != 2 || len(without) != 2 {
+		t.Fatalf("footer rows = %d, want 2", len(with))
+	}
+	if with[0] != without[0] {
+		t.Fatalf("quota changed the path row: %q != %q", with[0], without[0])
+	}
+	if withWidths[1] != withoutWidths[1] || CellWidth(Sanitize(with[1])) != CellWidth(Sanitize(without[1])) {
+		t.Fatalf("quota changed the footer width: %d != %d", withWidths[1], withoutWidths[1])
+	}
+	line := Sanitize(with[1])
+	for _, want := range []string{" " + quota + " ", "] 40%/100k", "m"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("quota footer missing %q: %q", want, line)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimRight(line, " "), " "+quota+" m") {
+		t.Fatalf("quota was not right-aligned against the model side: %q", line)
+	}
+	colored := PresentationSnapshot{
+		ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+		Model: "m", Quota: quota, QuotaToken: TokenSuccess,
+	}
+	coloredRows, _ := formatFooter(colored, 120, 3, false)
+	if !strings.Contains(coloredRows[1], "\x1b[32m"+quota) {
+		t.Fatalf("quota suffix did not use its token: %q", coloredRows[1])
+	}
+	if strings.Contains(Sanitize(without[1]), quota) {
+		t.Fatalf("baseline footer already contained quota: %q", without[1])
+	}
+
+	presentFrom := 0
+	for width := 40; width <= 140; width++ {
+		without, withoutWidths := formatFooter(PresentationSnapshot{
+			ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+			Model: "模型✓", NoColor: true,
+		}, width, 3, true)
+		with, withWidths := formatFooter(PresentationSnapshot{
+			ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+			Model: "模型✓", Quota: quota, QuotaToken: TokenSuccess, NoColor: true,
+		}, width, 3, true)
+		if with[0] != without[0] {
+			t.Fatalf("width %d: quota changed the path row: %q != %q", width, with[0], without[0])
+		}
+		if CellWidth(Sanitize(with[1])) != CellWidth(Sanitize(without[1])) || withWidths[1] != withoutWidths[1] {
+			t.Fatalf("width %d: quota changed the footer width: %d != %d", width, CellWidth(Sanitize(with[1])), CellWidth(Sanitize(without[1])))
+		}
+		line := Sanitize(with[1])
+		if strings.Contains(line, quota) {
+			if presentFrom == 0 {
+				presentFrom = width
+			}
+			if !strings.Contains(line, "] 40%/100k") || !strings.HasSuffix(strings.TrimRight(line, " "), " "+quota+" 模型✓") {
+				t.Fatalf("width %d: quota displaced context or model text or was not right-aligned: %q", width, line)
+			}
+			continue
+		}
+		if strings.Join(with, "\n") != strings.Join(without, "\n") {
+			t.Fatalf("width %d: footer changed without showing quota:\nwith=%q\nwithout=%q", width, with, without)
+		}
+	}
+	if presentFrom == 0 {
+		t.Fatal("quota never appeared between 40 and 140 columns")
+	}
+	if presentFrom > 40 {
+		without, _ := formatFooter(PresentationSnapshot{
+			ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+			Model: "模型✓", NoColor: true,
+		}, presentFrom-1, 3, true)
+		with, _ := formatFooter(PresentationSnapshot{
+			ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+			Model: "模型✓", Quota: quota, QuotaToken: TokenSuccess, NoColor: true,
+		}, presentFrom-1, 3, true)
+		if strings.Join(with, "\n") != strings.Join(without, "\n") {
+			t.Fatalf("width %d: quota fit below its first fitting width %d", presentFrom-1, presentFrom)
+		}
+	}
+}
+
+func TestFooterQuotaExpiresAtCompositionTime(t *testing.T) {
+	quota := "[░░░░░░░░░░] Codex: 100% Left"
+	base := PresentationSnapshot{
+		ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
+		Model: "m", NoColor: true,
+	}
+	with := base
+	with.Quota = quota
+	with.QuotaToken = TokenMuted
+	future := time.Now().Add(time.Hour)
+	with.QuotaDeadline = future
+	rows, _ := formatFooter(with, 120, 3, true)
+	if !strings.Contains(Sanitize(rows[1]), quota) {
+		t.Fatalf("future deadline hid quota: %q", rows[1])
+	}
+	with.QuotaDeadline = time.Now().Add(-time.Second)
+	expired, _ := formatFooter(with, 120, 3, true)
+	baseline, _ := formatFooter(base, 120, 3, true)
+	if strings.Join(expired, "\n") != strings.Join(baseline, "\n") {
+		t.Fatalf("expired quota changed the footer:\nexpired=%q\nbaseline=%q", expired, baseline)
+	}
+}
+
+func TestFooterBarEighthsAndCells(t *testing.T) {
+	for _, tc := range []struct {
+		percent float64
+		eighths int
+	}{
+		{0, 0},
+		{0.01, 1},
+		{42, 34},
+		{50, 40},
+		{99.5, 80},
+		{100, 80},
+	} {
+		if got := FooterBarEighths(tc.percent, 10); got != tc.eighths {
+			t.Fatalf("FooterBarEighths(%v, 10) = %d, want %d", tc.percent, got, tc.eighths)
+		}
+		filled, empty := FooterBarCells(tc.eighths, 10)
+		if CellWidth(filled)+CellWidth(empty) != 10 {
+			t.Fatalf("FooterBarCells(%d, 10) widths = %d + %d", tc.eighths, CellWidth(filled), CellWidth(empty))
 		}
 	}
 }
