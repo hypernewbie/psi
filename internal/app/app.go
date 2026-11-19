@@ -461,6 +461,7 @@ Session storage (Unix): new directories and missing parents use mode 0700. Exist
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
+During a run, /session, /hotkeys, and /name work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 Inline search content requires selected and enabled fetch_content.
@@ -3759,10 +3760,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 						continue
 					}
-					console.Editor.RestoreDraft(text, len([]rune(text)))
-					console.RefreshCompletion()
-					r.draw(console)
-					continue
+					cmd, known := terminal.ParseCommand(text)
+					if known {
+						switch cmd.Name {
+						case "session", "hotkeys", "name":
+							if _, err := r.command(cmd, out); err != nil {
+								print("error: " + err.Error())
+							}
+							r.draw(console)
+							continue
+						}
+					}
+					// Never send a recognized command with no busy handler to the
+					// provider. A bare slash stays in the draft for completion;
+					// unknown slash text uses the ordinary prompt queues below.
+					if known || strings.TrimSpace(text) == "/" {
+						console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+						console.RefreshCompletion()
+						r.draw(console)
+						continue
+					}
 				}
 				if activeLoop != nil {
 					if input.FollowUp {
