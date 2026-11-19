@@ -20,6 +20,9 @@ const (
 const (
 	// WebMaxCallStringBytes bounds one displayed URL, query, or target.
 	WebMaxCallStringBytes = 256
+	// WebMaxTitleBytes bounds the whole first row, which adds a tool title
+	// and, for search, quotes around a bounded query.
+	WebMaxTitleBytes = 512
 	// WebMaxCallEntries bounds the logical continuation entries of one call.
 	WebMaxCallEntries = 5
 	// WebMaxPreviewLines bounds the source lines retained for a result preview.

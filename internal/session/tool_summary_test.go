@@ -137,7 +137,7 @@ func TestWebCardHistoryBounds(t *testing.T) {
 	badCall := ToolCall{Type: "toolCall", ID: "bad-call", Name: "web_search", Arguments: map[string]any{"query": "q"}}
 	badMsg := AgentMessage{Role: "assistant", Assistant: &AssistantMessage{Role: "assistant",
 		Content: []ContentBlock{{Type: "toolCall", Call: &badCall}}}}
-	oversized := event.WebCall{Title: strings.Repeat("t", event.WebMaxCallStringBytes+1)}
+	oversized := event.WebCall{Title: strings.Repeat("t", event.WebMaxTitleBytes+1)}
 	if _, err := store.AppendMessageDisplay(badMsg, &event.WebMeta{Calls: map[string]event.WebCall{badCall.ID: oversized}}); err != nil {
 		t.Fatal(err)
 	}
@@ -295,5 +295,22 @@ func TestWebCardHistoryBounds(t *testing.T) {
 	}
 	if decodeWebMeta([]byte(`{"calls":{"c":{"title":"fetch https://example.com"}}}`)) == nil {
 		t.Fatal("valid display payload rejected")
+	}
+}
+
+func TestWebMetaAcceptsTitleAtBound(t *testing.T) {
+	atBound, err := json.Marshal(event.WebMeta{Calls: map[string]event.WebCall{"c": {Title: strings.Repeat("t", event.WebMaxTitleBytes)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodeWebMeta(atBound) == nil {
+		t.Fatal("title at the shared bound was rejected")
+	}
+	over, err := json.Marshal(event.WebMeta{Calls: map[string]event.WebCall{"c": {Title: strings.Repeat("t", event.WebMaxTitleBytes+1)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodeWebMeta(over) != nil {
+		t.Fatal("title over the shared bound was accepted")
 	}
 }

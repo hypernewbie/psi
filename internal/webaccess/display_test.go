@@ -47,6 +47,11 @@ func TestWebFetchCallDisplay(t *testing.T) {
 			want: event.WebCall{Title: "fetch", NoURL: true},
 		},
 		{
+			name: "blank url beside urls is invalid",
+			args: map[string]any{"url": "  ", "urls": []any{"https://example.com/b"}},
+			want: event.WebCall{Title: "fetch", Invalid: true},
+		},
+		{
 			name: "unparseable url keeps a fixed label",
 			args: map[string]any{"url": "javascript:alert(1)"},
 			want: event.WebCall{Title: "fetch", Invalid: true},
@@ -224,5 +229,38 @@ func TestWebResultDisplayFacts(t *testing.T) {
 	}
 	if empty := contentResultDisplay("Page", 12, 12, 12, false, nil); !empty.HasRange || empty.RangeStart != 12 || empty.RangeEnd != 12 {
 		t.Fatalf("empty end-of-content range = %+v", empty)
+	}
+}
+
+// TestWebCallDisplayStaysInsideStoredBounds pins the boundary where a call
+// title adds a tool prefix or quotes to a maximum-length value. The live card
+// and the stored payload must agree at the shared validation bounds.
+func TestWebCallDisplayStaysInsideStoredBounds(t *testing.T) {
+	client := New(Config{FetchModes: []string{"readable", "raw"}})
+	longURL := "https://example.com/" + strings.Repeat("p", 400)
+	fetch, ok := client.DisplayCall(ToolFetch, map[string]any{"url": longURL})
+	if !ok {
+		t.Fatal("fetch is not a web tool")
+	}
+	if len(fetch.Title) > event.WebMaxTitleBytes {
+		t.Fatalf("fetch title is %d bytes", len(fetch.Title))
+	}
+	if len(fetch.Title) <= event.WebMaxCallStringBytes {
+		t.Fatalf("expected the URL clip plus prefix to exceed the value bound: %d", len(fetch.Title))
+	}
+
+	longQuery := strings.Repeat("q", 400)
+	single, _ := client.DisplayCall(ToolSearch, map[string]any{"query": longQuery})
+	if len(single.Title) > event.WebMaxTitleBytes || !strings.HasPrefix(single.Title, `search "`) {
+		t.Fatalf("single-query title = %d bytes, %q", len(single.Title), single.Title[:min(20, len(single.Title))])
+	}
+	multi, _ := client.DisplayCall(ToolSearch, map[string]any{"queries": []any{longQuery, "short"}})
+	if len(multi.Entries) != 2 {
+		t.Fatalf("entries = %#v", multi.Entries)
+	}
+	for _, entry := range multi.Entries {
+		if len(entry) > event.WebMaxCallStringBytes || !strings.HasPrefix(entry, `"`) || !strings.HasSuffix(entry, `"`) {
+			t.Fatalf("quoted entry is %d bytes: %q", len(entry), entry)
+		}
 	}
 }

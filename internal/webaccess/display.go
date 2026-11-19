@@ -56,9 +56,13 @@ func (c *Client) fetchCallDisplay(args map[string]any) event.WebCall {
 	}
 	parsed, err := parseFetchArgs(args, c.cfg)
 	if err != nil {
-		if text, ok := args["url"].(string); ok && strings.TrimSpace(text) == "" {
-			call.NoURL = true
-			return call
+		// A blank sole `url` is Pi's "no URL" case. A blank `url` beside a
+		// `urls` array is a conflicting-input error, not a missing URL.
+		if !hasURLs {
+			if text, ok := args["url"].(string); ok && strings.TrimSpace(text) == "" {
+				call.NoURL = true
+				return call
+			}
 		}
 		call.Invalid = true
 		return call
@@ -123,7 +127,7 @@ func (c *Client) searchCallDisplay(args map[string]any) event.WebCall {
 		if i == event.WebMaxCallEntries {
 			break
 		}
-		call.Entries = append(call.Entries, "\""+c.displayText(query, 4096)+"\"")
+		call.Entries = append(call.Entries, c.displayQuoted(query, 4096))
 	}
 	if len(parsed.queries) > event.WebMaxCallEntries {
 		call.Overflow = len(parsed.queries) - event.WebMaxCallEntries
@@ -167,6 +171,16 @@ func (c *Client) contentCallDisplay(args map[string]any) event.WebCall {
 // shared call-string bound.
 func (c *Client) displayText(text string, redactLimit int) string {
 	return clipMeta(c.redact(strings.TrimSpace(text), redactLimit), event.WebMaxCallStringBytes)
+}
+
+// displayQuoted wraps a query in the display quotes and keeps the stored entry
+// inside the per-entry byte bound, including the quotes.
+func (c *Client) displayQuoted(text string, redactLimit int) string {
+	value := c.displayText(text, redactLimit)
+	if len(value) > event.WebMaxCallStringBytes-2 {
+		value = runePrefix(value, event.WebMaxCallStringBytes-2)
+	}
+	return "\"" + value + "\""
 }
 
 // abbreviateDisplay applies Pi's 30-character URL abbreviation: URLs longer
