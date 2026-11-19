@@ -1824,26 +1824,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 		console.SetThinking(false)
 		cancel()
 	}
-	// releaseTerminal hands the terminal back for process exit before the
-	// run settles: input stops, cursor/paste modes and the visible UI
-	// restore, raw mode ends, and the console drops every later write.
-	// Settlement continues behind the release with no new work until the
-	// run drains. Console and tty cleanup stay idempotent with the Run
-	// defers, which still run on the normal return path.
-	releaseTerminal := func() {
-		if released {
-			return
-		}
-		released = true
-		suspendPending = false
-		console.Release()
-		r.tty.Restore()
-		for i := range pendingInputs {
-			pendingInputs[i].Release()
-		}
-		pendingInputs = nil
-		inputs = nil
-	}
 	// cancelLogin asks the owned sign-in to stop. Ownership clears only
 	// when the worker's terminal result arrives and settles.
 	cancelLogin := func() {
@@ -2678,6 +2658,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 		resizeTimer.Reset(150 * time.Millisecond)
 		resizeTimeout = resizeTimer.C
 	}
+	// Stop terminal work before cancelling the run. Keep the REPL alive
+	// only to settle the worker and handle its events and bridge receipts.
+	releaseTerminal := func() {
+		released = true
+		suspendPending = false
+		frameTimer.Stop()
+		resizeTimer.Stop()
+		frameTick, resizeTimeout, themeChanges = nil, nil, nil
+		cancelACEndTurn()
+		console.Release()
+		r.tty.Restore()
+		inputs = nil
+		for i := range pendingInputs {
+			pendingInputs[i].Release()
+		}
+		pendingInputs = nil
+	}
 	for {
 		lastInput.Release()
 		if exiting && !busy && login == nil {
@@ -2686,7 +2683,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			return console.Err()
 		}
-		if suspendPending && !busy && login == nil && !released {
+		if suspendPending && !busy && login == nil {
 			suspendPending = false
 			if err := suspend(); err != nil {
 				return err
@@ -2710,7 +2707,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			close(queued)
 			inputSource = queued
 		}
-		if frameTick == nil && (stream.Pending() || console.NeedsDraw() || (busy && activityText != "")) {
+		if !released && frameTick == nil && (stream.Pending() || console.NeedsDraw() || (busy && activityText != "")) {
 			delay := time.Second / 30
 			if busy && !stream.Pending() && !console.NeedsDraw() {
 				delay = 80 * time.Millisecond
@@ -2724,7 +2721,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.draw(console)
 		case <-acEndTurnTimeout:
 			acEndTurnTimeout = nil
-			if !released && endTurnReady() {
+			if endTurnReady() {
 				checkAndStartCompact("", false, false)
 			}
 		case <-themeChanges:
@@ -2756,14 +2753,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 			_, afterFrames, _, _ := console.FrameStats()
 			r.timerFrames += afterFrames - beforeFrames
 		case sig := <-signals:
+			if released && (isResize(sig) || isSuspend(sig) || isResume(sig)) {
+				continue
+			}
 			if isResize(sig) {
 				requestResizeDraw()
 				continue
 			}
 			if isSuspend(sig) {
-				if released {
-					continue
-				}
 				if busy {
 					suspendPending = true
 					cancelActive()

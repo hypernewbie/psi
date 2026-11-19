@@ -891,6 +891,14 @@ func (c *Console) StatusWidth() int {
 }
 
 func (c *Console) size() (int, int) {
+	if c.released {
+		// Settlement can still format transcript entries, but no longer
+		// owns the terminal descriptor. Use the last drawn dimensions.
+		if c.lastW > 0 && c.lastH > 0 {
+			return c.lastW, c.lastH
+		}
+		return 80, 24
+	}
 	if c.SizeFunc != nil {
 		width, height := c.SizeFunc()
 		return max(1, width), max(1, height)
@@ -1216,6 +1224,9 @@ func (c *Console) EndFrame() error {
 }
 
 func (c *Console) emitComposed(appendText string) error {
+	if c.released {
+		return nil
+	}
 	width, height := c.size()
 	if c.lastW > 0 && (c.lastW != width || c.lastH != height) {
 		c.fullDocumentRedraw = true

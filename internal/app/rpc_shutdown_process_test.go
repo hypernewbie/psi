@@ -5,7 +5,6 @@ package app
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -15,9 +14,7 @@ import (
 	"time"
 )
 
-// rpcChildProcess runs `psi --mode rpc` with fixture-owned pipes. stdout is
-// decoded as JSONL; the reader goroutine owns the pipe until EOF so Wait
-// never closes it mid-line.
+// rpcChildProcess runs `psi --mode rpc` with fixture-owned pipes.
 type rpcChildProcess struct {
 	t      *testing.T
 	cmd    *exec.Cmd
@@ -52,19 +49,15 @@ func startRPCChild(t *testing.T, f *quitFixture) *rpcChildProcess {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
 	p := &rpcChildProcess{t: t, cmd: cmd, stdin: stdin, log: &rpcLog{notify: make(chan struct{}, 1)}, done: make(chan error, 1)}
-	cmd.Stderr = &p.stderr
+	// Wait joins exec's pipe readers and bounds the drain if an inherited
+	// output descriptor is still open after process exit.
+	cmd.Stdout, cmd.Stderr = p.log, &p.stderr
+	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	go func() {
-		_, _ = io.Copy(p.log, stdout)
-		p.done <- cmd.Wait()
-	}()
+	go func() { p.done <- cmd.Wait() }()
 	t.Cleanup(p.cleanup)
 	return p
 }
@@ -117,6 +110,10 @@ func (p *rpcChildProcess) waitExit() {
 		if err != nil {
 			p.t.Fatalf("rpc process failed: %v\nstderr: %s\nstdout: %s", err, p.stderr.String(), p.log.rawString())
 		}
+		if raw := p.log.rawString(); !strings.HasSuffix(raw, "\n") {
+			p.t.Fatalf("RPC output ended with an incomplete JSONL frame: %q", raw)
+		}
+		p.log.objects(p.t) // Validate frames written after the last live check too.
 	case <-time.After(8 * time.Second):
 		_ = p.cmd.Process.Kill()
 		<-p.done
@@ -137,7 +134,7 @@ func rpcSawPartial(objects []map[string]any) bool {
 			continue
 		}
 		update, _ := obj["assistantMessageEvent"].(map[string]any)
-		if update["type"] == "text_delta" && strings.Contains(fmt.Sprint(update["delta"]), "QUIT_PARTIAL") {
+		if update["type"] == "text_delta" && update["delta"] == "QUIT_PARTIAL" {
 			return true
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	pibridgepb "psi/internal/pibridge/pb"
+	"psi/internal/session"
 )
 
 // drainOutputAfterExit closes the harness's extra slave descriptor, then
@@ -24,19 +25,19 @@ import (
 func (q *reviewPTY) drainOutputAfterExit() string {
 	q.t.Helper()
 	_ = q.tty.Close()
-	drained := make(chan struct{})
-	go func() {
-		for chunk := range q.chunks {
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case chunk, ok := <-q.chunks:
+			if !ok {
+				return q.raw.String()
+			}
 			q.raw.Write(chunk)
+		case <-deadline.C:
+			q.t.Fatal("output did not settle after process exit")
 		}
-		close(drained)
-	}()
-	select {
-	case <-drained:
-	case <-time.After(8 * time.Second):
-		q.t.Fatal("output did not settle after process exit")
 	}
-	return q.raw.String()
 }
 
 // quitFixture is a local provider that streams one visible partial response
@@ -80,15 +81,13 @@ data: {"index":0,"delta":{"type":"text_delta","text":"QUIT_PARTIAL"}}
 	return f
 }
 
-const quitReleaseMarker = "\x1b[?2004l"
-
 func (f *quitFixture) assertSettled(t *testing.T, raw string, wantRequests int32) {
 	t.Helper()
-	idx := strings.LastIndex(raw, quitReleaseMarker)
-	if idx < 0 {
-		t.Fatalf("no terminal release output: %q", raw)
+	_, tail, found := strings.Cut(raw, quitReleaseMarker)
+	if !found {
+		t.Fatal("no terminal release output")
 	}
-	if tail := raw[idx+len(quitReleaseMarker):]; tail != "" {
+	if tail != "" {
 		t.Fatalf("writes after terminal release: %q", tail)
 	}
 	if n := f.requests.Load(); n != wantRequests {
@@ -99,22 +98,16 @@ func (f *quitFixture) assertSettled(t *testing.T, raw string, wantRequests int32
 
 func (f *quitFixture) assertPartialPersisted(t *testing.T) {
 	t.Helper()
-	homeDir := filepath.Dir(filepath.Dir(f.agentDir))
-	candidates := []string{filepath.Join(f.agentDir, "sessions"), filepath.Join(filepath.Dir(f.agentDir), "sessions"), filepath.Join(homeDir, "sessions")}
-	persisted := false
-	for _, dir := range candidates {
-		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(p, ".jsonl") {
-				return nil
-			}
-			data, err := os.ReadFile(p)
-			if err == nil && strings.Contains(string(data), "QUIT_PARTIAL") {
-				persisted = true
-			}
-			return nil
-		})
+	dir := session.DefaultSessionDir(f.work, f.agentDir)
+	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("expected one session in %s; got %v (%v)", dir, files, err)
 	}
-	if !persisted {
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "QUIT_PARTIAL") {
 		t.Fatal("aborted partial was not persisted")
 	}
 }
