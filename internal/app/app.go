@@ -457,7 +457,7 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
-Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in in a dedicated panel, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code; in device code mode, Enter opens the verification page. Esc cancels Codex sign-in, and Ctrl+D cancels and quits. /logout removes a stored API key. See docs/security.md for credential handling.
+Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in in a dedicated panel, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code; in device code mode, Enter opens the verification page. Esc cancels Codex sign-in, and Ctrl+D cancels and quits. /logout removes the selected stored API key or OAuth credential and attempts OAuth revocation. See docs/security.md for credential handling.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
@@ -3755,7 +3755,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 							continue
 						}
 						if r.selector.AuthMode == AuthLogout {
-							r.finishLogout(selected.ID, console, out)
+							selectedCredential := provider.StoredCredential{ProviderID: selected.ID, Kind: r.selector.CredentialKinds[selected.ID]}
+							r.finishLogout(selectedCredential, console, out)
 							continue
 						}
 						if selected.ID == r.store.Header().ID {

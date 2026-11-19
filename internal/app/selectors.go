@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/terminal"
 	pitheme "psi/internal/theme"
@@ -37,6 +38,9 @@ type Selector struct {
 	// ModelThinkingLevel marks the level picker in that flow.
 	ModelThinkingLevel bool
 	AuthMode           AuthMode
+	// CredentialKinds is logout-only metadata keyed by provider ID. It keeps
+	// the displayed credential kind separate from the row label and session data.
+	CredentialKinds map[string]provider.CredentialKind
 
 	Selected     int
 	SelectedID   string
@@ -185,7 +189,7 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 	} else if s.AuthMode == AuthLogin {
 		label, noMatch = "Providers", "  No matching providers"
 	} else if s.AuthMode == AuthLogout {
-		label, noMatch = "Stored API keys", "  No matching providers"
+		label, noMatch = "Stored credentials", "  No matching credentials"
 	} else if s.AuthMode == AuthCodexMethods {
 		label = "Select OpenAI Codex login method:"
 	}

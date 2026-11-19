@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 
@@ -87,17 +88,24 @@ func (r *runtime) openCodexLoginMethodSelector(console *terminal.Console) error 
 	return nil
 }
 
-func logoutSelector(providers []string, activeID string) *Selector {
-	items := make([]session.SessionInfo, 0, len(providers))
-	for _, id := range providers {
-		spec, ok := providerregistry.Lookup(id)
+func logoutSelector(credentials []provider.StoredCredential, activeID string) *Selector {
+	items := make([]session.SessionInfo, 0, len(credentials))
+	kinds := make(map[string]provider.CredentialKind, len(credentials))
+	for _, credential := range credentials {
+		spec, ok := providerregistry.Lookup(credential.ProviderID)
 		if !ok {
 			continue
 		}
-		items = append(items, session.SessionInfo{ID: id, FirstMessage: spec.Name + " · " + spec.Environment})
+		detail := "API key"
+		if credential.Kind == provider.CredentialOAuth {
+			detail = "OAuth credential"
+		}
+		items = append(items, session.SessionInfo{ID: credential.ProviderID, FirstMessage: spec.Name + " · " + detail})
+		kinds[credential.ProviderID] = credential.Kind
 	}
 	selector := NewSelector(items, activeID)
 	selector.AuthMode = AuthLogout
+	selector.CredentialKinds = kinds
 	return selector
 }
 
@@ -297,40 +305,50 @@ func (r *runtime) logoutCommand(arg string, console *terminal.Console, out io.Wr
 		return fmt.Errorf("use /logout")
 	}
 	authPath := filepath.Join(r.agentDir, "auth.json")
-	providers, err := provider.StoredAPIKeyProviders(authPath)
+	credentials, err := provider.StoredCredentials(authPath)
 	if err != nil {
 		return err
 	}
-	if len(providers) == 0 {
-		printStatusText(out, "No stored API keys to remove. /logout only removes keys from auth.json; environment variables and models.json config are unchanged.")
+	if len(credentials) == 0 {
+		printStatusText(out, "No stored credentials to remove. /logout only removes entries from auth.json; environment variables and models.json config are unchanged.")
 		r.draw(console)
 		return nil
 	}
-	r.openAuthSelector(logoutSelector(providers, r.ov.Provider), console)
+	r.openAuthSelector(logoutSelector(credentials, r.ov.Provider), console)
 	return nil
 }
 
-func (r *runtime) finishLogout(providerID string, console *terminal.Console, out io.Writer) {
+func (r *runtime) finishLogout(selected provider.StoredCredential, console *terminal.Console, out io.Writer) {
 	r.selector = nil
 	console.ClearPickerRows()
 	r.selectorDraft, r.selectorCursor, r.selectorRestoreOnSuccess = "", 0, false
 	console.Editor.Clear()
 	r.restoreAuthState()
 
-	spec, ok := providerregistry.Lookup(providerID)
-	if !ok || spec.Auth != providerregistry.AuthAPIKey {
-		printStatusText(out, fmt.Sprintf("Failed to remove API key for %s: unsupported provider", providerID))
+	spec, ok := providerregistry.Lookup(selected.ProviderID)
+	if !ok {
+		printStatusText(out, fmt.Sprintf("Failed to remove stored credential for %s: unsupported provider", selected.ProviderID))
 		r.draw(console)
 		return
 	}
-	removed, err := provider.RemoveAPIKey(context.Background(), filepath.Join(r.agentDir, "auth.json"), providerID)
+	if selected.Kind == provider.CredentialOAuth {
+		console.Status("Removing stored OAuth credential…")
+	}
+	result, err := provider.LogoutCredential(context.Background(), filepath.Join(r.agentDir, "auth.json"), selected, r.logoutHTTPClient(selected))
+	if selected.Kind == provider.CredentialOAuth {
+		console.Status("")
+	}
 	if err != nil {
-		printStatusText(out, fmt.Sprintf("Failed to remove API key for %s: %v", spec.Name, err))
+		status := fmt.Sprintf("Failed to remove stored %s for %s: %v", logoutKindName(selected.Kind), spec.Name, err)
+		if selected.Kind == provider.CredentialOAuth {
+			status += "\n" + logoutRevocationText(result.Revocation)
+		}
+		printLogoutNotice(out, terminal.NoticeError, status)
 		r.restoreAuthState()
 		r.draw(console)
 		return
 	}
-	if providerID == r.ov.Provider {
+	if result.Removed && selected.ProviderID == r.ov.Provider {
 		candidate := *r
 		candidate.prov = nil
 		refreshErr := candidate.configure(r.ov)
@@ -351,11 +369,68 @@ func (r *runtime) finishLogout(providerID string, console *terminal.Console, out
 		}
 		r.publishLive()
 	}
-	if removed {
-		printStatusText(out, fmt.Sprintf("Removed stored API key for %s. Environment variables and models.json config are unchanged.", spec.Name))
+	if !result.Removed {
+		if selected.Kind == provider.CredentialOAuth {
+			printStatusText(out, fmt.Sprintf("No stored OAuth credential for %s was found.", spec.Name))
+		} else {
+			printStatusText(out, fmt.Sprintf("No stored API key for %s was found.", spec.Name))
+		}
+		r.restoreAuthState()
+		r.draw(console)
+		return
+	}
+	if selected.Kind == provider.CredentialOAuth {
+		printLogoutNotice(out, terminal.NoticeInfo, fmt.Sprintf("Removed stored OAuth credential for %s.\n%s", spec.Name, logoutRevocationText(result.Revocation)))
 	} else {
-		printStatusText(out, fmt.Sprintf("No stored API key for %s was found.", spec.Name))
+		printLogoutNotice(out, terminal.NoticeInfo, fmt.Sprintf("Removed stored API key for %s.\nEnvironment variables and models.json config are unchanged.", spec.Name))
 	}
 	r.restoreAuthState()
 	r.draw(console)
+}
+
+// The usual one-line status clips a second outcome on narrow terminals.
+func printLogoutNotice(out io.Writer, kind terminal.NoticeKind, text string) {
+	if sink, ok := out.(interface {
+		AppendDocumentBlock(terminal.DocumentBlock) error
+	}); ok {
+		_ = sink.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentNotice, NoticeKind: kind, Text: text})
+		return
+	}
+	fmt.Fprintln(out, terminal.Sanitize(text))
+}
+
+func (r *runtime) logoutHTTPClient(selected provider.StoredCredential) *http.Client {
+	if selected.Kind != provider.CredentialOAuth {
+		return nil
+	}
+	switch selected.ProviderID {
+	case "openai-codex":
+		return oauthHTTPClient(r.codexTransport)
+	case "openai":
+		return oauthHTTPClient(r.openAITransport)
+	default:
+		return nil
+	}
+}
+
+func logoutKindName(kind provider.CredentialKind) string {
+	if kind == provider.CredentialOAuth {
+		return "OAuth credential"
+	}
+	return "API key"
+}
+
+func logoutRevocationText(outcome provider.RevocationOutcome) string {
+	switch outcome {
+	case provider.RevocationAcceptedRefresh:
+		return "OpenAI accepted the refresh-token revocation request."
+	case provider.RevocationAcceptedAccess:
+		return "OpenAI accepted the access-token revocation request."
+	case provider.RevocationNoUsableToken:
+		return "No usable token; no revocation request was sent."
+	case provider.RevocationNotAttempted:
+		return "Revocation not attempted."
+	default:
+		return "Revocation unconfirmed."
+	}
 }

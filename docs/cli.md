@@ -117,7 +117,9 @@ API-key login stores the key in `<agentDir>/auth.json`. The agent directory is
 `~/.pi/agent`. A stored key takes precedence over a `models.json` key and the
 provider's environment variable. An existing `auth.json` symlink is preserved:
 psi locks the logical path and atomically replaces the resolved regular-file
-target. Broken or nonregular targets fail. See [Security](security.md) for
+target. Broken or nonregular targets fail. `/logout` also acquires Pi's
+resolved-target lease when it differs from the logical lease. The two lease
+acquisitions share a five-second budget. See [Security](security.md) for
 target-race and memory-cleanup limits. psi does not validate the key during
 login; the first provider request can still fail. If the session is offline and
 the provider has a default model, login selects it and saves the default
@@ -125,9 +127,19 @@ provider and model. Otherwise, the key is saved without changing the current
 model. If model selection or defaults persistence fails after the key is saved,
 psi reports the failure and keeps the saved key.
 
-Use `/logout` to select and remove a stored built-in API key from
-`auth.json`. This includes Anthropic API keys. It does not remove OAuth
-credentials, environment variables, or `models.json` credentials. If the key
+Use `/logout` to select and remove a stored built-in credential from
+`auth.json`. The picker lists stored API keys, direct OpenAI ChatGPT OAuth, and
+OpenAI Codex OAuth. For OAuth, logout sends one best-effort POST to
+`https://auth.openai.com/oauth/revoke` with a ten-second limit and no redirects.
+A rejected, timed-out, or failed request does not block local deletion. The
+notice reports the two outcomes separately: a concurrent file change can stop
+local deletion even after OpenAI accepts the request. An accepted request is
+not proof that already-issued access tokens or other clients' copies stopped
+working. If the entry is shared, Pi sees the deletion on its next successful
+read.
+
+`/logout` does not remove environment variables or `models.json` credentials.
+An API-key logout cannot revoke the provider-side key. If the credential
 belongs to the active provider, psi reloads that provider from the remaining
 credential sources. If none is available, psi goes offline until you configure
 a credential again. `/logout` does not accept an argument.

@@ -43,8 +43,12 @@ export ANTHROPIC_API_KEY="..."
 ./psi
 ```
 
-Use `/logout` to remove a stored built-in API key. This does not remove OAuth
-credentials, environment variables, or credentials in `models.json`.
+Use `/logout` to remove a stored built-in API key or OAuth credential. OAuth
+logout attempts one best-effort OpenAI revocation request; local deletion
+continues if that request fails, and the status says remote revocation is
+unconfirmed. This does not remove environment variables or credentials in
+`models.json`. If Pi uses the same `auth.json`, its next successful read sees
+the deletion.
 
 Use `/model` to select a provider and model with a usable credential. Providers
 without a credential are not listed. A provider that `models.json` declares

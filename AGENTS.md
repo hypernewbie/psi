@@ -27,7 +27,8 @@
 - Use `internal/secretmem.Wipe` for retired application-owned storage: vacated ranges, discarded events, and fully retired allocations. Wipe exact dead ranges; use the full capacity only when the whole allocation is retired.
 - Keep `Wipe` as `clear` followed by `runtime.KeepAlive`. The keep-alive prevents the optimized path from dropping the explicit clear.
 - Never use an unsafe byte/string alias as an erasure shortcut. Do not log secrets. Do not claim complete process-memory erasure; document unavoidable runtime, standard-library, provider, HTTP, and terminal-rendering copies instead.
-- Preserve symlink-preserving auth writes: the logical `auth.json` path owns the Pi lock, while the resolved regular-file target receives the atomic replacement. Recheck the link and target identity before staging and before replacement, and refuse a change observed by those checks; do not claim an atomic guard against a race after the final check.
+- Preserve symlink-preserving auth writes: the logical `auth.json` path owns the Pi lock, while the resolved regular-file target receives the atomic replacement. `/logout` also holds Pi's resolved-target lease when it differs from the logical lease, for the whole read, revocation request, and write. Recheck the link and target identity before staging and before replacement, and refuse a change observed by those checks; do not claim an atomic guard against a race after the final check.
+- Adding a built-in provider or changing its credential kind requires a working `/logout` in the same change: listing, local removal, OAuth revocation where the provider supports it, tests, CLI help, docs, and prompt guidance. An API-key provider cannot revoke the key; `/logout` removes the stored copy and says so.
 
 ## Tests
 
