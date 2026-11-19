@@ -926,12 +926,12 @@ func TestSteeringDeliversOneBatchPerTurnWithContinuation(t *testing.T) {
 	// one-batch-per-turn rule can stop steer B from joining the same request.
 	nudges := 0
 	cfg := Config{Model: modelMeta(), Tools: toolDefs()}
-	cfg.ContinueOnEnd = func() (string, string, bool) {
+	cfg.ContinueOnEnd = func() (string, string, bool, error) {
 		nudges++
 		if nudges == 1 {
-			return "nudge", "keep going", true
+			return "nudge", "keep going", true, nil
 		}
-		return "", "", false
+		return "", "", false, nil
 	}
 	if err := loop.Submit(context.Background(), "start", cfg); err != nil {
 		t.Fatal(err)

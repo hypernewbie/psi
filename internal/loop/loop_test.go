@@ -106,8 +106,8 @@ func TestTurnEndAdvancesLoopAndCheckResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for want := 1; want <= 2; want++ {
-		messageType, prompt, ok := controller.ContinuePrompt()
-		if !ok || messageType != IterationMessageType {
+		messageType, prompt, ok, err := controller.ContinuePrompt()
+		if err != nil || !ok || messageType != IterationMessageType {
 			t.Fatalf("continue = %q %v", messageType, ok)
 		}
 		state := controller.Snapshot()
@@ -118,8 +118,8 @@ func TestTurnEndAdvancesLoopAndCheckResumes(t *testing.T) {
 	if result := controller.HandleDone(map[string]any{"reason": "looks done"}); result.Error {
 		t.Fatal(result.Text)
 	}
-	messageType, prompt, ok := controller.ContinuePrompt()
-	if !ok || messageType != ResumeMessageType {
+	messageType, prompt, ok, err := controller.ContinuePrompt()
+	if err != nil || !ok || messageType != ResumeMessageType {
 		t.Fatalf("check-turn continue = %q %v", messageType, ok)
 	}
 	state := controller.Snapshot()
@@ -129,8 +129,8 @@ func TestTurnEndAdvancesLoopAndCheckResumes(t *testing.T) {
 	if !strings.Contains(prompt, "not confirmed") || !strings.Contains(prompt, "looks done") {
 		t.Fatalf("resume prompt = %q", prompt)
 	}
-	if _, _, ok := controller.ContinuePrompt(); !ok {
-		t.Fatal("resumed loop stopped advancing")
+	if _, _, ok, err := controller.ContinuePrompt(); err != nil || !ok {
+		t.Fatalf("resumed loop stopped advancing: %v", err)
 	}
 }
 
@@ -147,12 +147,12 @@ func TestEvaluationAndResumePromptsFollowClaim(t *testing.T) {
 	if !ok || !strings.Contains(prompt, "Confirmation check") || !strings.Contains(prompt, "seems done") {
 		t.Fatalf("evaluation prompt = %q %v", prompt, ok)
 	}
-	if _, ok := controller.ResumePrompt(); ok {
+	if _, ok := controller.ResumePrompt(""); ok {
 		t.Fatal("resume prompt appeared during a pending check")
 	}
 	controller.HandleApprove(map[string]any{"verdict": "not_reached", "reason": "missing tests"})
-	resume, ok := controller.ResumePrompt()
-	if !ok || !strings.Contains(resume, "not confirmed") {
+	resume, ok := controller.ResumePrompt("missing tests")
+	if !ok || !strings.Contains(resume, "missing tests") {
 		t.Fatalf("resume prompt = %q %v", resume, ok)
 	}
 }
@@ -180,8 +180,8 @@ func TestForeverLoopHasNoToolAndCannotBeControlled(t *testing.T) {
 			t.Fatalf("forever tool call = %+v", result)
 		}
 	}
-	messageType, prompt, ok := controller.ContinuePrompt()
-	if !ok || messageType != NudgeMessageType || !strings.Contains(prompt, "Only the user can stop") {
+	messageType, prompt, ok, err := controller.ContinuePrompt()
+	if err != nil || !ok || messageType != NudgeMessageType || !strings.Contains(prompt, "Only the user can stop") {
 		t.Fatalf("forever continuation = %q %q %v", messageType, prompt, ok)
 	}
 }
@@ -251,8 +251,8 @@ func TestLoopStateReconstructsFromActiveSessionBranch(t *testing.T) {
 	if _, err := controller.Start("goal persist state"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := controller.ContinuePrompt(); !ok {
-		t.Fatal("turn end did not advance")
+	if _, _, ok, err := controller.ContinuePrompt(); err != nil || !ok {
+		t.Fatalf("turn end did not advance: %v", err)
 	}
 	controller.HandleDone(map[string]any{"reason": "persisted claim"})
 
@@ -261,8 +261,8 @@ func TestLoopStateReconstructsFromActiveSessionBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := restored.Snapshot()
-	if !state.Active || state.CurrentStep != 1 || state.Goal != "persist state" || !state.Evaluating || state.ClaimReason != "persisted claim" {
-		t.Fatalf("restored state = %+v", state)
+	if !state.Active || state.CurrentStep != 1 || state.Goal != "persist state" || state.Evaluating || state.ClaimReason != "" {
+		t.Fatalf("restored state = %+v; pending claim should be discarded", state)
 	}
 	if _, stopped, err := restored.Stop("user stop"); err != nil || !stopped {
 		t.Fatalf("stop returned stopped=%v err=%v", stopped, err)
@@ -305,8 +305,8 @@ func TestStatusLineAndSetStore(t *testing.T) {
 	if err := controller.SetStore(store1); err != nil {
 		t.Fatal(err)
 	}
-	if s := controller.StatusLine(); !strings.Contains(s, "evaluating") {
-		t.Errorf("StatusLine after SetStore back = %q, want evaluating", s)
+	if s := controller.StatusLine(); !strings.Contains(s, "iter 1") {
+		t.Errorf("StatusLine after SetStore back = %q, want working iteration", s)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestControllerConcurrentUsage(t *testing.T) {
 				_ = controller.Snapshot()
 				_ = controller.StatusLine()
 				_, _ = controller.EvaluationPrompt()
-				_, _ = controller.ResumePrompt()
+				_, _ = controller.ResumePrompt("")
 			}
 		}()
 	}

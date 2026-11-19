@@ -17,12 +17,12 @@ func TestHiddenContinuationAddsModelContextWithoutVisibleTranscript(t *testing.T
 	continuations := 0
 	cfg := Config{
 		Model: modelMeta(),
-		ContinueOnEnd: func() (string, string, bool) {
+		ContinueOnEnd: func() (string, string, bool, error) {
 			continuations++
 			if continuations == 1 {
-				return "psi.loop.nudge", "continue the active task", true
+				return "psi.loop.nudge", "continue the active task", true, nil
 			}
-			return "", "", false
+			return "", "", false, nil
 		},
 	}
 	if err := loop.Submit(context.Background(), "start", cfg); err != nil {

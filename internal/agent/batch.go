@@ -62,7 +62,6 @@ type batchCompletion struct {
 
 type batch struct {
 	loop        *Loop
-	cfg         Config
 	plans       []*batchPlan
 	completions chan batchCompletion
 	outstanding int
@@ -89,7 +88,7 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 	batchCtx, stopBatch := context.WithCancel(ctx)
 	defer stopBatch()
 
-	b := &batch{loop: l, cfg: cfg, completions: make(chan batchCompletion, len(calls))}
+	b := &batch{loop: l, completions: make(chan batchCompletion, len(calls))}
 	b.plans = make([]*batchPlan, len(calls))
 
 	// Preflight phase: populate plans, prepare builtin tools, and emit ToolStart in call order.
@@ -98,10 +97,10 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 			invocation: tools.Invocation{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments},
 			summary:    tools.SummarizeArguments(tc.Name, tc.Arguments, l.store.Cwd(), home),
 		}
-		if handler, ok := cfg.InternalTools[tc.Name]; ok {
+		if handler, ok := cfg.InternalTools[tc.Name]; ok && enabled[tc.Name] {
 			plan.kind = batchInternal
 			plan.internal = handler
-		} else if enabled[tc.Name] {
+		} else if _, internal := cfg.InternalTools[tc.Name]; !internal && enabled[tc.Name] {
 			plan.kind = batchBuiltin
 		} else {
 			plan.kind = batchDisabled
@@ -139,6 +138,18 @@ func (l *Loop) runBatch(ctx context.Context, calls []provider.Block, cfg Config)
 	err := b.coordinate(batchCtx, stopBatch)
 	if err != nil {
 		return err
+	}
+	// Post-processing may append model-visible messages. All tool results
+	// must precede those messages, even when the first call in a parallel
+	// batch completes before its siblings.
+	if cfg.AfterToolCall != nil {
+		for _, plan := range b.plans {
+			if !plan.notStarted {
+				if err := cfg.AfterToolCall(batchCtx, plan.invocation, plan.result); err != nil {
+					return fmt.Errorf("tool post-processing: %w", err)
+				}
+			}
+		}
 	}
 	// A cancelled run surfaces the cancellation to the caller, matching the
 	// pre-parallel behavior of returning at the call boundary.
@@ -216,7 +227,7 @@ func (b *batch) coordinate(ctx context.Context, stopBatch context.CancelFunc) er
 	for next < len(b.plans) {
 		// Settle every result that is complete and whose predecessors settled.
 		for next < len(b.plans) && b.plans[next].completed {
-			if err := b.loop.settleBatchCall(ctx, b.plans[next], b.cfg); err != nil {
+			if err := b.loop.settleBatchCall(ctx, b.plans[next]); err != nil {
 				// Storage failure: stop admission, join active workers, and
 				// report. Completed mutations cannot be rolled back.
 				stopBatch()
@@ -251,10 +262,10 @@ func (b *batch) drain() {
 }
 
 // settleBatchCall appends one tool result durably, then commits the terminal
-// row and post-processing hooks. Not-started calls record psiOutcome
+// row. Not-started calls record psiOutcome
 // "not_started"; started calls keep their truthful result and cancellation
 // state.
-func (l *Loop) settleBatchCall(ctx context.Context, plan *batchPlan, cfg Config) error {
+func (l *Loop) settleBatchCall(ctx context.Context, plan *batchPlan) error {
 	tc := plan.invocation
 	state := "done"
 	if plan.result.IsError {
@@ -295,11 +306,6 @@ func (l *Loop) settleBatchCall(ctx context.Context, plan *batchPlan, cfg Config)
 	summary := plan.summary
 	tools.SetExitCode(&summary, plan.result.Details)
 	l.sink(event.Event{Type: event.ToolEnd, ToolName: tc.Name, ToolCallID: tc.ID, State: state, Summary: summary})
-	if !plan.notStarted && cfg.AfterToolCall != nil {
-		if err := cfg.AfterToolCall(ctx, tc, plan.result); err != nil {
-			return fmt.Errorf("tool post-processing: %w", err)
-		}
-	}
 	return nil
 }
 

@@ -67,7 +67,7 @@ type Config struct {
 	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
 	InternalTools map[string]InternalToolHandler
 	AfterToolCall func(context.Context, tools.Invocation, tools.Result) error
-	ContinueOnEnd func() (messageType, content string, ok bool)
+	ContinueOnEnd func() (messageType, content string, ok bool, err error)
 	ACPolicy      *ac.Controller
 	// CompactionProvider optionally supplies a separate model/provider for the
 	// summary call. The normal provider remains active for resumed user work.
@@ -696,9 +696,17 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			if err != nil {
 				return err
 			}
-			// Compaction can be long; a model or thinking change during the
-			// summary must reach the post-compaction request in this turn.
+			// Compaction can be long; live settings and dynamically available
+			// tools (such as raw session history) may change while it runs.
 			applyLiveSettings(&cfg, l)
+			refreshDynamicConfig(&cfg)
+			if err := l.syncConfiguration(proj, cfg); err != nil {
+				return err
+			}
+			proj, err = l.store.Projection()
+			if err != nil {
+				return err
+			}
 		}
 		req, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
 		if err != nil {
@@ -883,7 +891,13 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				continue
 			}
 			if cfg.ContinueOnEnd != nil {
-				messageType, content, ok := cfg.ContinueOnEnd()
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				messageType, content, ok, err := cfg.ContinueOnEnd()
+				if err != nil {
+					return fmt.Errorf("loop continuation: %w", err)
+				}
 				if ok {
 					if _, err := l.store.AppendCustomMessage(messageType, content, false, nil); err != nil {
 						return fmt.Errorf("storage failure, stopping: %w", err)

@@ -2169,6 +2169,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		switch ev.Type {
 		case event.AssistantStart:
+			if r.loops != nil {
+				console.SetLoopStatus(r.loops.StatusLine())
+			}
 			if r.state != StateCancelling {
 				console.SetThinking(true)
 			}
@@ -2465,7 +2468,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 			case loop.ApproveToolName:
 				// A rejected claim resumes the work in the same run.
-				if content, ok := r.loops.ResumePrompt(); ok {
+				reason, _ := invocation.Arguments["reason"].(string)
+				if content, ok := r.loops.ResumePrompt(reason); ok {
 					_, err := r.store.AppendCustomMessage(loop.ResumeMessageType, content, false, nil)
 					return err
 				}

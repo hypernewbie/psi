@@ -1307,13 +1307,13 @@ func TestBumpPreservesCompletedSettlementAfterFollowOnStorageFailure(t *testing.
 	cfg := bumpConfig()
 	storageErr := errors.New("continuation write failed")
 	continued := false
-	cfg.ContinueOnEnd = func() (string, string, bool) {
+	cfg.ContinueOnEnd = func() (string, string, bool, error) {
 		if continued {
-			return "", "", false
+			return "", "", false, nil
 		}
 		continued = true
 		store.FailWritesForTest(storageErr)
-		return "test.continue", "next", true
+		return "test.continue", "next", true, nil
 	}
 	fake.Responses = []*provider.Response{{Text: "answer", StopReason: "stop"}}
 	err := loop.Submit(context.Background(), "hello", cfg)

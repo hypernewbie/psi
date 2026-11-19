@@ -272,6 +272,10 @@ func (c *Controller) reconstructLocked() error {
 		}
 		c.state = state
 	}
+	// Like the reference extension, a pending confirmation is abandoned on
+	// session reconstruction; it must not approve a stale claim after restart.
+	c.state.Evaluating = false
+	c.state.ClaimReason = ""
 	return nil
 }
 
@@ -407,29 +411,32 @@ func (c *Controller) HandleApprove(args map[string]any) ControlResult {
 // ContinuePrompt advances the loop when a turn ends and returns the message
 // to append. The controller owns iteration boundaries: the model cannot
 // advance the loop itself.
-func (c *Controller) ContinuePrompt() (messageType, content string, ok bool) {
+func (c *Controller) ContinuePrompt() (messageType, content string, ok bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.state.Active {
-		return "", "", false
+		return "", "", false, nil
 	}
 	if c.state.Forever {
-		return NudgeMessageType, NudgePrompt(c.state), true
-	}
-	// A check turn that ended without a verdict: the claim is ignored and the
-	// work resumes, whatever the model said about the goal.
-	if c.state.Evaluating {
-		state := c.state
-		state.Evaluating = false
-		c.state = state
-		_ = c.persistLocked(state)
-		return ResumeMessageType, BuildResumePrompt(state, "the claim was not confirmed"), true
+		return NudgeMessageType, NudgePrompt(c.state), true, nil
 	}
 	state := c.state
-	state.CurrentStep++
+	if state.Evaluating {
+		// A check turn ended without a verdict; resume rather than accepting it.
+		state.Evaluating = false
+		messageType = ResumeMessageType
+		content = BuildResumePrompt(state, "the claim was not confirmed")
+	} else {
+		state.CurrentStep++
+		messageType = IterationMessageType
+		content = BuildPrompt(state)
+	}
+	// Never advance in memory when the durable state could not be saved.
+	if err := c.persistLocked(state); err != nil {
+		return "", "", false, err
+	}
 	c.state = state
-	_ = c.persistLocked(state)
-	return IterationMessageType, BuildPrompt(state), true
+	return messageType, content, true, nil
 }
 
 // EvaluationPrompt is appended after a recorded claim so the same run checks
@@ -444,12 +451,15 @@ func (c *Controller) EvaluationPrompt() (string, bool) {
 
 // ResumePrompt is appended after a rejected verdict so the work continues in
 // the same run.
-func (c *Controller) ResumePrompt() (string, bool) {
+func (c *Controller) ResumePrompt(reason string) (string, bool) {
 	state := c.Snapshot()
 	if !state.Active || state.Forever || state.Evaluating {
 		return "", false
 	}
-	return BuildResumePrompt(state, "the claim was not confirmed"), true
+	if strings.TrimSpace(reason) == "" {
+		reason = "the goal was not confirmed"
+	}
+	return BuildResumePrompt(state, strings.TrimSpace(reason)), true
 }
 
 func (c *Controller) StatusLine() string {

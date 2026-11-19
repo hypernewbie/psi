@@ -342,7 +342,7 @@ func TestParallelChainedInternalCallCancelledDoesNotRun(t *testing.T) {
 		),
 	}}
 	cfg := Config{
-		Model: modelMeta(), Tools: toolDefs(),
+		Model: modelMeta(), Tools: append(toolDefs(), provider.ToolDef{Name: "control"}),
 		InternalTools: map[string]InternalToolHandler{
 			"control": func(ctx context.Context, _ tools.Invocation) tools.Result {
 				once.Do(func() { close(firstEntered) })
@@ -577,7 +577,7 @@ func TestParallelBashProcessesAreIndependent(t *testing.T) {
 // TestParallelLoopControlMixesWithReads: a control call in a mixed batch
 // keeps its state transitions ordered, settles in call order, and defers its
 // model-visible continuation until the whole batch is durable. The read gates
-// the batch, so the control call runs concurrently and settles after it.
+// the batch even though the control call appears first.
 func TestParallelLoopControlMixesWithReads(t *testing.T) {
 	ws := t.TempDir()
 	store, err := session.New(session.OpenOptions{Cwd: ws, SessionDir: t.TempDir(), Persist: false})
@@ -597,8 +597,8 @@ func TestParallelLoopControlMixesWithReads(t *testing.T) {
 	}
 	fake := &provider.Fake{Responses: []*provider.Response{
 		batchResponse(
-			readCall("r1", "a.txt"),
 			provider.Block{Type: "toolCall", ID: "control-1", Name: "loop_done", Arguments: map[string]any{"reason": "step done"}},
+			readCall("r1", "a.txt"),
 		),
 		{Text: "finished", StopReason: "stop"},
 	}}
@@ -606,7 +606,7 @@ func TestParallelLoopControlMixesWithReads(t *testing.T) {
 	var continuations []string
 	loop := New(store, reg, fake, func(event.Event) {})
 	cfg := Config{
-		Model: modelMeta(), Tools: toolDefs(),
+		Model: modelMeta(), Tools: append(toolDefs(), provider.ToolDef{Name: "loop_done"}),
 		InternalTools: map[string]InternalToolHandler{
 			"loop_done": func(_ context.Context, _ tools.Invocation) tools.Result {
 				controlRan <- struct{}{}
@@ -649,7 +649,7 @@ func TestParallelLoopControlMixesWithReads(t *testing.T) {
 			order = append(order, "custom:"+m.Custom.CustomType)
 		}
 	}
-	want := []string{"result:r1", "result:control-1"}
+	want := []string{"result:control-1", "result:r1"}
 	if len(order) < 2 || order[0] != want[0] || order[1] != want[1] {
 		t.Fatalf("settlement order = %v, want %v first", order, want)
 	}
@@ -670,8 +670,8 @@ func TestParallelLoopControlMixesWithReads(t *testing.T) {
 			tail = append(tail, "user")
 		}
 	}
-	if len(tail) != 4 || tail[1] != "toolResult:r1" || tail[2] != "toolResult:control-1" || tail[3] != "user" {
-		t.Fatalf("next request order = %v, want [user toolResult:r1 toolResult:control-1 user]", tail)
+	if len(tail) != 4 || tail[1] != "toolResult:control-1" || tail[2] != "toolResult:r1" || tail[3] != "user" {
+		t.Fatalf("next request order = %v, want [user toolResult:control-1 toolResult:r1 user]", tail)
 	}
 }
 
@@ -983,7 +983,7 @@ func TestParallelBatch_CancellationTenCallsSomeRunningSomeQueued(t *testing.T) {
 
 	var c0Once sync.Once
 	cfg := Config{
-		Model: modelMeta(), Tools: toolDefs(),
+		Model: modelMeta(), Tools: append(toolDefs(), provider.ToolDef{Name: "control"}),
 		InternalTools: map[string]InternalToolHandler{
 			"control": func(ctx context.Context, inv tools.Invocation) tools.Result {
 				if inv.ID == "c0" {
@@ -1313,7 +1313,7 @@ func TestParallelBatch_InternalToolsSequentialWhileBuiltinsOverlap(t *testing.T)
 
 	internalDone := make(chan struct{})
 	cfg := Config{
-		Model: modelMeta(), Tools: toolDefs(),
+		Model: modelMeta(), Tools: append(toolDefs(), provider.ToolDef{Name: "loop_done"}),
 		InternalTools: map[string]InternalToolHandler{
 			"loop_done": func(_ context.Context, inv tools.Invocation) tools.Result {
 				cur := activeInternal.Add(1)
@@ -1431,7 +1431,7 @@ func TestParallelBatch_ToolPanicDoesNotWedgeBatch(t *testing.T) {
 	}}
 
 	cfg := Config{
-		Model: modelMeta(), Tools: toolDefs(),
+		Model: modelMeta(), Tools: append(toolDefs(), provider.ToolDef{Name: "panicking_internal"}),
 		InternalTools: map[string]InternalToolHandler{
 			"panicking_internal": func(context.Context, tools.Invocation) tools.Result {
 				panic("simulated internal tool panic")
@@ -1621,7 +1621,7 @@ func TestParallelBatch_PanicRecoveryFormatting(t *testing.T) {
 	}}
 
 	cfg := Config{
-		Model: modelMeta(), Tools: toolDefs(),
+		Model: modelMeta(), Tools: append(toolDefs(), provider.ToolDef{Name: "err_internal"}, provider.ToolDef{Name: "str_internal"}),
 		InternalTools: map[string]InternalToolHandler{
 			"err_internal": func(context.Context, tools.Invocation) tools.Result {
 				panic(errors.New("internal error message"))
