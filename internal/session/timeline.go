@@ -93,9 +93,9 @@ func displayTools(entries []*Entry) map[string]*displayTool {
 			if t.name == "" {
 				t.name = tr.ToolName
 			}
-			// Result display is joined only when the result's own tool name and
-			// call ID match a retained web call.
-			if t.webResult == nil && t.call && e.web != nil && e.web.CallID == tr.ToolCallID && e.web.Result != nil && event.IsWebTool(tr.ToolName) {
+			// Card data must belong to the retained call, not just share its ID.
+			if t.webResult == nil && t.call && t.name == tr.ToolName && event.IsWebTool(tr.ToolName) &&
+				e.web != nil && e.web.CallID == tr.ToolCallID {
 				t.webResult = e.web.Result
 			}
 			t.state, t.note = "done", ""
