@@ -73,6 +73,29 @@ Unknown harmless UI prefs need no per-key warning.
 
 `/settings` changes the supported subset above in place. Persisted values merge into the user `settings.json`; unknown keys, `$schema`, nested siblings, and top-level key order stay. Malformed JSON is refused without writing. Project `.pi/settings.json` is never written and can still override a user value. Auto-compact is session-only. `quietStartup: "header"` loads as on and is written as a boolean only when that row changes. `Ctrl+T` also toggles and persists `hideThinkingBlock`.
 
+## MCP tools
+
+psi reads `~/.pi/agent/mcp.json` and, for a trusted project, `.pi/mcp.json`.
+This layer supports stdio only; enabled HTTP entries report `unsupported`
+before any endpoint request. It includes Pi tool names and schemas, direct
+`codemode` declaration, `direct`/`deferred`/`hidden` exposure, `toolExposure`,
+`${NAME}` and whole-value `!command` interpolation in `env`/`headers`, and a
+status-only `/mcp` command. `--no-mcp` disables the client for one run.
+
+This is not a full MCP host. Legacy SSE, OAuth, prompts, resources, resource
+subscriptions, sampling, elicitation, roots, tasks, MCP Apps, codemode, and
+`tool_search` are absent. Project `!command` needs the user-only
+`mcp.allowProjectCommands` opt-in. Startup never waits for a server. A malformed
+file keeps the previous accepted config; an invalid entry is withdrawn. Results
+are bounded, and interrupted calls are never replayed. See
+[MCP servers](docs/mcp.md).
+
+Unlike Pi's stdio environment behavior, psi passes each MCP server only the
+resolved values in its configured `env` setting. Go may add `SYSTEMROOT` on
+Windows if that setting omits it. Whole-value `!command` interpolation runs in a
+separate shell with its normal parent environment; only its output is used as
+the configured value.
+
 ## Native loop and adaptive compaction controls
 
 Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it does not load TypeScript extensions. `/loop` and `/loop-stop` control goal/pass/forever runs. `/ac` and `/autocompact` provide adaptive thresholds, predicted-growth compaction, completed-run compaction, and a session-local summary-model choice. See `internal/ac/README.md` for `/ac` defaults and commands. `/ac` settings reset when the session changes and are not written to `settings.json`.
@@ -137,7 +160,7 @@ Psi natively ports the installed `pi-loop-minimal` and `pi-ac` behaviors; it doe
 
 ## Explicit exclusions
 
-TypeScript extensions, JS runtime, npm package installation/execution, MCP, codemode, tool search,
+TypeScript extensions, JS runtime, MCP Apps, codemode, tool search,
 subagents, public SDK, RPC server, JSON event mode, print mode, fullscreen mode,
 custom widgets, Pi TUI API, session tree/branch/fork/clone UI, HTML export,
 sharing, bug uploads, hosted services, update checks, self-update, catalog
@@ -170,7 +193,11 @@ and local HTTP servers. A former optional `PSI_PI_SESSION_MODULE` suite exercise
 a configured Pi reader and writer across both continuation directions and the
 supported provider/API pairs. It was retired with the Node reference harness.
 The recorded run used the installed Pi 1.4.0 package adapter, not a verified
-build from the pinned source revision. Exact executable Pi parity remains
+build from the pinned source revision.
+The tagged MCP acceptance suite exercises synthetic stdio servers; the
+optional Chrome acceptance uses the pinned `chrome-devtools-mcp.13.0` package
+and an isolated browser profile. HTTP acceptance is not part of this layer.
+Exact executable Pi parity remains
 unclaimed. A JSON-shape test alone is not evidence of complete Pi interchange.
 
 See `docs/limitations.md` for explicit size limits, reasoning-protocol limits,

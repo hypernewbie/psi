@@ -257,5 +257,5 @@ project `mcp.json` may use whole-value `!command` interpolation in `env` and
 definitions themselves live in `mcp.json`, not in `settings.json`; see
 [MCP servers](mcp.md). Stdio server processes receive the resolved values in
 their own `env` setting, not psi's general environment. On Windows, Go may also
-add `SYSTEMROOT` when it is not set; this exception and the separate `!command`
+add `SYSTEMROOT` when the configured `env` omits it; this exception and the separate `!command`
 environment are described in [MCP servers](mcp.md).

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/session"
@@ -167,13 +168,21 @@ func runRPC(o Options, version string) error {
 		}
 		r.store.Unlock()
 	}
+	var cleanupOnce sync.Once
+	cleanupAll := func() {
+		cleanupOnce.Do(func() {
+			r.stopMCP()
+			r.waitMCP(30 * time.Second)
+			cleanup()
+		})
+	}
 	if err := r.restore(); err != nil {
-		cleanup()
+		cleanupAll()
 		return err
 	}
 	if o.Name != "" {
 		if _, err := r.store.AppendSessionInfo(o.Name); err != nil {
-			cleanup()
+			cleanupAll()
 			return fmt.Errorf("set session name: %w", err)
 		}
 	}
@@ -185,9 +194,10 @@ func runRPC(o Options, version string) error {
 	if proj, err := store.Projection(); err == nil {
 		s.emitted = len(proj.Flat)
 	} else {
-		cleanup()
+		cleanupAll()
 		return err
 	}
+	r.startMCP()
 	// The RPC child runs without bridge environment variables, so the
 	// syncboard tool stays hidden by the same availability predicate the
 	// terminal loop uses.
@@ -208,7 +218,7 @@ func runRPC(o Options, version string) error {
 			// shutdown channel already stopped intake; this only ends
 			// the blocked read so no goroutine outlives the session.
 			_ = os.Stdin.Close()
-			cleanup()
+			cleanupAll()
 		})
 	}
 	sigs := make(chan os.Signal, 2)

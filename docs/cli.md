@@ -225,8 +225,11 @@ psi --no-skills --no-context-files
 
 Project skills, themes, settings, and `.pi/SYSTEM.md` / `.pi/APPEND_SYSTEM.md`
 load only after project consent. Context files such as `AGENTS.md` load without
-consent. psi has no extension runtime, MCP client, skill-file flag, or prompt templates,
-so the Pi flags that load them do not exist.
+consent. psi has no extension runtime, skill-file flag, or prompt templates,
+so the Pi flags that load them do not exist. MCP servers use
+`<agentDir>/mcp.json` and trusted `.pi/mcp.json`; this layer supports stdio
+servers only. HTTP entries are unavailable. `--no-mcp` disables the client for
+one run. See [MCP servers](mcp.md).
 
 ## Prompts and process
 
