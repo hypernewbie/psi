@@ -30,6 +30,5 @@ jobs:
         # first page, and the 512 MiB compacted-session activation.
         run: go test -tags acceptance ./internal/app -count=1 -v
       - name: tagged-drain
-        # Post-exit drain depends on the 100ms idle grace re-arming between
-        # chunks; a starved runner can miss it without a product change.
-        run: go test -tags acceptance ./internal/tools -count=1 -v
+        # Keep pipe-drain watchdogs and idle-grace profiles out of per-push CI.
+        run: go test -tags acceptance ./internal/tools ./internal/mcp -count=1 -v
