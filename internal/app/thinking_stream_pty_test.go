@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"psi/internal/testutil"
 )
 
 // TestActualAppShowsLiveThinkingAndCollapsesItWithCtrlT is the end-to-end
@@ -87,7 +89,11 @@ data: {}
 	q.write("\x14")
 	q.wait("Thinking...")
 	releaseText <- struct{}{}
-	q.wait("ANSWER_TOKENS")
+	// Raw output can match an earlier frame while the screen is mid-redraw.
+	// Wait for the editor to be ready and the synchronized update to end.
+	waitScreenState(q, "settled editor after the run", func(screen *testutil.VTModel) bool {
+		return !screen.Modes["?2026"] && semanticEditorReady(screen)
+	})
 	screen := q.screen.Text()
 	if strings.Contains(screen, "WEIGHOPTIONSMORE") {
 		t.Fatalf("the hidden reasoning stayed on the screen:\n%s", screen)
