@@ -106,7 +106,11 @@ Psi does not support these Pi options:
 
 - `--print/-p`, Pi's JSON event mode, or fullscreen mode.
 - `@file`, `--api-key`, `--models`, `--fork`, or `--export`.
-- Extensions, MCP, or prompt templates.
+- Extensions or prompt templates.
+
+MCP servers use `<agentDir>/mcp.json` and trusted `.pi/mcp.json`. This layer
+supports stdio only; HTTP entries are unavailable. See [MCP servers](mcp.md).
+`--no-mcp` disables the client for one run.
 
 Keys: `Enter` submit, `Ctrl+J` newline, `Up/Down` visual rows (or completion/picker selection),
 `Ctrl+P` model cycling, five-row slash completion, `Ctrl+L` model picker, `Shift+Tab` thinking cycle,

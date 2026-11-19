@@ -11,7 +11,7 @@ trust the working folder. The prompt lists what it would load.
 Trust gates:
 
 - `.pi/settings.json`
-- `.pi/mcp.json` (MCP application loading is not yet enabled at this layer)
+- `.pi/mcp.json`
 - `.pi/skills` and `.pi/SYSTEM.md` / `.pi/APPEND_SYSTEM.md`
 - `.pi/themes` and project theme paths
 - `.pi/packages`, if configured
@@ -37,15 +37,32 @@ There is no per-tool approval, no permission-policy language, and no automatic
 Git checkpoint. Use a container, a dedicated user, or a throwaway checkout for
 untrusted or unattended work.
 
-## MCP project command interpolation
+## MCP servers
 
-The MCP configuration resolver refuses a project-sourced `!command` value in
-`env` or `headers` unless the user settings file sets
-`mcp.allowProjectCommands` to `true`. A project settings file cannot enable
-this option. Trust alone does not permit project command interpolation.
+MCP servers are separate stdio programs in this layer. psi does not sandbox
+them. A stdio server receives only its resolved configured `env` values; it
+does not inherit psi's environment. On Windows, Go may add psi's `SYSTEMROOT`
+when the configured environment omits it. A trusted project can still start a
+server that reads any files available to the psi process.
 
-This layer adds the configuration and policy code only. The application does
-not yet load MCP files or connect to MCP servers.
+The separate `!command` interpolation shell keeps its normal parent environment.
+Only its resolved output is used as the configured value. HTTP MCP
+entries are unavailable and make no endpoint request. However, the manager
+resolves configured header values before it rejects an enabled HTTP entry. An
+allowed `!command` in `headers` can therefore still run. Do not use HTTP entries
+or header commands in this layer; see [MCP servers](mcp.md).
+
+Project MCP command interpolation (`!command` in `env` or `headers`) stays
+disabled unless the user settings file sets `mcp.allowProjectCommands` to
+`true`. A project file cannot enable this opt-in. Trust alone does not permit
+it.
+
+MCP output is untrusted. It can contain secrets, misleading text, or
+instructions. psi keeps it out of the system prompt and treats result text as
+data. psi does not write an MCP log; only a bounded in-memory stderr tail is
+kept. Header and environment values are not shown by `/mcp`.
+
+See [MCP servers](mcp.md) for limits, process cleanup, and the exact subset.
 
 ## Shell and environment
 

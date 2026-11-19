@@ -87,6 +87,18 @@ settings for either key require project consent.
 The `bash` tool inherits the whole environment, including provider keys. A
 command that dumps the environment writes secrets into the session.
 
+## MCP server environment
+
+Stdio MCP servers receive only the resolved values configured in their `env`
+setting. They do not inherit psi's environment. On Windows, Go may add
+`SYSTEMROOT` when the configured environment omits it. This is a Windows-only
+exception. Unlike Pi's stdio children, psi's MCP servers do not inherit the
+parent process environment.
+
+The separate `!command` interpolation shell uses its normal parent environment.
+Only its resolved output is used as the configured value. See
+[MCP servers](mcp.md).
+
 ## Display
 
 | Variable | Effect |
@@ -101,7 +113,8 @@ SGR color is withheld.
 ## Not supported
 
 Pi reads variables psi does not: `PI_OFFLINE`, `PI_PACKAGE_DIR`,
-`PI_SELF_UPDATE_COMMAND`, `PI_EXTENSION_*`, and MCP-related settings. The
+`PI_SELF_UPDATE_COMMAND`, and `PI_EXTENSION_*`. `PSI_SHELL` selects the shell
+for MCP `!command` interpolation and defaults to `bash`. The
 `--offline` flag exists only for one-run compatibility and changes nothing,
 because psi never fetches catalogs. There is no variable that enables print
 mode, extensions, or fullscreen mode; `--mode rpc` is a flag, not a variable.
