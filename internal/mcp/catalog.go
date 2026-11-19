@@ -26,8 +26,11 @@ type Tool struct {
 	Exposure    Exposure
 }
 
-// ToolDefSchema returns a deep copy of the declared schema.
-func (t Tool) ToolDefSchema() map[string]any { return cloneMap(t.Schema) }
+// ToolDefSchema returns the schema the catalog already owns. It is shared, not
+// copied, so declaration snapshots do not rebuild every tool schema. Callers
+// must treat the map as read-only; the provider request builders either keep
+// the reference for JSON encoding or copy it before rewriting.
+func (t Tool) ToolDefSchema() map[string]any { return t.Schema }
 
 func sanitizeName(value string) string {
 	var b strings.Builder

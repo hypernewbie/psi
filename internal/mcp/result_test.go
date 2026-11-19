@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -93,6 +94,23 @@ func TestCatalogRejectsBadSchema(t *testing.T) {
 	_, err := buildCatalog(server, 1, []*sdk.Tool{sdkTool("bad", "", "not an object")})
 	if err == nil {
 		t.Fatal("non-object schema accepted")
+	}
+}
+
+func TestToolDefSchemaIsSharedNotCopied(t *testing.T) {
+	catalog, err := buildCatalog(Server{Name: "s", Exposure: ExposureDirect}, 1, []*sdk.Tool{
+		sdkTool("t", "", map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string"}}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every declaration snapshot calls this once per tool, so a per-call copy
+	// would allocate on each snapshot. Identity pins the shared read-only
+	// contract; the provider request builders never write to the map.
+	first := catalog[0].ToolDefSchema()
+	second := catalog[0].ToolDefSchema()
+	if reflect.ValueOf(first).Pointer() != reflect.ValueOf(second).Pointer() {
+		t.Fatal("ToolDefSchema copied the catalog schema")
 	}
 }
 
