@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"regexp"
 	"strings"
 
@@ -113,6 +112,7 @@ func supportsClaudeMidConvoSystemMessages(id string) bool {
 var claudeDisabledThinkingModels = map[string]bool{
 	"claude-opus-5":    true,
 	"claude-haiku-5-5": true,
+	"claude-haiku-5.5": true,
 }
 
 var claudeDateSuffix = regexp.MustCompile(`-\d{8}$`)
@@ -248,11 +248,6 @@ var (
 		"gpt-5.6-luna": true, "gpt-6-astra": true, "gpt-6-sol": true, "gpt-6-luna": true,
 		"gpt-6.1-sol": true, "gpt-6.1-terra": true,
 	}
-	openAILongContextPricing = map[string]bool{
-		"gpt-5.4": true, "gpt-5.5": true, "gpt-5.6-sol": true, "gpt-5.6-terra": true,
-		"gpt-5.6-luna": true, "gpt-6-astra": true, "gpt-6-sol": true, "gpt-6-luna": true,
-		"gpt-6.1-sol": true, "gpt-6.1-terra": true, "gpt-5.4-pro": true, "gpt-5.5-pro": true,
-	}
 	openAINoneReasoning = map[string]bool{
 		"gpt-5.1": true, "gpt-5.2": true, "gpt-5.3-codex": true, "gpt-5.4": true,
 		"gpt-5.4-mini": true, "gpt-5.4-nano": true, "gpt-5.5": true, "gpt-5.6-sol": true,
@@ -274,41 +269,12 @@ var (
 	}()
 )
 
-// openAIStandardCosts supplies corrected cache-write prices. Costs are not
-// emitted; the write price only decides supportsExplicitPromptCacheMode.
-var openAIStandardCosts = map[string]modelCost{
-	"gpt-5.6-luna":  {Input: 0.2, Output: 1.2, CacheRead: 0.02, CacheWrite: 0.25},
-	"gpt-5.6-sol":   {Input: 4, Output: 20, CacheRead: 0.4, CacheWrite: 5},
-	"gpt-5.6-terra": {Input: 2, Output: 12, CacheRead: 0.2, CacheWrite: 2.5},
-	"gpt-6-astra":   {Input: 10, Output: 50, CacheRead: 1, CacheWrite: 12.5},
-	"gpt-6-luna":    {Input: 0.1, Output: 0.5, CacheRead: 0.01, CacheWrite: 0.125},
-	"gpt-6-sol":     {Input: 2, Output: 10, CacheRead: 0.2, CacheWrite: 2.5},
-	"gpt-6.1-sol":   {Input: 2, Output: 10, CacheRead: 0.1, CacheWrite: 2.5},
-	"gpt-6.1-terra": {Input: 1, Output: 5, CacheRead: 0.05, CacheWrite: 1.25},
-}
-
-func roundCost(value float64) float64 {
-	return math.Round(value*1e6) / 1e6
-}
-
-func withOpenAILongContextPricing(cost modelCost) modelCost {
-	priced := cost
-	priced.Tiers = []costTier{{
-		InputTokensAbove: 272000,
-		Input:            roundCost(cost.Input * 2),
-		Output:           roundCost(cost.Output * 1.5),
-		CacheRead:        roundCost(cost.CacheRead * 2),
-		CacheWrite:       roundCost(cost.CacheWrite * 2),
-		hasInput:         true,
-		hasOutput:        true,
-		hasCacheRead:     true,
-		hasCacheWrite:    true,
-	}}
-	return priced
-}
-
-func openAIStandardCost(id string) modelCost {
-	return withOpenAILongContextPricing(openAIStandardCosts[id])
+// Only the corrected base cache-write price affects this projection: a paid
+// write enables explicit cache mode. No OpenAI prices or tiers are emitted.
+var openAICacheWritePrices = map[string]float64{
+	"gpt-5.6-luna": 0.25, "gpt-5.6-sol": 5, "gpt-5.6-terra": 2.5,
+	"gpt-6-astra": 12.5, "gpt-6-luna": 0.125, "gpt-6-sol": 2.5,
+	"gpt-6.1-sol": 2.5, "gpt-6.1-terra": 1.25,
 }
 
 func correctOpenAIUpstream(model *catalogModel) {
@@ -316,12 +282,8 @@ func correctOpenAIUpstream(model *catalogModel) {
 		model.ContextWindow = 272000
 		model.MaxTokens = 128000
 	}
-	if openAILongContextPricing[model.ID] {
-		if cost, ok := openAIStandardCosts[model.ID]; ok {
-			model.cost = withOpenAILongContextPricing(cost)
-		} else {
-			model.cost = withOpenAILongContextPricing(model.cost)
-		}
+	if price, ok := openAICacheWritePrices[model.ID]; ok {
+		model.cost.CacheWrite = price
 	}
 	if model.ID == "gpt-5-pro" {
 		model.MaxTokens = 128000
@@ -384,7 +346,6 @@ func openAIProvider() *providerDef {
 				Input:         []string{"text", "image"},
 				ContextWindow: 128000,
 				MaxTokens:     16384,
-				cost:          modelCost{Input: 1.25, Output: 10, CacheRead: 0.125},
 			}}
 		},
 		finalize: func(model *catalogModel) {
@@ -445,7 +406,6 @@ func openAICodexProvider() *providerDef {
 					Input:         []string{"text", "image"},
 					ContextWindow: entry.contextWindow,
 					MaxTokens:     128000,
-					cost:          openAIStandardCost(entry.id),
 				})
 			}
 			return models, nil
@@ -676,7 +636,6 @@ func deepSeekProvider() *providerDef {
 					Input:         []string{"text", "image"},
 					ContextWindow: 1000000,
 					MaxTokens:     384000,
-					cost:          modelCost{Input: 0.3, Output: 1.2, CacheRead: 0.006},
 					ThinkingLevelMap: map[string]*string{
 						"minimal": nil, "low": stringPointer("low"), "medium": nil,
 						"high": stringPointer("high"), "max": stringPointer("max"),
@@ -695,7 +654,6 @@ func deepSeekProvider() *providerDef {
 					Input:         []string{"text"},
 					ContextWindow: 1000000,
 					MaxTokens:     384000,
-					cost:          modelCost{Input: 1.32, Output: 3.96, CacheRead: 0.044},
 					Compat: map[string]any{
 						"requiresReasoningContentOnAssistantMessages": true,
 						"thinkingFormat": "deepseek",
@@ -820,7 +778,6 @@ func googleProvider() *providerDef {
 			}
 			model.ContextWindow = defaultLimit(source.ContextWindow)
 			model.MaxTokens = defaultLimit(source.MaxTokens)
-			model.cost = source.Cost
 			return model, nil
 		},
 	}
@@ -1122,7 +1079,6 @@ func mistralProvider() *providerDef {
 					"off": stringPointer("none"), "minimal": nil, "low": nil, "medium": nil,
 					"high": stringPointer("high"), "xhigh": nil, "max": nil,
 				},
-				cost: modelCost{Input: 1.5, Output: 7.5},
 			}}
 		},
 	}

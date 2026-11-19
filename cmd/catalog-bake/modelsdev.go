@@ -24,7 +24,7 @@ type modelsDevModel struct {
 	Modalities   modelsDevModalities     `json:"modalities"`
 	Capabilities modelsDevCapabilities   `json:"capabilities"`
 	Limit        modelsDevLimits         `json:"limit"`
-	Cost         *modelsDevCost          `json:"cost"`
+	Cost         json.RawMessage         `json:"cost"`
 	API          map[string]modelsDevAPI `json:"api"`
 }
 
@@ -77,13 +77,12 @@ type modelsDevModalityCost struct {
 }
 
 type modelsDevCachePrices struct {
-	Read     *float64     `json:"read"`
-	Write    orderedPrice `json:"write"`
-	Explicit *modelsDevExplicitCache
+	Read     *float64                `json:"read"`
+	Write    orderedPrice            `json:"write"`
+	Explicit *modelsDevExplicitCache `json:"explicit"`
 }
 
 type modelsDevExplicitCache struct {
-	Read  *float64     `json:"read"`
 	Write orderedPrice `json:"write"`
 }
 
@@ -103,32 +102,28 @@ type orderedPrice struct {
 }
 
 func (p *orderedPrice) UnmarshalJSON(data []byte) error {
-	var number float64
+	*p = orderedPrice{}
+	var number *float64
 	if err := json.Unmarshal(data, &number); err == nil {
-		p.Value, p.Set = number, true
+		if number != nil {
+			*p = orderedPrice{Value: *number, Set: true}
+		}
 		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	token, err := decoder.Token()
-	if err != nil {
-		return nil // A shape this catalog does not understand carries no price.
-	}
-	delim, ok := token.(json.Delim)
-	if !ok || delim != '{' {
-		return nil
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return fmt.Errorf("cache write price must be a number or a TTL price object")
 	}
 	for decoder.More() {
 		if _, err := decoder.Token(); err != nil {
-			return nil
+			return err
 		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return nil
+		var price *float64
+		if err := decoder.Decode(&price); err != nil || price == nil {
+			return fmt.Errorf("cache write TTL price must be a number")
 		}
-		var price float64
-		if err := json.Unmarshal(value, &price); err == nil {
-			p.Value, p.Set = price, true
-			return nil
+		if !p.Set {
+			*p = orderedPrice{Value: *price, Set: true}
 		}
 	}
 	return nil
@@ -185,6 +180,14 @@ func modelsDevChatModels(catalog modelsDevCatalog, provider string) ([]*sourceMo
 		if err != nil {
 			return nil, fmt.Errorf("models.dev %s/%s: %w", provider, key, err)
 		}
+		// Only these rows contribute price-derived metadata to the projection.
+		if (provider == "anthropic" || provider == "openai") && model.ToolCall && len(raw.Cost) > 0 {
+			var cost modelsDevCost
+			if err := json.Unmarshal(raw.Cost, &cost); err != nil {
+				return nil, fmt.Errorf("models.dev %s/%s: invalid cost: %w", provider, model.ID, err)
+			}
+			model.Cost = normalizeModelsDevCost(&cost)
+		}
 		models = append(models, model)
 	}
 	return models, nil
@@ -208,7 +211,6 @@ func normalizeModelsDevModel(raw modelsDevModel) (*sourceModel, error) {
 		Reasoning:     raw.Capabilities.Reasoning.Supported,
 		ContextWindow: intValue(raw.Limit.Context),
 		MaxTokens:     intValue(raw.Limit.Output),
-		Cost:          normalizeModelsDevCost(raw.Cost),
 	}
 	if model.Name == "" {
 		model.Name = model.ID

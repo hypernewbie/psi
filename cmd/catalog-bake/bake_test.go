@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,8 +18,7 @@ import (
 
 type mdOption func(*modelsDevModel)
 
-func intPointer(value int) *int           { return &value }
-func floatPointer(value float64) *float64 { return &value }
+func intPointer(value int) *int { return &value }
 
 func mdRow(id string, options ...mdOption) modelsDevModel {
 	row := modelsDevModel{
@@ -74,13 +74,7 @@ func withAPIs(apis map[string]modelsDevAPI) mdOption {
 
 func withCost(input, output, cacheRead, cacheWrite float64) mdOption {
 	return func(row *modelsDevModel) {
-		row.Cost = &modelsDevCost{Text: &struct {
-			Input  *modelsDevModalityCost `json:"input"`
-			Output *modelsDevModalityCost `json:"output"`
-		}{
-			Input:  &modelsDevModalityCost{Price: floatPointer(input), Cache: &modelsDevCachePrices{Read: floatPointer(cacheRead), Write: orderedPrice{Value: cacheWrite, Set: true}}},
-			Output: &modelsDevModalityCost{Price: floatPointer(output)},
-		}}
+		row.Cost = json.RawMessage(fmt.Sprintf(`{"text":{"input":{"price":%g,"cache":{"read":%g,"write":%g}},"output":{"price":%g}}}`, input, cacheRead, cacheWrite, output))
 	}
 }
 
@@ -263,6 +257,61 @@ func TestAnthropicFallbacksAndProviderAdmissions(t *testing.T) {
 	opencodeRows := buildRows(t, opencode, []*providerDef{opencodeGoProvider()})
 	if rowByID(opencodeRows["opencode-go"], "old-model") != nil || rowByID(opencodeRows["opencode-go"], "live-model") == nil {
 		t.Fatal("OpenCode Go deprecated filter did not apply")
+	}
+}
+
+func TestClaudeMidConversationEffortPreservesHaikuOff(t *testing.T) {
+	for _, id := range []string{"claude-haiku-5-5", "claude-haiku-5.5-20261001"} {
+		t.Run(id, func(t *testing.T) {
+			rows := buildRows(t, catalogWith("anthropic", mdRow(id, withReasoningNoEffort())), []*providerDef{anthropicProvider()})
+			row := rowByID(rows["anthropic"], id)
+			if enabled, _ := compatBool(row, "supportsMidConvoEffort"); !enabled {
+				t.Fatal("Haiku lost mid-conversation effort support")
+			}
+			if value, present := row.ThinkingLevelMap["off"]; present && value == nil {
+				t.Fatal("the catalog disables Haiku's off level")
+			}
+		})
+	}
+}
+
+func TestModelsDevCostOnlyAffectsConsumers(t *testing.T) {
+	const correct = `{"text":{"input":{"price":2,"cache":{"write":{"5m":0,"1h":5}}},"output":{"price":10}}}`
+	const explicit = `{"text":{"input":{"price":2,"cache":{"write":null,"explicit":{"write":2.5}}},"output":{"price":10}}}`
+	const malformed = `{"text":{"input":{"price":2,"cache":{"write":{"5m":"invalid","1h":5}}},"output":{"price":10}}}`
+	for _, tc := range []struct {
+		name, provider, cost string
+		def                  *providerDef
+		wantCache, wantError bool
+	}{
+		{"first TTL price wins even if zero", "openai", correct, openAIProvider(), false, false},
+		{"null write falls back to explicit price", "openai", explicit, openAIProvider(), true, false},
+		{"invalid consumed price fails", "openai", malformed, openAIProvider(), false, true},
+		{"unused cost shape is ignored", "groq", `[]`, groqProvider(), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var model modelsDevModel
+			if err := json.Unmarshal([]byte(`{"id":"fixture","type":"chat","capabilities":{"tools":{"supported":true}},"api":{"responses":{}},"cost":`+tc.cost+`}`), &model); err != nil {
+				t.Fatalf("decode catalog row: %v", err)
+			}
+			rows, err := buildCatalog(catalogWith(tc.provider, model), openRouterListing{}, []*providerDef{tc.def}, false)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), tc.provider+"/fixture") || !strings.Contains(err.Error(), "cost") {
+					t.Fatalf("invalid cost error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := rowByID(rows[tc.provider], "fixture")
+			if row == nil {
+				t.Fatal("fixture row missing")
+			}
+			if got, _ := compatBool(row, "supportsExplicitPromptCacheMode"); got != tc.wantCache {
+				t.Fatalf("explicit cache support = %v, want %v", got, tc.wantCache)
+			}
+		})
 	}
 }
 
