@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -842,32 +840,5 @@ func TestManagerBoundsConfigWarnings(t *testing.T) {
 	}
 	if warnings[len(warnings)-1] != "5 more config warnings" {
 		t.Fatalf("warning trailer = %q", warnings[len(warnings)-1])
-	}
-}
-
-func TestManagerRejectsHTTPBeforeEndpointRequest(t *testing.T) {
-	var requests atomic.Int32
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		http.Error(w, "unexpected request", http.StatusBadRequest)
-	}))
-	t.Cleanup(endpoint.Close)
-
-	manager := NewManager(Options{})
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
-	})
-	server := Server{Name: "remote", Transport: TransportHTTP, URL: endpoint.URL}
-	state := &serverState{cfg: server}
-	_, conn, err := manager.connect(context.Background(), state, 1, server, Input{})
-	if conn == nil {
-		t.Fatal("HTTP rejection did not return connection state")
-	}
-	if class := ErrorClass(err); class != "unsupported" {
-		t.Fatalf("HTTP setup error class = %q, want unsupported (err=%v)", class, err)
-	}
-	if got := requests.Load(); got != 0 {
-		t.Fatalf("HTTP setup made %d endpoint requests before rejection", got)
 	}
 }

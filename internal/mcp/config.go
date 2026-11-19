@@ -383,14 +383,6 @@ var (
 	variablePattern   = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 )
 
-// reservedHeaders lists protocol headers owned by the streamable HTTP transport.
-var reservedHeaders = map[string]bool{
-	"host": true, "content-length": true, "transfer-encoding": true,
-	"content-type": true, "accept": true, "mcp-session-id": true,
-	"mcp-protocol-version": true, "last-event-id": true,
-	"idempotency-key": true, "x-idempotency-key": true,
-}
-
 var knownServerFields = map[string]bool{
 	"type": true, "command": true, "args": true, "cwd": true, "env": true,
 	"url": true, "headers": true, "enabled": true, "description": true,
