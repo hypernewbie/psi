@@ -53,7 +53,7 @@ func TestWriteAuthDocumentCountsFinalNewlineAtLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAuthDocument(target, atLimit, 0o600, func() bool { return true }); err != nil {
+	if err := writeAuthDocument(target, atLimit, 0o600, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -69,7 +69,7 @@ func TestWriteAuthDocumentCountsFinalNewlineAtLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAuthDocument(target, overLimit, 0o600, func() bool { return true }); err == nil {
+	if err := writeAuthDocument(target, overLimit, 0o600, func() error { return nil }); err == nil {
 		t.Fatal("one-byte-over document was accepted")
 	}
 	after, err := os.ReadFile(path)

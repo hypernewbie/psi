@@ -120,8 +120,6 @@ func (r *runtime) loginCommand(arg string, console *terminal.Console) error {
 	switch providerID {
 	case "anthropic":
 		return fmt.Errorf("Anthropic login is not available; set ANTHROPIC_API_KEY or add an api_key entry to %s.", authPath)
-	case "openai-codex":
-		return fmt.Errorf("OpenAI Codex login is not available in psi; log in through Pi with /login openai-codex.")
 	}
 	spec, ok := providerregistry.Lookup(providerID)
 	if !ok {
