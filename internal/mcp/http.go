@@ -50,8 +50,11 @@ func (m *Manager) newHTTPTransport(server Server, conn *connection) sdk.Transpor
 		TLSHandshakeTimeout:    5 * time.Second,
 		ResponseHeaderTimeout:  10 * time.Second,
 		MaxResponseHeaderBytes: maxHTTPHeader,
-		ForceAttemptHTTP2:      true,
+		// Bound the lifetime of a socket returned to the pool after cancellation.
+		IdleConnTimeout:   90 * time.Second,
+		ForceAttemptHTTP2: true,
 	}
+	conn.closeIdleConnections = base.CloseIdleConnections
 	headers := make(map[string]string, len(server.Headers))
 	for name, value := range server.Headers {
 		headers[name] = value
@@ -212,37 +215,32 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		}
 		clone.Header.Set(name, value)
 	}
-	var stopConn func() bool
-	var cancel context.CancelFunc
-	if t.conn != nil {
-		ctx, cancelFunc := context.WithCancel(clone.Context())
-		cancel = cancelFunc
-		stopConn = context.AfterFunc(t.conn.ctx, cancel)
-		clone = clone.WithContext(ctx)
+	ctx, cancel := context.WithCancel(clone.Context())
+	stopConn := context.AfterFunc(t.conn.ctx, cancel)
+	// AfterFunc runs asynchronously. A request starting after retirement
+	// must not reopen the closed connection pool.
+	if t.conn.ctx.Err() != nil {
+		cancel()
 	}
+	clone = clone.WithContext(ctx)
 	if req.Method == http.MethodPost {
 		clone.GetBody = nil
 	}
-	resp, err := t.base.RoundTrip(clone)
 	if req.Method == http.MethodGet {
-		t.conn.markListenerStarted()
+		// Discovery waits for the GET outcome, not just the HTTP headers.
+		defer t.conn.markListenerChecked()
 	}
+	resp, err := t.base.RoundTrip(clone)
 	if err != nil {
-		if stopConn != nil {
-			stopConn()
-		}
-		if cancel != nil {
-			cancel()
-		}
+		stopConn()
+		cancel()
 		t.recordTransportError(baseObs, claimObs, req, err)
 		return nil, err
 	}
-	if resp.Body != nil && cancel != nil {
+	if resp.Body != nil {
 		resp.Body = newCancelBody(resp.Body, t.conn.ctx, clone.Context(), stopConn, cancel)
-	} else if cancel != nil {
-		if stopConn != nil {
-			stopConn()
-		}
+	} else {
+		stopConn()
 		cancel()
 	}
 	lower := strings.ToLower(resp.Header.Get("Content-Type"))
@@ -452,8 +450,8 @@ func (c *connection) latchedClass() string {
 	return class
 }
 
-func (c *connection) markListenerStarted() {
-	c.listenerOnce.Do(func() { close(c.listenerStarted) })
+func (c *connection) markListenerChecked() {
+	c.listenerOnce.Do(func() { close(c.listenerChecked) })
 }
 
 func (c *connection) terminalClass() string {

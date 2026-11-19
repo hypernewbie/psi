@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,6 +340,47 @@ func TestManagerHTTPStatelessAndUnsupportedListener(t *testing.T) {
 	result := manager.Call(context.Background(), tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "stateless"}})
 	if result.IsError {
 		t.Fatalf("stateless call = %+v", result)
+	}
+}
+
+func TestManagerHTTPStopClosesIdleConnection(t *testing.T) {
+	server := httpFixture(t)
+	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+	dir := t.TempDir()
+	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
+	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
+	manager.Start()
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
+	snapshot := waitHTTPServerState(t, manager, "http-fixture", serverStateReady)
+	tool, ok := snapshot.Find("mcp__http_fixture__echo")
+	if !ok {
+		t.Fatal("echo tool missing")
+	}
+
+	var socket net.Conn
+	pooled := make(chan error, 1)
+	ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		GotConn:     func(info httptrace.GotConnInfo) { socket = info.Conn },
+		PutIdleConn: func(err error) { pooled <- err },
+	})
+	if result := manager.Call(ctx, tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "idle"}}); result.IsError {
+		t.Fatalf("call failed: %+v", result)
+	}
+	select {
+	case err := <-pooled:
+		if err != nil || socket == nil {
+			t.Fatalf("call socket was not returned to the pool: socket=%v err=%v", socket, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call socket never entered the pool")
+	}
+
+	manager.Stop()
+	manager.Wait()
+	if err := socket.SetDeadline(time.Time{}); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("call socket was not closed after shutdown: %v", err)
 	}
 }
 
@@ -1744,7 +1787,7 @@ func TestHTTPObservationDoesNotLeakAcrossRequests(t *testing.T) {
 	t.Cleanup(server.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	conn := &connection{ctx: ctx, cancel: cancel, listenerStarted: make(chan struct{})}
+	conn := &connection{ctx: ctx, cancel: cancel, listenerChecked: make(chan struct{})}
 	conn.errClass.Store("")
 	transport := &headerRoundTripper{base: http.DefaultTransport, conn: conn}
 	do := func(obs *requestObservation, header string, mark bool) *http.Response {
@@ -1987,7 +2030,7 @@ func TestHeaderRoundTripperCancelsInFlightRequest(t *testing.T) {
 		return nil, req.Context().Err()
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	conn := &connection{ctx: ctx, cancel: cancel, listenerStarted: make(chan struct{})}
+	conn := &connection{ctx: ctx, cancel: cancel, listenerChecked: make(chan struct{})}
 	conn.errClass.Store("")
 	transport := &headerRoundTripper{base: base, conn: conn}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.test/mcp", strings.NewReader(`{}`))
@@ -2071,11 +2114,69 @@ func TestCancelBodyClosesOnRequestCancellation(t *testing.T) {
 	}
 }
 
+func TestHeaderRoundTripperClassifiesListenerBeforeSignaling(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	classifying := make(chan struct{})
+	resume := make(chan struct{})
+	// Parsing an HTTP-date Retry-After gives the test a gate inside classification.
+	manager := NewManager(Options{now: func() time.Time {
+		close(classifying)
+		<-resume
+		return now
+	}})
+	t.Cleanup(manager.Stop)
+	conn := &connection{manager: manager, ctx: t.Context(), listenerChecked: make(chan struct{})}
+	conn.errClass.Store("")
+	base := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Header:     http.Header{"Retry-After": {now.Add(time.Second).Format(http.TimeFormat)}},
+			Body:       http.NoBody,
+		}, nil
+	})
+	transport := &headerRoundTripper{base: base, conn: conn}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.test/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		resp, err := transport.RoundTrip(req)
+		if err == nil {
+			err = resp.Body.Close()
+		}
+		done <- err
+	}()
+	select {
+	case <-classifying:
+	case <-time.After(5 * time.Second):
+		close(resume)
+		t.Fatal("listener response did not reach classification")
+	}
+	select {
+	case <-conn.listenerChecked:
+		t.Error("listener signaled before the GET outcome was classified")
+	default:
+	}
+	close(resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-conn.listenerChecked:
+		if class := conn.terminalClass(); class != "auth" {
+			t.Fatalf("listener class = %q, want auth", class)
+		}
+	default:
+		t.Fatal("listener did not signal after classifying the response")
+	}
+}
+
 func TestHeaderRoundTripperMarksListenerNetworkFailure(t *testing.T) {
 	base := roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("synthetic listener failure")
 	})
-	conn := &connection{ctx: context.Background(), cancel: func() {}, listenerStarted: make(chan struct{})}
+	conn := &connection{ctx: context.Background(), cancel: func() {}, listenerChecked: make(chan struct{})}
 	conn.errClass.Store("")
 	transport := &headerRoundTripper{base: base, conn: conn}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.test/mcp", nil)
