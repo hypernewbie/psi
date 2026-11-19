@@ -134,7 +134,7 @@ func rpcSawPartial(objects []map[string]any) bool {
 			continue
 		}
 		update, _ := obj["assistantMessageEvent"].(map[string]any)
-		if update["type"] == "text_delta" && update["delta"] == "QUIT_PARTIAL" {
+		if update["type"] == "text_delta" && update["delta"] == quitPartial {
 			return true
 		}
 	}
@@ -193,7 +193,7 @@ func TestActualRPCAbortAndEOFSettle(t *testing.T) {
 			if n := f.requests.Load(); n != 1 {
 				t.Fatalf("provider requests = %d, want 1", n)
 			}
-			f.assertPartialPersisted(t)
+			assertAbortedQuitSession(t, f.work, f.agentDir)
 		})
 	}
 }

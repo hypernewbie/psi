@@ -15,7 +15,6 @@ import (
 	"time"
 
 	pibridgepb "psi/internal/pibridge/pb"
-	"psi/internal/session"
 )
 
 // drainOutputAfterExit closes the harness's extra slave descriptor, then
@@ -55,16 +54,16 @@ func newQuitFixture(t *testing.T) *quitFixture {
 		io.Copy(io.Discard, r.Body)
 		f.requests.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, `event: message_start
+		fmt.Fprintf(w, `event: message_start
 data: {"message":{"id":"quit","model":"synthetic-model","usage":{"input_tokens":1}}}
 
 event: content_block_start
 data: {"index":0,"content_block":{"type":"text","text":""}}
 
 event: content_block_delta
-data: {"index":0,"delta":{"type":"text_delta","text":"QUIT_PARTIAL"}}
+data: {"index":0,"delta":{"type":"text_delta","text":%q}}
 
-`)
+`, quitPartial)
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -93,23 +92,7 @@ func (f *quitFixture) assertSettled(t *testing.T, raw string, wantRequests int32
 	if n := f.requests.Load(); n != wantRequests {
 		t.Fatalf("provider requests = %d, want %d", n, wantRequests)
 	}
-	f.assertPartialPersisted(t)
-}
-
-func (f *quitFixture) assertPartialPersisted(t *testing.T) {
-	t.Helper()
-	dir := session.DefaultSessionDir(f.work, f.agentDir)
-	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
-	if err != nil || len(files) != 1 {
-		t.Fatalf("expected one session in %s; got %v (%v)", dir, files, err)
-	}
-	data, err := os.ReadFile(files[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "QUIT_PARTIAL") {
-		t.Fatal("aborted partial was not persisted")
-	}
+	assertAbortedQuitSession(t, f.work, f.agentDir)
 }
 
 func TestActualAppQuitReleasesTTYAndPersistsPartial(t *testing.T) {
@@ -117,7 +100,7 @@ func TestActualAppQuitReleasesTTYAndPersistsPartial(t *testing.T) {
 	q := startReviewPTY(t, f.home, f.work, f.agentDir, "--deny-project", "--no-tools")
 	q.prompt()
 	q.write("partial work\r")
-	q.wait("QUIT_PARTIAL")
+	q.wait(quitPartial)
 	q.write("/quit\r")
 	q.wait(quitReleaseMarker)
 	q.finish()
@@ -139,7 +122,7 @@ func TestActualAppQuitWithBridgeConnected(t *testing.T) {
 	phi.waitFrame(t, "agent start", func(frame *pibridgepb.PiToPhi) bool {
 		return frame.GetAgentStarted() != nil
 	})
-	q.wait("QUIT_PARTIAL")
+	q.wait(quitPartial)
 	q.write("/quit\r")
 	q.wait(quitReleaseMarker)
 	q.finish()

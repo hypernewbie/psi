@@ -269,6 +269,8 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	}
 	write("\x03\x03") // Cancel the picker, then clear any restored search text.
 	waitFor("editor after picker", func(_ string) bool { return conptyEditorReady(screen) && !conptyPickerVisible(screen) })
+	write("work interrupted by quit\r")
+	waitFor("partial reply before quit", func(text string) bool { return strings.Contains(text, quitPartial) })
 	write("/quit\r")
 	result := make(chan error, 1)
 	go func() {
@@ -300,6 +302,7 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		t.Fatal("psi did not settle and exit under ConPTY")
 	}
 	drain()
+	assertAbortedQuitSession(t, work, agentDir)
 	// The inline session must never switch to the alternate screen. Full
 	// viewport clears inside synchronized output (2026h/l) are expected:
 	// they rebuild the main screen on resize.

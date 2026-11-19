@@ -75,12 +75,21 @@ func startConPTYTestProvider(t *testing.T, agentDir string) (*httptest.Server, <
 			messageEnd("tool_use")
 			flush.Flush()
 			close(toolStarted)
-		default:
+		case 3:
 			messageStart("tool-2")
 			textBlockStart()
 			emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": "TOOL_FINISHED"}})
 			emit("content_block_stop", map[string]any{"index": 0})
 			messageEnd("end_turn")
+		case 4:
+			messageStart("quit")
+			textBlockStart()
+			emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": quitPartial}})
+			flush.Flush()
+			<-r.Context().Done()
+		default:
+			t.Error("unexpected extra provider request")
+			w.WriteHeader(http.StatusBadRequest)
 		}
 	}))
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","compaction":{"enabled":false}}`)

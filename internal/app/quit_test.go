@@ -3,15 +3,20 @@ package app
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"psi/internal/provider"
+	"psi/internal/session"
 	"psi/internal/terminal"
 )
 
-const quitReleaseMarker = "\x1b[?2004l"
+const (
+	quitReleaseMarker = "\x1b[?2004l"
+	quitPartial       = "QUIT_PARTIAL"
+)
 
 // gatedCancelProvider exposes the context before streaming. It acknowledges
 // cancellation, then holds settlement until the test opens the gate.
@@ -23,7 +28,7 @@ type gatedCancelProvider struct {
 
 func (p *gatedCancelProvider) Send(ctx context.Context, _ provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	p.started <- ctx
-	onDelta(provider.Delta{Kind: provider.DeltaText, Text: "QUIT_PARTIAL"})
+	onDelta(provider.Delta{Kind: provider.DeltaText, Text: quitPartial})
 	<-ctx.Done()
 	close(p.cancelled)
 	<-p.settle
@@ -118,7 +123,7 @@ func TestQuitDuringRunReleasesTerminalBeforeSettlement(t *testing.T) {
 	if _, err := inputWrite.WriteString("question\r"); err != nil {
 		t.Fatal(err)
 	}
-	out.wait(t, "QUIT_PARTIAL")
+	out.wait(t, quitPartial)
 	if _, err := inputWrite.WriteString("/quit\r"); err != nil {
 		t.Fatal(err)
 	}
@@ -152,11 +157,38 @@ func TestQuitDuringRunReleasesTerminalBeforeSettlement(t *testing.T) {
 	if geometryReads != 0 {
 		t.Errorf("queried terminal geometry %d times after release", geometryReads)
 	}
-	data, err := os.ReadFile(r.store.File())
+	assertAbortedQuitPartial(t, r.store.File())
+}
+
+func assertAbortedQuitSession(t *testing.T, work, agentDir string) {
+	t.Helper()
+	dir := session.DefaultSessionDir(work, agentDir)
+	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("expected one session in %s; got %v (%v)", dir, files, err)
+	}
+	assertAbortedQuitPartial(t, files[0])
+}
+
+func assertAbortedQuitPartial(t *testing.T, file string) {
+	t.Helper()
+	_, entries, _, err := session.ReadFileEntries(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "QUIT_PARTIAL") {
-		t.Fatalf("aborted partial was not persisted: %s", r.store.File())
+	for _, entry := range entries {
+		if entry.Message == nil {
+			continue
+		}
+		assistant := entry.Message.Message.Assistant
+		if assistant == nil || assistant.StopReason != "aborted" {
+			continue
+		}
+		for _, block := range assistant.Content {
+			if block.Text != nil && block.Text.Text == quitPartial {
+				return
+			}
+		}
 	}
+	t.Fatalf("no aborted assistant reply containing %q in %s", quitPartial, file)
 }
