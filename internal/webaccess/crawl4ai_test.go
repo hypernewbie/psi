@@ -517,16 +517,17 @@ func TestCrawl4AIRedirects(t *testing.T) {
 			wantBody := `{"url":"` + server.URL + `/md","f":"fit"}`
 			for i := range methods {
 				wantMethod := http.MethodPost
-				wantBodyValue, wantType := wantBody, "application/json"
+				wantBodyValue := wantBody
 				if i > 0 && bodylessAfter303 {
 					wantMethod = http.MethodGet
-					wantBodyValue, wantType = "", ""
+					wantBodyValue = ""
 				}
 				if methods[i] != wantMethod || bodies[i] != wantBodyValue || auth[i] != "Bearer "+token {
 					t.Fatalf("hop %d method=%s body=%d auth=%t, want method=%s body=%d auth=true", i+1, methods[i], len(bodies[i]), auth[i] != "", wantMethod, len(wantBodyValue))
 				}
-				if contentTypes[i] != wantType {
-					t.Fatalf("hop %d Content-Type = %q, want %q", i+1, contentTypes[i], wantType)
+				// Go versions differ on whether a bodyless redirect retains Content-Type.
+				if wantMethod == http.MethodPost && contentTypes[i] != "application/json" {
+					t.Fatalf("hop %d Content-Type = %q, want application/json", i+1, contentTypes[i])
 				}
 			}
 		})
