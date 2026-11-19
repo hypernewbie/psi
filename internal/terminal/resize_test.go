@@ -105,10 +105,15 @@ func TestConsoleResizeWatcherUsesDrawnSizeAfterMissedSize(t *testing.T) {
 			return 80, 24, nil
 		}, state, inputs, time.Millisecond)
 	}()
-	select {
-	case <-observed:
-	case <-time.After(time.Second):
-		t.Fatal("size watcher did not sample the console")
+	// The initial read reports a sample before the watcher stores its size.
+	// Wait for both the initial read and the first poll so startup cannot
+	// overwrite the size recorded by the simulated draw.
+	for range 2 {
+		select {
+		case <-observed:
+		case <-time.After(time.Second):
+			t.Fatal("size watcher did not reach its first poll")
+		}
 	}
 	// A draw adopted the transient 120x40 size, then the console returned to
 	// 80x24 before the watcher sampled it. The watcher must not treat 80x24 as
