@@ -48,6 +48,8 @@ func TestWebCardPTYProgressAndExpansion(t *testing.T) {
 	t.Run("released progress resize and expansion", func(t *testing.T) {
 		home, work := t.TempDir(), t.TempDir()
 		agentDir := filepath.Join(home, "agent")
+		const queryToken = "BATCH_QUERY_CANARY"
+		var sawQuery atomic.Bool
 		writeAppFile(t, filepath.Join(work, "sibling.txt"), "SIBLING_OK")
 
 		holdRelease := make(chan struct{})
@@ -66,6 +68,7 @@ func TestWebCardPTYProgressAndExpansion(t *testing.T) {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				io.WriteString(w, longWebPage("Held Page", "HELD PAGE BODY"))
 			case "/ok":
+				sawQuery.Store(r.URL.Query().Get("token") == queryToken)
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				io.WriteString(w, longWebPage("OK Page", "OK PAGE FIRST LINE"))
 			default:
@@ -76,7 +79,7 @@ func TestWebCardPTYProgressAndExpansion(t *testing.T) {
 			releaseHold()
 			page.Close()
 		}()
-		urls := []string{page.URL + "/hold", page.URL + "/ok"}
+		urls := []string{page.URL + "/hold", page.URL + "/ok?token=" + queryToken}
 		args, err := json.Marshal(map[string]any{"urls": urls})
 		if err != nil {
 			t.Fatal(err)
@@ -167,6 +170,10 @@ func TestWebCardPTYProgressAndExpansion(t *testing.T) {
 			t.Fatalf("unexpected requests before expansion: provider=%d page=%d", provider.requests(), pageRequests.Load())
 		}
 
+		if !sawQuery.Load() {
+			t.Fatal("page server did not receive the original query")
+		}
+
 		// Expansion renders from persisted metadata only: no new requests.
 		q.write("\x0f")
 		q.waitScreen("SKILL_BODY_CANARY")
@@ -175,6 +182,13 @@ func TestWebCardPTYProgressAndExpansion(t *testing.T) {
 		expanded := q.screen.Text()
 		if !strings.Contains(expanded, "DRAFT_TEXT") {
 			t.Fatalf("expansion changed the draft: %q", expanded)
+		}
+		const safePreview = "/ok: OK PAGE FIRST LINE"
+		if !strings.Contains(expanded, safePreview) || strings.Contains(expanded, queryToken) {
+			t.Fatalf("expanded card did not strip the URL query: %q", expanded)
+		}
+		if metadata := string(webCardPsiWeb(t, store.File())); !strings.Contains(metadata, safePreview) || strings.Contains(metadata, queryToken) {
+			t.Fatal("saved web card should contain the preview without the URL query")
 		}
 		if provider.requests() != 2 || pageRequests.Load() != 2 {
 			t.Fatalf("expansion issued requests: provider=%d page=%d", provider.requests(), pageRequests.Load())
@@ -201,7 +215,10 @@ func TestWebCardPTYProgressAndExpansion(t *testing.T) {
 		}
 		replay.write("\x0f")
 		replay.waitScreen("SKILL_BODY_CANARY")
-		replay.waitScreen("OK PAGE FIRST LINE")
+		replay.waitScreen(safePreview)
+		if strings.Contains(replay.screen.Text(), queryToken) {
+			t.Fatal("replayed card exposed the URL query")
+		}
 		replay.write("\x0f")
 		replay.waitScreenGone("OK PAGE FIRST LINE")
 		replay.write("/quit\r")
