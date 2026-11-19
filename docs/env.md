@@ -61,9 +61,17 @@ overrides are unset.
 | `SEARXNG_BASE_URL` | Overrides `searxngBaseUrl`; empty leaves SearXNG unconfigured |
 | `EXA_BASE_URL` | Overrides `exaBaseUrl`; empty is invalid |
 | `EXA_API_KEY` | Overrides a configured literal Exa key |
+| `CRAWL4AI_BASE_URL` | Overrides a nonempty `crawl4aiBaseUrl`; empty or whitespace-only uses the file value |
+| `CRAWL4AI_API_TOKEN` | Overrides a configured literal Crawl4AI token; empty or whitespace-only uses the file value |
 | `PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS` | `true`, `false`, `1`, or `0`; allows plain-HTTP provider base URLs |
 
 These variables affect `web-search.json` only. They also apply when the file is absent. See [Web access](web.md).
+
+A configured `$NAME` or `${NAME}` Crawl4AI token is resolved before
+`CRAWL4AI_API_TOKEN`. A missing or empty reference disables extraction; the
+environment token does not rescue it. An empty or whitespace-only
+`CRAWL4AI_API_TOKEN` uses the file's literal token. With no token from either
+source, psi calls the service without an `Authorization` header.
 
 ## Shell
 

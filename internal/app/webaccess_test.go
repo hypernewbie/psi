@@ -81,31 +81,39 @@ func TestWebSearchInlineContentRespectsCLISelection(t *testing.T) {
 			name = "fetch selected"
 		}
 		t.Run(name, func(t *testing.T) {
-			var searches, pages atomic.Int32
-			var server *httptest.Server
-			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/search" {
-					searches.Add(1)
-					json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{{"url": server.URL + "/page"}}})
-					return
-				}
+			const extracted = "SELECTED-INLINE-EXTRACTED"
+			var searches, pages, extractions atomic.Int32
+			page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				pages.Add(1)
-				w.Header().Set("Content-Type", "text/plain")
-				io.WriteString(w, "page text")
+				http.Error(w, "denied", http.StatusForbidden)
 			}))
-			defer server.Close()
+			defer page.Close()
+			extractor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				extractions.Add(1)
+				io.WriteString(w, `{"success":true,"markdown":"`+extracted+`"}`)
+			}))
+			defer extractor.Close()
+			search := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				searches.Add(1)
+				json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{{"url": page.URL + "/page"}}})
+			}))
+			defer search.Close()
 			cfg := testWebConfig()
-			cfg.SearXNGBaseURL = server.URL
+			cfg.SearXNGBaseURL = search.URL
 			cfg.SearXNGAvailable = true
+			cfg.Crawl4AIBaseURL = extractor.URL
+			cfg.Crawl4AIAvailable = true
+			cfg.Crawl4AIAllowed = true
 			cfg.AllowRanges = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
 			client := webaccess.New(cfg)
 			defer client.CloseIdle()
 			selected := []string{webaccess.ToolSearch}
 			if fetchSelected {
-				selected = append(selected, webaccess.ToolFetch)
+				selected = append(selected, webaccess.ToolFetch, webaccess.ToolContent)
 			}
 			r := &runtime{web: client, settings: config.Settings{DefaultTools: selected}}
-			handler := r.webHandlers()[webaccess.ToolSearch]
+			handlers := r.webHandlers()
+			handler := handlers[webaccess.ToolSearch]
 			result := handler(context.Background(), tools.Invocation{
 				Name: webaccess.ToolSearch, Arguments: map[string]any{"query": "q", "includeContent": true},
 			})
@@ -114,14 +122,28 @@ func TestWebSearchInlineContentRespectsCLISelection(t *testing.T) {
 				wantRequests = 1
 			}
 			wantError := !fetchSelected
-			if result.IsError != wantError || searches.Load() != wantRequests || pages.Load() != wantRequests {
-				t.Fatalf("inline search: error=%t search requests=%d page requests=%d", result.IsError, searches.Load(), pages.Load())
+			if result.IsError != wantError || searches.Load() != wantRequests || pages.Load() != wantRequests || extractions.Load() != wantRequests {
+				t.Fatalf("inline search: error=%t search requests=%d page requests=%d extractor requests=%d", result.IsError, searches.Load(), pages.Load(), extractions.Load())
 			}
-			if !fetchSelected && !strings.Contains(result.Content[0].Text, "includeContent requires fetch_content") {
-				t.Fatalf("missing actionable permission error: %s", result.Content[0].Text)
+			if !fetchSelected {
+				if !strings.Contains(result.Content[0].Text, "includeContent requires fetch_content") {
+					t.Fatalf("missing actionable permission error: %s", result.Content[0].Text)
+				}
+			} else {
+				details, _ := result.Details.(map[string]any)
+				id, _ := details["responseId"].(string)
+				if details["fetched"] != 1 || id == "" {
+					t.Fatalf("selected inline fetch did not retain extracted content: %+v", result.Details)
+				}
+				content := handlers[webaccess.ToolContent](context.Background(), tools.Invocation{
+					Name: webaccess.ToolContent, Arguments: map[string]any{"responseId": id, "urlIndex": 0},
+				})
+				if content.IsError || !strings.Contains(content.Content[0].Text, extracted) {
+					t.Fatalf("selected inline extraction not retrievable: %s", content.Content[0].Text)
+				}
 			}
 			plain := handler(context.Background(), tools.Invocation{Name: webaccess.ToolSearch, Arguments: map[string]any{"query": "q"}})
-			if plain.IsError || searches.Load() != wantRequests+1 || pages.Load() != wantRequests {
+			if plain.IsError || searches.Load() != wantRequests+1 || pages.Load() != wantRequests || extractions.Load() != wantRequests {
 				t.Fatal("fetch selection changed ordinary search behavior")
 			}
 		})

@@ -1,14 +1,16 @@
 // Package webaccess implements the native web search and fetch tools.
 //
 // The tools read the pi-web-access plugin's web-search.json for compatibility.
-// Network access is direct: HTTP(S) text fetch with an address guard, SearXNG
-// JSON search, and Exa's direct or keyless MCP endpoint.
+// Network access is direct: HTTP(S) text fetch with an address guard, an
+// optional configured Crawl4AI readable extractor, SearXNG JSON search, and
+// Exa's direct or keyless MCP endpoint.
 package webaccess
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/netip"
@@ -43,6 +45,11 @@ type Config struct {
 	ExaAPIKey         string
 	ExaBaseURL        string
 	AllowHTTPBaseURLs bool
+
+	Crawl4AIBaseURL   string
+	Crawl4AIToken     string
+	Crawl4AIAvailable bool
+	Crawl4AIAllowed   bool
 
 	SearchEnabled  bool
 	FetchEnabled   bool
@@ -168,6 +175,7 @@ func defaultConfig() (Config, []string) {
 		CacheMaxEntries:    DefaultCacheEntries,
 		CacheMaxBytes:      DefaultCacheBytes,
 		ExaAvailable:       true,
+		Crawl4AIAllowed:    true,
 	}
 	return cfg, nil
 }
@@ -198,7 +206,7 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 		return disableAll(cfg, "web access: web-search.json must be one JSON object")
 	}
 
-	var shared, fetchErrs, routeErrs, providerErrs []string
+	var shared, fetchErrs, routeErrs, providerErrs, fallbackErrs []string
 
 	// Shared values: enablement, HTTP permission, inline limit, exemptions, cache.
 	if override, ok := env.lookup("PI_WEB_ACCESS_ALLOW_HTTP_BASE_URLS"); ok {
@@ -319,6 +327,7 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 	// Provider settings.
 	applySearXNG(&cfg, root, env, &providerErrs)
 	applyExa(&cfg, root, env, &providerErrs)
+	applyCrawl4AI(&cfg, root, env, &fallbackErrs)
 
 	if len(shared) > 0 {
 		cfg.SearchEnabled, cfg.FetchEnabled, cfg.ContentEnabled = false, false, false
@@ -334,6 +343,7 @@ func ParseConfig(data []byte, env Env) (Config, []string) {
 	for _, d := range providerErrs {
 		cfg.Diagnostics = append(cfg.Diagnostics, d)
 	}
+	cfg.Diagnostics = append(cfg.Diagnostics, fallbackErrs...)
 	cfg.Diagnostics = append(cfg.Diagnostics, shared...)
 	cfg.Diagnostics = append(cfg.Diagnostics, fetchErrs...)
 	cfg.Diagnostics = append(cfg.Diagnostics, routeErrs...)
@@ -681,7 +691,7 @@ func applyExa(cfg *Config, root map[string]json.RawMessage, env Env, diags *[]st
 			return
 		}
 	}
-	resolved, err := resolveCredential(key, env)
+	resolved, err := resolveCredential("exaApiKey", key, env)
 	if err != nil {
 		*diags = append(*diags, err.Error())
 		cfg.ExaAvailable = false
@@ -693,23 +703,142 @@ func applyExa(cfg *Config, root map[string]json.RawMessage, env Env, diags *[]st
 	cfg.ExaAPIKey = resolved
 }
 
-// resolveCredential supports literal values and $NAME references. Command
-// credentials are refused; psi never executes a command to obtain a key.
-func resolveCredential(value string, env Env) (string, error) {
+func applyCrawl4AI(cfg *Config, root map[string]json.RawMessage, env Env, diags *[]string) {
+	applyFetchRouting(cfg, root, diags)
+
+	base := ""
+	if override, ok := env.lookup("CRAWL4AI_BASE_URL"); ok && strings.TrimSpace(override) != "" {
+		base = override
+	} else if raw, ok := root["crawl4aiBaseUrl"]; ok {
+		if jsonNull(raw) || json.Unmarshal(raw, &base) != nil {
+			*diags = append(*diags, "web access: crawl4aiBaseUrl must be one string")
+			return
+		}
+	}
+	if strings.TrimSpace(base) == "" {
+		return
+	}
+	normalized, err := normalizeBaseURL(base, cfg.AllowHTTPBaseURLs)
+	if err != nil {
+		*diags = append(*diags, "web access: crawl4aiBaseUrl must be an absolute HTTP(S) base URL without credentials, query, or fragment")
+		return
+	}
+
+	configured := ""
+	if raw, ok := root["crawl4aiApiToken"]; ok {
+		if jsonNull(raw) || json.Unmarshal(raw, &configured) != nil {
+			*diags = append(*diags, "web access: crawl4aiApiToken must be one string")
+			return
+		}
+	}
+	configured = strings.TrimSpace(configured)
+	if strings.HasPrefix(configured, "$$") || strings.HasPrefix(configured, "$!") {
+		*diags = append(*diags, "web access: crawl4aiApiToken literal escapes are not supported")
+		return
+	}
+	if strings.HasPrefix(configured, "!") {
+		*diags = append(*diags, "web access: crawl4aiApiToken command credentials are not supported")
+		return
+	}
+
+	token := configured
+	if strings.HasPrefix(configured, "$") {
+		token, err = resolveCredential("crawl4aiApiToken", configured, env)
+		if err != nil {
+			*diags = append(*diags, err.Error())
+			return
+		}
+		token = strings.TrimSpace(token)
+		if token == "" {
+			*diags = append(*diags, "web access: crawl4aiApiToken references an empty environment variable")
+			return
+		}
+	} else if value, ok := env.lookup("CRAWL4AI_API_TOKEN"); ok && strings.TrimSpace(value) != "" {
+		token = strings.TrimSpace(value)
+	}
+	if token != "" && !httpguts.ValidHeaderFieldValue(token) {
+		*diags = append(*diags, "web access: crawl4aiApiToken must be one valid header value")
+		return
+	}
+
+	cfg.Crawl4AIBaseURL = normalized
+	cfg.Crawl4AIToken = token
+	cfg.Crawl4AIAvailable = true
+}
+
+// applyFetchRouting honors the plugin's explicit provider list only as a
+// Crawl4AI enable switch. Missing routing keeps the default order, which
+// includes Crawl4AI. Invalid values disable only the extraction fallback.
+func applyFetchRouting(cfg *Config, root map[string]json.RawMessage, diags *[]string) {
+	raw, ok := root["fetchRouting"]
+	if !ok {
+		return
+	}
+	var routing map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &routing); err != nil || routing == nil {
+		*diags = append(*diags, "web access: fetchRouting must be an object")
+		cfg.Crawl4AIAllowed = false
+		return
+	}
+	providers, ok := routing["providers"]
+	if !ok {
+		return
+	}
+	if jsonNull(providers) {
+		*diags = append(*diags, "web access: fetchRouting.providers must be a nonempty string array")
+		cfg.Crawl4AIAllowed = false
+		return
+	}
+	var list []string
+	if err := json.Unmarshal(providers, &list); err != nil || len(list) == 0 {
+		*diags = append(*diags, "web access: fetchRouting.providers must be a nonempty string array")
+		cfg.Crawl4AIAllowed = false
+		return
+	}
+	seen := map[string]bool{}
+	allowed := false
+	for _, item := range list {
+		name := strings.ToLower(strings.TrimSpace(item))
+		if name == "" || seen[name] {
+			*diags = append(*diags, "web access: fetchRouting.providers must contain unique nonempty strings")
+			cfg.Crawl4AIAllowed = false
+			return
+		}
+		seen[name] = true
+		if name == "crawl4ai" {
+			allowed = true
+		}
+	}
+	cfg.Crawl4AIAllowed = allowed
+}
+
+// resolveCredential supports literal values, $NAME, and ${NAME} references.
+// Command credentials are refused; psi never executes a command to obtain a
+// key. The key name appears in diagnostics, never the configured value.
+func resolveCredential(name, value string, env Env) (string, error) {
 	if value == "" {
 		return "", nil
 	}
 	if strings.HasPrefix(value, "!") {
-		return "", errors.New("web access: exaApiKey command credentials are not supported")
+		return "", fmt.Errorf("web access: %s command credentials are not supported", name)
 	}
 	if strings.HasPrefix(value, "$") {
-		name := strings.TrimPrefix(value, "$")
-		if name == "" {
-			return "", errors.New("web access: exaApiKey has an empty variable reference")
+		reference := value[1:]
+		var variable string
+		if strings.HasPrefix(reference, "{") {
+			if !strings.HasSuffix(reference, "}") || len(reference) < 2 || strings.ContainsAny(reference[1:len(reference)-1], "{}") {
+				return "", fmt.Errorf("web access: %s has a malformed variable reference", name)
+			}
+			variable = reference[1 : len(reference)-1]
+		} else {
+			variable = reference
 		}
-		resolved, ok := env.lookup(name)
+		if variable == "" {
+			return "", fmt.Errorf("web access: %s has an empty variable reference", name)
+		}
+		resolved, ok := env.lookup(variable)
 		if !ok || resolved == "" {
-			return "", errors.New("web access: exaApiKey references a missing environment variable")
+			return "", fmt.Errorf("web access: %s references a missing environment variable", name)
 		}
 		return resolved, nil
 	}

@@ -146,7 +146,9 @@ psi --no-tools
 These flags apply only to the tools listed under `--tools`. Web tools honor the
 `web-search.json` switches described in [Web access](web.md). Excluding
 `fetch_content` also blocks `web_search` with `includeContent: true` before any
-network request; metadata-only search remains available. `loop_control`
+network request; metadata-only search remains available. A readable
+`fetch_content` call may use a configured Crawl4AI fallback (`crawl4aiBaseUrl`)
+after a direct failure; `raw` mode is direct HTTP only. `loop_control`
 remains available during an active goal or exact-count loop. `syncboard`
 remains available while the connected Phi bridge accepts that capability.
 

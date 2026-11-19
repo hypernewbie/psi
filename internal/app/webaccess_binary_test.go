@@ -65,6 +65,111 @@ func TestWebAccessLoopbackFetchExclusionBinary(t *testing.T) {
 	}
 }
 
+func TestWebAccessLoopbackCrawl4AIBinary(t *testing.T) {
+	if os.Getenv("PSI_WEB_BINARY") == "" {
+		t.Skip("set PSI_WEB_BINARY to the built psi executable")
+	}
+	const (
+		tokenCanary = "invented-crawl4ai-token"
+		markdown    = "BINARY-CRAWL4AI-UNIQUE"
+	)
+	for _, tc := range []struct {
+		name           string
+		providers      string
+		wantExtraction bool
+	}{
+		{"disabled routing", `["http"]`, false},
+		{"enabled routing", `["http","crawl4ai"]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var pageCalls, extractorCalls atomic.Int32
+			page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				pageCalls.Add(1)
+				http.Error(w, "denied", http.StatusForbidden)
+			}))
+			defer page.Close()
+			extractor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				extractorCalls.Add(1)
+				if r.Method != http.MethodPost || r.URL.Path != "/base/md" {
+					t.Errorf("extractor request = %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer "+tokenCanary {
+					t.Errorf("extractor bearer header did not match")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"success":true,"markdown":%q}`, markdown)
+			}))
+			defer extractor.Close()
+
+			configPath := filepath.Join(t.TempDir(), "web-search.json")
+			writeAppFile(t, configPath, fmt.Sprintf(`{
+				"crawl4aiBaseUrl":%q,"crawl4aiApiToken":%q,
+				"fetchRouting":{"providers":%s},
+				"ssrf":{"allowRanges":["127.0.0.1/32"]}
+			}`, extractor.URL+"/base", tokenCanary, tc.providers))
+			t.Setenv("PSI_WEB_CONFIG_PATH", configPath)
+
+			target := page.URL + "/doc"
+			env := prepareAcceptance(t, func(turn int, results []string) (string, string) {
+				switch turn {
+				case 0:
+					return "fetch_content", fmt.Sprintf(`{"url":%q,"mode":"readable"}`, target)
+				case 1:
+					if !tc.wantExtraction {
+						return "", ""
+					}
+					id := responseIDValue(results[0])
+					if id == "" {
+						t.Errorf("enabled fallback returned no responseId: %.300q", results[0])
+						return "", ""
+					}
+					return "get_search_content", fmt.Sprintf(`{"responseId":%q}`, id)
+				}
+				return "", ""
+			})
+			env.run(t, "--mode", "rpc", "--tools", "fetch_content,get_search_content",
+				"--provider", "anthropic", "--model", "web-fixture",
+				"--deny-project", "--no-session", "--no-context-files", "--no-skills")
+
+			turns := env.snapshotTurns()
+			if len(turns) < 2 || len(turns[1].results) != 1 {
+				t.Fatalf("expected a fetch result, got %+v", turns)
+			}
+			fetchResult := turns[1].results[0]
+			if !tc.wantExtraction {
+				if !strings.Contains(fetchResult, "fetch_content failed") || !strings.Contains(fetchResult, "http status: 403") {
+					t.Fatalf("disabled fallback result = %.400q", fetchResult)
+				}
+				if got := extractorCalls.Load(); got != 0 {
+					t.Fatalf("disabled routing made %d extractor calls", got)
+				}
+				return
+			}
+
+			if strings.Contains(fetchResult, "fetch_content failed") || !strings.Contains(fetchResult, markdown) {
+				t.Fatalf("enabled fallback result = %.500q", fetchResult)
+			}
+			if strings.Contains(fetchResult, tokenCanary) {
+				t.Fatal("enabled fallback result leaked the extractor token")
+			}
+			if len(turns) != 3 || len(turns[2].results) < 2 {
+				t.Fatalf("expected a retrieval result, got %+v", turns)
+			}
+			retrieved := turns[2].results[len(turns[2].results)-1]
+			_, payload, ok := strings.Cut(retrieved, "\ncontent:\n")
+			if !ok || payload != markdown {
+				t.Fatalf("retained payload differs from extracted Markdown: %.400q", retrieved)
+			}
+			if got := pageCalls.Load(); got != 1 {
+				t.Fatalf("page calls = %d, want 1", got)
+			}
+			if got := extractorCalls.Load(); got != 1 {
+				t.Fatalf("extractor calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
 func TestWebAccessLoopbackHeaderProfileBinary(t *testing.T) {
 	if os.Getenv("PSI_WEB_BINARY") == "" {
 		t.Skip("set PSI_WEB_BINARY to the built psi executable")

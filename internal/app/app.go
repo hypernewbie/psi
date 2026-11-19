@@ -464,6 +464,7 @@ Interactive Enter submits; an empty Enter retries an unfinished turn when idle, 
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 Inline search content requires selected and enabled fetch_content.
+Readable fetch_content may use a configured Crawl4AI fallback (crawl4aiBaseUrl) after a direct failure; raw mode is direct HTTP only.
 loop_control and syncboard remain available when their separate availability checks pass.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.

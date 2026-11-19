@@ -95,7 +95,7 @@ func TestMissingFileUsesDefaults(t *testing.T) {
 }
 
 func TestUnsupportedCredentialFieldsAreIgnored(t *testing.T) {
-	body := `{"crawl4aiApiToken":"CANARY-TOKEN","firecrawlApiKey":"CANARY-FIRE","fetchRouting":{"providers":["crawl4ai"]},"provider":"auto","fetch":{"defaultMode":"raw"}}`
+	body := `{"firecrawlApiKey":"CANARY-FIRE","provider":"auto","fetch":{"defaultMode":"raw"}}`
 	env, _ := newEnv(t, nil, map[string]string{"/home/tester/.pi/agent/web-search.json": body})
 	cfg, diags := Load(env)
 	if len(diags) != 0 {
@@ -108,6 +108,94 @@ func TestUnsupportedCredentialFieldsAreIgnored(t *testing.T) {
 	joined := strings.Join(diags, " ")
 	if strings.Contains(joined, "CANARY") {
 		t.Fatalf("diagnostics leaked a value: %s", joined)
+	}
+}
+
+func TestCrawl4AIConfig(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		available bool
+		allowed   bool
+		wantDiag  string
+	}{
+		{"literal", `{"crawl4aiBaseUrl":"https://crawl.example/base/","crawl4aiApiToken":"token-value"}`, true, true, ""},
+		{"unconfigured", `{}`, false, true, ""},
+		{"empty base", `{"crawl4aiBaseUrl":"  ","crawl4aiApiToken":"token-value"}`, false, true, ""},
+		{"null base", `{"crawl4aiBaseUrl":null}`, false, true, "crawl4aiBaseUrl"},
+		{"non-string base", `{"crawl4aiBaseUrl":7}`, false, true, "crawl4aiBaseUrl"},
+		{"query base", `{"crawl4aiBaseUrl":"https://crawl.example/?canary=SECRET"}`, false, true, "crawl4aiBaseUrl"},
+		{"credentials base", `{"crawl4aiBaseUrl":"https://user:SECRET@crawl.example"}`, false, true, "crawl4aiBaseUrl"},
+		{"http needs permission", `{"crawl4aiBaseUrl":"http://crawl.example"}`, false, true, "crawl4aiBaseUrl"},
+		{"http with permission", `{"allowHttpBaseUrls":true,"crawl4aiBaseUrl":"http://crawl.example"}`, true, true, ""},
+		{"invalid port", `{"crawl4aiBaseUrl":"https://crawl.example:99999"}`, false, true, "crawl4aiBaseUrl"},
+		{"loopback http", `{"crawl4aiBaseUrl":"http://127.0.0.1:11235"}`, true, true, ""},
+		{"null token", `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":null}`, false, true, "crawl4aiApiToken"},
+		{"non-string token", `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":7}`, false, true, "crawl4aiApiToken"},
+		{"command token", `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"!echo SECRET"}`, false, true, "crawl4aiApiToken"},
+		{"invalid header token", `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"bad\nSECRET"}`, false, true, "crawl4aiApiToken"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, _ := newEnv(t, nil, nil)
+			cfg, diags := ParseConfig([]byte(tc.body), env)
+			if cfg.Crawl4AIAvailable != tc.available {
+				t.Fatalf("available = %v, want %v", cfg.Crawl4AIAvailable, tc.available)
+			}
+			if cfg.Crawl4AIAllowed != tc.allowed {
+				t.Fatalf("allowed = %v, want %v", cfg.Crawl4AIAllowed, tc.allowed)
+			}
+			if !cfg.SearchEnabled || !cfg.FetchEnabled || !cfg.ContentEnabled {
+				t.Fatalf("fallback config disabled unrelated tools: %v %v %v", cfg.SearchEnabled, cfg.FetchEnabled, cfg.ContentEnabled)
+			}
+			joined := strings.Join(diags, " ")
+			if tc.wantDiag != "" && !strings.Contains(joined, tc.wantDiag) {
+				t.Fatalf("diagnostics = %v", diags)
+			}
+			if tc.wantDiag == "" && len(diags) != 0 {
+				t.Fatalf("diagnostics = %v, want none", diags)
+			}
+			if strings.Contains(joined, "SECRET") {
+				t.Fatalf("diagnostics leaked a value: %v", diags)
+			}
+		})
+	}
+}
+
+func TestCrawl4AIRouting(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		allowed  bool
+		wantDiag bool
+	}{
+		{"missing routing", `{"crawl4aiBaseUrl":"https://crawl.example"}`, true, false},
+		{"missing providers", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{}}`, true, false},
+		{"explicit crawl4ai", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":[" HTTP ","Crawl4AI"]}}`, true, false},
+		{"excluded crawl4ai", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":["http","jina"]}}`, false, false},
+		{"unsupported names ignored", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":["firecrawl","jina"]}}`, false, false},
+		{"null routing", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":null}`, false, true},
+		{"array routing", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":[]}`, false, true},
+		{"null providers", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":null}}`, false, true},
+		{"empty providers", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":[]}}`, false, true},
+		{"wrong providers type", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":{}}}`, false, true},
+		{"empty provider name", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":[" "]}}`, false, true},
+		{"duplicate provider names", `{"crawl4aiBaseUrl":"https://crawl.example","fetchRouting":{"providers":["http","HTTP"]}}`, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, _ := newEnv(t, nil, nil)
+			cfg, diags := ParseConfig([]byte(tc.body), env)
+			if cfg.Crawl4AIAllowed != tc.allowed {
+				t.Fatalf("allowed = %v, want %v", cfg.Crawl4AIAllowed, tc.allowed)
+			}
+			if got := len(diags) > 0; got != tc.wantDiag {
+				t.Fatalf("diagnostics = %v, want diagnostic %v", diags, tc.wantDiag)
+			}
+			if !cfg.SearchEnabled || !cfg.FetchEnabled || !cfg.ContentEnabled {
+				t.Fatalf("routing disabled unrelated tools: %v %v %v", cfg.SearchEnabled, cfg.FetchEnabled, cfg.ContentEnabled)
+			}
+		})
 	}
 }
 
@@ -320,6 +408,160 @@ func TestCredentialRules(t *testing.T) {
 	cfg, _ = ParseConfig([]byte(`{"exaApiKey":"$NAMED_KEY"}`), env)
 	if cfg.ExaAPIKey != "named" {
 		t.Fatalf("key = %q", cfg.ExaAPIKey)
+	}
+
+	env, _ = newEnv(t, map[string]string{"NAMED_KEY": "named", "EXA_API_KEY": "fallback"}, nil)
+	cfg, _ = ParseConfig([]byte(`{"exaApiKey":"$NAMED_KEY"}`), env)
+	if cfg.ExaAPIKey != "named" {
+		t.Fatalf("reference did not win over EXA_API_KEY: %q", cfg.ExaAPIKey)
+	}
+
+	env, _ = newEnv(t, map[string]string{"BRACED_KEY": "braced"}, nil)
+	cfg, diags = ParseConfig([]byte(`{"exaApiKey":"${BRACED_KEY}"}`), env)
+	if len(diags) != 0 || cfg.ExaAPIKey != "braced" {
+		t.Fatalf("braced reference = %q diagnostics=%v", cfg.ExaAPIKey, diags)
+	}
+
+	// Exa keeps literal and resolved whitespace; Crawl4AI trims separately.
+	cfg, diags = ParseConfig([]byte(`{"exaApiKey":"  literal key  "}`), env)
+	if len(diags) != 0 || cfg.ExaAPIKey != "  literal key  " {
+		t.Fatalf("Exa literal whitespace changed: %q diagnostics=%v", cfg.ExaAPIKey, diags)
+	}
+	env, _ = newEnv(t, map[string]string{"SPACE_KEY": "   "}, nil)
+	cfg, diags = ParseConfig([]byte(`{"exaApiKey":"${SPACE_KEY}"}`), env)
+	if len(diags) != 0 || cfg.ExaAPIKey != "   " {
+		t.Fatalf("Exa resolved whitespace changed: %q diagnostics=%v", cfg.ExaAPIKey, diags)
+	}
+}
+
+func TestCrawl4AIEnvironment(t *testing.T) {
+	cases := []struct {
+		name      string
+		vars      map[string]string
+		body      string
+		available bool
+		base      string
+		token     string
+		wantDiag  bool
+	}{
+		{
+			name:      "env base overrides malformed file",
+			vars:      map[string]string{"CRAWL4AI_BASE_URL": " https://env-crawl.example/ "},
+			body:      `{"crawl4aiBaseUrl":7,"crawl4aiApiToken":"file-token"}`,
+			available: true, base: "https://env-crawl.example", token: "file-token",
+		},
+		{
+			name:      "empty env base uses file",
+			vars:      map[string]string{"CRAWL4AI_BASE_URL": "   "},
+			body:      `{"crawl4aiBaseUrl":"https://file-crawl.example"}`,
+			available: true, base: "https://file-crawl.example",
+		},
+		{
+			name:      "env token overrides literal",
+			vars:      map[string]string{"CRAWL4AI_API_TOKEN": " env-token "},
+			body:      `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"file-token"}`,
+			available: true, base: "https://crawl.example", token: "env-token",
+		},
+		{
+			name:      "empty env token uses literal",
+			vars:      map[string]string{"CRAWL4AI_API_TOKEN": "  "},
+			body:      `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":" file-token "}`,
+			available: true, base: "https://crawl.example", token: "file-token",
+		},
+		{
+			name:      "reference wins over token env",
+			vars:      map[string]string{"CRAWL4AI_API_TOKEN": "env-token", "CRAWL_KEY": " ref-token "},
+			body:      `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"${CRAWL_KEY}"}`,
+			available: true, base: "https://crawl.example", token: "ref-token",
+		},
+		{
+			name:     "reference missing is not rescued",
+			vars:     map[string]string{"CRAWL4AI_API_TOKEN": "env-token"},
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$MISSING_CRAWL"}`,
+			wantDiag: true,
+		},
+		{
+			name:     "reference whitespace is empty",
+			vars:     map[string]string{"CRAWL4AI_API_TOKEN": "env-token", "CRAWL_KEY": "   "},
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$CRAWL_KEY"}`,
+			wantDiag: true,
+		},
+		{
+			name:      "resolved bang is data",
+			vars:      map[string]string{"CRAWL_KEY": "!not-a-command"},
+			body:      `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$CRAWL_KEY"}`,
+			available: true, base: "https://crawl.example", token: "!not-a-command",
+		},
+		{
+			name:      "unauthenticated",
+			body:      `{"crawl4aiBaseUrl":"https://crawl.example"}`,
+			available: true, base: "https://crawl.example",
+		},
+		{
+			name:     "empty reference",
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$"}`,
+			wantDiag: true,
+		},
+		{
+			name:     "malformed braced reference",
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"${CRAWL_KEY"}`,
+			wantDiag: true,
+		},
+		{
+			name:     "unsupported dollar escape is not a reference",
+			vars:     map[string]string{"$CRAWL_KEY": "SECRET", "CRAWL4AI_API_TOKEN": "env-token"},
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$$CRAWL_KEY"}`,
+			wantDiag: true,
+		},
+		{
+			name:     "unsupported bang escape is not a reference",
+			vars:     map[string]string{"!CRAWL_KEY": "SECRET", "CRAWL4AI_API_TOKEN": "env-token"},
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example","crawl4aiApiToken":"$!CRAWL_KEY"}`,
+			wantDiag: true,
+		},
+		{
+			name:     "invalid env token header",
+			vars:     map[string]string{"CRAWL4AI_API_TOKEN": "bad\nSECRET"},
+			body:     `{"crawl4aiBaseUrl":"https://crawl.example"}`,
+			wantDiag: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, _ := newEnv(t, tc.vars, nil)
+			cfg, diags := ParseConfig([]byte(tc.body), env)
+			if cfg.Crawl4AIAvailable != tc.available {
+				t.Fatalf("available = %v, want %v", cfg.Crawl4AIAvailable, tc.available)
+			}
+			if cfg.Crawl4AIBaseURL != tc.base {
+				t.Fatalf("base = %q, want %q", cfg.Crawl4AIBaseURL, tc.base)
+			}
+			if cfg.Crawl4AIToken != tc.token {
+				t.Fatal("effective token differs")
+			}
+			if got := len(diags) > 0; got != tc.wantDiag {
+				t.Fatalf("diagnostics = %v, want diagnostic %v", diags, tc.wantDiag)
+			}
+			for _, diag := range diags {
+				if strings.Contains(diag, "SECRET") || strings.Contains(diag, "env-token") || strings.Contains(diag, "file-token") {
+					t.Fatal("diagnostic leaked a token value")
+				}
+			}
+		})
+	}
+}
+
+func TestCrawl4AIEnvironmentOnly(t *testing.T) {
+	env, _ := newEnv(t, map[string]string{
+		"CRAWL4AI_BASE_URL":  "https://env-only-crawl.example/base/",
+		"CRAWL4AI_API_TOKEN": "env-only-token",
+	}, nil)
+	cfg, diags := Load(env)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if !cfg.Crawl4AIAvailable || cfg.Crawl4AIBaseURL != "https://env-only-crawl.example/base" || cfg.Crawl4AIToken != "env-only-token" {
+		t.Fatal("environment-only Crawl4AI config was not applied")
 	}
 }
 

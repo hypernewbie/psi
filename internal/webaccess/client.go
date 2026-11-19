@@ -14,13 +14,14 @@ import (
 // Client owns immutable configuration, guarded transports, and the store. The
 // runtime creates one and keeps it across model, session, and reload changes.
 type Client struct {
-	cfg      Config
-	page     *http.Client
-	provider *http.Client
-	store    *store
-	mcpURL   string
-	now      func() time.Time
-	redactor redactor
+	cfg       Config
+	page      *http.Client
+	provider  *http.Client
+	extractor *http.Client
+	store     *store
+	mcpURL    string
+	now       func() time.Time
+	redactor  redactor
 }
 
 // New builds a client from a validated configuration. Callers must not reuse
@@ -48,7 +49,22 @@ func New(cfg Config) *Client {
 		Transport:     newHTTPTransport(providerDial.DialContext),
 		CheckRedirect: providerRedirect,
 	}
-	return &Client{cfg: cfg, page: page, provider: provider, store: newStore(cfg.CacheMaxEntries, cfg.CacheMaxBytes), mcpURL: "https://mcp.exa.ai/mcp?tools=web_search_exa", redactor: newRedactor(cfg)}
+
+	extractorDial := &guardedDialer{
+		allow:   cfg.AllowRanges,
+		resolve: defaultResolver,
+		dial:    defaultDialer().DialContext,
+	}
+	if origin := loopbackOrigin(cfg.Crawl4AIBaseURL); origin != "" {
+		extractorDial.loopbackOrigin = origin
+	}
+	extractorTransport := newHTTPTransport(extractorDial.DialContext)
+	extractorTransport.ResponseHeaderTimeout = crawl4AIExtractionTimeout
+	extractor := &http.Client{
+		Transport:     extractorTransport,
+		CheckRedirect: extractorRedirect,
+	}
+	return &Client{cfg: cfg, page: page, provider: provider, extractor: extractor, store: newStore(cfg.CacheMaxEntries, cfg.CacheMaxBytes), mcpURL: "https://mcp.exa.ai/mcp?tools=web_search_exa", redactor: newRedactor(cfg)}
 }
 
 func loopbackOrigin(base string) string {
@@ -77,13 +93,14 @@ func netJoin(host, port string) string {
 	return host + ":" + port
 }
 
-// CloseIdle releases connections owned by both pools.
+// CloseIdle releases connections owned by every pool.
 func (c *Client) CloseIdle() {
 	if c == nil {
 		return
 	}
 	c.page.CloseIdleConnections()
 	c.provider.CloseIdleConnections()
+	c.extractor.CloseIdleConnections()
 }
 
 func pageRedirect(req *http.Request, via []*http.Request) error {
@@ -110,6 +127,43 @@ func providerRedirect(req *http.Request, via []*http.Request) error {
 	}
 	if _, err := validateTarget(req.URL.String()); err != nil {
 		return fmt.Errorf("%s: provider redirect target is invalid", classValidation)
+	}
+	return nil
+}
+
+// extractorRedirect keeps extraction on its configured origin and preserves
+// the original JSON POST across redirects. A 303 remains Go's bodyless GET.
+func extractorRedirect(req *http.Request, via []*http.Request) error {
+	if err := providerRedirect(req, via); err != nil {
+		return err
+	}
+	if req.Response == nil {
+		return fmt.Errorf("%s: extractor redirect state is invalid", classInvalid)
+	}
+	status := req.Response.StatusCode
+	previous := via[len(via)-1]
+	if previous.Method != http.MethodPost {
+		return nil
+	}
+	switch status {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		original := via[0]
+		if original.GetBody == nil {
+			return fmt.Errorf("%s: extractor redirect body cannot be replayed", classInvalid)
+		}
+		body, err := original.GetBody()
+		if err != nil {
+			return fmt.Errorf("%s: extractor redirect body cannot be replayed", classInvalid)
+		}
+		if req.Body != nil {
+			req.Body.Close()
+		}
+		req.Method = original.Method
+		req.Body = body
+		req.GetBody = original.GetBody
+		req.ContentLength = original.ContentLength
+		// net/http drops content headers after a 301 or 302 converts POST to GET.
+		req.Header.Set("Content-Type", original.Header.Get("Content-Type"))
 	}
 	return nil
 }
