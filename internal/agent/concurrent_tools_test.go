@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -32,31 +34,27 @@ func TestConcurrentExternalToolsOverlap(t *testing.T) {
 		cfg.Tools = append(cfg.Tools, externalToolDef(first), externalToolDef(second))
 		entered := make(chan struct{}, 2)
 		release := make(chan struct{})
-		var lookups atomic.Int32
 		cfg.ConcurrentTools = func(name string) (InternalToolHandler, bool) {
-			lookups.Add(1)
 			if name != first && name != second {
 				return nil, false
 			}
 			return func(_ context.Context, invocation tools.Invocation) tools.Result {
 				entered <- struct{}{}
 				<-release
-				return tools.Result{Content: []tools.Block{{Type: "text", Text: invocation.ID}}}
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: name + ":" + invocation.ID}}}
 			}, true
 		}
 		done := make(chan error, 1)
 		go func() { done <- h.loop.Submit(context.Background(), "go", cfg) }()
 
 		synctest.Wait()
-		if got := len(entered); got != 2 {
-			t.Fatalf("external handlers entered before release = %d, want 2", got)
-		}
+		enteredBeforeRelease := len(entered)
 		close(release)
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		if lookups.Load() != 2 {
-			t.Fatalf("lookup count = %d, want 2", lookups.Load())
+		if enteredBeforeRelease != 2 {
+			t.Fatalf("external handlers entered before release = %d, want 2", enteredBeforeRelease)
 		}
 
 		projection, err := h.store.Projection()
@@ -68,10 +66,15 @@ func TestConcurrentExternalToolsOverlap(t *testing.T) {
 			if message.Role != "toolResult" || message.ToolResult == nil {
 				continue
 			}
-			results[message.ToolResult.ToolCallID] = message.ToolResult.Content[0].Text.Text
+			result := message.ToolResult
+			text := textOf(result.Content)
+			if result.IsError || len(text) != 1 {
+				t.Fatalf("unexpected result for %s: %+v", result.ToolCallID, result)
+			}
+			results[result.ToolCallID] = text[0]
 		}
-		if results["e1"] != "e1" || results["e2"] != "e2" {
-			t.Fatalf("persisted results = %v, want e1 and e2", results)
+		if len(results) != 2 || results["e1"] != first+":e1" || results["e2"] != second+":e2" {
+			t.Fatalf("persisted results = %v, want %s:e1 and %s:e2", results, first, second)
 		}
 	})
 }
@@ -125,6 +128,42 @@ func TestConcurrentExternalToolCancelledBeforeDispatchDoesNotRun(t *testing.T) {
 		return
 	}
 	t.Fatal("cancelled external call was not persisted")
+}
+
+// A batch cancelled before dispatch must release prepared mutation slots
+// even though its write and edit never touch the file.
+func TestBatchCancelledBeforeDispatchReleasesMutationSlots(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newParallelHarness(t, nil)
+		const file = "shared.txt"
+		writeFileFor(t, h.ws, file, "original text\n")
+		editCall := func(id, replacement string) provider.Block {
+			return provider.Block{Type: "toolCall", ID: id, Name: tools.Edit, Arguments: map[string]any{
+				"path":  file,
+				"edits": []any{map[string]any{"oldText": "original text", "newText": replacement}},
+			}}
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		calls := []provider.Block{writeCall("w1", file, "cancelled write\n"), editCall("e1", "cancelled edit")}
+		cfg := h.config()
+		if err := h.loop.runBatch(ctx, calls, cfg); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled batch = %v, want context.Canceled", err)
+		}
+
+		// This edit needs an empty mutation queue and the unchanged input text.
+		if err := h.loop.runBatch(t.Context(), []provider.Block{editCall("e2", "updated text")}, cfg); err != nil {
+			t.Fatal(err)
+		}
+		content, err := os.ReadFile(filepath.Join(h.ws, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(content); got != "updated text\n" {
+			t.Fatalf("file after follow-up edit = %q, want updated text", got)
+		}
+	})
 }
 
 func TestConcurrentExternalToolDisabledNameNeverLooksUp(t *testing.T) {
