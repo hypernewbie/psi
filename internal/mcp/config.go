@@ -422,40 +422,6 @@ func parseExposure(value string) (Exposure, error) {
 	}
 }
 
-func effectiveExposure(server Server, rawTool string) Exposure {
-	for _, rule := range server.ToolRules {
-		if rule.Pattern == rawTool {
-			return rule.Exposure
-		}
-	}
-	for _, rule := range server.ToolRules {
-		if strings.Contains(rule.Pattern, "*") && wildcardMatch(rule.Pattern, rawTool) {
-			return rule.Exposure
-		}
-	}
-	return server.Exposure
-}
-
-// wildcardMatch matches a pattern where only '*' is special.
-func wildcardMatch(pattern, value string) bool {
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 1 {
-		return pattern == value
-	}
-	if !strings.HasPrefix(value, parts[0]) {
-		return false
-	}
-	value = value[len(parts[0]):]
-	for i := 1; i < len(parts)-1; i++ {
-		idx := strings.Index(value, parts[i])
-		if idx < 0 {
-			return false
-		}
-		value = value[idx+len(parts[i]):]
-	}
-	return strings.HasSuffix(value, parts[len(parts)-1])
-}
-
 func parseTransportEntry(raw *rawServer) (Server, error) {
 	if err := checkNullFields(raw); err != nil {
 		return Server{}, err

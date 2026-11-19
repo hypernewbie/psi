@@ -1,8 +1,9 @@
-# MCP configuration
+# MCP configuration and data handling
 
-This layer adds MCP configuration parsing and value resolution. The application
-is not yet wired to load these files or connect to servers. This document does
-not describe available MCP tools.
+This layer adds MCP configuration parsing and value resolution, tool-catalog
+mapping, and result conversion. The application is not yet wired to load these
+files or connect to servers. This document describes data contracts; it does not
+claim that MCP tools are available.
 
 ## Configuration files
 
@@ -75,5 +76,48 @@ unless the user settings file sets `mcp.allowProjectCommands` to `true`. The
 default is `false`, and a project settings file cannot enable this option.
 Trust alone does not permit project command interpolation.
 
-The configuration API does not connect to MCP servers in this layer. Application
-integration, server lifecycle, and tool availability are added in later layers.
+## Tool names and schemas
+
+The catalog maps a raw tool name to `mcp__<server>__<tool>`. Characters outside
+`[A-Za-z0-9_]` become `_`. Names longer than 64 characters, or names that
+collide after sanitizing, receive `_` plus eight lowercase hexadecimal digits
+derived from SHA-256. The catalog assigns names across the full discovered list
+before it filters by exposure, so reordering the same list does not change a
+tool name. A remaining within-server name collision rejects the catalog.
+
+The input schema must be a JSON object. psi deep-copies it, adds
+`type: "object"` only when `type` is absent or null, and adds
+`properties: {}` only when `properties` is absent. It does not repair other
+schema keywords. The description uses the tool description, then the tool title,
+then the annotation title, then a generated fallback.
+
+An exact `toolExposure` name takes precedence over wildcard patterns. Otherwise,
+the first matching wildcard in JSON order wins. Only `*` is special. A tool
+without a matching rule uses the server's `exposure`. The catalog marks
+`direct` and `codemode` tools as declared; it filters `deferred` and `hidden`
+tools out.
+
+## Results and limits
+
+Result conversion maps MCP text, images, embedded resources, resource links,
+errors, and structured output to psi tool results. Supported images are PNG,
+JPEG, GIF, and WebP, up to 3 MiB of decoded data. Unsupported or oversized
+images become text notices. An error with no text includes a fallback message.
+Audio and unknown content become text placeholders. Resource links are text
+only; psi does not fetch their URIs. Embedded text, JSON, and XML blobs are
+returned as text if they are valid UTF-8. Media-type parameters such as
+`charset` do not change how psi classifies these blobs. Embedded binary
+resources are written to mode-0600 `psi-mcp-resource-*` files, which are not
+removed automatically. The mode applies on Linux and macOS; on Windows the
+operating system applies its own file permissions.
+
+Combined text over 20 KiB keeps its beginning and end. psi writes the full text
+to a mode-0600 `psi-mcp-*` file. When the read tool is available, the result
+notice directs the model to read the file with an offset and limit. If the write
+fails, the notice reports that the complete output was not saved and does not
+show a false path. A regression test reads the saved output through the actual
+`read` tool.
+
+The configuration API and catalog/result conversion do not connect to MCP
+servers in this layer. Application integration, server lifecycle, and tool
+availability are added in later layers.

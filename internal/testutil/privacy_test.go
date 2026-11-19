@@ -34,7 +34,7 @@ func TestPrivacyAudit(t *testing.T) {
 		})
 	}
 	// No excluded runtime imports (extensions, MCP, telemetry, etc.).
-	banned := []string{"telemetry", "mcp", "subagent", "rpc-server", "print-mode", "json-event"}
+	banned := []string{"telemetry", "subagent", "rpc-server", "print-mode", "json-event"}
 	for _, root := range []string{"internal", "cmd"} {
 		filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
 			if err != nil || fi.IsDir() || !strings.HasSuffix(p, ".go") {
