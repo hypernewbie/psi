@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"psi/internal/provider"
@@ -90,16 +91,24 @@ func (r *runtime) readSessionHandler(_ context.Context, invocation tools.Invocat
 	}
 }
 
+// intArgument reads a JSON number. Agent tool calls are decoded with
+// json.Decoder.UseNumber, so the common case is json.Number, not float64.
 func intArgument(value any) int {
 	switch v := value.(type) {
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+		if f, err := v.Float64(); err == nil {
+			return int(f)
+		}
+		return 0
 	case float64:
 		return int(v)
 	case int:
 		return v
 	case int64:
 		return int(v)
-	case nil:
-		return 0
 	default:
 		return 0
 	}

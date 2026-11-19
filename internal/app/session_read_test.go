@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -78,6 +79,40 @@ func TestReadSessionAvailableFollowsCompaction(t *testing.T) {
 	}
 	if !r.readSessionAvailable() {
 		t.Fatal("tool not advertised after a compaction")
+	}
+}
+
+// Agent tool arguments arrive as json.Number (decoder.UseNumber), so the
+// token bound must accept that type instead of silently falling back to the
+// default.
+func TestReadSessionToolBoundsWithJSONNumberTokens(t *testing.T) {
+	r := testRuntime(t)
+	if _, err := r.store.AppendMessage(agentMessageUser(strings.Repeat("bulk ", 8_000))); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := r.store.AppendMessage(agentMessageUser("kept"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.AppendCompaction("summary", kept, 10, nil); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.store.ActivePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := r.readSessionHandler(context.Background(), tools.Invocation{Name: readSessionToolName, Arguments: map[string]any{
+		"action": "read", "startEntryId": path[0].ID(), "endEntryId": path[0].ID(), "maxTokens": json.Number("500"),
+	}})
+	if result.IsError {
+		t.Fatalf("read failed: %+v", result.Content)
+	}
+	details, _ := result.Details.(session.HistoryResult)
+	if details.EstimatedTokens > 500*2 {
+		t.Fatalf("estimated tokens = %d, want the requested bound", details.EstimatedTokens)
+	}
+	if !strings.Contains(result.Content[0].Text, "characters omitted") {
+		t.Fatal("large entry was not bounded")
 	}
 }
 
