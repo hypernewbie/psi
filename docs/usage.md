@@ -117,8 +117,10 @@ one message per turn) or `all`.
 - `/settings` sets a per-model default under `Default thinking level per model`.
   The current model uses a new default at once; other models use theirs on the
   next switch.
-- `/model`, `/thinking`, and `/settings` also work during a run. The run is
-  not cancelled; request settings apply to the next request.
+- `/model`, `/thinking`, and `/settings` work during a run. The run is
+  not cancelled; request settings apply to the next request. `/session`,
+  `/hotkeys`, and `/name` also run immediately without cancelling the run.
+  Unknown slash text is queued as steering.
 - An explicit CLI, restored, or `/thinking` level applies to that selection.
   A later model change applies `modelThinkingLevels[provider/modelId]` first,
   then `defaultThinkingLevel`, then the carried level. An unadvertised level
