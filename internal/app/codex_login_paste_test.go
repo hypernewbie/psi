@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,17 +30,7 @@ func codexReplyTestModels(t *testing.T, reply string) (*httptest.Server, *config
 			t.Errorf("model path = %q", req.URL.Path)
 			return
 		}
-		message := map[string]any{"type": "message", "id": "msg_" + reply, "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": reply}}}
-		event := func(typ string, fields map[string]any) {
-			fields["type"] = typ
-			data, _ := json.Marshal(fields)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", typ, data)
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		event("response.output_item.added", map[string]any{"output_index": 0, "item": message})
-		event("response.output_text.delta", map[string]any{"output_index": 0, "delta": reply})
-		event("response.output_item.done", map[string]any{"output_index": 0, "item": message})
-		event("response.completed", map[string]any{"response": map[string]any{"id": "resp_" + reply, "status": "completed", "output": []any{message}}})
+		writeCodexLoginTestReply(w, reply)
 	}))
 	return server, codexAppTestModels(t, server.URL)
 }
@@ -146,23 +135,30 @@ func startCodexPasteLogin(t *testing.T, r *runtime, reply string) (*terminal.Con
 	return console, out, inputs, bindAddr, parsed.Query().Get("state"), stop
 }
 
+type codexPasteExchange struct {
+	calls atomic.Int32
+	form  url.Values // Read only after the REPL joins the sign-in worker.
+}
+
+func (e *codexPasteExchange) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.String() != "https://auth.openai.com/oauth/token" {
+		return nil, fmt.Errorf("unexpected URL %s", req.URL)
+	}
+	e.calls.Add(1)
+	if err := req.ParseForm(); err != nil {
+		return nil, err
+	}
+	e.form = req.PostForm
+	body := codexAppTestTokenBody(codexAppTestAccess("acct-paste-app"), "paste-app-refresh")
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+}
+
 // Masked manual paste delivers the callback URL without echo. The code is
 // exchanged once and a normal prompt completes after settlement. L1-L9.
 func TestCodexLoginManualPasteREPL(t *testing.T) {
 	r := testRuntime(t)
-	var exchanges atomic.Int32
-	var gotForm url.Values
-	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != "https://auth.openai.com/oauth/token" {
-			return nil, fmt.Errorf("unexpected URL %s", req.URL)
-		}
-		exchanges.Add(1)
-		if err := req.ParseForm(); err != nil {
-			return nil, err
-		}
-		gotForm = req.PostForm
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexAppTestTokenBody(codexAppTestAccess("acct-manual-app"), "manual-app-refresh"))), Header: make(http.Header)}, nil
-	})
+	exchange := &codexPasteExchange{}
+	r.codexTransport = exchange
 	console, out, inputs, bindAddr, state, stop := startCodexPasteLogin(t, r, "manual-paste-reply")
 	paste := "http://" + bindAddr + "/auth/callback?code=manual-app-code&state=" + state
 	sendCodexInput(t, inputs, terminal.Input{Paste: true, PasteStart: true})
@@ -174,9 +170,9 @@ func TestCodexLoginManualPasteREPL(t *testing.T) {
 	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
 	waitAppOutput(t, out, "manual-paste-reply")
 	stop()
-	if exchanges.Load() != 1 || gotForm.Get("code") != "manual-app-code" ||
-		gotForm.Get("redirect_uri") != "http://"+bindAddr+"/auth/callback" {
-		t.Fatalf("exchanges=%d form=%v", exchanges.Load(), gotForm)
+	if exchange.calls.Load() != 1 || exchange.form.Get("code") != "manual-app-code" ||
+		exchange.form.Get("redirect_uri") != "http://"+bindAddr+"/auth/callback" {
+		t.Fatalf("exchanges=%d form=%v", exchange.calls.Load(), exchange.form)
 	}
 	sessionData, err := os.ReadFile(r.store.File())
 	if err != nil {
@@ -205,19 +201,8 @@ func TestCodexLoginManualPasteREPL(t *testing.T) {
 // rest of the transaction. The next normal prompt still completes. L5-L9.
 func TestCodexLoginCallbackDuringPasteREPL(t *testing.T) {
 	r := testRuntime(t)
-	var exchanges atomic.Int32
-	var gotForm url.Values
-	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != "https://auth.openai.com/oauth/token" {
-			return nil, fmt.Errorf("unexpected URL %s", req.URL)
-		}
-		exchanges.Add(1)
-		if err := req.ParseForm(); err != nil {
-			return nil, err
-		}
-		gotForm = req.PostForm
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexAppTestTokenBody(codexAppTestAccess("acct-callback-paste"), "callback-paste-refresh"))), Header: make(http.Header)}, nil
-	})
+	exchange := &codexPasteExchange{}
+	r.codexTransport = exchange
 	_, out, inputs, bindAddr, state, stop := startCodexPasteLogin(t, r, "after-paste-reply")
 	sendCodexInput(t, inputs, terminal.Input{Paste: true, PasteStart: true})
 	sendCodexInput(t, inputs, terminal.Input{Paste: true, Key: []byte("PASTE-SENTINEL")})
@@ -231,8 +216,8 @@ func TestCodexLoginCallbackDuringPasteREPL(t *testing.T) {
 	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
 	waitAppOutput(t, out, "after-paste-reply")
 	stop()
-	if exchanges.Load() != 1 || gotForm.Get("code") != "callback-paste-code" {
-		t.Fatalf("exchanges=%d form=%v", exchanges.Load(), gotForm)
+	if exchange.calls.Load() != 1 || exchange.form.Get("code") != "callback-paste-code" {
+		t.Fatalf("exchanges=%d form=%v", exchange.calls.Load(), exchange.form)
 	}
 	sessionData, err := os.ReadFile(r.store.File())
 	if err != nil {
@@ -286,19 +271,8 @@ func TestCodexLoginCancelDuringPasteREPL(t *testing.T) {
 // PasteEnd, so no chunk reaches chat, and a later prompt still completes.
 func TestCodexLoginCallbackBeforeQueuedPasteREPL(t *testing.T) {
 	r := testRuntime(t)
-	var exchanges atomic.Int32
-	var gotForm url.Values
-	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != "https://auth.openai.com/oauth/token" {
-			return nil, fmt.Errorf("unexpected URL %s", req.URL)
-		}
-		exchanges.Add(1)
-		if err := req.ParseForm(); err != nil {
-			return nil, err
-		}
-		gotForm = req.PostForm
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexAppTestTokenBody(codexAppTestAccess("acct-queued-paste"), "queued-paste-refresh"))), Header: make(http.Header)}, nil
-	})
+	exchange := &codexPasteExchange{}
+	r.codexTransport = exchange
 	_, out, inputs, bindAddr, state, stop := startCodexPasteLogin(t, r, "queued-paste-reply")
 	if status := deliverAppCodexCallback(t, bindAddr, "state="+state+"&code=queued-paste-code"); status != http.StatusOK {
 		t.Fatalf("callback status = %d", status)
@@ -311,8 +285,8 @@ func TestCodexLoginCallbackBeforeQueuedPasteREPL(t *testing.T) {
 	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
 	waitAppOutput(t, out, "queued-paste-reply")
 	stop()
-	if exchanges.Load() != 1 || gotForm.Get("code") != "queued-paste-code" {
-		t.Fatalf("exchanges=%d form=%v", exchanges.Load(), gotForm)
+	if exchange.calls.Load() != 1 || exchange.form.Get("code") != "queued-paste-code" {
+		t.Fatalf("exchanges=%d form=%v", exchange.calls.Load(), exchange.form)
 	}
 	sessionData, err := os.ReadFile(r.store.File())
 	if err != nil {

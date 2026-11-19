@@ -411,23 +411,6 @@ func parseCodexLoginQuery(raw, expectedState string) (codexLoginOutcome, error) 
 	return codexLoginOutcome{code: code}, nil
 }
 
-// writeCodexLoginPage sends one static browser page. The caller ignores
-// write errors: a disconnected browser does not invalidate an accepted code.
-func writeCodexLoginPage(w http.ResponseWriter, status int, page string) {
-	header := w.Header()
-	header.Set("Content-Type", "text/html; charset=utf-8")
-	header.Set("Cache-Control", "no-store")
-	header.Set("Referrer-Policy", "no-referrer")
-	// The server may close immediately after the flush. A fixed length
-	// lets the browser finish reading the page without a final chunk.
-	header.Set("Content-Length", strconv.Itoa(len(page)))
-	w.WriteHeader(status)
-	_, _ = io.WriteString(w, page)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
 // codexLoginCallbackGate owns one attempt's callback latch and terminal
 // outcome. Exactly one valid outcome is claimed and published once to the
 // buffered channel; invalid requests and late duplicates have no effect.
@@ -447,17 +430,17 @@ func (g *codexLoginCallbackGate) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		outcome, status, ok := parseCodexLoginCallback(r, g.host, g.state)
 		if !ok {
-			writeCodexLoginPage(w, status, codexLoginInvalidPage)
+			writeOAuthCallbackPage(w, status, codexLoginInvalidPage)
 			return
 		}
 		if !g.claimed.CompareAndSwap(false, true) {
-			writeCodexLoginPage(w, http.StatusOK, codexLoginSuccessPage)
+			writeOAuthCallbackPage(w, http.StatusOK, codexLoginSuccessPage)
 			return
 		}
 		if outcome.denied {
-			writeCodexLoginPage(w, http.StatusBadRequest, codexLoginDeniedPage)
+			writeOAuthCallbackPage(w, http.StatusBadRequest, codexLoginDeniedPage)
 		} else {
-			writeCodexLoginPage(w, http.StatusOK, codexLoginSuccessPage)
+			writeOAuthCallbackPage(w, http.StatusOK, codexLoginSuccessPage)
 		}
 		// Publish after the response is written so server shutdown cannot
 		// truncate the browser page when the wait returns immediately.
@@ -754,14 +737,6 @@ func (l *CodexLogin) commit(ctx context.Context, baseline codexLoginBaseline, to
 	}
 	next["openai-codex"] = newEntry
 	defer releaseRawEntries(next)
-	encoded, err := json.MarshalIndent(next, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cannot encode auth.json")
-	}
-	defer secretmem.Wipe(encoded[:cap(encoded)])
-	if len(encoded)+1 > maxAuthJSONSize {
-		return fmt.Errorf("cannot save the OpenAI Codex login: auth.json would exceed its size limit")
-	}
 	validate := func() error {
 		if !leaseValid() {
 			return errCodexLoginLockLost
@@ -782,10 +757,14 @@ func (l *CodexLogin) commit(ctx context.Context, baseline codexLoginBaseline, to
 		return err
 	}
 	if err := writeAuthDocumentWithHooks(currentTarget, next, mode, validate, authFileHooks{Chmod: l.Chmod, Rename: l.Rename}); err != nil {
-		if errors.Is(err, errCodexLoginConflict) || errors.Is(err, errCodexLoginLockLost) {
+		switch {
+		case errors.Is(err, errCodexLoginConflict), errors.Is(err, errCodexLoginLockLost):
 			return err
+		case errors.Is(err, errAuthDocumentTooLarge):
+			return fmt.Errorf("cannot save the OpenAI Codex login: auth.json would exceed its size limit")
+		default:
+			return fmt.Errorf("cannot save the OpenAI Codex login")
 		}
-		return fmt.Errorf("cannot save the OpenAI Codex login")
 	}
 	return nil
 }

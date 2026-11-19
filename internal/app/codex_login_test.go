@@ -66,6 +66,15 @@ func codexAppTestModels(t *testing.T, baseURL string) *config.ModelsFile {
 	return models
 }
 
+func writeCodexLoginTestReply(w http.ResponseWriter, reply string) {
+	message := map[string]any{"type": "message", "id": "msg_codex_login", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": reply}}}
+	w.Header().Set("Content-Type", "text/event-stream")
+	_, _ = io.WriteString(w, openAISyntheticEvent("response.output_item.added", map[string]any{"output_index": 0, "item": message})+
+		openAISyntheticEvent("response.output_text.delta", map[string]any{"output_index": 0, "delta": reply})+
+		openAISyntheticEvent("response.output_item.done", map[string]any{"output_index": 0, "item": message})+
+		openAISyntheticEvent("response.completed", map[string]any{"response": map[string]any{"id": "resp_codex_login", "status": "completed", "output": []any{message}}}))
+}
+
 // A cold interactive start signs in through the native Codex browser flow on
 // the injected listener, saves the Codex entry, keeps the same model without
 // a duplicate change, and completes one reply through a configured local
@@ -89,17 +98,7 @@ func TestCodexLoginREPL(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		message := map[string]any{"type": "message", "id": "msg_codex_login", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": "codex-login-reply"}}}
-		event := func(typ string, fields map[string]any) {
-			fields["type"] = typ
-			data, _ := json.Marshal(fields)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", typ, data)
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		event("response.output_item.added", map[string]any{"output_index": 0, "item": message})
-		event("response.output_text.delta", map[string]any{"output_index": 0, "delta": "codex-login-reply"})
-		event("response.output_item.done", map[string]any{"output_index": 0, "item": message})
-		event("response.completed", map[string]any{"response": map[string]any{"id": "resp_codex_login", "status": "completed", "output": []any{message}}})
+		writeCodexLoginTestReply(w, "codex-login-reply")
 	}))
 	defer server.Close()
 	r.models = codexAppTestModels(t, server.URL)

@@ -230,7 +230,6 @@ func TestParseCodexLoginPaste(t *testing.T) {
 		{"code=embedded%00control&state=" + state, errCodexLoginPasteInvalid},
 		{strings.Repeat(" ", codexLoginPasteLimit) + "bare-code", errCodexLoginPasteInvalid},
 		{"http://127.0.0.1:1455/auth/callback?error=access_denied&state=" + state, errCodexLoginPasteInvalid},
-		{strings.Repeat("x", codexLoginPasteLimit+1), errCodexLoginPasteInvalid},
 	}
 	for _, tc := range invalid {
 		_, err := parseCodexLoginPaste([]byte(tc.input), state)

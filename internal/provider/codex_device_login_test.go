@@ -51,7 +51,7 @@ func TestCodexLoginDevice(t *testing.T) {
 		case codexDeviceUserCodeURL:
 			starts.Add(1)
 			startBody = readCodexDeviceRequest(t, r)
-			return codexDeviceJSONResponse(http.StatusOK, `{"user_code":"ABCD-EFGH","device_auth_id":"device-1","interval":"2"}`), nil
+			return codexDeviceJSONResponse(http.StatusOK, `{"user_code":"ABCD-EFGH","device_auth_id":"device-1","interval":"0"}`), nil
 		case codexDeviceTokenURL:
 			polls.Add(1)
 			pollBody = readCodexDeviceRequest(t, r)
@@ -112,7 +112,9 @@ func TestCodexLoginDevice(t *testing.T) {
 	if pollBody["device_auth_id"] != "device-1" || pollBody["user_code"] != "ABCD-EFGH" {
 		t.Fatalf("poll body = %v", pollBody)
 	}
-	wantWaits := []time.Duration{2 * time.Second, 2 * time.Second, 7 * time.Second, 7 * time.Second}
+	// The one-second floor is the effective interval. slow_down adds
+	// five seconds to that interval for this and later polls.
+	wantWaits := []time.Duration{time.Second, time.Second, 6 * time.Second, 6 * time.Second}
 	if len(waits) != len(wantWaits) {
 		t.Fatalf("waits = %v, want %v", waits, wantWaits)
 	}

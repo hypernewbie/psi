@@ -23,6 +23,8 @@ const (
 	apiKeyAuthLockWait = 5 * time.Second
 )
 
+var errAuthDocumentTooLarge = errors.New("auth.json exceeds the size limit")
+
 // SaveAPIKey atomically stores a literal API key in Pi-compatible auth.json.
 // The caller owns key and must wipe it after SaveAPIKey returns.
 func SaveAPIKey(ctx context.Context, authPath, providerID string, key []byte) error {
@@ -347,7 +349,7 @@ func writeAuthDocumentWithHooks(target authTarget, entries map[string]json.RawMe
 	}
 	defer secretmem.Wipe(encoded[:cap(encoded)])
 	if len(encoded)+1 > maxAuthJSONSize {
-		return fmt.Errorf("auth.json exceeds the size limit")
+		return errAuthDocumentTooLarge
 	}
 	if valid != nil {
 		if err := valid(); err != nil {

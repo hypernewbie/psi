@@ -204,7 +204,7 @@ func codexDeviceInterval(value any) (time.Duration, bool) {
 // ambiguous start or poll response.
 func (l *CodexDeviceLogin) poll(ctx context.Context, start codexDeviceStart) (string, string, error) {
 	deadline := l.nowOrNow().Add(codexDevicePollTimeout)
-	interval := start.interval
+	interval := max(start.interval, codexDeviceMinInterval)
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", "", err
@@ -263,18 +263,11 @@ func (l *CodexDeviceLogin) poll(ctx context.Context, start codexDeviceStart) (st
 		default:
 			return "", "", errCodexDeviceInvalid
 		}
-		delay := interval
-		if delay < codexDeviceMinInterval {
-			delay = codexDeviceMinInterval
-		}
 		remaining := deadline.Sub(l.nowOrNow())
 		if remaining <= 0 {
 			return "", "", errCodexDeviceExpired
 		}
-		if delay > remaining {
-			delay = remaining
-		}
-		if err := l.wait(ctx, delay); err != nil {
+		if err := l.wait(ctx, min(interval, remaining)); err != nil {
 			if ctx.Err() != nil {
 				return "", "", ctx.Err()
 			}
