@@ -57,7 +57,7 @@ func decodeWebMeta(raw []byte) *event.WebMeta {
 }
 
 func validWebCall(call event.WebCall) bool {
-	if len(call.Title) > event.WebMaxCallStringBytes || len(call.Mode) > 32 {
+	if len(call.Title) > event.WebMaxTitleBytes || len(call.Mode) > 32 {
 		return false
 	}
 	if call.Overflow < 0 || call.Overflow > 100 {
