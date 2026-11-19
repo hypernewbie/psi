@@ -97,7 +97,14 @@ func validWebResult(result *event.WebResult) bool {
 	if result.OK < 0 || result.Total < 0 || result.OK > result.Total || result.Total > 100 {
 		return false
 	}
+	if result.HasCounts && result.Total == 0 {
+		// Every counted result (a batch or search) has at least one attempt.
+		return false
+	}
 	if !result.HasCounts && (result.OK != 0 || result.Total != 0) {
+		return false
+	}
+	if !result.HasChars && result.Chars != 0 {
 		return false
 	}
 	if result.Sources < 0 || result.Sources > 1000 || !result.HasSources && result.Sources != 0 {

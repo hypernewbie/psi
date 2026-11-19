@@ -285,6 +285,8 @@ func TestWebCardHistoryBounds(t *testing.T) {
 		`{"calls":{"c":{"title":"ok","overflow":-1}}}`,
 		`{"calls":{"c":{"title":"ok","entries":["1","2","3","4","5","6"]}}}`,
 		`{"callId":"c","result":{"chars":-1}}`,
+		`{"callId":"c","result":{"chars":5}}`,
+		`{"callId":"c","result":{"kind":"batch","countsKnown":true,"ok":0,"total":0}}`,
 		`{"callId":"c","result":{"preview":["1","2","3","4","5","6","7","8","9","10","11","12","13"]}}`,
 	} {
 		if decodeWebMeta([]byte(raw)) != nil {
