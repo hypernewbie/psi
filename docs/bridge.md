@@ -202,6 +202,6 @@ the variables to opt out of the native bridge.
 ## Contract
 
 The wire contract, bounds, and status mappings live in Phi at
-`bonus/pi-phi/PROTOCOL.md`, pinned at revision `66e2db0c63060f40fbbdff7cb7b4bb109d6ac0ef`. The bindings under
+`bonus/pi-phi/PROTOCOL.md`, pinned at revision `fa49951f1be53b8c6fb7f0c3dda5475f325c7147`. The bindings under
 `internal/pibridge/pb` are generated from `internal/pibridge/proto/bridge.proto`
 and must be regenerated from that same Phi revision.
