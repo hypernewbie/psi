@@ -35,7 +35,7 @@ func codexReplyTestModels(t *testing.T, reply string) (*httptest.Server, *config
 	return server, codexAppTestModels(t, server.URL)
 }
 
-func startCodexInputREPL(t *testing.T, r *runtime, wantErr error) (*terminal.Console, *notifyingBuffer, chan terminal.Input, func()) {
+func startCodexInputREPL(t *testing.T, r *runtime, wantErr error) (*terminal.Console, *notifyingBuffer, chan terminal.Input, <-chan struct{}, func()) {
 	t.Helper()
 	input, inputWrite, err := os.Pipe()
 	if err != nil {
@@ -71,7 +71,7 @@ func startCodexInputREPL(t *testing.T, r *runtime, wantErr error) (*terminal.Con
 		})
 	}
 	t.Cleanup(stop)
-	return console, out, inputs, stop
+	return console, out, inputs, finished, stop
 }
 
 func sendCodexInput(t *testing.T, inputs chan terminal.Input, input terminal.Input) {
@@ -115,7 +115,7 @@ func startCodexPasteLogin(t *testing.T, r *runtime, reply string) (*terminal.Con
 	if r.authErr == nil {
 		t.Fatal("cold Codex configure unexpectedly usable")
 	}
-	console, out, inputs, stop := startCodexInputREPL(t, r, nil)
+	console, out, inputs, _, stop := startCodexInputREPL(t, r, nil)
 	waitAppOutput(t, out, "gpt-5.6-luna")
 	sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login openai-codex")})
 	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})

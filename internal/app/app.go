@@ -457,7 +457,7 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
-Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in, and other supported providers use a masked API-key prompt. Codex browser sign-in also accepts a masked redirect URL or code. /logout removes a stored API key. See docs/security.md for credential handling.
+Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in, and other supported providers use a masked API-key prompt. Codex browser sign-in also accepts a masked redirect URL or code. During Codex sign-in, Esc cancels and Ctrl+D cancels and quits. /logout removes a stored API key. See docs/security.md for credential handling.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.

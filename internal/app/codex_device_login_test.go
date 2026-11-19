@@ -20,41 +20,72 @@ import (
 	"psi/internal/terminal"
 )
 
-// A terminal read error must cancel and join the device worker and return the
-// error, not silently exit on the channel close that follows it.
-func TestCodexDeviceLoginREPLInputError(t *testing.T) {
-	r := testRuntime(t)
-	polling := make(chan struct{})
-	stopped := make(chan struct{})
-	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Path {
-		case "/api/accounts/deviceauth/usercode":
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"user_code":"ABCD-EFGH","device_auth_id":"device-1","interval":1}`))}, nil
-		case "/api/accounts/deviceauth/token":
-			close(polling)
-			<-req.Context().Done()
-			close(stopped)
-			return nil, req.Context().Err()
-		default:
-			t.Error("unexpected request during device sign-in")
-			return nil, errors.New("unexpected request")
-		}
-	})
-
+// Each exit path cancels and joins an in-flight poll without saving credentials.
+func TestCodexDeviceLoginREPLStopPolling(t *testing.T) {
 	readErr := errors.New("synthetic terminal read error")
-	_, out, inputs, stop := startCodexInputREPL(t, r, readErr)
-	sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login openai-codex")})
-	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
-	waitAppOutput(t, out, "Device code login (headless)")
-	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\x1b[B")})
-	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
-	<-polling
-	sendCodexInput(t, inputs, terminal.Input{Err: readErr})
-	stop()
-	select {
-	case <-stopped:
-	default:
-		t.Fatal("REPL returned before the active poll stopped")
+	for _, tc := range []struct {
+		name  string
+		input terminal.Input
+	}{
+		{"escape", terminal.Input{Key: []byte("\x1b")}},
+		{"ctrl-d", terminal.Input{Key: []byte("\x04")}},
+		{"read error", terminal.Input{Err: readErr}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := testRuntime(t)
+			polling := make(chan struct{})
+			stopped := make(chan struct{})
+			r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				switch req.URL.Path {
+				case "/api/accounts/deviceauth/usercode":
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"user_code":"ABCD-EFGH","device_auth_id":"device-1","interval":1}`))}, nil
+				case "/api/accounts/deviceauth/token":
+					close(polling)
+					<-req.Context().Done()
+					close(stopped)
+					return nil, req.Context().Err()
+				default:
+					t.Error("unexpected request during device sign-in")
+					return nil, errors.New("unexpected request")
+				}
+			})
+
+			_, out, inputs, finished, stop := startCodexInputREPL(t, r, tc.input.Err)
+			sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login openai-codex")})
+			sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
+			waitAppOutput(t, out, "Device code login (headless)")
+			sendCodexInput(t, inputs, terminal.Input{Key: []byte("\x1b[B")})
+			sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
+			watchdog := time.NewTimer(60 * time.Second)
+			defer watchdog.Stop()
+			select {
+			case <-polling:
+			case <-watchdog.C:
+				t.Fatal("device poll did not start")
+			}
+			sendCodexInput(t, inputs, tc.input)
+			if tc.name == "escape" {
+				waitAppOutput(t, out, "OpenAI Codex sign-in cancelled")
+				sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login")})
+				sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
+				waitAppOutput(t, out, "Providers")
+			} else {
+				select {
+				case <-finished:
+				case <-watchdog.C:
+					t.Fatal("REPL did not exit after cancelling device sign-in")
+				}
+			}
+			select {
+			case <-stopped:
+			default:
+				t.Fatal("REPL settled before the active poll stopped")
+			}
+			stop()
+			if _, err := os.Stat(filepath.Join(r.agentDir, "auth.json")); !os.IsNotExist(err) {
+				t.Fatalf("cancelled sign-in wrote credentials: %v", err)
+			}
+		})
 	}
 }
 

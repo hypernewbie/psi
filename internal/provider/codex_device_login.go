@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -267,7 +268,9 @@ func (l *CodexDeviceLogin) poll(ctx context.Context, start codexDeviceStart) (st
 		if remaining <= 0 {
 			return "", "", errCodexDeviceExpired
 		}
-		if err := l.wait(ctx, min(interval, remaining)); err != nil {
+		// Add up to 20% jitter without polling sooner than the server allows.
+		delay := interval + time.Duration(1+rand.Int64N(int64(interval/5)))
+		if err := l.wait(ctx, min(delay, remaining)); err != nil {
 			if ctx.Err() != nil {
 				return "", "", ctx.Err()
 			}

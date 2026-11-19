@@ -112,15 +112,15 @@ func TestCodexLoginDevice(t *testing.T) {
 	if pollBody["device_auth_id"] != "device-1" || pollBody["user_code"] != "ABCD-EFGH" {
 		t.Fatalf("poll body = %v", pollBody)
 	}
-	// The one-second floor is the effective interval. slow_down adds
-	// five seconds to that interval for this and later polls.
-	wantWaits := []time.Duration{time.Second, time.Second, 6 * time.Second, 6 * time.Second}
-	if len(waits) != len(wantWaits) {
-		t.Fatalf("waits = %v, want %v", waits, wantWaits)
+	// slow_down adds five seconds to the one-second floor, not to a
+	// jittered wait. Each scheduled wait must add up to 20% jitter.
+	minWaits := []time.Duration{time.Second, time.Second, 6 * time.Second, 6 * time.Second}
+	if len(waits) != len(minWaits) {
+		t.Fatalf("waits = %v, want %d waits", waits, len(minWaits))
 	}
-	for i := range wantWaits {
-		if waits[i] != wantWaits[i] {
-			t.Fatalf("waits = %v, want %v", waits, wantWaits)
+	for i, floor := range minWaits {
+		if ceiling := floor + floor/5; waits[i] <= floor || waits[i] > ceiling {
+			t.Fatalf("wait %d = %v, want (%v, %v]", i, waits[i], floor, ceiling)
 		}
 	}
 	if gotForm.Get("grant_type") != "authorization_code" || gotForm.Get("client_id") != codexClientID ||
@@ -421,22 +421,22 @@ func TestCodexDeviceRequestBodyLifetime(t *testing.T) {
 }
 
 // Each poll request ends at the earlier of its own HTTP timeout and the poll
-// deadline. A request issued one second before expiry must see that deadline.
+// deadline. A slow response leaves less than two seconds for the next wait
+// and request.
 func TestCodexLoginDevicePollDeadlineCapsRequest(t *testing.T) {
 	authPath := filepath.Join(t.TempDir(), "auth.json")
 	now := fixedOpenAINow()
 	var polls, exchanges atomic.Int32
-	var waits []time.Duration
 	var sawDeadline bool
 	login := &CodexDeviceLogin{
 		Path: authPath,
 		HTTP: &http.Client{Transport: &openAIFakeToken{handler: func(r *http.Request) (*http.Response, error) {
 			switch r.URL.String() {
 			case codexDeviceUserCodeURL:
-				return codexDeviceJSONResponse(http.StatusOK, `{"user_code":"u","device_auth_id":"d","interval":899}`), nil
+				return codexDeviceJSONResponse(http.StatusOK, `{"user_code":"u","device_auth_id":"d","interval":1}`), nil
 			case codexDeviceTokenURL:
-				polls.Add(1)
-				if polls.Load() == 1 {
+				if polls.Add(1) == 1 {
+					now = now.Add(codexDevicePollTimeout - 2*time.Second)
 					return codexDeviceJSONResponse(http.StatusForbidden, ""), nil
 				}
 				if deadline, ok := r.Context().Deadline(); ok {
@@ -452,7 +452,6 @@ func TestCodexLoginDevicePollDeadlineCapsRequest(t *testing.T) {
 		}}},
 		now: func() time.Time { return now },
 		Wait: func(_ context.Context, delay time.Duration) error {
-			waits = append(waits, delay)
 			now = now.Add(delay)
 			return nil
 		},
@@ -462,8 +461,5 @@ func TestCodexLoginDevicePollDeadlineCapsRequest(t *testing.T) {
 	}
 	if polls.Load() != 2 || exchanges.Load() != 1 || !sawDeadline {
 		t.Fatalf("polls=%d exchanges=%d sawDeadline=%v", polls.Load(), exchanges.Load(), sawDeadline)
-	}
-	if len(waits) != 1 || waits[0] != 899*time.Second {
-		t.Fatalf("waits = %v", waits)
 	}
 }

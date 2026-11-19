@@ -95,6 +95,8 @@ enters chat or recall. An OS-assigned port is a best-effort fallback: OpenAI
 can reject that redirect. If it does, close the tab, cancel, and choose
 device code. Device code shows a user code and
 `https://auth.openai.com/codex/device`; availability depends on the account.
+While psi waits for approval, press `Esc` to cancel sign-in or `Ctrl+D` to
+cancel and quit psi.
 
 For other supported providers, the prompt masks the API key; do not put keys
 in command arguments. API-key login supports `deepseek`, `google`, `groq`,
