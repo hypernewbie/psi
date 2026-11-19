@@ -179,7 +179,8 @@ func (q *reviewPTY) resizeTo(t *testing.T, width, height int) int {
 	}
 	q.screen.Resize(width, height)
 	q.wait(fullClearSequence)
-	q.observeWindow()
+	q.wait("\x1b[?2026l") // End of the synchronized rebuild.
+	q.observeWindow()     // Include any extra clears from the delayed resize draw.
 	return mark
 }
 

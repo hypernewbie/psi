@@ -134,6 +134,9 @@ func runChoicePicker(console *terminal.Console, lifecycle *terminalLifecycle, pi
 		case <-resizeWait.timeout:
 			if resizeWait.Fallback() {
 				draw()
+				if err := console.Err(); err != nil {
+					return -1, true, err
+				}
 			}
 		case input, ok := <-console.Inputs:
 			if !ok {
@@ -223,6 +226,9 @@ func runSessionPicker(console *terminal.Console, lifecycle *terminalLifecycle, s
 		case <-resizeWait.timeout:
 			if resizeWait.Fallback() {
 				draw()
+				if err := console.Err(); err != nil {
+					return nil, true, err
+				}
 			}
 		case input, ok := <-console.Inputs:
 			if !ok {
