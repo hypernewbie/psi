@@ -120,7 +120,8 @@ one message per turn) or `all`.
 - `/model`, `/thinking`, and `/settings` work during a run. The run is
   not cancelled; request settings apply to the next request. `/session`,
   `/hotkeys`, and `/name` also run immediately without cancelling the run.
-  Unknown slash text is queued as steering.
+  Unknown slash text queues like ordinary prompt text: `Enter` for steering
+  and `Alt+Enter` for follow-up.
 - An explicit CLI, restored, or `/thinking` level applies to that selection.
   A later model change applies `modelThinkingLevels[provider/modelId]` first,
   then `defaultThinkingLevel`, then the carried level. An unadvertised level

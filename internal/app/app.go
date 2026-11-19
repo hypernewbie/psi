@@ -3759,35 +3759,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.draw(console)
 						continue
 					}
-					// Read-only and metadata commands run immediately without
-					// cancelling the active run.
-					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "session" || cmd.Name == "hotkeys" || cmd.Name == "name") {
-						if _, err := r.command(cmd, out); err != nil {
-							print("error: " + err.Error())
-						}
-						r.draw(console)
-						continue
-					}
-					// Known operations that need cancellation or are unsafe stay
-					// refused (restored) until their interrupt path lands. Unknown
-					// slash text falls through to ordinary steering below; a bare
-					// "/" is not prompt text and stays in the draft.
-					if cmd, ok := terminal.ParseCommand(text); ok {
+					cmd, known := terminal.ParseCommand(text)
+					if known {
 						switch cmd.Name {
-						case "quit", "new", "clone", "resume", "trust", "login", "logout":
-							console.Editor.RestoreDraft(text, len([]rune(text)))
-							console.RefreshCompletion()
+						case "session", "hotkeys", "name":
+							if _, err := r.command(cmd, out); err != nil {
+								print("error: " + err.Error())
+							}
 							r.draw(console)
 							continue
 						}
-					} else if strings.TrimSpace(text) == "/" {
-						console.Editor.RestoreDraft(text, len([]rune(text)))
+					}
+					// Never send a recognized command with no busy handler to the
+					// provider. A bare slash stays in the draft for completion;
+					// unknown slash text uses the ordinary prompt queues below.
+					if known || strings.TrimSpace(text) == "/" {
+						console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 						console.RefreshCompletion()
 						r.draw(console)
 						continue
 					}
-					// Unknown slash (including /help, /history, /version): queue
-					// as ordinary prompt text via steering.
 				}
 				if activeLoop != nil {
 					if input.FollowUp {

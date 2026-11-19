@@ -133,7 +133,8 @@ select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 `/model`, `/thinking`, and `/settings` work during a run. Request settings apply to the next request.
 `/session`, `/hotkeys`, and `/name` run immediately without cancelling the run.
 `/quit` releases the terminal first, then the run settles behind it and the process exits.
-Unknown slash text is queued as steering; other slash commands return to the draft.
+Unknown slash text queues as ordinary prompt text. Recognized commands without
+busy-run handling and a bare `/` return to the draft.
 Phi can also change the model or thinking level during a run. Bridge reload
 and compaction still require an idle pane. RPC model and thinking changes
 still require an idle session.

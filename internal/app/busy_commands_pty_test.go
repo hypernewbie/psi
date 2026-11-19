@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,16 +36,28 @@ func busyWaitBody(t *testing.T, bodies <-chan []byte) []byte {
 func TestActualAppBusyInformationalCommandsAndSlashSteering(t *testing.T) {
 	var requests atomic.Int32
 	bodies := make(chan []byte, 8)
-	release := make(chan struct{})
+	releaseCh := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseCh) })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
 		index := requests.Add(1)
-		bodies <- body
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request %d: %v", index, err)
+			http.Error(w, "cannot read request", http.StatusBadRequest)
+			return
+		}
+		select {
+		case bodies <- body:
+		default:
+			t.Errorf("too many provider requests: %d", index)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.(http.Flusher).Flush()
 		if index == 1 {
 			select {
-			case <-release:
+			case <-releaseCh:
 			case <-r.Context().Done():
 				return
 			}
@@ -53,14 +66,10 @@ func TestActualAppBusyInformationalCommandsAndSlashSteering(t *testing.T) {
 		if index > 1 {
 			text = "AFTER_STEER"
 		}
-		fmt.Fprintf(w, "event: message_start\ndata: {\"message\":{\"id\":\"busy-%d\",\"model\":\"local-model\",\"usage\":{\"input_tokens\":1}}}\n\n", index)
-		fmt.Fprint(w, "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-		fmt.Fprintf(w, "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"%s\"}}\n\n", text)
-		fmt.Fprint(w, "event: content_block_stop\ndata: {\"index\":0}\n\n")
-		fmt.Fprint(w, "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")
-		fmt.Fprint(w, "event: message_stop\ndata: {}\n\n")
+		writeAnthropicTestResponse(w, fmt.Sprintf("busy-%d", index), text)
 	}))
 	defer server.Close()
+	defer release()
 
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
@@ -82,22 +91,30 @@ func TestActualAppBusyInformationalCommandsAndSlashSteering(t *testing.T) {
 	q.wait("Keys (fixed, no Kitty required):")
 	q.write("/name PR3-busy\r")
 	q.wait("Session name set: PR3-busy")
-	// An unsupported command must still be refused and restored, not steered.
-	q.write("/resume\r")
-	q.waitScreen("/resume")
-	q.write(strings.Repeat("\x7f", len("/resume")))
+	// Idle-only commands must not appear in provider context. Adding a
+	// character after submission proves the draft and its cursor survived,
+	// not just that the command was visible in a pre-submit frame.
+	const lineStart, lineEnd, enter, altEnter = "\x01", "\x05", "\r", "\x1b\r" // Ctrl+A, Ctrl+E, Enter, Alt+Enter.
+	for _, draft := range []string{"/compact KEEP_COMPACT", "/reload", "/loop KEEP_LOOP", "/resume", "/"} {
+		submit := enter
+		if draft == "/" || strings.HasPrefix(draft, "/loop ") {
+			// Exercise the follow-up submission path too. Alt+Enter also
+			// submits the bare slash without applying a completion.
+			submit = altEnter
+		}
+		q.write(draft + lineStart + submit + "x")
+		q.waitScreen("\nx" + draft + "\n")
+		q.write(lineEnd + strings.Repeat("\x7f", len(draft)+1))
+	}
 	q.write("/not-a-command hello\r")
 	q.waitScreen("Steering: /not-a-command hello")
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("busy commands reached the provider: %d requests, want 1", got)
 	}
 
-	close(release)
+	release()
 	q.wait("FIRST_REPLY")
 	q.wait("AFTER_STEER")
-	if got := requests.Load(); got != 2 {
-		t.Fatalf("provider requests = %d, want 2 (original + steering)", got)
-	}
 	second := busyWaitBody(t, bodies)
 	if !strings.Contains(string(second), "/not-a-command hello") {
 		t.Fatalf("steering text missing from the next request: %s", second)
@@ -106,6 +123,9 @@ func TestActualAppBusyInformationalCommandsAndSlashSteering(t *testing.T) {
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("provider requests = %d, want 2 (original + steering)", got)
+	}
 
 	var files []string
 	if err := filepath.WalkDir(filepath.Join(agentDir, "sessions"), func(path string, entry os.DirEntry, err error) error {
