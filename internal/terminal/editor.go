@@ -387,24 +387,26 @@ func (e *Editor) MoveDown(width int) bool {
 	return true
 }
 
-// Complete returns slash-command and skill-name candidates for Tab (P2-022).
+// Complete returns slash-command, skill, and supported argument candidates at the rune cursor.
 // No tool/shell execution, no filesystem scan, no provider request.
 func Complete(draft string, pos int, commands []string, skills []string) (candidates []string, showList bool) {
 	if !strings.Contains(draft, "/") {
 		return nil, false
 	}
-	// Find current token start (after whitespace or start).
-	start := pos
 	runes := []rune(draft)
-	if start > len(runes) {
-		start = len(runes)
+	if pos < 0 || pos > len(runes) {
+		return nil, false
 	}
+	// An exact match is safe only at the token end: acceptance replaces the
+	// entire token, not just the prefix before the cursor.
+	atTokenEnd := pos == len(runes) || unicode.IsSpace(runes[pos])
+	start := pos
 	for start > 0 && runes[start-1] != ' ' && runes[start-1] != '\n' && runes[start-1] != '\t' {
 		start--
 	}
 	token := string(runes[start:pos])
 	if !startsWith(token, "/") {
-		return completeACArguments(string(runes[:start]), token)
+		return completeACArguments(string(runes[:start]), token, atTokenEnd)
 	}
 	// Strip leading / and optional skill: prefix handling.
 	var pool []string
@@ -415,14 +417,14 @@ func Complete(draft string, pos int, commands []string, skills []string) (candid
 		pool = append(pool, "/skill:"+sk)
 	}
 	for _, p := range pool {
-		if startsWith(p, token) && p != token {
+		if startsWith(p, token) && (p != token || atTokenEnd) {
 			candidates = append(candidates, p)
 		}
 	}
 	return candidates, len(candidates) > 1
 }
 
-func completeACArguments(before, token string) ([]string, bool) {
+func completeACArguments(before, token string, atTokenEnd bool) ([]string, bool) {
 	parts := strings.Fields(before)
 	if len(parts) == 0 || (parts[0] != "/ac" && parts[0] != "/autocompact") {
 		return nil, false
@@ -446,7 +448,7 @@ func completeACArguments(before, token string) ([]string, bool) {
 	}
 	var candidates []string
 	for _, option := range options {
-		if startsWith(option, token) && option != token {
+		if startsWith(option, token) && (option != token || atTokenEnd) {
 			candidates = append(candidates, option)
 		}
 	}

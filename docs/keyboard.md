@@ -10,7 +10,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+P` cycles to the next available model; if the current model is no longer available, it selects the first available model
 - `Home/End`, `Ctrl+A`/`Ctrl+E` logical line; `Ctrl+Home`/`Ctrl+End` document
 - `Backspace/Delete` one grapheme; `Ctrl+W` previous word; `Ctrl+U`/`Ctrl+K` line
-- `/command` and `/skill:name` completion stays in the editor tail (at most five rows) with Pi's `→` selection pointer; `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
+- `/command`, `/skill:name`, and existing `/ac`/`/autocompact` argument completion stays in the editor tail (up to five rows by default; `autocompleteMaxVisible` sets the limit from 3 to 20) with Pi's `→` selection pointer. A whole-token match remains eligible, and the current highlight stays when its item is still a candidate. `Up/Down` select, `Tab` applies, `Enter` applies and submits, `Esc` dismisses
 - Search pickers replace the editor region, as Pi's `showSelector` does. The picker owns its border, its `> ` query row, and its bounded list. Search uses case-insensitive substring matching in the editor query; `Up/Down` select, `PageUp/PageDown` move by the visible list size (at most ten), `Enter` applies, `Esc` or `Ctrl+C` cancels and restores the prior draft
 - `Ctrl+L` opens the model picker; `Shift+Tab` cycles the selected model's supported thinking levels
 - In `/thinking`, `Ctrl+S` saves the highlighted level as the global `defaultThinkingLevel`. `Enter` changes only the current session. The per-model level picker in `/settings` does not use `Ctrl+S`.
