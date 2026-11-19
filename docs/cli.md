@@ -12,7 +12,11 @@ Positional arguments are prompts. They are sent in order after the terminal
 starts. Use `--` before a prompt that begins with `-`.
 
 ChatGPT sign-in is interactive-only: select OpenAI from `/login` or enter
-`/login openai` directly.
+`/login openai` directly. The built-in `openai-codex` provider periodically
+reads its used primary ChatGPT quota and shows the remaining percentage in
+unused footer space when available. It backs off after failed reads. The
+reading is best effort: it uses the existing local OAuth entry without signing
+in, refreshing credentials, or changing inference.
 Positional messages and RPC `prompt` commands never sign in; they keep their
 existing prompt-data contract.
 

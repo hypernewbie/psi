@@ -70,7 +70,11 @@ checks; a retarget after the final check remains a filesystem race and is not
 made atomic. Codex OAuth refresh uses the same logical-lock and resolved-target
 rule. `/logout` removes only the selected stored API key, not OAuth credentials,
 environment variables, or `models.json` credentials. OpenAI ChatGPT sign-in
-and refresh require a regular `auth.json` and refuse symlink writes.
+and refresh require a regular `auth.json` and refuse symlink writes. The
+`openai-codex` quota indicator reads the selected OAuth entry locally and makes
+periodic best-effort usage requests to the fixed ChatGPT endpoint. It never
+refreshes or writes credentials, and it never uses direct-use OpenAI credentials
+or an API-key fallback.
 
 Windows identity checks use an open handle to capture the file ID before a
 replacement can affect a later comparison. The file must allow read access.

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rivo/uniseg"
 
@@ -337,8 +338,15 @@ type PresentationSnapshot struct {
 	ProviderCount      int
 	Model              string
 	Thinking           string
-	NoColor            bool
-	Theme              *pitheme.Theme
+	// Quota is an optional suffix placed in the unused gap between the
+	// context stats and the model side. An empty value omits it. QuotaToken
+	// selects its color; empty means TokenMuted. QuotaDeadline hides a stale
+	// suffix at composition time without a background timer.
+	Quota         string
+	QuotaToken    ThemeToken
+	QuotaDeadline time.Time
+	NoColor       bool
+	Theme         *pitheme.Theme
 }
 
 type EditorView struct {
@@ -433,6 +441,26 @@ func footerBarToken(percent float64) ThemeToken {
 	default:
 		return TokenError
 	}
+}
+
+// FooterBarEighths converts a percentage into eighth-block units for a track
+// of cells. Positive usage keeps one partial cell visible at low values.
+func FooterBarEighths(percent float64, cells int) int {
+	if cells <= 0 {
+		return 0
+	}
+	percent = footerBarPercent(percent)
+	eighths := int(math.Round(percent * float64(cells) * 8 / 100))
+	if percent > 0 && eighths == 0 {
+		eighths = 1
+	}
+	return eighths
+}
+
+// FooterBarCells renders a bare track for compact callers such as the Codex
+// quota footer. The returned strings total exactly cells display cells.
+func FooterBarCells(eighths, cells int) (filled, empty string) {
+	return footerBarCells(eighths, cells)
 }
 
 // footerBarCells renders one band with eighth-block precision so low usage
@@ -566,6 +594,27 @@ func formatFooter(snapshot PresentationSnapshot, width int, height int, noColor 
 		gap = max(0, width-statsWidth-CellWidth(right))
 	}
 	second := StyledRow{Spans: append(append([]StyledSpan(nil), leftRow.Spans...), StyledSpan{Text: strings.Repeat(" ", gap), Token: TokenText}, StyledSpan{Text: right, Token: TokenText})}
+	// The quota suffix may use only the existing model gap. It never takes
+	// cells from the context stats or the model side, and it never adds a
+	// footer row. It sits at the right edge of the gap, next to the model
+	// side; the two surrounding spaces keep the original gap shape.
+	quota := SanitizeStatusRow(snapshot.Quota)
+	if !snapshot.QuotaDeadline.IsZero() && !time.Now().Before(snapshot.QuotaDeadline) {
+		quota = ""
+	}
+	if quota != "" && CellWidth(quota)+2 <= gap {
+		token := snapshot.QuotaToken
+		if token == "" {
+			token = TokenMuted
+		}
+		remaining := gap - CellWidth(quota) - 2
+		spans := append([]StyledSpan(nil), leftRow.Spans...)
+		if remaining > 0 {
+			spans = append(spans, StyledSpan{Text: strings.Repeat(" ", remaining), Token: TokenText})
+		}
+		spans = append(spans, StyledSpan{Text: " ", Token: TokenText}, StyledSpan{Text: quota, Token: token}, StyledSpan{Text: " ", Token: TokenText}, StyledSpan{Text: right, Token: TokenText})
+		second = StyledRow{Spans: spans}
+	}
 	second = ClipStyledRow(second, width)
 	rows := []string{pathRow.SerializeWithTheme(snapshot.Theme, noColor), second.SerializeWithTheme(snapshot.Theme, noColor)}
 	cells := []int{pathRow.Width(), second.Width()}
