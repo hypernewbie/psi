@@ -2,29 +2,17 @@ package app
 
 import (
 	"context"
-	"net"
-	"net/http"
 	"path/filepath"
 
 	"psi/internal/provider"
 	"psi/internal/terminal"
 )
 
-// codexLoginRequest carries one OpenAI Codex attempt. It adds no device
-// identity: the Codex grant sends neither a device ID nor a nonce.
-type codexLoginRequest struct {
-	agentDir  string
-	transport http.RoundTripper
-	bind      func() (net.Listener, error)
-	browser   func(context.Context, string) error
-	rename    func(string, string) error
-}
-
 // runCodexLogin executes one Codex browser attempt: baseline, loopback
 // authorization, single exchange, and atomic save. It returns the terminal
 // result instead of mutating runtime state; the REPL owns all reporting and
 // activation.
-func runCodexLogin(ctx context.Context, req codexLoginRequest, updates chan<- oauthLoginUpdate) oauthLoginResult {
+func runCodexLogin(ctx context.Context, req oauthLoginRequest, updates chan<- oauthLoginUpdate) oauthLoginResult {
 	login := &provider.CodexLogin{
 		Path:   filepath.Join(req.agentDir, "auth.json"),
 		HTTP:   oauthHTTPClient(req.transport),

@@ -1886,7 +1886,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	busy, exiting, compacting, released := false, false, false, false
 	var cancel context.CancelFunc
 	var activeLoop *agent.Loop
-	// login owns one interactive ChatGPT sign-in. The done and updates
+	// login owns one interactive OAuth sign-in. The done and updates
 	// channels are nil while no attempt owns the REPL, which disables
 	// their select cases. suppressPaste discards a paste transaction that
 	// started under login mode through its PasteEnd, even when the login
@@ -2677,13 +2677,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 		return nil
 	}
 	startOpenAILogin := func() error {
-		req := openAILoginRequest{agentDir: r.agentDir, transport: r.openAITransport, bind: r.openAIBind, browser: r.openAIBrowser, rename: r.openAIRename}
+		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.openAITransport, bind: r.openAIBind, browser: r.openAIBrowser, rename: r.openAIRename}
 		return startOAuthLogin("ChatGPT", r.activateOpenAILogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runOpenAILogin(ctx, req, updates)
 		})
 	}
 	startCodexLogin := func() error {
-		req := codexLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, bind: r.codexBind, browser: r.codexBrowser, rename: r.codexRename}
+		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, bind: r.codexBind, browser: r.codexBrowser, rename: r.codexRename}
 		return startOAuthLogin("OpenAI Codex", r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runCodexLogin(ctx, req, updates)
 		})

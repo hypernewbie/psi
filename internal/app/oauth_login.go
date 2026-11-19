@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os/exec"
 	goruntime "runtime"
@@ -36,6 +37,18 @@ type oauthLoginSession struct {
 	// cancelled is set by the REPL when it cancels first. A save already
 	// admitted then still settles, but it never activates a model.
 	cancelled bool
+}
+
+// oauthLoginRequest carries one browser sign-in attempt's shared
+// dependencies. transport, bind, browser, and rename are test seams and stay
+// nil in production: the default HTTP client, the fixed loopback listener,
+// the platform browser launcher, and the real filesystem rename.
+type oauthLoginRequest struct {
+	agentDir  string
+	transport http.RoundTripper
+	bind      func() (net.Listener, error)
+	browser   func(context.Context, string) error
+	rename    func(string, string) error
 }
 
 // oauthLoginUpdate is one worker-to-REPL notification. link presents the
