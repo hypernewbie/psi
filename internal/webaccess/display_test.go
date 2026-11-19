@@ -100,8 +100,14 @@ func TestWebPageResultDisplayBounds(t *testing.T) {
 	}
 	// Even empty source lines count toward the page preview's line cap.
 	throughLastLine := strings.Repeat("\n", event.WebMaxPreviewLines-1) + "LAST LINE"
-	if got := pagePreview(throughLastLine + "\nOMITTED"); got != throughLastLine {
-		t.Fatalf("newline-heavy preview = %q, want %q", got, throughLastLine)
+	crOnly := strings.ReplaceAll(throughLastLine, "\n", "\r") + "\rOMITTED"
+	if got := pagePreview(crOnly); got != throughLastLine {
+		t.Fatalf("CR-only preview = %q, want %q", got, throughLastLine)
+	}
+	// Cutting between CR and LF must not invent a line break.
+	atCR := strings.Repeat("x", event.WebMaxPreviewUnits-1)
+	if got := pagePreview(atCR + "\r\nmore"); got != atCR+" " {
+		t.Fatalf("preview cut inside CRLF: length=%d, suffix=%q; want %d units ending in a space", len(got), strings.TrimPrefix(got, atCR), event.WebMaxPreviewUnits)
 	}
 	if empty := client.pageResultDisplay(pageData{Text: "body"}, false, 0); empty.Title != "Untitled" {
 		t.Fatalf("title fallback = %q", empty.Title)

@@ -388,8 +388,15 @@ func utf16Units(s string) int { return len(utf16.Encode([]rune(s))) }
 // cap and fold controls other than line separators and tabs before storage.
 // A tab still counts as one unit; the renderer expands it after clipping.
 func pagePreview(text string) string {
-	lines := strings.SplitN(utf16Prefix(text, event.WebMaxPreviewUnits), "\n", event.WebMaxPreviewLines+1)
-	prefix := strings.Join(lines[:min(len(lines), event.WebMaxPreviewLines)], "\n")
+	prefix := utf16Prefix(text, event.WebMaxPreviewUnits)
+	// Use one displayed line break for CRLF, but keep both units in
+	// the budget. If the cutoff falls between them, only the space fits.
+	if len(prefix) < len(text) && text[len(prefix)] == '\n' && strings.HasSuffix(prefix, "\r") {
+		prefix = strings.TrimSuffix(prefix, "\r") + " "
+	}
+	prefix = strings.ReplaceAll(strings.ReplaceAll(prefix, "\r\n", " \n"), "\r", "\n")
+	lines := strings.SplitN(prefix, "\n", event.WebMaxPreviewLines+1)
+	prefix = strings.Join(lines[:min(len(lines), event.WebMaxPreviewLines)], "\n")
 	return strings.Clone(strings.Map(func(r rune) rune {
 		if r != '\n' && r != '\t' && unicode.IsControl(r) {
 			return ' '

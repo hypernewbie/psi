@@ -144,11 +144,12 @@ text even when color is off; a failed call never shows success data.
 
 `Ctrl+O` expands or collapses web cards together with skill blocks. A
 single-fetch preview uses up to 200 UTF-16 units when collapsed or 500 when
-expanded. Whitespace and line breaks count toward the limit. The preview
-keeps at most 12 source lines and ends with `...` if it omits text. Search
-previews use up to 120 units when collapsed or 500 when expanded. Expansion
-also adds batch page snippets in input order and shows the returned
-retrieval slice. A search with more expanded lines shows a
+expanded. Whitespace and line breaks count toward the limit. CRLF counts as
+two units but displays as one line break. The preview keeps at most 12
+source lines and ends with `...` if it omits text. Search previews use up
+to 120 units when collapsed or 500 when expanded. Expansion also adds batch
+page snippets in input order and shows the returned retrieval slice. A
+search with more expanded lines shows a
 `ctrl+o to expand` hint. Expansion reads only the card metadata stored with
 the session message: it never calls the network, reads the cache, or changes
 the model result. The flag is in memory, so a restart starts collapsed.

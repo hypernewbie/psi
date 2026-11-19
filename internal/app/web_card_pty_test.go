@@ -223,7 +223,9 @@ func rowIndex(t *testing.T, rows []string, want string) int {
 func TestWebCardPTYRawFetchPreview(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
-	prefix := "<!doctype html>\n\n  \t<script>😀\n"
+	// Count CRLF as two source units, but display it as one line break.
+	// An isolated CR also starts a line, as it did in the old preview.
+	prefix := "<!doctype html>\r\n\r  \t<script>😀\n"
 	at200 := prefix + strings.Repeat("x", 200-len(utf16.Encode([]rune(prefix)))-len(" CUT200")) + " CUT200"
 	middle := "-MORE\n"
 	at500 := at200 + middle + strings.Repeat("y", 300-len(middle)-len(" CUT500")) + " CUT500"
