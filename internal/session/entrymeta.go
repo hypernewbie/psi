@@ -19,6 +19,7 @@ func fillEntryMetadata(e *Entry) {
 		e.provenanceTarget = rawTargetID(e.CustomMessage.Details)
 	}
 	e.toolSummaries = entryToolSummaries(e)
+	e.web = entryWebMeta(e)
 }
 
 // rawTargetID reads the provenance target from a raw payload. The property

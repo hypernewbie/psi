@@ -12,6 +12,7 @@ import (
 	"github.com/rivo/uniseg"
 	"golang.org/x/term"
 
+	"psi/internal/event"
 	"psi/internal/secretmem"
 	pitheme "psi/internal/theme"
 )
@@ -89,6 +90,7 @@ type Console struct {
 	completionDismissed bool
 	picker              *pickerRegion
 	toolRow             string
+	toolCard            *ConsoleToolCard
 	steeringRows        []string
 	steeringTexts       []string
 	followUpTexts       []string
@@ -990,13 +992,39 @@ func (c *Console) SetToolRowNoDraw(text string) {
 		row = MessageIndent + row
 	}
 	c.toolRow = TruncateToWidth(row, max(1, c.currentWidth()-1))
+	c.toolCard = nil
 }
 
-// ClearToolRow removes the active tool row. The next frame drops it, so the
-// settled line and the removal share one frame and no duplicate running row
-// stays visible.
+// ConsoleToolCard is the structured pending card for the newest active web
+// call. It is formatted at the emission width, so a resize reflows it from the
+// bounded source data instead of a preformatted string.
+type ConsoleToolCard struct {
+	Name     string
+	State    string
+	Web      event.WebDisplay
+	Progress *event.WebProgress
+}
+
+// SetToolCard installs the pending web card above the editor and replaces any
+// one-row tool status. The card stays in the owned tail until the call settles.
+func (c *Console) SetToolCard(card ConsoleToolCard) {
+	c.SetToolCardNoDraw(card)
+	c.Draw()
+}
+
+// SetToolCardNoDraw installs the card for a frame assembled by the caller.
+func (c *Console) SetToolCardNoDraw(card ConsoleToolCard) {
+	card.Name = SanitizeStatusRow(card.Name)
+	c.toolCard = &card
+	c.toolRow = ""
+}
+
+// ClearToolRow removes the active tool row and any pending card. The next
+// frame drops them, so the settled block and the removal share one frame and
+// no duplicate running row stays visible.
 func (c *Console) ClearToolRow() {
 	c.toolRow = ""
+	c.toolCard = nil
 }
 
 func (c *Console) Draw() {
@@ -1258,7 +1286,10 @@ func (c *Console) emitComposed(appendText string) error {
 	if c.thinking {
 		fragmentRows = append(append([]string(nil), fragmentRows...), FormatThinkingRow(width, c.presentation.NoColor, c.presentation.Display, c.presentation.Theme))
 	}
-	if c.toolRow != "" {
+	if c.toolCard != nil {
+		rows := FormatWebCardRows(c.toolCard.Name, c.toolCard.State, c.toolCard.Web, c.toolCard.Progress, width, c.presentation.NoColor, c.presentation.Display, c.presentation.Theme)
+		fragmentRows = append(append([]string(nil), fragmentRows...), clipWebCardRows(rows, EditorComponentRowBudget(height)-len(c.completionRows))...)
+	} else if c.toolRow != "" {
 		fragmentRows = append(append([]string(nil), fragmentRows...), c.toolRow)
 	}
 	var view EditorView

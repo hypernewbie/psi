@@ -77,7 +77,7 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 		if summary.Kind == "" {
 			summary.Kind = name
 		}
-		return []string{FormatToolRowWithDisplay(summary, name, state, width, noColor, display, theme)}
+		return FormatToolRowsWithDisplay(summary, name, state, width, noColor, display, theme)
 	case DocumentMetadata:
 		return FormatMetadataMessage(block.Label, block.Text, width, noColor, display, theme)
 	case DocumentBoundary:

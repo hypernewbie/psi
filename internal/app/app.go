@@ -787,9 +787,10 @@ type runtime struct {
 
 // activeTool is one running tool call tracked by call ID.
 type activeTool struct {
-	name    string
-	callID  string
-	summary event.ToolSummary
+	name     string
+	callID   string
+	summary  event.ToolSummary
+	progress *event.WebProgress
 }
 
 // busySkillRefused reports whether a busy native skill submission must restore
@@ -808,6 +809,90 @@ func (r *runtime) liveToolRow(console *terminal.Console) (string, bool) {
 	}
 	active := r.activeTools[len(r.activeTools)-1]
 	return terminal.FormatToolRowWithDisplay(active.summary, active.name, "running", console.StatusWidth(), noColorEnvironment(), presentationDisplay(r.settings), r.theme), true
+}
+
+// liveToolCard reports the newest active web call's structured card. Web
+// calls use the card even without display data, so a restored or malformed
+// call still gets its truthful title instead of the fallback summary.
+func (r *runtime) liveToolCard() (terminal.ConsoleToolCard, bool) {
+	if len(r.activeTools) == 0 {
+		return terminal.ConsoleToolCard{}, false
+	}
+	active := r.activeTools[len(r.activeTools)-1]
+	if active.summary.Web == nil && !event.IsWebTool(active.name) {
+		return terminal.ConsoleToolCard{}, false
+	}
+	card := terminal.ConsoleToolCard{Name: active.name, State: "running", Progress: active.progress}
+	if active.summary.Web != nil {
+		card.Web = *active.summary.Web
+	}
+	return card, true
+}
+
+// syncLiveTool moves the newest active call into the composed tail. Web calls
+// own a card; every other tool keeps the one-row status.
+func (r *runtime) syncLiveTool(console *terminal.Console) {
+	if card, ok := r.liveToolCard(); ok {
+		console.SetToolCardNoDraw(card)
+		return
+	}
+	if row, ok := r.liveToolRow(console); ok {
+		console.SetToolRowNoDraw(row)
+		return
+	}
+	console.ClearToolRow()
+}
+
+// applyWebProgress stores a transient snapshot on the matching active call.
+// The generation check runs in applyEvent; this also requires the active
+// session and a matching call. Older phases and regressing counts are
+// discarded, and only the newest active call owns the live fragment.
+func (r *runtime) applyWebProgress(console *terminal.Console, ev event.Event) {
+	if ev.Progress == nil || r.state == StateCancelling || r.store == nil {
+		return
+	}
+	if ev.SessionID != "" && ev.SessionID != r.store.Header().ID {
+		return
+	}
+	index := -1
+	for i := range r.activeTools {
+		if r.activeTools[i].callID == ev.ToolCallID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return
+	}
+	if previous := r.activeTools[index].progress; previous != nil {
+		if webPhaseRank(ev.Progress.Phase) < webPhaseRank(previous.Phase) {
+			return
+		}
+		if ev.Progress.Phase == previous.Phase && ev.Progress.Completed < previous.Completed {
+			return
+		}
+	}
+	update := *ev.Progress
+	r.activeTools[index].progress = &update
+	if index != len(r.activeTools)-1 {
+		// A sibling still owns the live fragment; keep this snapshot for
+		// when it becomes the newest call.
+		return
+	}
+	r.syncLiveTool(console)
+	console.Draw()
+}
+
+// webPhaseRank orders the web partial phases so a late worker cannot move the
+// card back to an earlier operation.
+func webPhaseRank(phase string) int {
+	switch phase {
+	case "fetching pages":
+		return 2
+	case "searching", "fetching page", "fetching URLs":
+		return 1
+	}
+	return 0
 }
 
 // inputMode selects admission behavior for one run. Prompt and compaction keep
@@ -928,6 +1013,11 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		AutoCompact: r.settings.Compaction.Enabled, ReserveTokens: r.settings.Compaction.ReserveForModel(ov.Provider, ov.Model), KeepRecentTokens: r.settings.Compaction.KeepRecentTokens,
 		RetryAttempts: r.settings.MaxRetries, RetryBaseDelayMs: r.settings.RetryBaseDelayMs,
 		RetryMaxAgentDelayMs: r.settings.RetryMaxAgentDelayMs}
+	// The display hook is interactive-only: RPC keeps its config and the
+	// model-facing messages unchanged.
+	if r.web != nil {
+		cfg.WebDisplay = r.web.DisplayCall
+	}
 	if _, err := provider.BuildRequest(provider.Request{Model: pm, Thinking: ov.Thinking}); err != nil {
 		return err
 	}
@@ -1433,6 +1523,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		sessionName := r.store.SessionName()
 		display := presentationDisplay(r.settings)
 		display.ExpandSkills = r.skillExpanded
+		display.ExpandWeb = r.skillExpanded
 		snapshot := terminal.PresentationSnapshot{
 			Display:          display,
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName, GitBranch: branch,
@@ -1580,6 +1671,12 @@ func (r *runtime) replace(next *session.Store) error {
 	if r.ac != nil {
 		r.ac.ResetSession()
 	}
+	// The replaced session owns neither a pending progress snapshot nor a live
+	// tool card.
+	r.activeTools = nil
+	if r.lifecycle != nil && r.lifecycle.console != nil {
+		r.lifecycle.console.ClearToolRow()
+	}
 	if r.lifecycle != nil && r.lifecycle.console != nil && r.loops != nil {
 		r.lifecycle.console.SetLoopStatus(r.loops.StatusLine())
 	}
@@ -1666,9 +1763,7 @@ func (r *runtime) cloneSession(print func(string)) error {
 
 func (r *runtime) draw(console *terminal.Console) {
 	r.refreshPresentation(console)
-	if row, ok := r.liveToolRow(console); ok {
-		console.SetToolRowNoDraw(row)
-	}
+	r.syncLiveTool(console)
 	if r.settingsPicker != nil {
 		width, rows := console.PickerSize()
 		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
@@ -2113,6 +2208,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if ev.Generation != 0 && ev.Generation != r.generation {
 			return
 		}
+		if ev.Type == event.WebProgressUpdate {
+			// Partial web progress is display-only: no footer or session
+			// refresh, and only the call that owns the live fragment redraws.
+			r.applyWebProgress(console, ev)
+			return
+		}
 		// A run can span many tool calls and a mid-run compaction. Each of
 		// these events follows a session append, so rebuild the footer before
 		// the event's own redraw; otherwise the context estimate stays frozen
@@ -2196,7 +2297,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.state = StateRunningTool
 			r.activeTools = append(r.activeTools, activeTool{name: ev.ToolName, callID: ev.ToolCallID, summary: ev.Summary})
 			display := presentationDisplay(r.settings)
-			console.SetToolRow(terminal.FormatToolRowWithDisplay(ev.Summary, ev.ToolName, "running", console.StatusWidth(), noColorEnvironment(), display, r.theme))
+			r.syncLiveTool(console)
+			console.Draw()
 			setActivity("Working")
 			status.UpdateSummary(ev.ToolName, ev.ToolCallID, ev.Summary, "running", display, r.theme, noColorEnvironment())
 		case event.ToolEnd:
@@ -2209,9 +2311,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if len(r.activeTools) > 0 {
 				// Sibling calls still run: keep the live row on the newest one
 				// instead of clearing it mid-batch.
-				if row, ok := r.liveToolRow(console); ok {
-					console.SetToolRow(row)
-				}
+				r.syncLiveTool(console)
+				console.Draw()
 			} else {
 				console.ClearToolRow()
 			}
@@ -3378,8 +3479,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 15 {
-				// Ctrl+O expands or collapses skill blocks, like Pi's
-				// app.tools.expand. The flag stays in memory and is never saved.
+				// Ctrl+O expands or collapses skill blocks and web cards, like
+				// Pi's app.tools.expand. The flag stays in memory and is never
+				// saved.
 				r.skillExpanded = !r.skillExpanded
 				r.footerKey = ""
 				console.RequestFullRedraw()
@@ -3388,7 +3490,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if r.skillExpanded {
 					state = "expanded"
 				}
-				console.Status("Skill blocks: " + state)
+				console.Status("Skill and web cards: " + state)
 				continue
 			}
 			if !input.Paste && string(input.Key) == "\x1b[Z" {

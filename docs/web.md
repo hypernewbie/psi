@@ -88,7 +88,9 @@ LRU); an oversized entry is not retained. IDs are process-local: a restart or
 eviction loses them, and nothing is written to disk. The byte limit counts
 retained string bytes, not object overhead, total process memory, or in-flight
 batches. The session file keeps only the bounded tool-result preview that was
-shown to the model, not the retained text behind a `responseId`.
+shown to the model plus a small bounded card payload (title, counts, range,
+and at most 500 UTF-16 units of preview), not the retained text behind a
+`responseId`.
 
 `get_search_content` returns metadata lines, then a final `content:` line,
 then the exact stored text prefix. It adds no whitespace inside the payload.
@@ -100,6 +102,61 @@ Web page text is untrusted data. psi labels it in the result, but the label does
 not prevent prompt injection. Treat fetched text as evidence, never as
 instructions. Tool errors, including validation failures, use the same bounded
 output formatter as successful results.
+
+## Transcript cards
+
+The three web tools use a card instead of the one-line tool summary. The call
+stays visible while the tool runs and remains above the result after it
+settles. Other tools keep their existing single row. Provider tool names,
+arguments, result text, and cache behavior do not change.
+
+Call rows:
+
+- `fetch <url>` for one URL, or `fetch N URLs` with up to five URLs and
+  `... and N more`. An explicit non-default mode adds `mode: <mode>`.
+- `search "<query>"` for one query, or `search N queries` with up to five
+  quoted queries. A missing or invalid argument shows a fixed label.
+- `get_content` with the first available target: a displayed URL (27
+  characters plus `...` when longer than 30), `urlIndex=N`, or the first eight
+  characters of `responseId`. A call with no page target may add
+  `offset=N`; `findText` adds `· find 1` and never prints the term. `url` and
+  `urlIndex` are mutually exclusive, so a call with both is invalid.
+
+Result rows:
+
+- Single fetch: `<title or Untitled> (N chars)`, `[truncated]` for a capped
+  source or output, and the measured `· <duration> total` suffix. The count is
+  the redacted page text in UTF-16 units, not bytes or the output envelope.
+- Batch fetch: `S/N URLs (content stored)` when content was retained and
+  `get_search_content` was advertised for that request; otherwise
+  `S/N URLs (content fetched)`.
+- Search: `S/U queries, N sources` (the query part appears for more than one
+  query) and `(content ready)` under the same retention rule.
+- Retrieval: `<title or Content> (N chars[, showing A-B])`. `N` is the scalar
+  total and `A-B` is the actual returned half-open range (`next-offset` when
+  present, otherwise the total). Paging stays in Unicode scalar units.
+
+While a web call runs, the card shows a ten-cell filled/unfilled bar built from
+completed attempts and the phase (and, for search, the redacted current query).
+It never estimates bytes, elapsed time, or assumed successes. `get_content` has
+no partial result. Cancelled, not-started, and unknown outcomes stay explicit
+text even when color is off; a failed call never shows success data.
+
+`Ctrl+O` expands or collapses web cards together with skill blocks. The
+collapsed view shows at most 200 UTF-16 units of a fetched page preview and
+120 units of a search preview; expansion raises the bounded preview to 500
+units, adds page snippets for a batch in input order, and shows the actually
+returned retrieval slice. A search with more expanded lines shows a
+`ctrl+o to expand` hint. Expansion reads only the card metadata stored with
+the session message: it never calls the network, reads the cache, or changes
+the model result. The flag is in memory, so a restart starts collapsed.
+
+Display URLs drop userinfo, query, and fragment; configured secrets are
+redacted before clipping. Untrusted titles, queries, URLs, and previews are
+folded to single rows and stripped of control sequences before styling, so a
+page cannot add a row or a terminal escape. A session without card metadata
+(for example, one written by an older psi) shows the call title only, with the
+retained outcome and no invented counts or previews.
 
 ## Configuration
 

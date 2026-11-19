@@ -5,9 +5,13 @@ package app
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -24,7 +28,27 @@ const procThreadAttributePseudoConsole = 0x00020016
 func TestActualWindowsConPTYInteraction(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := t.TempDir()
-	server, streamStarted, releaseStream, toolStarted := startConPTYTestProvider(t, agentDir)
+	pageArrived := make(chan struct{}, 1)
+	releasePage := make(chan struct{})
+	var releasePageOnce sync.Once
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case pageArrived <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releasePage:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, `<!doctype html><html><head><title>ConPTY Page</title></head><body><p>CONPTY_BODY</p></body></html>`)
+	}))
+	defer func() {
+		releasePageOnce.Do(func() { close(releasePage) })
+		page.Close()
+	}()
+	server, streamStarted, releaseStream, toolStarted := startConPTYTestProvider(t, agentDir, page.URL+"/page")
 	defer server.Close()
 	inRead, inWrite, outRead, outWrite := windows.Handle(0), windows.Handle(0), windows.Handle(0), windows.Handle(0)
 	if err := windows.CreatePipe(&inRead, &inWrite, nil, 0); err != nil {
@@ -241,6 +265,27 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	}
 	waitFor("tool completion", func(text string) bool { return strings.Contains(text, "TOOL_FINISHED") })
 	waitFor("editor after tool", func(_ string) bool { return conptyEditorReady(screen) })
+	// Web card: the call is visible while the page is held, then the settled
+	// call and its result replace it with no stale progress row.
+	write("web-fetch\r")
+	select {
+	case <-pageArrived:
+	case <-time.After(8 * time.Second):
+		t.Fatalf("web page request did not start: screen=%q", conptyVisibleText(screen))
+	}
+	waitFor("pending web card", func(text string) bool { return strings.Contains(text, "fetch "+page.URL+"/page") })
+	if text := conptyVisibleText(screen); strings.Contains(text, "ConPTY Page") {
+		t.Fatalf("pending web card already shows the result: %q", text)
+	}
+	releasePageOnce.Do(func() { close(releasePage) })
+	waitFor("web completion", func(text string) bool { return strings.Contains(text, "WEB_FINISHED") })
+	waitFor("editor after web", func(_ string) bool { return conptyEditorReady(screen) })
+	waitFor("settled web card", func(text string) bool {
+		return strings.Contains(text, "ConPTY Page") && strings.Contains(text, "chars)")
+	})
+	if text := conptyVisibleText(screen); strings.Contains(text, "fetching page") {
+		t.Fatalf("stale web progress row: %q", text)
+	}
 	write("/model\r")
 	waitFor("model picker", func(text string) bool {
 		return conptyModelPickerReady(text, "local-model") && conptyEditorReady(screen)
@@ -388,7 +433,7 @@ func conptyTestEnvironment(home, agentDir string) string {
 		"HOME=" + home,
 		"LANG=C.UTF-8",
 		"PATH=C:\\Program Files\\Git\\usr\\bin;" + os.Getenv("SystemRoot") + `\System32`,
-		"PSI_APP_TEST_TOOLS=read,bash",
+		"PSI_APP_TEST_TOOLS=read,bash,fetch_content",
 		"PI_CODING_AGENT_DIR=" + agentDir,
 		"PI_CODING_AGENT_SESSION_DIR=",
 		"PSI_APP_TEST_PROCESS=1",

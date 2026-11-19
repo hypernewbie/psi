@@ -65,7 +65,7 @@ func renderTimelineItems(emit func(string) bool, items []session.TranscriptItem,
 			if it.Note != "" && !summary.Available {
 				summary.Note = it.Note
 			}
-			lines = []string{terminal.FormatToolRowWithDisplay(summary, name, state, width, noColor, display, palette...)}
+			lines = terminal.FormatToolRowsWithDisplay(summary, name, state, width, noColor, display, palette...)
 		case session.KindCompaction:
 			lines = terminal.FormatMetadataMessage("[compaction] ", it.Text, width, noColor, display, palette...)
 		case session.KindBranchSummary:

@@ -128,7 +128,8 @@ messages can exceed that existing limit.
 
 Project consent and local-file rules are unchanged: project skills load only
 after you trust the workspace, and bodies are never fetched from a network.
-`Ctrl+O` toggles skill blocks only; psi has no expandable tool-output panels.
+`Ctrl+O` toggles skill blocks and web tool cards; other tool rows stay
+single-line and unexpanded.
 
 The model can also read a skill file itself with the `read` tool when its
 description matches the task.

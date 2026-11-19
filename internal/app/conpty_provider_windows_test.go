@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func startConPTYTestProvider(t *testing.T, agentDir string) (*httptest.Server, <-chan struct{}, chan struct{}, <-chan struct{}) {
+func startConPTYTestProvider(t *testing.T, agentDir, pageURL string) (*httptest.Server, <-chan struct{}, chan struct{}, <-chan struct{}) {
 	t.Helper()
 	streamStarted := make(chan struct{})
 	releaseStream := make(chan struct{})
@@ -75,10 +75,22 @@ func startConPTYTestProvider(t *testing.T, agentDir string) (*httptest.Server, <
 			messageEnd("tool_use")
 			flush.Flush()
 			close(toolStarted)
-		default:
+		case 3:
 			messageStart("tool-2")
 			textBlockStart()
 			emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": "TOOL_FINISHED"}})
+			emit("content_block_stop", map[string]any{"index": 0})
+			messageEnd("end_turn")
+		case 4:
+			messageStart("web-1")
+			emit("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "tool_use", "id": "web-call", "name": "fetch_content"}})
+			emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": fmt.Sprintf(`{"url":%q}`, pageURL)}})
+			emit("content_block_stop", map[string]any{"index": 0})
+			messageEnd("tool_use")
+		default:
+			messageStart("web-2")
+			textBlockStart()
+			emit("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": "WEB_FINISHED"}})
 			emit("content_block_stop", map[string]any{"index": 0})
 			messageEnd("end_turn")
 		}
@@ -86,5 +98,6 @@ func startConPTYTestProvider(t *testing.T, agentDir string) (*httptest.Server, <
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"local-model","compaction":{"enabled":false}}`)
 	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"local-model","maxTokens":4096,"contextWindow":8192},{"id":"local-model-2","maxTokens":4096,"contextWindow":8192}]}}}`)
 	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"conpty-test-key"}}`)
+	writeAppFile(t, filepath.Join(agentDir, "web-search.json"), `{"ssrf":{"allowRanges":["127.0.0.1/32"]}}`)
 	return server, streamStarted, releaseStream, toolStarted
 }

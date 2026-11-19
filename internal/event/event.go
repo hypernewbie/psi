@@ -7,15 +7,18 @@ package event
 type Type string
 
 const (
-	TextDelta                      Type = "text_delta"
-	ThinkingDelta                  Type = "thinking_delta"
-	AssistantStart                 Type = "assistant_start"
-	RunStart                       Type = "run_start"
-	RunEnd                         Type = "run_end"
-	SteeringDelivered              Type = "steering_delivered"
-	FollowUpDelivered              Type = "follow_up_delivered"
-	ToolStart                      Type = "tool_start"
-	ToolEnd                        Type = "tool_end"
+	TextDelta         Type = "text_delta"
+	ThinkingDelta     Type = "thinking_delta"
+	AssistantStart    Type = "assistant_start"
+	RunStart          Type = "run_start"
+	RunEnd            Type = "run_end"
+	SteeringDelivered Type = "steering_delivered"
+	FollowUpDelivered Type = "follow_up_delivered"
+	ToolStart         Type = "tool_start"
+	ToolEnd           Type = "tool_end"
+	// WebProgressUpdate is a transient, display-only update for one running
+	// web call. It is never persisted and never enters the model context.
+	WebProgressUpdate              Type = "web_progress"
 	Retry                          Type = "retry"
 	SummarizationRetryScheduled    Type = "summarization_retry_scheduled"
 	SummarizationRetryAttemptStart Type = "summarization_retry_attempt_start"
@@ -37,6 +40,7 @@ type Event struct {
 	ToolCallID   string
 	State        string
 	Summary      ToolSummary
+	Progress     *WebProgress
 	RetryAttempt int
 	RetryMaximum int
 	RetryDelayMs int64
