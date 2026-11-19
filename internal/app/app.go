@@ -3332,6 +3332,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 			}
+			if input.Err != nil && login != nil {
+				cancelLogin()
+				settleLogin(<-login.done)
+				if errors.Is(input.Err, io.EOF) {
+					return console.Err()
+				}
+				return input.Err
+			}
 			if input.Err != nil && r.login != nil {
 				r.cancelLogin(console)
 				return input.Err
@@ -3354,13 +3362,6 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if login != nil && login.secretActive {
-				if input.Err != nil {
-					cancelLogin()
-					result := <-login.done
-					settleLogin(result)
-					input.Release()
-					return input.Err
-				}
 				if !input.Paste {
 					switch key := string(input.Key); {
 					case key == "\x04":

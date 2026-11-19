@@ -3,6 +3,8 @@
 package terminal
 
 import (
+	"errors"
+	"io"
 	"os"
 	"time"
 	"unsafe"
@@ -34,6 +36,10 @@ func waitInputReady(f *os.File, timeoutMs int) (bool, error) {
 		var avail uint32
 		for {
 			if err := peekNamedPipe(h, &avail); err != nil {
+				// Match os.File.Read when the write end of a pipe closes.
+				if errors.Is(err, windows.ERROR_BROKEN_PIPE) {
+					return false, io.EOF
+				}
 				return false, err
 			}
 			if avail > 0 {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,9 +22,9 @@ import (
 	"psi/internal/terminal"
 )
 
-// codexManualTestModels points openai-codex at a local Responses endpoint
+// codexReplyTestModels points openai-codex at a local Responses endpoint
 // that returns reply after each completed prompt.
-func codexManualTestModels(t *testing.T, reply string) (*httptest.Server, *config.ModelsFile) {
+func codexReplyTestModels(t *testing.T, reply string) (*httptest.Server, *config.ModelsFile) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/codex/responses" {
@@ -45,7 +46,7 @@ func codexManualTestModels(t *testing.T, reply string) (*httptest.Server, *confi
 	return server, codexAppTestModels(t, server.URL)
 }
 
-func startCodexPasteREPL(t *testing.T, r *runtime) (*terminal.Console, *notifyingBuffer, chan terminal.Input, func()) {
+func startCodexInputREPL(t *testing.T, r *runtime, wantErr error) (*terminal.Console, *notifyingBuffer, chan terminal.Input, func()) {
 	t.Helper()
 	input, inputWrite, err := os.Pipe()
 	if err != nil {
@@ -53,6 +54,7 @@ func startCodexPasteREPL(t *testing.T, r *runtime) (*terminal.Console, *notifyin
 	}
 	out := &notifyingBuffer{notify: make(chan struct{}, 1)}
 	console := terminal.NewConsole(input, out)
+	console.Pause()
 	console.SizeFunc = func() (int, int) { return 80, 24 }
 	inputs := make(chan terminal.Input)
 	console.Inputs = inputs
@@ -67,19 +69,15 @@ func startCodexPasteREPL(t *testing.T, r *runtime) (*terminal.Console, *notifyin
 		stopOnce.Do(func() {
 			_ = inputWrite.Close()
 			close(inputs)
+			defer input.Close()
 			select {
 			case <-finished:
+				console.Close()
+				if err := <-result; !errors.Is(err, wantErr) {
+					t.Errorf("repl error = %v, want %v", err, wantErr)
+				}
 			case <-time.After(5 * time.Second):
 				t.Error("REPL did not stop after input closed")
-			}
-			_ = input.Close()
-			select {
-			case err := <-result:
-				if err != nil {
-					t.Errorf("repl: %v", err)
-				}
-			default:
-				t.Error("REPL result was not published")
 			}
 		})
 	}
@@ -104,7 +102,7 @@ func waitCodexPasteField(t *testing.T, out *notifyingBuffer) {
 func startCodexPasteLogin(t *testing.T, r *runtime, reply string) (*terminal.Console, *notifyingBuffer, chan terminal.Input, string, string, func()) {
 	t.Helper()
 	clearProviderAPIKeys(t)
-	server, models := codexManualTestModels(t, reply)
+	server, models := codexReplyTestModels(t, reply)
 	t.Cleanup(server.Close)
 	r.models = models
 	r.settings.MaxRetries = 0
@@ -128,7 +126,7 @@ func startCodexPasteLogin(t *testing.T, r *runtime, reply string) (*terminal.Con
 	if r.authErr == nil {
 		t.Fatal("cold Codex configure unexpectedly usable")
 	}
-	console, out, inputs, stop := startCodexPasteREPL(t, r)
+	console, out, inputs, stop := startCodexInputREPL(t, r, nil)
 	waitAppOutput(t, out, "gpt-5.6-luna")
 	sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login openai-codex")})
 	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})

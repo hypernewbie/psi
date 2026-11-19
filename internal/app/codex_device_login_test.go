@@ -3,11 +3,10 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,7 +17,46 @@ import (
 
 	"psi/internal/config"
 	"psi/internal/provider"
+	"psi/internal/terminal"
 )
+
+// A terminal read error must cancel and join the device worker and return the
+// error, not silently exit on the channel close that follows it.
+func TestCodexDeviceLoginREPLInputError(t *testing.T) {
+	r := testRuntime(t)
+	polling := make(chan struct{})
+	stopped := make(chan struct{})
+	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"user_code":"ABCD-EFGH","device_auth_id":"device-1","interval":1}`))}, nil
+		case "/api/accounts/deviceauth/token":
+			close(polling)
+			<-req.Context().Done()
+			close(stopped)
+			return nil, req.Context().Err()
+		default:
+			t.Error("unexpected request during device sign-in")
+			return nil, errors.New("unexpected request")
+		}
+	})
+
+	readErr := errors.New("synthetic terminal read error")
+	_, out, inputs, stop := startCodexInputREPL(t, r, readErr)
+	sendCodexInput(t, inputs, terminal.Input{Key: []byte("/login openai-codex")})
+	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
+	waitAppOutput(t, out, "Device code login (headless)")
+	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\x1b[B")})
+	sendCodexInput(t, inputs, terminal.Input{Key: []byte("\r")})
+	<-polling
+	sendCodexInput(t, inputs, terminal.Input{Err: readErr})
+	stop()
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("REPL returned before the active poll stopped")
+	}
+}
 
 // A cold REPL picks device sign-in from the Codex method picker, receives the
 // user code in the interactive view, completes a synthetic reply, and saves
@@ -30,34 +68,18 @@ func TestCodexDeviceLoginREPL(t *testing.T) {
 	access, refresh := codexAppTestAccess("acct-device-repl"), "device-repl-refresh"
 	var starts, polls, exchanges atomic.Int32
 	var gotForm url.Values
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path != "/codex/responses" {
-			t.Errorf("model path = %q", req.URL.Path)
-			return
-		}
-		message := map[string]any{"type": "message", "id": "msg_codex_device", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": "codex-device-reply"}}}
-		event := func(typ string, fields map[string]any) {
-			fields["type"] = typ
-			data, _ := json.Marshal(fields)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", typ, data)
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		event("response.output_item.added", map[string]any{"output_index": 0, "item": message})
-		event("response.output_text.delta", map[string]any{"output_index": 0, "delta": "codex-device-reply"})
-		event("response.output_item.done", map[string]any{"output_index": 0, "item": message})
-		event("response.completed", map[string]any{"response": map[string]any{"id": "resp_codex_device", "status": "completed", "output": []any{message}}})
-	}))
+	server, models := codexReplyTestModels(t, "codex-device-reply")
 	defer server.Close()
-	r.models = codexAppTestModels(t, server.URL)
+	r.models = models
 	r.settings.MaxRetries = 0
 	var bindCalled, browserCalled atomic.Bool
 	r.codexBind = func(string) (net.Listener, error) {
 		bindCalled.Store(true)
-		return nil, fmt.Errorf("device mode must not bind")
+		return nil, errors.New("device mode must not bind")
 	}
 	r.codexBrowser = func(context.Context, string) error {
 		browserCalled.Store(true)
-		return fmt.Errorf("device mode must not launch a browser")
+		return errors.New("device mode must not launch a browser")
 	}
 	r.codexWait = func(context.Context, time.Duration) error { return nil }
 	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {

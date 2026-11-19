@@ -142,8 +142,7 @@ func TestCodexLoginDevice(t *testing.T) {
 	}
 }
 
-// A start failure stops before polling, exchange, or write. Redirects are not
-// followed. Every malformed start response is rejected.
+// A start failure stops before polling, exchange, or write.
 func TestCodexLoginDeviceStartFailures(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -154,7 +153,6 @@ func TestCodexLoginDeviceStartFailures(t *testing.T) {
 		{name: "unavailable", status: http.StatusNotFound, body: "", want: errCodexDeviceUnavailable},
 		{name: "other status", status: http.StatusBadGateway, body: "", want: errCodexDeviceNetwork},
 		{name: "rate limited", status: http.StatusTooManyRequests, body: "", want: errCodexDeviceRateLimited},
-		{name: "redirect", status: http.StatusFound, body: "", want: errCodexDeviceNetwork},
 		{name: "malformed", status: http.StatusOK, body: `{"user_code":`, want: errCodexDeviceInvalid},
 		{name: "missing user code", status: http.StatusOK, body: `{"device_auth_id":"d","interval":1}`, want: errCodexDeviceInvalid},
 		{name: "missing device id", status: http.StatusOK, body: `{"user_code":"u","interval":1}`, want: errCodexDeviceInvalid},
@@ -197,9 +195,8 @@ func TestCodexLoginDeviceStartFailures(t *testing.T) {
 	}
 }
 
-// Unknown poll statuses, redirects, malformed success responses, and transport
-// failures stop without exchange or write. A 429 without a usable poll code is
-// reported as rate limiting.
+// Unexpected poll statuses, redirects, and malformed successes stop without
+// exchange or write. A 429 without a usable poll code reports rate limiting.
 func TestCodexLoginDevicePollFailures(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -229,7 +226,13 @@ func TestCodexLoginDevicePollFailures(t *testing.T) {
 						if polls.Add(1) != 1 {
 							t.Fatal("retried an ambiguous poll response")
 						}
-						return codexDeviceJSONResponse(tc.status, tc.body), nil
+						resp := codexDeviceJSONResponse(tc.status, tc.body)
+						if tc.status == http.StatusTemporaryRedirect {
+							resp.Header.Set("Location", "https://redirect.example/poll")
+						}
+						return resp, nil
+					case "https://redirect.example/poll":
+						t.Fatal("forwarded the device poll to a redirect target")
 					case codexTokenURL:
 						exchanges.Add(1)
 					}
