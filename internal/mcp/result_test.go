@@ -97,6 +97,27 @@ func TestCatalogRejectsBadSchema(t *testing.T) {
 	}
 }
 
+func TestCatalogSanitizesNonASCIIToolNames(t *testing.T) {
+	raw := "工具.read"
+	catalog, err := buildCatalog(Server{Name: "srv", Exposure: ExposureDirect}, 1, []*sdk.Tool{sdkTool(raw, "", map[string]any{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 工 and 具 each collapse to one underscore and the dot becomes another, so
+	// the name keeps no non-ASCII rune while the route keeps the raw tool name.
+	if got, want := catalog[0].Name, "mcp__srv_____read"; got != want {
+		t.Fatalf("sanitized name = %q, want %q", got, want)
+	}
+	if catalog[0].RawName != raw {
+		t.Fatalf("raw name lost: %q", catalog[0].RawName)
+	}
+	for _, r := range catalog[0].Name {
+		if !isToolNameRune(r) {
+			t.Fatalf("name kept rejected rune %q in %q", r, catalog[0].Name)
+		}
+	}
+}
+
 func TestToolDefSchemaIsSharedNotCopied(t *testing.T) {
 	catalog, err := buildCatalog(Server{Name: "s", Exposure: ExposureDirect}, 1, []*sdk.Tool{
 		sdkTool("t", "", map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string"}}}),

@@ -32,18 +32,31 @@ type Tool struct {
 // the reference for JSON encoding or copy it before rewriting.
 func (t Tool) ToolDefSchema() map[string]any { return t.Schema }
 
+// sanitizeName replaces every character that provider function-name grammars
+// reject with an underscore. Only ASCII letters, ASCII digits, and underscore
+// survive, and one multi-byte rune collapses to one underscore.
 func sanitizeName(value string) string {
 	var b strings.Builder
 	b.Grow(len(value))
 	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+		if isToolNameRune(r) {
 			b.WriteRune(r)
-		default:
+		} else {
 			b.WriteByte('_')
 		}
 	}
 	return b.String()
+}
+
+// isToolNameRune reports the ASCII set that provider function-name grammars
+// accept. Unicode letters and digits are not accepted there, so this
+// intentionally differs from unicode.IsLetter and unicode.IsDigit.
+func isToolNameRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+		return true
+	}
+	return false
 }
 
 func baseToolName(server, tool string) string {
