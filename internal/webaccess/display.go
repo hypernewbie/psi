@@ -195,7 +195,12 @@ func abbreviateDisplay(text string, limit, keep int) string {
 // displayURL redacts configured secrets, then removes userinfo, query, and
 // fragment from the display copy. The network request keeps the original URL.
 func (c *Client) displayURL(raw string, limit int) (string, bool) {
-	redacted := c.redact(strings.TrimSpace(raw), maxURLBytes)
+	return safeDisplayURL(c.redact(strings.TrimSpace(raw), maxURLBytes), limit)
+}
+
+// safeDisplayURL strips private URL parts from a value that has already
+// been redacted, including final URLs supplied by the page fetcher.
+func safeDisplayURL(redacted string, limit int) (string, bool) {
 	parsed, err := url.Parse(redacted)
 	if err != nil {
 		return "", false
@@ -269,7 +274,11 @@ func batchPagePreview(pages []pageData, errs []error) []string {
 		if label == "" {
 			label = pages[i].URL
 		}
-		row := utf16Prefix(label+": "+line, min(event.WebMaxPreviewUnits-units, 200))
+		row := line
+		if display, ok := safeDisplayURL(label, event.WebMaxCallStringBytes); ok {
+			row = display + ": " + line
+		}
+		row = utf16Prefix(row, min(event.WebMaxPreviewUnits-units, 200))
 		if row == "" {
 			break
 		}
