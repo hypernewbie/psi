@@ -29,6 +29,8 @@ const (
 	maxCommandStderr = 64 << 10
 	// commandTimeout bounds one interpolation command.
 	commandTimeout = 10 * time.Second
+	// commandDrainDelay bounds pipe cleanup after shell exit or cancellation.
+	commandDrainDelay = time.Second
 )
 
 // Transport identifies the MCP wire transport for one server.
@@ -825,6 +827,8 @@ func runInterpolationCommand(parent context.Context, command string) (string, er
 	// Start checks the context. This function owns cancellation after start
 	// so it can terminate the whole process group on Unix.
 	cmd.Cancel = nil
+	// A descendant outside the owned process group can keep output pipes open.
+	cmd.WaitDelay = commandDrainDelay
 	cmd.Env = os.Environ()
 	stdout := &limitedBuffer{limit: maxCommandOutput}
 	stderr := &ringBuffer{limit: maxCommandStderr}
@@ -839,21 +843,27 @@ func runInterpolationCommand(parent context.Context, command string) (string, er
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
+	var waitErr error
 	select {
-	case err := <-done:
-		if err != nil {
-			return "", configErr("command", "interpolation command failed")
-		}
+	case waitErr = <-done:
 	case <-ctx.Done():
 		terminateCommand(cmd)
 		<-done
 		return "", ctx.Err()
 	}
-	out := strings.TrimRight(stdout.String(), "\r\n")
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		return "", configErr("command", "interpolation command output pipes stayed open")
+	}
+	if waitErr != nil {
+		return "", configErr("command", "interpolation command failed")
+	}
 	if stdout.overflow {
 		return "", errLimit("interpolation command output")
 	}
-	return out, nil
+	return strings.TrimRight(stdout.String(), "\r\n"), nil
 }
 
 // limitedBuffer retains at most limit bytes and records overflow.

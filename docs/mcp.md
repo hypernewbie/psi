@@ -62,6 +62,10 @@ The resolver processes values in `env` and `headers`:
   Each command has a 10-second deadline, a 64 KiB stdout limit, and a bounded
   64 KiB retained stderr tail. Trailing CR and LF characters are removed.
   If cancellation occurs before the command starts, the resolver does not run it.
+  After shell exit or cancellation, the resolver waits up to one second to
+  drain the output pipes. If the pipes stay open, resolution fails. On Unix,
+  cancellation stops the shell's process group. On Windows, it stops only
+  the shell. Descendants outside the group can outlive cancellation.
 
 The loader rejects invalid HTTP header names and values. The resolver also
 rejects header values that are invalid after interpolation.
