@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -141,7 +142,7 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 		return reader, writer
 	}
 	_, stdin := pipe()
-	stdout, _ := pipe()
+	stdout, stdoutPeer := pipe()
 	stderr, _ := pipe()
 	done := make(chan struct{})
 	close(done)
@@ -150,8 +151,11 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 		stdout:     bufio.NewReader(stdout),
 		stdoutPipe: stdout,
 		stderrPipe: stderr,
+		frames:     make(chan []byte),
+		readerStop: make(chan struct{}),
 		done:       done,
 	}
+	go connection.readLoop()
 	// Model a reaped leader whose descendant still holds stdout open.
 	// Closing the transport must release Read without that peer cooperating.
 	result := make(chan error, 1)
@@ -164,11 +168,29 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 	}
 	select {
 	case err := <-result:
-		if !errors.Is(err, os.ErrClosed) {
-			t.Fatalf("Read after Close = %v; want a closed pipe error", err)
+		if !errors.Is(err, sdk.ErrConnectionClosed) {
+			t.Fatalf("Read after Close = %v; want %v", err, sdk.ErrConnectionClosed)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("transport close left Read blocked on an open peer")
+	}
+	// Join the reader before cleanup closes the pipe ends: with the peer
+	// gone it must report EOF and exit, proving cleanup cannot race a
+	// lingering read on Windows.
+	_ = stdoutPeer.Close()
+	drained := make(chan struct{})
+	go func() {
+		for range connection.frames {
+		}
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(10 * time.Second):
+		t.Fatal("reader did not exit after the peer closed stdout")
+	}
+	if _, err := connection.Read(context.Background()); !errors.Is(err, io.EOF) {
+		t.Fatalf("Read after peer exit = %v; want EOF", err)
 	}
 }
 

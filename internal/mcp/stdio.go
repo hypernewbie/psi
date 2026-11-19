@@ -81,30 +81,55 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 		stdout:     bufio.NewReaderSize(stdout, 64<<10),
 		stdoutPipe: stdout,
 		stderrPipe: stderr,
+		frames:     make(chan []byte),
+		readerStop: make(chan struct{}),
 		writeCh:    make(chan struct{}, 1),
 		done:       make(chan struct{}),
 		stderr:     &ringBuffer{limit: maxStderrRetain},
 	}
 	prepareCommand(cmd)
 	if err := cmd.Start(); err != nil {
-		c.closePipes()
+		// No goroutine owns these pipes yet; close them directly.
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
 		return nil, err
 	}
 	c.writeCh <- struct{}{}
-	go c.drainStderr(stderr)
+	go c.readLoop()
+	go c.drainStderr()
 	go c.wait()
 	return c, nil
 }
 
 type stdioConnection struct {
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
+	cmd *exec.Cmd
+	// stdin is nil after close; every access runs under writeMu.
+	stdin io.WriteCloser
+
+	// stdout and stdoutPipe are owned by readLoop: it performs every read
+	// and closes the pipe when its final read returns. drainStderr likewise
+	// owns stderrPipe. No other goroutine touches the read pipes, because on
+	// Windows closing a pipe races an in-flight read: File.Close waits for
+	// pending I/O while the cancel it issues can land before the read enters
+	// the kernel, deadlocking both sides permanently.
 	stdout     *bufio.Reader
 	stdoutPipe *os.File
 	stderrPipe *os.File
-	writeCh    chan struct{}
-	done       chan struct{}
-	stderr     *ringBuffer
+
+	// frames carries complete stdout frames from readLoop to Read. readLoop
+	// stores the terminal read error in readErr before closing frames, so a
+	// receive on the closed channel observes the stored error.
+	frames  chan []byte
+	readErr error
+	// readerStop is closed by Close and abort. It releases Reads blocked on
+	// frames without the reader's cooperation, so Close never waits for a
+	// peer that holds stdout open.
+	readerStop chan struct{}
+
+	writeCh chan struct{}
+	done    chan struct{}
+	stderr  *ringBuffer
 
 	writeMu   sync.Mutex
 	stderrMu  sync.Mutex
@@ -122,16 +147,60 @@ func (c *stdioConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	}
 	stop := context.AfterFunc(ctx, func() { c.abort() })
 	defer stop()
-	line, err := c.readFrame()
-	if err != nil {
-		return nil, err
+	select {
+	case line, ok := <-c.frames:
+		if !ok {
+			return nil, c.readErr
+		}
+		return c.decodeFrame(line)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.readerStop:
+		// The connection closed while this Read was blocked. Prefer a frame
+		// or terminal error the reader already delivered over a generic
+		// closed error, so reads after a clean EOF stay deterministic.
+		select {
+		case line, ok := <-c.frames:
+			if !ok {
+				return nil, c.readErr
+			}
+			return c.decodeFrame(line)
+		default:
+			return nil, sdk.ErrConnectionClosed
+		}
 	}
+}
+
+// decodeFrame parses one delivered frame. A malformed frame fails the
+// connection.
+func (c *stdioConnection) decodeFrame(line []byte) (jsonrpc.Message, error) {
 	msg, err := jsonrpc.DecodeMessage(line)
 	if err != nil {
 		c.abort()
 		return nil, fmt.Errorf("malformed stdio frame: %w", err)
 	}
 	return msg, nil
+}
+
+// readLoop is the sole reader and closer of stdoutPipe. It exits when the
+// stream ends or when Close or abort releases it. A descendant that inherits
+// stdout can delay its exit, but never Close, which does not wait for this
+// goroutine.
+func (c *stdioConnection) readLoop() {
+	defer func() { _ = c.stdoutPipe.Close() }()
+	for {
+		line, err := c.readFrame()
+		if err != nil {
+			c.readErr = err
+			close(c.frames)
+			return
+		}
+		select {
+		case c.frames <- line:
+		case <-c.readerStop:
+			return
+		}
+	}
 }
 
 func (c *stdioConnection) readFrame() ([]byte, error) {
@@ -190,8 +259,12 @@ func (c *stdioConnection) Write(ctx context.Context, msg jsonrpc.Message) error 
 	writeDone := make(chan error, 1)
 	go func() {
 		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
+		if c.stdin == nil {
+			writeDone <- sdk.ErrConnectionClosed
+			return
+		}
 		_, err := c.stdin.Write(frame)
-		c.writeMu.Unlock()
 		writeDone <- err
 	}()
 	select {
@@ -212,23 +285,31 @@ func (c *stdioConnection) Write(ctx context.Context, msg jsonrpc.Message) error 
 func (c *stdioConnection) Close() error {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
-		defer c.closePipes()
-		_ = c.stdin.Close()
-		select {
-		case <-c.done:
-			return
-		case <-time.After(500 * time.Millisecond):
+		close(c.readerStop)
+		// Offer stdin EOF for a graceful exit while no write is in flight.
+		// A write blocked on a child that never reads would wedge a locked
+		// close, and that child would ignore the EOF anyway, so skip the
+		// graceful close rather than wait for the mutex.
+		c.closeStdinIfIdle()
+		exited := c.waitExit(500 * time.Millisecond)
+		if !exited {
+			signalCommand(c.cmd, false)
+			exited = c.waitExit(1500 * time.Millisecond)
 		}
-		signalCommand(c.cmd, false)
-		select {
-		case <-c.done:
-			return
-		case <-time.After(1500 * time.Millisecond):
+		if !exited {
+			signalCommand(c.cmd, true)
+			exited = c.waitExit(2 * time.Second)
 		}
-		signalCommand(c.cmd, true)
-		select {
-		case <-c.done:
-		case <-time.After(2 * time.Second):
+		if exited {
+			// The process is dead, so a straggler write drains with a
+			// broken-pipe error instead of blocking: reclaim stdin under
+			// the write mutex.
+			c.closeStdin()
+		} else {
+			// An unkillable child can hold a write, and this mutex, forever.
+			// Skip the reclaim rather than hang Close; one pipe FD leaks
+			// with the wedged writer.
+			c.closeStdinIfIdle()
 		}
 	})
 	c.waitMu.Lock()
@@ -236,26 +317,65 @@ func (c *stdioConnection) Close() error {
 	return c.waitErr
 }
 
-// abort is the cancellation path: close pipes and force the owned process
-// group without waiting for a graceful protocol shutdown.
+// waitExit reports whether the process exited within d.
+func (c *stdioConnection) waitExit(d time.Duration) bool {
+	select {
+	case <-c.done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// abort is the cancellation path: force-stop the owned process or group
+// without waiting for a graceful protocol shutdown. It performs no I/O waits:
+// the kill releases the reader and a stuck write, the stop release fails
+// blocked Reads, and the stdin reclaim skips when a write is in flight (wait
+// reclaims it once the process exits).
 func (c *stdioConnection) abort() {
 	c.closed.Store(true)
 	c.closeOnce.Do(func() {
-		c.closePipes()
 		signalCommand(c.cmd, true)
+		close(c.readerStop)
+		c.closeStdinIfIdle()
 	})
 }
 
-func (c *stdioConnection) closePipes() {
+// closeStdin closes the stdin pipe exactly once. It runs under writeMu so the
+// close can never race an in-flight write syscall: on Windows that race
+// deadlocks File.Close against the write. Callers must ensure no write can
+// stay blocked first; after process exit a straggler write drains with a
+// broken-pipe error instead.
+func (c *stdioConnection) closeStdin() {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.closeStdinLocked()
+}
+
+// closeStdinIfIdle closes stdin only when no write holds the mutex. It backs
+// the graceful EOF offer and the paths that must never block.
+func (c *stdioConnection) closeStdinIfIdle() {
+	if !c.writeMu.TryLock() {
+		return
+	}
+	defer c.writeMu.Unlock()
+	c.closeStdinLocked()
+}
+
+func (c *stdioConnection) closeStdinLocked() {
+	if c.stdin == nil {
+		return
+	}
 	_ = c.stdin.Close()
-	_ = c.stdoutPipe.Close()
-	_ = c.stderrPipe.Close()
+	c.stdin = nil
 }
 
 func (c *stdioConnection) wait() {
 	err := c.cmd.Wait()
 	c.closed.Store(true)
-	_ = c.stdin.Close()
+	// The process is dead, so no write can stay blocked: reclaim stdin here
+	// to cover every path, including an abort that skipped it mid-write.
+	c.closeStdin()
 	// Close can return as soon as done closes. Signal remaining owned
 	// descendants before publishing exit, even if the launcher exits first.
 	terminateCommand(c.cmd)
@@ -265,10 +385,14 @@ func (c *stdioConnection) wait() {
 	close(c.done)
 }
 
-func (c *stdioConnection) drainStderr(reader io.Reader) {
+func (c *stdioConnection) drainStderr() {
+	// This goroutine owns stderrPipe: it closes the pipe when the stream
+	// ends, after its own final read, so the close can never race another
+	// goroutine's I/O.
+	defer func() { _ = c.stderrPipe.Close() }()
 	buf := make([]byte, 32<<10)
 	for {
-		n, err := reader.Read(buf)
+		n, err := c.stderrPipe.Read(buf)
 		if n > 0 {
 			c.stderrMu.Lock()
 			_, _ = c.stderr.Write(buf[:n])
