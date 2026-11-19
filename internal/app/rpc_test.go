@@ -47,8 +47,11 @@ func (l *rpcLog) objects(t *testing.T) []map[string]any {
 	t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Live subprocess reads can end partway through the next JSONL frame.
+	// Decode only complete lines while the writer is still running.
+	text := l.buf.String()
 	var out []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(l.buf.String()), "\n") {
+	for _, line := range strings.Split(text[:strings.LastIndexByte(text, '\n')+1], "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

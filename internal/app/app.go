@@ -1776,7 +1776,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.restoreAuthState()
 		}
 	}()
-	busy, exiting, compacting := false, false, false
+	busy, exiting, compacting, released := false, false, false, false
 	var cancel context.CancelFunc
 	var activeLoop *agent.Loop
 	// login owns one interactive ChatGPT sign-in. The done and updates
@@ -2738,6 +2738,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 		resizeTimer.Reset(150 * time.Millisecond)
 		resizeTimeout = resizeTimer.C
 	}
+	// Stop terminal work before cancelling the run. Keep the REPL alive
+	// only to settle the worker and handle its events and bridge receipts.
+	releaseTerminal := func() {
+		released = true
+		suspendPending = false
+		frameTimer.Stop()
+		resizeTimer.Stop()
+		frameTick, resizeTimeout, themeChanges = nil, nil, nil
+		cancelACEndTurn()
+		console.Release()
+		r.tty.Restore()
+		inputs = nil
+		for i := range pendingInputs {
+			pendingInputs[i].Release()
+		}
+		pendingInputs = nil
+	}
 	for {
 		lastInput.Release()
 		if quota.observe(r) {
@@ -2779,7 +2796,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			close(queued)
 			inputSource = queued
 		}
-		if frameTick == nil && (stream.Pending() || console.NeedsDraw() || (busy && activityText != "")) {
+		if !released && frameTick == nil && (stream.Pending() || console.NeedsDraw() || (busy && activityText != "")) {
 			delay := time.Second / 30
 			if busy && !stream.Pending() && !console.NeedsDraw() {
 				delay = 80 * time.Millisecond
@@ -2827,6 +2844,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			_, afterFrames, _, _ := console.FrameStats()
 			r.timerFrames += afterFrames - beforeFrames
 		case sig := <-signals:
+			if released && (isResize(sig) || isSuspend(sig) || isResume(sig)) {
+				continue
+			}
 			if isResize(sig) {
 				requestResizeDraw()
 				continue
@@ -3538,6 +3558,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// AC policy commands can update session-local policy; /ac compact
 				// waits for this run to settle and then resumes it after compaction.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
+					// /quit releases the terminal first and settles behind it.
+					// The remaining unsafe operations stay refused (restored).
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "quit" {
+						releaseTerminal()
+						exiting = true
+						cancelActive()
+						continue
+					}
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
 						if strings.TrimSpace(cmd.Arg) != "" {
 							notice(terminal.NoticeError, "use /settings")

@@ -131,6 +131,7 @@ select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 `/settings` picker does not list these values, so edit `settings.json` instead.
 `/ac`, `/autocompact`, `/loop-stop`, and `/skill:<name>` have busy-run handling.
 `/model`, `/thinking`, and `/settings` work during a run. Request settings apply to the next request.
+`/quit` releases the terminal first, then the run settles behind it and the process exits.
 Other slash commands return to the draft.
 Phi can also change the model or thinking level during a run. Bridge reload
 and compaction still require an idle pane. RPC model and thinking changes
