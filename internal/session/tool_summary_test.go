@@ -132,6 +132,21 @@ func TestWebCardHistoryBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A retained call ID is not enough: a result from a different web tool
+	// must not supply its card data.
+	mismatchedCall := ToolCall{Type: "toolCall", ID: "mismatched-result", Name: "fetch_content"}
+	if _, err := store.AppendMessage(AgentMessage{Role: "assistant", Assistant: &AssistantMessage{Role: "assistant",
+		Content: []ContentBlock{{Type: "toolCall", Call: &mismatchedCall}}}}); err != nil {
+		t.Fatal(err)
+	}
+	mismatchedResult := AgentMessage{Role: "toolResult", ToolResult: &ToolResultMessage{Role: "toolResult",
+		ToolCallID: mismatchedCall.ID, ToolName: "web_search",
+		Content: []UserContentBlock{{Type: "text", Text: &TextContent{Type: "text", Text: "ok"}}}}}
+	if _, err := store.AppendMessageDisplay(mismatchedResult, &event.WebMeta{CallID: mismatchedCall.ID,
+		Result: &event.WebResult{Kind: event.WebResultSearch, Sources: 4, HasSources: true}}); err != nil {
+		t.Fatal(err)
+	}
+
 	// A call with an over-limit title is ignored as display data; the call
 	// still shows its truthful outcome.
 	badCall := ToolCall{Type: "toolCall", ID: "bad-call", Name: "web_search", Arguments: map[string]any{"query": "q"}}
@@ -187,6 +202,10 @@ func TestWebCardHistoryBounds(t *testing.T) {
 		}
 		if rejectedResult.ToolState != "done" || rejectedResult.ToolSummary.Web == nil || rejectedResult.ToolSummary.Web.Result != nil {
 			t.Fatalf("over-limit result display changed the outcome: %+v", rejectedResult)
+		}
+		mismatched, ok := items["fetch_content/mismatched-result"]
+		if !ok || mismatched.ToolState != "done" || mismatched.ToolSummary.Web == nil || mismatched.ToolSummary.Web.Result != nil {
+			t.Fatalf("mismatched result should keep its outcome without attaching card data: %+v", mismatched)
 		}
 		badItem, ok := items["web_search/bad-call"]
 		if !ok {
