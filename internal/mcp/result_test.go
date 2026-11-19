@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -243,6 +244,32 @@ func TestResultTruncatesAndSavesReadableFullOutput(t *testing.T) {
 	}
 }
 
+func TestResultReportsUnsavedTruncatedOutput(t *testing.T) {
+	// Use a nonexistent temp directory so creation fails even with elevated
+	// permissions. Go uses TMPDIR on Unix and TMP or TEMP on Windows.
+	missing := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("TMPDIR", missing)
+	t.Setenv("TMP", missing)
+	t.Setenv("TEMP", missing)
+	full := "start:" + strings.Repeat("界", maxResultText) + ":end"
+	result := Convert(&sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: full}}}, ConvertOptions{ReadAvailable: true})
+	if result.IsError || len(result.Content) != 2 || result.Content[0].Type != "text" || result.Content[1].Type != "text" {
+		t.Fatalf("expected truncated text and a notice, got %d blocks (tool error: %t)", len(result.Content), result.IsError)
+	}
+	preview := result.Content[0].Text
+	if len(preview) > maxResultText || !utf8.ValidString(preview) ||
+		!strings.HasPrefix(preview, "start:") || !strings.HasSuffix(preview, ":end") ||
+		!strings.Contains(preview, "[... output truncated ...]") {
+		t.Fatal("preview must preserve both ends and valid UTF-8 within the text limit, with a truncation marker")
+	}
+	if details, ok := result.Details.(toolDetails); !ok || details.FullOutputPath != "" {
+		t.Fatalf("failed save published unexpected details: %+v", result.Details)
+	}
+	if notice := result.Content[1].Text; notice != "MCP output was truncated and the full output could not be saved." {
+		t.Fatalf("failed save notice = %q", notice)
+	}
+}
+
 func TestResultStructuredContent(t *testing.T) {
 	result := &sdk.CallToolResult{StructuredContent: map[string]any{"ok": true}}
 	converted := Convert(result, ConvertOptions{Server: "s", Tool: "t"})
@@ -255,12 +282,28 @@ func TestResultStructuredContent(t *testing.T) {
 }
 
 func TestResultFormatsResourceLinkAsText(t *testing.T) {
-	result := &sdk.CallToolResult{Content: []sdk.Content{
-		&sdk.ResourceLink{URI: "http://127.0.0.1:1/never", Name: "example"},
-	}}
-	converted := Convert(result, ConvertOptions{Server: "s", Tool: "t"})
-	if len(converted.Content) != 1 || !strings.Contains(converted.Content[0].Text, "example") {
-		t.Errorf("resource link = %+v", converted.Content)
+	const uriLimit = 512
+	const linkPrefix = "MCP resource link: "
+	// Put a multi-byte rune across each byte limit.
+	longURI := "https://example.test/" + strings.Repeat("x", uriLimit-1-len("https://example.test/")) + "界"
+	longName := strings.Repeat("x", maxNoticeBytes-len("...")-1-len(linkPrefix)) + "界"
+	result := Convert(&sdk.CallToolResult{Content: []sdk.Content{
+		&sdk.ResourceLink{URI: longURI, Name: "example"},
+		&sdk.ResourceLink{URI: "https://example.test/", Name: longName},
+	}}, ConvertOptions{})
+	if len(result.Content) != 2 {
+		t.Fatalf("resource link blocks = %d, want 2", len(result.Content))
+	}
+	for _, block := range result.Content {
+		if block.Type != "text" || !utf8.ValidString(block.Text) || len(block.Text) > maxNoticeBytes {
+			t.Fatalf("resource link should be bounded UTF-8 text: %q", block.Text)
+		}
+	}
+	if want := linkPrefix + "example (" + strings.TrimSuffix(longURI, "界") + ")"; result.Content[0].Text != want {
+		t.Errorf("URI was not clipped at a rune boundary: %q", result.Content[0].Text)
+	}
+	if !strings.HasSuffix(result.Content[1].Text, "...") {
+		t.Errorf("missing ellipsis on clipped notice: %q", result.Content[1].Text)
 	}
 }
 

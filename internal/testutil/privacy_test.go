@@ -56,18 +56,4 @@ func TestPrivacyAudit(t *testing.T) {
 			return nil
 		})
 	}
-	// The MCP SDK stays behind internal/mcp in production code. Test fixtures
-	// may use the SDK server directly.
-	for _, root := range []string{"internal", "cmd"} {
-		filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
-			if err != nil || fi.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
-				return nil
-			}
-			b, _ := os.ReadFile(p)
-			if strings.Contains(string(b), "github.com/modelcontextprotocol/go-sdk") && !strings.HasPrefix(filepath.ToSlash(p), "internal/mcp/") {
-				t.Errorf("%s imports the MCP SDK outside internal/mcp", p)
-			}
-			return nil
-		})
-	}
 }

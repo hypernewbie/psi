@@ -114,7 +114,7 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 	var noticeBlocks []tools.Block
 	if len(combined) > maxResultText {
 		fullPath, pathErr := writeFullOutput(combined)
-		truncated := truncateMiddle(combined, maxResultText)
+		truncated := truncateMiddle(combined)
 		var kept []tools.Block
 		for _, block := range content {
 			if block.Type == "image" {
@@ -222,11 +222,8 @@ func resourceLinkText(link *sdk.ResourceLink) string {
 	if name == "" {
 		name = "resource"
 	}
-	uri := link.URI
-	if len(uri) > 512 {
-		uri = uri[:512]
-	}
-	text := fmt.Sprintf("MCP resource link: %s (%s)", name, uri)
+	const maxURIPreviewBytes = 512
+	text := fmt.Sprintf("MCP resource link: %s (%s)", name, utf8Prefix(link.URI, maxURIPreviewBytes))
 	return boundNotice(text)
 }
 
@@ -234,18 +231,27 @@ func boundNotice(text string) string {
 	if len(text) <= maxNoticeBytes {
 		return text
 	}
-	return text[:maxNoticeBytes-3] + "..."
+	const ellipsis = "..."
+	return utf8Prefix(text, maxNoticeBytes-len(ellipsis)) + ellipsis
 }
 
-func truncateMiddle(text string, limit int) string {
+// utf8Prefix clips valid UTF-8 text without splitting the rune at the limit.
+func utf8Prefix(text string, limit int) string {
 	if len(text) <= limit {
 		return text
 	}
-	marker := fmt.Sprintf("\n\n[... output truncated: %d bytes omitted ...]\n\n", len(text)-limit)
-	if len(marker) >= limit/2 {
-		marker = "\n\n[... truncated ...]\n\n"
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
 	}
-	budget := limit - len(marker)
+	return text[:limit]
+}
+
+func truncateMiddle(text string) string {
+	if len(text) <= maxResultText {
+		return text
+	}
+	const marker = "\n\n[... output truncated ...]\n\n"
+	budget := maxResultText - len(marker)
 	startBudget := budget / 2
 	endBudget := budget - startBudget
 	start := text[:startBudget]
