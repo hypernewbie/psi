@@ -2,7 +2,7 @@ package session
 
 import (
 	"encoding/json"
-	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -16,6 +16,7 @@ import (
 // search literal text case-insensitively, read a bounded entry range, and keep
 // tool call/result pairs together.
 const (
+	MinHistoryReadTokens     = 500
 	DefaultHistoryReadTokens = 4_000
 	MaxHistoryReadTokens     = 8_000
 	HistoryListLimit         = 40
@@ -32,7 +33,6 @@ const (
 // HistoryItem is one raw entry projected to context messages.
 type HistoryItem struct {
 	ID       string
-	Entry    *Entry
 	Messages []AgentMessage
 	Role     string
 	Text     string
@@ -51,32 +51,32 @@ type HistoryResult struct {
 	Text            string   `json:"-"`
 }
 
-// BuildHistoryIndex projects entries to searchable history items. Entries with
-// no model-visible messages are skipped.
-func BuildHistoryIndex(entries []*Entry) []HistoryItem {
-	index := make([]HistoryItem, 0, len(entries))
-	for _, entry := range entries {
-		messages := EntryToContextMessages(entry)
-		if len(messages) == 0 {
-			continue
-		}
-		text := historySearchText(messages)
-		index = append(index, HistoryItem{
-			ID:       entry.ID(),
-			Entry:    entry,
-			Messages: messages,
-			Role:     historyRole(entry, messages),
-			Text:     text,
-			Tokens:   historyTokens(text),
-		})
+// historyItem keeps only metadata until an action actually needs the text.
+// Raw session bodies can be large, and list/read should not duplicate every
+// older tool result merely to choose a few entry IDs.
+func historyItem(entry *Entry) (HistoryItem, bool) {
+	messages := EntryToContextMessages(entry)
+	if len(messages) == 0 {
+		return HistoryItem{}, false
 	}
-	return index
+	return HistoryItem{ID: entry.ID(), Messages: messages, Role: historyRole(entry, messages)}, true
+}
+
+func loadHistoryText(item *HistoryItem) {
+	item.Text = historySearchText(item.Messages)
+	item.Tokens = historyTokens(item.Text)
 }
 
 // ListHistory renders the newest entries first.
 func ListHistory(entries []*Entry, limit int) HistoryResult {
-	index := BuildHistoryIndex(entries)
-	items := lastItems(index, clampHistoryLimit(limit, HistoryListLimit))
+	limit = clampHistoryLimit(limit, HistoryListLimit)
+	var items []HistoryItem
+	for i := len(entries) - 1; i >= 0 && len(items) < limit; i-- {
+		if item, ok := historyItem(entries[i]); ok {
+			loadHistoryText(&item)
+			items = append(items, item)
+		}
+	}
 	lines := make([]string, 0, len(items))
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
@@ -92,27 +92,38 @@ func ListHistory(entries []*Entry, limit int) HistoryResult {
 
 // SearchHistory scans the raw index for a literal, case-insensitive query.
 func SearchHistory(entries []*Entry, query string, limit int) HistoryResult {
-	needle := strings.ToLower(strings.TrimSpace(query))
+	needle := strings.TrimSpace(query)
 	if needle == "" {
 		return historyFailure(HistoryActionSearch, "Search requires a non-empty query.")
 	}
+	// FindStringIndex returns offsets into the original text, even when Unicode
+	// case folding changes the byte length of a character.
+	pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(needle))
+	if err != nil {
+		return historyFailure(HistoryActionSearch, "Search query is not valid UTF-8.")
+	}
 	limit = clampHistoryLimit(limit, HistorySearchLimit)
 	var items []HistoryItem
-	index := BuildHistoryIndex(entries)
-	for i := len(index) - 1; i >= 0 && len(items) < limit; i-- {
-		if strings.Contains(strings.ToLower(index[i].Text), needle) {
-			items = append(items, index[i])
+	for i := len(entries) - 1; i >= 0 && len(items) < limit; i-- {
+		item, ok := historyItem(entries[i])
+		if !ok {
+			continue
+		}
+		loadHistoryText(&item)
+		if pattern.MatchString(item.Text) {
+			items = append(items, item)
 		}
 	}
 	lines := make([]string, 0, len(items))
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
-		lines = append(lines, "id: "+item.ID+" | "+item.Role+" | ~"+strconv.Itoa(item.Tokens)+" tokens | "+quoteHistoryPreview(matchExcerpt(item.Text, needle)))
+		lines = append(lines, "id: "+item.ID+" | "+item.Role+" | ~"+strconv.Itoa(item.Tokens)+" tokens | "+quoteHistoryPreview(matchExcerpt(item.Text, pattern)))
 		ids = append(ids, item.ID)
 	}
-	text := "No raw session entries match " + strconv.Quote(query) + "."
+	queryPreview := quoteHistoryPreview(query)
+	text := "No raw session entries match " + queryPreview + "."
 	if len(lines) > 0 {
-		text = "Session history matches for " + strconv.Quote(query) + " (newest first)\n" + strings.Join(lines, "\n")
+		text = "Session history matches for " + queryPreview + " (newest first)\n" + strings.Join(lines, "\n")
 	}
 	return historySuccess(HistoryActionSearch, ids, text, false, "")
 }
@@ -124,7 +135,12 @@ func ReadHistory(entries []*Entry, startID, endID string, requestedTokens int) H
 	if startID == "" || endID == "" {
 		return historyFailure(HistoryActionRead, "Read requires both startEntryId and endEntryId from list or search.")
 	}
-	index := BuildHistoryIndex(entries)
+	index := make([]HistoryItem, 0, len(entries))
+	for _, entry := range entries {
+		if item, ok := historyItem(entry); ok {
+			index = append(index, item)
+		}
+	}
 	start, end := -1, -1
 	for i, item := range index {
 		if item.ID == startID {
@@ -145,33 +161,38 @@ func ReadHistory(entries []*Entry, startID, endID string, requestedTokens int) H
 	maxTokens := clampHistoryTokens(requestedTokens)
 	// Reserve room for the stable header lines so the whole result stays
 	// within the requested bound, not merely its body.
-	maxChars := int(math.Max(500, float64(maxTokens*4-600)))
+	maxChars := maxTokens*4 - 600
 	var rendered []string
 	var returnedIDs []string
 	cursor := start
 	usedChars := 0
 	for cursor <= end {
-		groupEnd := cursor
-		if bound, ok := pairs[cursor]; ok && bound.end > groupEnd {
-			groupEnd = bound.end
-		}
+		_, groupEnd := expandHistoryPairs(cursor, cursor, pairs)
 		group := index[cursor : groupEnd+1]
+		for i := range group {
+			loadHistoryText(&group[i])
+		}
 		remaining := maxChars - usedChars
+		if len(rendered) > 0 {
+			remaining -= len("\n\n")
+		}
 		if remaining <= 0 {
 			break
 		}
-		groupText := renderHistoryGroup(group, remaining)
-		if len(groupText) > remaining && len(rendered) > 0 {
+		// Do not truncate a later group merely because the preceding groups
+		// filled this page. Let the caller read it on the next page instead.
+		if len(rendered) > 0 && historyGroupSize(group) > remaining {
 			break
 		}
-		if len(groupText) > remaining {
-			bounded := boundHistoryText(renderHistoryGroup(group, int(math.Max(500, float64(remaining)))), remaining)
-			rendered = append(rendered, bounded)
-			for _, item := range group {
-				returnedIDs = append(returnedIDs, item.ID)
+		groupText, fits := renderHistoryGroup(group, remaining)
+		if !fits {
+			if len(rendered) > 0 {
+				break
 			}
-			cursor = groupEnd + 1
-			break
+			return historyFailure(HistoryActionRead, "This tool-call group cannot fit within the requested bound. Increase maxTokens.")
+		}
+		if len(rendered) > 0 {
+			usedChars += len("\n\n")
 		}
 		rendered = append(rendered, groupText)
 		for _, item := range group {
@@ -200,7 +221,11 @@ func ReadHistory(entries []*Entry, startID, endID string, requestedTokens int) H
 		"- Estimated size: ~" + strconv.Itoa(historyTokens(body)) + " tokens",
 		"- More available: " + moreText,
 	}, "\n")
-	return historySuccess(HistoryActionRead, returnedIDs, header+"\n\n"+body, moreAvailable, nextEntryID)
+	text := header + "\n\n" + body
+	if len(text) > maxTokens*4 {
+		return historyFailure(HistoryActionRead, "Entry metadata cannot fit within the requested bound. Increase maxTokens.")
+	}
+	return historySuccess(HistoryActionRead, returnedIDs, text, moreAvailable, nextEntryID)
 }
 
 func historySuccess(action string, returnedIDs []string, text string, moreAvailable bool, nextEntryID string) HistoryResult {
@@ -224,29 +249,23 @@ func clampHistoryTokens(value int) int {
 	if value <= 0 {
 		return DefaultHistoryReadTokens
 	}
-	return int(math.Max(500, math.Min(MaxHistoryReadTokens, float64(value))))
+	if value < MinHistoryReadTokens {
+		return MinHistoryReadTokens
+	}
+	if value > MaxHistoryReadTokens {
+		return MaxHistoryReadTokens
+	}
+	return value
 }
 
 func clampHistoryLimit(value, max int) int {
 	if value <= 0 {
 		return max
 	}
-	return int(math.Max(1, math.Min(float64(max), float64(value))))
-}
-
-func lastItems(items []HistoryItem, limit int) []HistoryItem {
-	if len(items) <= limit {
-		out := make([]HistoryItem, len(items))
-		for i := range items {
-			out[i] = items[len(items)-1-i]
-		}
-		return out
+	if value > max {
+		return max
 	}
-	out := make([]HistoryItem, 0, limit)
-	for i := len(items) - 1; i >= len(items)-limit; i-- {
-		out = append(out, items[i])
-	}
-	return out
+	return value
 }
 
 // historyTokens is a bytes/4 estimate. It is a conservative superset of Pi's
@@ -324,13 +343,26 @@ func userContentText(content any) string {
 	case []UserContentBlock:
 		parts := make([]string, 0, len(value))
 		for _, block := range value {
-			if block.Text != nil {
+			if block.Type == "text" && block.Text != nil {
 				parts = append(parts, block.Text.Text)
 			}
 		}
 		return strings.Join(parts, "\n")
+	case []any:
+		// Reopened JSON messages decode their generic content arrays as []any.
+		// Keep text blocks only, never embedded image data or opaque fields.
+		var parts []string
+		for _, value := range value {
+			block, ok := value.(map[string]any)
+			if ok && block["type"] == "text" {
+				if text, ok := block["text"].(string); ok {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
 	default:
-		return safeHistoryJSON(value)
+		return ""
 	}
 }
 
@@ -350,18 +382,19 @@ func collapseHistoryWhitespace(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
-func matchExcerpt(text, needle string) string {
-	index := strings.Index(strings.ToLower(text), needle)
-	if index < 0 {
+func matchExcerpt(text string, pattern *regexp.Regexp) string {
+	match := pattern.FindStringIndex(text)
+	if match == nil {
 		return boundHistoryText(text, HistoryPreviewChars)
 	}
-	start := index - HistoryPreviewChars/2
-	if start < 0 {
-		start = 0
+	start := max(0, match[0]-HistoryPreviewChars/2)
+	end := min(len(text), match[1]+HistoryPreviewChars/2)
+	// Keep excerpt boundaries on UTF-8 rune boundaries.
+	for start > 0 && !utf8.RuneStart(text[start]) {
+		start--
 	}
-	end := index + len(needle) + HistoryPreviewChars/2
-	if end > len(text) {
-		end = len(text)
+	for end < len(text) && !utf8.RuneStart(text[end]) {
+		end++
 	}
 	prefix, suffix := "", ""
 	if start > 0 {
@@ -373,36 +406,70 @@ func matchExcerpt(text, needle string) string {
 	return prefix + text[start:end] + suffix
 }
 
-func renderHistoryGroup(items []HistoryItem, maxChars int) string {
-	perItem := maxChars/len(items) - 80
-	if perItem < 300 {
-		perItem = 300
+func historyEntryFrame(item HistoryItem) (string, string) {
+	return "--- entry " + item.ID + " | " + item.Role + " ---\n", "\n--- end entry " + item.ID + " ---"
+}
+
+func historyGroupSize(items []HistoryItem) int {
+	size := 0
+	for i, item := range items {
+		before, after := historyEntryFrame(item)
+		size += len(before) + len(item.Text) + len(after)
+		if i > 0 {
+			size += len("\n\n")
+		}
 	}
+	return size
+}
+
+// renderHistoryGroup keeps every entry's frame when a paired group is too
+// large; otherwise it fails rather than claiming omitted entries were returned.
+func renderHistoryGroup(items []HistoryItem, maxChars int) (string, bool) {
+	frameBytes := 0
+	for i, item := range items {
+		before, after := historyEntryFrame(item)
+		frameBytes += len(before) + len(after)
+		if i > 0 {
+			frameBytes += len("\n\n")
+		}
+	}
+	if frameBytes > maxChars {
+		return "", false
+	}
+	perItem := (maxChars - frameBytes) / len(items)
+	truncate := historyGroupSize(items) > maxChars
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
-		parts = append(parts, "--- entry "+item.ID+" | "+item.Role+" ---\n"+
-			boundHistoryText(item.Text, perItem)+"\n--- end entry "+item.ID+" ---")
+		text := item.Text
+		if truncate && len(text) > perItem {
+			marker := "\n[... " + strconv.Itoa(len(text)) + " bytes omitted ...]\n"
+			if perItem < len(marker) {
+				return "", false
+			}
+			text = boundHistoryText(text, perItem)
+		}
+		before, after := historyEntryFrame(item)
+		parts = append(parts, before+text+after)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), true
 }
 
 func boundHistoryText(text string, maxChars int) string {
 	if len(text) <= maxChars {
 		return text
 	}
-	head := (maxChars*7 + 9) / 10
-	if head < 1 {
-		head = 1
+	// Reserve enough room for the omission count before dividing the rest
+	// between head and tail. len(text) is an upper bound on the omitted bytes.
+	marker := "\n[... " + strconv.Itoa(len(text)) + " bytes omitted ...]\n"
+	if maxChars <= len(marker) {
+		return clipHistoryHead(marker, maxChars)
 	}
-	tail := maxChars - head
-	if tail < 1 {
-		tail = 1
-	}
-	omitted := len(text) - head - tail
-	if omitted < 0 {
-		omitted = 0
-	}
-	return clipHistoryHead(text, head) + "\n[... " + strconv.Itoa(omitted) + " characters omitted ...]\n" + clipHistoryTail(text, tail)
+	available := maxChars - len(marker)
+	head := (available*7 + 9) / 10
+	tail := available - head
+	prefix, suffix := clipHistoryHead(text, head), clipHistoryTail(text, tail)
+	omitted := len(text) - len(prefix) - len(suffix)
+	return prefix + "\n[... " + strconv.Itoa(omitted) + " bytes omitted ...]\n" + suffix
 }
 
 // clipHistoryHead truncates at a rune boundary at or before n bytes.
@@ -461,8 +528,13 @@ func historyToolPairs(index []HistoryItem) map[int]historyPair {
 		if start > end {
 			start, end = end, start
 		}
-		pairs[callIndex] = historyPair{start: start, end: end}
-		pairs[resultIndex] = historyPair{start: start, end: end}
+		for _, endpoint := range []int{callIndex, resultIndex} {
+			if previous, ok := pairs[endpoint]; ok {
+				pairs[endpoint] = historyPair{start: min(previous.start, start), end: max(previous.end, end)}
+			} else {
+				pairs[endpoint] = historyPair{start: start, end: end}
+			}
+		}
 	}
 	return pairs
 }

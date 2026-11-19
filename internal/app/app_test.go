@@ -922,8 +922,8 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 		t.Fatal("instructions or skills not sent")
 	}
 	defs := body["tools"].([]any)
-	if len(defs) != 1 || defs[0].(map[string]any)["name"] != "read" {
-		t.Fatal("CLI tools selection ignored")
+	if len(defs) != 2 || defs[0].(map[string]any)["name"] != "read" || defs[1].(map[string]any)["name"] != "read_session" {
+		t.Fatalf("CLI tools selection or internal history tool mismatch: %v", defs)
 	}
 	write("/skill:doer run-it\r")
 	wait("APP_OK")

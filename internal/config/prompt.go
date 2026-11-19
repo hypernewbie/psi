@@ -27,6 +27,7 @@ var toolSnippets = map[string]string{
 	"web_search":         "Search the web with one to three queries; returns ranked results and a responseId",
 	"fetch_content":      "Fetch one or up to 20 public HTTP(S) URLs as Markdown or raw text",
 	"get_search_content": "Page retained web content by responseId",
+	"read_session":       "Read a narrow raw excerpt from earlier session history",
 }
 
 var toolGuidelines = map[string][]string{
@@ -53,6 +54,9 @@ var toolGuidelines = map[string][]string{
 		"Get retained text by responseId; IDs are valid only for this process and are lost on restart.",
 		"Use the returned next-offset for continuation; offsets count Unicode scalar values after output limits. Use findText to jump to a match; do not re-fetch a page that is already returned. Retrieval metadata repeats incomplete and source-truncated flags.",
 		"Search snapshots keep per-query order; select a result with url and page a long page with offset.",
+	},
+	"read_session": {
+		"Use read_session only for a specific missing fact from earlier raw session history. Search or list before reading and never request the whole session.",
 	},
 }
 

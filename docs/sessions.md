@@ -86,6 +86,29 @@ error. Otherwise a new session is created with the ID.
 The display name is stored in session metadata and shown by `/session` and the
 session picker; it is not sent to the model.
 
+### Reading earlier history
+
+The model can use `read_session` to recover a specific fact from the current
+session's raw active branch, including entries hidden by compaction or context
+edits. It cannot inspect other sessions or sibling branches. It is also
+available with `--no-session` and when selectable tools are disabled.
+
+`list` returns up to 40 recent entry previews; `search` finds up to 20
+case-insensitive literal matches. `read` requires a start and end entry ID from
+those results and returns an excerpt in chronological order. Its `maxTokens`
+uses a byte-based estimate, defaults to 4,000, and is clamped to 500–8,000.
+Large ranges can continue from the reported next entry ID; oversized individual
+entries are truncated to head and tail and cannot be paged within an entry.
+Tool calls and their results are kept together; if a group cannot fit even after
+truncation, the tool returns an error rather than silently dropping members. User and tool
+result image blocks and assistant thinking blocks are excluded from the text
+index. Empty searches, unknown IDs, reversed ranges, and unavailable branches
+also return errors.
+
+History may include sensitive messages and tool output. The tool reads only
+this session and does not modify files or send data itself; returned text enters
+the model context just like other tool results.
+
 ## Format
 
 psi writes Pi session version 3. Reading:

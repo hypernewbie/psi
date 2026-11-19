@@ -126,23 +126,23 @@ func TestActualAppGoalLoopConfirmsClaimBeforeClosing(t *testing.T) {
 		}
 		requestsJSON = append(requestsJSON, request)
 	}
-	// Request 1 works the goal and exposes only loop_done.
+	// Request 1 exposes loop_done and the always-available history tool.
 	if !strings.Contains(string(bodies[0]), "loop_done") || !strings.Contains(string(bodies[0]), "Iteration 1") {
 		t.Fatalf("request 1 lacks the working-phase tool/instructions: %s", bodies[0])
 	}
-	if tools := requestsJSON[0]["tools"].([]any); len(tools) != 1 || !strings.Contains(fmt.Sprint(tools[0]), "loop_done") {
+	if tools := requestsJSON[0]["tools"].([]any); len(tools) != 2 || tools[0].(map[string]any)["name"] != "loop_done" || tools[1].(map[string]any)["name"] != "read_session" {
 		t.Fatalf("request 1 tools = %#v", tools)
 	}
-	// Request 2 checks the claim and exposes only loop_approve.
+	// Request 2 replaces loop_done with loop_approve.
 	if !strings.Contains(string(bodies[1]), "loop_approve") || !strings.Contains(string(bodies[1]), "Confirmation check") {
 		t.Fatalf("request 2 lacks the checking-phase tool/instructions: %s", bodies[1])
 	}
-	if tools := requestsJSON[1]["tools"].([]any); len(tools) != 1 || !strings.Contains(fmt.Sprint(tools[0]), "loop_approve") {
+	if tools := requestsJSON[1]["tools"].([]any); len(tools) != 2 || tools[0].(map[string]any)["name"] != "loop_approve" || tools[1].(map[string]any)["name"] != "read_session" {
 		t.Fatalf("request 2 tools = %#v", tools)
 	}
-	// The confirmed loop is closed: no tools and no active-loop prompt.
-	if tools, present := requestsJSON[2]["tools"]; present {
-		t.Fatalf("completed loop still exposed control tools: %#v", tools)
+	// The confirmed loop is closed: only the history tool remains.
+	if tools := requestsJSON[2]["tools"].([]any); len(tools) != 1 || tools[0].(map[string]any)["name"] != "read_session" {
+		t.Fatalf("completed loop tool set: %#v", tools)
 	}
 	if strings.Contains(string(bodies[2]), "## Active Loop") {
 		t.Fatalf("completed loop system prompt stayed active: %s", bodies[2])

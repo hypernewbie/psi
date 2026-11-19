@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/tools"
 )
@@ -61,24 +62,16 @@ func TestReadSessionToolReadsRawBranchThroughCompaction(t *testing.T) {
 	}
 }
 
-// The tool is only advertised once a compaction can hide raw entries.
-func TestReadSessionAvailableFollowsCompaction(t *testing.T) {
-	r := testRuntime(t)
-	if r.readSessionAvailable() {
-		t.Fatal("tool advertised without a compaction")
+func TestReadSessionAvailableInRPCWithoutCompactionOrSelectedTools(t *testing.T) {
+	s, _, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
+	s.r.settings.DefaultTools = nil
+	cfg := s.runConfig()
+	_, _, definitions := cfg.DynamicConfig()
+	if len(definitions) != 1 || definitions[0].Name != readSessionToolName {
+		t.Fatalf("RPC tools = %+v", definitions)
 	}
-	if _, err := r.store.AppendMessage(agentMessageUser("kept")); err != nil {
-		t.Fatal(err)
-	}
-	path, err := r.store.ActivePath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.store.AppendCompaction("summary", path[0].ID(), 10, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !r.readSessionAvailable() {
-		t.Fatal("tool not advertised after a compaction")
+	if cfg.InternalTools[readSessionToolName] == nil {
+		t.Fatal("RPC history handler missing")
 	}
 }
 
@@ -108,11 +101,30 @@ func TestReadSessionToolBoundsWithJSONNumberTokens(t *testing.T) {
 		t.Fatalf("read failed: %+v", result.Content)
 	}
 	details, _ := result.Details.(session.HistoryResult)
-	if details.EstimatedTokens > 500*2 {
-		t.Fatalf("estimated tokens = %d, want the requested bound", details.EstimatedTokens)
+	if details.EstimatedTokens > 500 {
+		t.Fatalf("estimated tokens = %d, want at most 500", details.EstimatedTokens)
 	}
-	if !strings.Contains(result.Content[0].Text, "characters omitted") {
+	if !strings.Contains(result.Content[0].Text, "bytes omitted") {
 		t.Fatal("large entry was not bounded")
+	}
+}
+
+func TestHistoryTokenArgumentClampsBeforeConversion(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		want  int
+	}{
+		{nil, 4000},
+		{json.Number("500"), 500},
+		{json.Number("0"), 500},
+		{json.Number("-1"), 500},
+		{json.Number("1e999"), 8000},
+		{json.Number("-1e999"), 500},
+		{json.Number("bogus"), 4000},
+	} {
+		if got := historyTokenArgument(tc.value); got != tc.want {
+			t.Errorf("historyTokenArgument(%v) = %d, want %d", tc.value, got, tc.want)
+		}
 	}
 }
 
@@ -127,7 +139,7 @@ func TestReadSessionToolDefinitionIsAdvertised(t *testing.T) {
 	if len(enum) != 3 || enum[0] != "list" || enum[1] != "search" || enum[2] != "read" {
 		t.Fatalf("action enum = %#v", action["enum"])
 	}
-	if !strings.Contains(definition.Description, "cannot read a whole session") {
+	if !strings.Contains(definition.Description, "Output is bounded") {
 		t.Fatalf("description = %q", definition.Description)
 	}
 }

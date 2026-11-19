@@ -151,7 +151,7 @@ func TestHistoryReadExpandsToolPairsAndBoundsOutput(t *testing.T) {
 	if len(read.ReturnedIDs) != 2 || read.ReturnedIDs[1] != resultID {
 		t.Fatalf("tool pair was split: %v", read.ReturnedIDs)
 	}
-	if !strings.Contains(read.Text, "characters omitted") {
+	if !strings.Contains(read.Text, "bytes omitted") {
 		t.Fatalf("large payload was not bounded: %d bytes", len(read.Text))
 	}
 	if len(read.Text) > 1_000*4 {

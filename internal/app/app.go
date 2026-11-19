@@ -2430,9 +2430,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if r.syncboardAvailable() {
 				definitions = append(definitions, syncboardToolDefinition())
 			}
-			if r.readSessionAvailable() {
-				definitions = append(definitions, readSessionToolDefinition())
-			}
+			definitions = append(definitions, readSessionToolDefinition())
 			sections := r.sections
 			if addition := strings.TrimSpace(loop.SystemPromptAddition(state)); addition != "" {
 				sections = append(append([]config.PromptSection(nil), sections...), config.PromptSection{Name: "loop", Body: "<loop>\n" + addition + "\n</loop>"})

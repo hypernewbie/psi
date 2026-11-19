@@ -169,6 +169,19 @@ func TestCwdSectionPreservesWhitespace(t *testing.T) {
 	}
 }
 
+func TestSessionHistoryPromptGuidance(t *testing.T) {
+	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read_session"}, "", false, nil))
+	for _, want := range []string{
+		"read_session: Read a narrow raw excerpt",
+		"Use read_session only for a specific missing fact",
+		"Search or list before reading",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
 	tools := defaultSettings().DefaultTools
 	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, tools, "", false, nil))

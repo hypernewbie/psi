@@ -70,7 +70,7 @@ func activateSessionWithStore(o Options, cwd, agentDir string, st *config.Settin
 	for _, source := range o.AppendSystemPrompts {
 		appendSystemPrompts = append(appendSystemPrompts, resolveCLIPrompt(source))
 	}
-	sections = config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, filterPromptTools(st.DefaultTools, web), resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
+	sections = config.BuildPromptSections(cwd, instructions, []string{skills.FormatForPrompt(sk)}, promptToolNames(st.DefaultTools, web), resolveCLIPrompt(o.SystemPrompt), o.SystemPrompt != "", appendSystemPrompts)
 	prompt = config.RenderSections(sections)
 	ov = config.ResolveStartup(o.Provider, o.Model, o.Thinking, o.SessionDir, o.NoSession, "", "", "", *st, os.Getenv("PI_CODING_AGENT_SESSION_DIR"))
 	if prepared != nil {

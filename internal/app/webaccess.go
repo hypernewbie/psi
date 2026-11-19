@@ -87,6 +87,18 @@ func (r *runtime) webHandlers() map[string]agent.InternalToolHandler {
 	return out
 }
 
+// promptToolNames includes the always-available history tool along with the
+// selected built-ins. Copy the selection so appending cannot alter settings.
+func promptToolNames(names []string, web *webaccess.Client) []string {
+	out := append([]string(nil), filterPromptTools(names, web)...)
+	for _, name := range out {
+		if name == readSessionToolName {
+			return out
+		}
+	}
+	return append(out, readSessionToolName)
+}
+
 // filterPromptTools removes disabled web tools from the prompt name list so a
 // disabled tool never appears in tool snippets or rules.
 func filterPromptTools(names []string, web *webaccess.Client) []string {

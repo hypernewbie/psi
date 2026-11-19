@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"psi/internal/provider"
 	"psi/internal/session"
@@ -18,9 +19,8 @@ const readSessionToolName = "read_session"
 func readSessionToolDefinition() provider.ToolDef {
 	return provider.ToolDef{
 		Name: readSessionToolName,
-		Description: "Read a small, specific raw excerpt from earlier messages in the current session. " +
-			"Search or list first, then read a narrow range. This tool cannot read a whole session at once. " +
-			"Use it only for a specific missing fact from earlier raw session history.",
+		Description: "Read a small, specific raw excerpt from earlier messages on the active branch of the current session, including compacted history. " +
+			"Search or list first, then read a narrow range. Output is bounded and intended for specific missing facts, not whole sessions.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -28,27 +28,11 @@ func readSessionToolDefinition() provider.ToolDef {
 				"query":        map[string]any{"type": "string", "description": "Literal text to search for; required for search"},
 				"startEntryId": map[string]any{"type": "string", "description": "First entry ID to read; required for read"},
 				"endEntryId":   map[string]any{"type": "string", "description": "Last entry ID to read; required for read"},
-				"maxTokens":    map[string]any{"type": "integer", "minimum": 500, "maximum": 8000, "description": "Maximum bounded output size"},
+				"maxTokens":    map[string]any{"type": "integer", "minimum": 500, "maximum": 8000, "description": "Maximum estimated output tokens for read (default 4000); list and search use separate limits"},
 			},
 			"required": []string{"action"},
 		},
 	}
-}
-
-// readSessionAvailable advertises the tool only once a compaction summary is
-// on the active branch. Before that every raw entry is already in the
-// model-facing context, so there is nothing hidden to recover.
-func (r *runtime) readSessionAvailable() bool {
-	path, err := r.store.ActivePath()
-	if err != nil {
-		return false
-	}
-	for _, entry := range path {
-		if entry.Kind == "compaction" {
-			return true
-		}
-	}
-	return false
 }
 
 func (r *runtime) readSessionHandler(_ context.Context, invocation tools.Invocation) tools.Result {
@@ -56,7 +40,7 @@ func (r *runtime) readSessionHandler(_ context.Context, invocation tools.Invocat
 	query, _ := invocation.Arguments["query"].(string)
 	startID, _ := invocation.Arguments["startEntryId"].(string)
 	endID, _ := invocation.Arguments["endEntryId"].(string)
-	maxTokens := intArgument(invocation.Arguments["maxTokens"])
+	maxTokens := historyTokenArgument(invocation.Arguments["maxTokens"])
 
 	path, err := r.store.ActivePath()
 	if err != nil {
@@ -91,25 +75,34 @@ func (r *runtime) readSessionHandler(_ context.Context, invocation tools.Invocat
 	}
 }
 
-// intArgument reads a JSON number. Agent tool calls are decoded with
-// json.Decoder.UseNumber, so the common case is json.Number, not float64.
-func intArgument(value any) int {
+// historyTokenArgument clamps before converting to int, including on 32-bit
+// hosts. Tool arguments normally arrive as json.Number via UseNumber.
+func historyTokenArgument(value any) int {
+	var n float64
 	switch v := value.(type) {
 	case json.Number:
-		if n, err := v.Int64(); err == nil {
-			return int(n)
+		var err error
+		n, err = v.Float64()
+		if err != nil && !math.IsInf(n, 0) {
+			return session.DefaultHistoryReadTokens
 		}
-		if f, err := v.Float64(); err == nil {
-			return int(f)
-		}
-		return 0
 	case float64:
-		return int(v)
+		n = v
 	case int:
-		return v
+		n = float64(v)
 	case int64:
-		return int(v)
+		n = float64(v)
 	default:
-		return 0
+		return session.DefaultHistoryReadTokens
 	}
+	if math.IsNaN(n) {
+		return session.DefaultHistoryReadTokens
+	}
+	if n < session.MinHistoryReadTokens {
+		return session.MinHistoryReadTokens
+	}
+	if n > session.MaxHistoryReadTokens {
+		return session.MaxHistoryReadTokens
+	}
+	return int(n)
 }
