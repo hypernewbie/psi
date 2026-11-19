@@ -227,7 +227,7 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.NoTools, "nt", false, "disable all selectable tools (Pi alias)")
 	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "alias for --no-tools")
 	fs.BoolVar(&o.NoTools, "nbt", false, "alias for --no-tools (Pi alias)")
-	fs.BoolVar(&o.NoMCP, "no-mcp", false, "disable MCP config reads and stdio servers (HTTP unavailable)")
+	fs.BoolVar(&o.NoMCP, "no-mcp", false, "disable MCP config reads, processes, and network requests")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -445,7 +445,7 @@ Pi-compatible options:
   --exclude-tools, -xt <list> Disable selected tools
   --no-tools, -nt            Disable all selectable tools
   --no-builtin-tools, -nbt   Alias for --no-tools
-  --no-mcp                   Disable MCP config reads and stdio servers (HTTP unavailable)
+  --no-mcp                   Disable MCP config reads, processes, and network requests
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
   --theme <path>             Load a theme (repeatable)
@@ -479,7 +479,7 @@ Change it in /settings, or edit settings.json and run /reload. It is a settings 
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. OpenAI Codex uses /login openai-codex and never falls back to an API key.
 A custom provider using openai-completions, openai-responses, or anthropic-messages may omit the API key; built-in openai and anthropic may omit it only on an explicit non-default baseUrl override. An omitted key sends no generated auth header. authHeader: true still requires a key; explicit headers still apply.
 Eligible built-in openai-codex, zai and opencode-go models show remaining quota in unused footer space. Codex shows primary ChatGPT quota; Go shows rolling (R), weekly (W), and monthly (M) percentages. Reads are best effort and back off after failures.
-MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; this layer supports stdio only. --no-mcp disables MCP.
+MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; this layer supports stdio and streamable HTTP. --no-mcp disables MCP.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }

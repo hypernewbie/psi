@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -197,26 +199,53 @@ func TestManagerRetriesSetupAfterTrustReturns(t *testing.T) {
 
 func TestManagerConnectUsesCapturedServerDuringReload(t *testing.T) {
 	manager := NewManager(Options{})
-	t.Cleanup(manager.Stop)
-	// HTTP is rejected in this layer. That lets setup reach its connection
-	// identity check without opening a socket or starting a subprocess.
-	server := Server{Name: "fixture", Transport: TransportHTTP, Enabled: true, Exposure: ExposureDirect}
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
+	requestStarted := make(chan struct{})
+	continueRequest := make(chan struct{})
+	var firstRequest sync.Once
+	mcpServer := httpFixture(t)
+	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return mcpServer }, nil)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstRequest.Do(func() {
+			close(requestStarted)
+			<-continueRequest
+		})
+		mcpHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(endpoint.Close)
+
+	server := Server{Name: "fixture", Transport: TransportHTTP, URL: endpoint.URL, Enabled: true, Exposure: ExposureDirect}
 	state := &serverState{cfg: server, status: serverStateConnecting, epoch: 1, setupActive: true}
 	manager.servers[server.Name] = state
 	updated := server
 	updated.Exposure = ExposureHidden
-	start := make(chan struct{})
-	var reload sync.WaitGroup
-	reload.Go(func() {
-		<-start
+	finishedReload := make(chan struct{})
+	go func() {
+		<-requestStarted
 		manager.mu.Lock()
 		manager.acceptConfigLocked(&Config{Servers: []Server{updated}}, Input{}, nil)
 		manager.mu.Unlock()
+		close(continueRequest)
+		close(finishedReload)
+	}()
+
+	session, conn, err := manager.connect(t.Context(), state, 1, server, Input{})
+	<-finishedReload
+	if err != nil {
+		t.Fatalf("connect with captured server failed: %v", err)
+	}
+	t.Cleanup(func() {
+		conn.cancel()
+		_ = session.Close()
 	})
-	close(start)
-	_, conn, err := manager.connect(t.Context(), state, 1, server, Input{})
-	reload.Wait()
-	if conn == nil || conn.server != server.Name || ErrorClass(err) != "unsupported" {
-		t.Fatalf("setup did not use the captured server identity: error = %v", err)
+	var echo Tool
+	for _, tool := range conn.catalog {
+		if tool.Name == "mcp__fixture__echo" {
+			echo = tool
+			break
+		}
+	}
+	if echo.Name == "" || echo.Exposure != ExposureDirect {
+		t.Fatalf("connection did not use the captured direct exposure: %+v", conn.catalog)
 	}
 }

@@ -26,7 +26,7 @@ var Topics = []Topic{
 	{Name: "cli", Summary: "Every command-line flag and what psi rejects"},
 	{Name: "config", Summary: "settings.json, models.json, and precedence"},
 	{Name: "web", Summary: "Native web fetch, configuration, and network guard"},
-	{Name: "mcp", Summary: "MCP configuration and project-command policy"},
+	{Name: "mcp", Summary: "MCP servers, tools, exposure, limits, and security"},
 	{Name: "providers", Summary: "Supported providers, credentials, and models"},
 	{Name: "sessions", Summary: "Session files, resume, clone, and storage"},
 	{Name: "compaction", Summary: "Automatic and manual context compaction"},

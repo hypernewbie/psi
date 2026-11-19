@@ -216,27 +216,29 @@ type Manager struct {
 	stopped    bool
 	stopOnce   sync.Once
 
-	snapshot  atomic.Pointer[Snapshot]
-	reloads   chan reloadRequest
-	setupSlot chan struct{}
-	callSlot  chan struct{}
-	callSeq   atomic.Uint64
-	pending   int
-	idle      *sync.Cond
+	snapshot       atomic.Pointer[Snapshot]
+	snapshotChange chan struct{}
+	reloads        chan reloadRequest
+	setupSlot      chan struct{}
+	callSlot       chan struct{}
+	callSeq        atomic.Uint64
+	pending        int
+	idle           *sync.Cond
 }
 
 // NewManager creates a manager. Call Start to schedule configuration loading.
 func NewManager(opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		opts:      opts,
-		ctx:       ctx,
-		cancel:    cancel,
-		servers:   map[string]*serverState{},
-		input:     opts.Input,
-		reloads:   make(chan reloadRequest, 1),
-		setupSlot: make(chan struct{}, maxSetupWorkers),
-		callSlot:  make(chan struct{}, maxCallsPerManager),
+		opts:           opts,
+		ctx:            ctx,
+		cancel:         cancel,
+		servers:        map[string]*serverState{},
+		input:          opts.Input,
+		snapshotChange: make(chan struct{}, 1),
+		reloads:        make(chan reloadRequest, 1),
+		setupSlot:      make(chan struct{}, maxSetupWorkers),
+		callSlot:       make(chan struct{}, maxCallsPerManager),
 	}
 	m.snapshot.Store(&Snapshot{})
 	m.idle = sync.NewCond(&m.mu)
@@ -649,10 +651,6 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 		connCancel()
 		return nil, conn, configErr("permission", "MCP server is no longer permitted")
 	}
-	if server.Transport == TransportHTTP {
-		connCancel()
-		return nil, conn, configErr("unsupported", "MCP HTTP transport is not available yet")
-	}
 	client := sdk.NewClient(&sdk.Implementation{Name: "psi", Version: m.opts.Version}, &sdk.ClientOptions{
 		Capabilities:   &sdk.ClientCapabilities{},
 		MultiRoundTrip: &sdk.MultiRoundTripOptions{Disabled: true},
@@ -673,7 +671,12 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 			return next(ctx, method, req)
 		}
 	})
-	transport := newStdioTransport(server, input.Cwd)
+	var transport sdk.Transport
+	if server.Transport == TransportHTTP {
+		transport = m.newHTTPTransport(server, conn)
+	} else {
+		transport = newStdioTransport(server, input.Cwd)
+	}
 	conn.clearRetryAdvice()
 	var disarm func() bool
 	if server.Transport == TransportHTTP {
@@ -1122,6 +1125,12 @@ func (m *Manager) publishLocked() {
 		snap.Servers = append(snap.Servers, status)
 	}
 	m.snapshot.Store(snap)
+	// Coalesce notifications. Waiters read the snapshot before blocking and
+	// again after each notification, so one token can represent many updates.
+	select {
+	case m.snapshotChange <- struct{}{}:
+	default:
+	}
 }
 
 // Snapshot returns the latest immutable view.

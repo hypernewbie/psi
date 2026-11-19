@@ -7,10 +7,9 @@ It has no fullscreen mode, widgets, panels, session-tree interface, or Pi TUI AP
 It has no extension runtime, codemode, tool search, subagents, public SDK, or Pi JSON event mode.
 Print mode, HTML export, sharing, bug uploads, hosted services, telemetry, and automatic updates are excluded.
 
-This layer's MCP client supports tools over stdio only. Streamable HTTP is
-unavailable until layer 7. The client does not run MCP Apps, JavaScript,
-codemode, `tool_search`, prompts, resources,
-resource subscriptions, sampling, elicitation, roots, tasks, OAuth, or automatic
+The MCP client supports tools over stdio and streamable HTTP only.
+It does not run MCP Apps, JavaScript, codemode, `tool_search`, prompts, resources,
+resource subscriptions, sampling, elicitation, roots, tasks, OAuth, or
 provider-token forwarding. Legacy SSE is rejected. A tool result can contain an
 embedded resource, but psi does not fetch its URI.
 
