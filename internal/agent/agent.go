@@ -65,6 +65,10 @@ type Config struct {
 	// DynamicConfig returns the system prompt, its sections, and the tool set
 	// for each model request.
 	DynamicConfig func() (string, []config.PromptSection, []provider.ToolDef)
+	// WebDisplay returns the bounded card data for a web tool call. Only
+	// interactive hosts set it; it never changes arguments, admission, or the
+	// model-facing message.
+	WebDisplay func(name string, args map[string]any) (event.WebCall, bool)
 	// ConcurrentTools returns a captured handler for one enabled external tool.
 	// The handler is prepared during batch preflight and runs through the
 	// existing parallel worker path. It must not be used for control tools.
@@ -838,8 +842,13 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				keepExistingFailure = true
 			}
 		}
+		webCalls := webCallDisplay(cfg, resp.ToolCalls)
 		if !keepExistingFailure {
-			if _, err := l.store.AppendMessage(assistantMessage); err != nil {
+			var webMeta *event.WebMeta
+			if len(webCalls) > 0 {
+				webMeta = &event.WebMeta{Calls: webCalls}
+			}
+			if _, err := l.store.AppendMessageDisplay(assistantMessage, webMeta); err != nil {
 				outcome = event.OutcomeUnsaved
 				storageFailure := fmt.Errorf("storage failure, stopping: %w (unsaved authoritative response)", err)
 				if providerErr != nil {
@@ -924,7 +933,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				return err
 			}
 		}
-		if err := l.runBatch(ctx, resp.ToolCalls, cfg); err != nil {
+		if err := l.runBatch(ctx, resp.ToolCalls, cfg, webCalls); err != nil {
 			return err
 		}
 		if len(resp.ToolCalls) > 0 {

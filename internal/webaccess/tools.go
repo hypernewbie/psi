@@ -7,7 +7,10 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/tools"
 )
@@ -149,13 +152,17 @@ func (c *Client) handleFetch(ctx context.Context, inv tools.Invocation) tools.Re
 		return fetchError(err)
 	}
 	if len(args.urls) == 1 {
-		return c.handleSingleFetch(ctx, args.urls[0], args.mode)
+		return c.handleSingleFetch(ctx, args.urls[0], args.mode, inv.Report)
 	}
-	return c.handleFetchBatch(ctx, args.urls, args.mode)
+	return c.handleFetchBatch(ctx, args.urls, args.mode, inv.Report)
 }
 
-func (c *Client) handleSingleFetch(ctx context.Context, target, mode string) tools.Result {
+func (c *Client) handleSingleFetch(ctx context.Context, target, mode string, report func(event.WebProgress)) tools.Result {
+	reportWebProgress(report, "fetching page", 0, 1, "")
+	started := time.Now()
 	page, err := c.fetchPage(ctx, target, mode)
+	duration := time.Since(started)
+	reportWebProgress(report, "fetching page", 1, 1, "")
 	if err != nil {
 		return fetchError(err)
 	}
@@ -181,10 +188,11 @@ func (c *Client) handleSingleFetch(ctx context.Context, target, mode string) too
 	return tools.Result{
 		Content: []tools.Block{{Type: "text", Text: text}},
 		Details: details,
+		Web:     c.pageResultDisplay(page, page.Truncated || truncated, duration),
 	}
 }
 
-func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode string) tools.Result {
+func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode string, report func(event.WebProgress)) tools.Result {
 	// Validate every target before starting any request, so an invalid entry
 	// cannot produce a partially executed batch.
 	for i, target := range urls {
@@ -192,8 +200,10 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 			return fetchError(fmt.Errorf("urls[%d]: %w", i+1, err))
 		}
 	}
+	reportWebProgress(report, "fetching URLs", 0, len(urls), "")
 	pages := make([]pageData, len(urls))
 	errs := make([]error, len(urls))
+	var completed atomic.Int32
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxWorkers)
 	for i := range urls {
@@ -210,9 +220,10 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 			page, err := c.fetchPage(ctx, urls[i], mode)
 			if err != nil {
 				errs[i] = err
-				return
+			} else {
+				pages[i] = page
 			}
-			pages[i] = page
+			reportWebProgress(report, "fetching URLs", int(completed.Add(1)), len(urls), "")
 		}(i)
 	}
 	wg.Wait()
@@ -304,7 +315,8 @@ func (c *Client) handleFetchBatch(ctx context.Context, urls []string, mode strin
 	if omitted > 0 {
 		details["omitted"] = omitted
 	}
-	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details}
+	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details,
+		Web: c.batchResultDisplay(ctx, okCount, len(urls), responseID, pages, errs)}
 }
 
 func fetchError(err error) tools.Result {

@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"psi/internal/event"
 )
 
 // Names in the supported subset.
@@ -27,6 +29,9 @@ type Result struct {
 	Content []Block
 	Details any
 	IsError bool
+	// Web optionally carries the bounded result card data produced by a web
+	// tool. It is nil for other tools and never enters the model-facing text.
+	Web *event.WebResult
 }
 
 type Block struct {
@@ -41,6 +46,9 @@ type Invocation struct {
 	ID        string
 	Name      string
 	Arguments map[string]any
+	// Report optionally streams display-only progress for this call. It is
+	// nil for non-interactive callers and never affects execution.
+	Report func(event.WebProgress)
 }
 
 // Registry dispatches known tools.

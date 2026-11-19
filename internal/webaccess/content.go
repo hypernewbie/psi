@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"psi/internal/event"
 	"psi/internal/provider"
 	"psi/internal/tools"
 )
@@ -203,7 +204,8 @@ func (c *Client) handleContent(ctx context.Context, inv tools.Invocation) tools.
 	if url != "" {
 		details["url"] = clipMeta(url, maxURLBytes)
 	}
-	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details}
+	return tools.Result{Content: []tools.Block{{Type: "text", Text: text}}, Details: details,
+		Web: contentResultDisplay(title, length, start, next, truncated, previewLines(string(runes[start:next]), event.WebMaxPreviewUnits, event.WebMaxPreviewLines))}
 }
 
 func contentError(err error) tools.Result {

@@ -290,6 +290,10 @@ type DisplaySettings struct {
 	HideThinking bool
 	// ExpandSkills shows skill invocation bodies instead of the collapsed row.
 	ExpandSkills bool
+	// ExpandWeb shows the full bounded web card preview and extra rows instead
+	// of the collapsed view. Both flags come from the same in-memory Ctrl+O
+	// state and are never persisted.
+	ExpandWeb bool
 }
 
 func DefaultDisplaySettings() DisplaySettings {

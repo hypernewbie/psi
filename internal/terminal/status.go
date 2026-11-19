@@ -88,9 +88,11 @@ func (s *StatusWriter) UpdateSummary(name, callID string, summary event.ToolSumm
 	if sized, ok := s.w.(interface{ StatusWidth() int }); ok {
 		width = sized.StatusWidth()
 	}
-	line := FormatToolRowWithDisplay(summary, name, state, width, noColor, display, palette)
-	if line != "" {
-		fmt.Fprintln(s.w, line)
+	line := FormatToolRowsWithDisplay(summary, name, state, width, noColor, display, palette)
+	for _, row := range line {
+		if row != "" {
+			fmt.Fprintln(s.w, row)
+		}
 	}
 }
 

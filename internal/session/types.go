@@ -484,6 +484,7 @@ type Entry struct {
 	toolSummaries    map[string]event.ToolSummary // bounded display data extracted during indexing
 	contentIssue     string                       // metadata-only continuation issue removable by a context edit
 	deferred         bool                         // metadata-only assistant deferred/background marker
+	web              *event.WebMeta               // metadata-only web card payload from the message envelope
 	Kind             string                       // type discriminator
 	Base             entryBase
 	// Exactly one payload set (except header handled separately).

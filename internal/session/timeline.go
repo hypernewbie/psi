@@ -50,6 +50,8 @@ func AllHistoryView(path []*Entry) []TranscriptItem {
 type displayTool struct {
 	name, state, note string
 	call              bool
+	webCall           *event.WebCall
+	webResult         *event.WebResult
 	summary           event.ToolSummary
 }
 
@@ -73,6 +75,13 @@ func displayTools(entries []*Entry) map[string]*displayTool {
 					out[b.Call.ID] = t
 				}
 				t.name, t.call = b.Call.Name, true
+				// Web call data is joined only for retained calls of the three
+				// web tools, by the existing call ID.
+				if t.webCall == nil && e.web != nil && event.IsWebTool(b.Call.Name) {
+					if call, ok := e.web.Calls[b.Call.ID]; ok {
+						t.webCall = &call
+					}
+				}
 			}
 		}
 		if tr := m.ToolResult; tr != nil {
@@ -83,6 +92,11 @@ func displayTools(entries []*Entry) map[string]*displayTool {
 			}
 			if t.name == "" {
 				t.name = tr.ToolName
+			}
+			// Card data must belong to the retained call, not just share its ID.
+			if t.webResult == nil && t.call && t.name == tr.ToolName && event.IsWebTool(tr.ToolName) &&
+				e.web != nil && e.web.CallID == tr.ToolCallID {
+				t.webResult = e.web.Result
 			}
 			t.state, t.note = "done", ""
 			if tr.IsError {
@@ -128,8 +142,17 @@ func addToolSummaries(display map[string]*displayTool, e *Entry, cwd, home strin
 		if t := display[block.Call.ID]; t != nil {
 			if summary, ok := e.toolSummaries[block.Call.ID]; ok {
 				t.summary = toolsummary.RebaseSummaryPath(summary, cwd, home)
-			} else if block.Call.Arguments != nil {
+			} else if block.Call.Arguments != nil && !event.IsWebTool(block.Call.Name) {
+				// Web calls never fall back to their raw arguments; a session
+				// without display metadata keeps a title-only card.
 				t.summary = toolsummary.SummarizeArguments(block.Call.Name, block.Call.Arguments, cwd, home)
+			}
+			if t.webCall != nil || t.webResult != nil || event.IsWebTool(block.Call.Name) {
+				web := event.WebDisplay{Result: t.webResult}
+				if t.webCall != nil {
+					web.Call = *t.webCall
+				}
+				t.summary.Web = &web
 			}
 		}
 	}

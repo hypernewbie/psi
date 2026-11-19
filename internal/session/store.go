@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"psi/internal/event"
 )
 
 // Store owns mutation of one active session. One goroutine owns mutation;
@@ -436,6 +438,14 @@ func (s *Store) LastContextUsage() (int, string, bool) {
 
 // AppendMessage appends a message as a child of the leaf.
 func (s *Store) AppendMessage(msg AgentMessage) (string, error) {
+	return s.AppendMessageDisplay(msg, nil)
+}
+
+// AppendMessageDisplay appends a message as a child of the leaf and, when web
+// is set, records the bounded web card payload on the message-entry envelope
+// beside `message`. The model-facing message bytes stay unchanged, and the
+// payload is never part of the assistant or tool-result message itself.
+func (s *Store) AppendMessageDisplay(msg AgentMessage, web *event.WebMeta) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := newEntryID(s.byID)
@@ -444,10 +454,26 @@ func (s *Store) AppendMessage(msg AgentMessage) (string, error) {
 		Message: &SessionMessageEntry{Type: "message", ID: id, ParentID: parent, Timestamp: nowISO(), Message: msg}}
 	// Ensure consistent timestamps between base and payload.
 	e.Base.Timestamp = e.Message.Timestamp
-	if err := s.appendLocked(e, e.Message); err != nil {
+	var payload any = e.Message
+	if web != nil {
+		payload = messageEnvelope{Type: "message", ID: id, ParentID: parent, Timestamp: e.Base.Timestamp, Message: msg, PsiWeb: web}
+	}
+	if err := s.appendLocked(e, payload); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// messageEnvelope is the on-disk message record with the optional display
+// payload. It is an encoding-only type: session decoding reads `psiWeb` from
+// the raw record instead of storing it inside the typed message entry.
+type messageEnvelope struct {
+	Type      string         `json:"type"`
+	ID        string         `json:"id"`
+	ParentID  *string        `json:"parentId"`
+	Timestamp string         `json:"timestamp"`
+	Message   AgentMessage   `json:"message"`
+	PsiWeb    *event.WebMeta `json:"psiWeb,omitempty"`
 }
 
 // AppendThinkingLevelChange appends a thinking-level change.
@@ -759,6 +785,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 	e.toolSummaries = thin.toolSummaries
 	e.contentIssue = thin.contentIssue
 	e.deferred = thin.deferred
+	e.web = thin.web
 	expectedSize := int64(-1)
 	var writtenRecord []byte
 	if s.persist && s.file != "" {

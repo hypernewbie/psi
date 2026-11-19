@@ -133,6 +133,12 @@ func UnmarshalEntry(data []byte) (*Entry, error) {
 	default:
 		return nil, fmt.Errorf("unknown entry type %q", recType)
 	}
+	if recType == "message" {
+		// Extract the display payload from the root already parsed here; a
+		// second full-record parse on load would double the work for large
+		// tool results.
+		e.web = decodeWebMeta(obj["psiWeb"])
+	}
 	return e, nil
 }
 
