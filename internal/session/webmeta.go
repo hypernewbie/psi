@@ -6,6 +6,7 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 
 	"psi/internal/event"
 )
@@ -120,6 +121,12 @@ func validWebResult(result *event.WebResult) bool {
 		}
 	} else if result.DurationMs != 0 {
 		return false
+	}
+	if result.PagePreview != "" {
+		units := webUTF16Units(result.PagePreview)
+		return result.Kind == event.WebResultPage && result.HasChars && int64(units) <= result.Chars &&
+			units <= event.WebMaxPreviewUnits && strings.Count(result.PagePreview, "\n") < event.WebMaxPreviewLines &&
+			len(result.Preview) == 0 && len(result.Expanded) == 0
 	}
 	if len(result.Preview) > event.WebMaxPreviewLines || len(result.Expanded) > event.WebMaxPreviewLines {
 		return false

@@ -142,19 +142,21 @@ It never estimates bytes, elapsed time, or assumed successes. `get_content` has
 no partial result. Cancelled, not-started, and unknown outcomes stay explicit
 text even when color is off; a failed call never shows success data.
 
-`Ctrl+O` expands or collapses web cards together with skill blocks. The
-collapsed view shows at most 200 UTF-16 units of a fetched page preview and
-120 units of a search preview; expansion raises the bounded preview to 500
-units, adds page snippets for a batch in input order, and shows the actually
-returned retrieval slice. A search with more expanded lines shows a
+`Ctrl+O` expands or collapses web cards together with skill blocks. A
+single-fetch preview uses up to 200 UTF-16 units when collapsed or 500 when
+expanded. Whitespace and line breaks count toward the limit. The preview
+keeps at most 12 source lines and ends with `...` if it omits text. Search
+previews use up to 120 units when collapsed or 500 when expanded. Expansion
+also adds batch page snippets in input order and shows the returned
+retrieval slice. A search with more expanded lines shows a
 `ctrl+o to expand` hint. Expansion reads only the card metadata stored with
 the session message: it never calls the network, reads the cache, or changes
 the model result. The flag is in memory, so a restart starts collapsed.
 
 Display URLs drop userinfo, query, and fragment; configured secrets are
-redacted before clipping. Untrusted titles, queries, URLs, and previews are
-folded to single rows and stripped of control sequences before styling, so a
-page cannot add a row or a terminal escape. A session without card metadata
+redacted before clipping. Titles, queries, and URLs cannot add extra rows.
+Previews preserve only the line breaks allowed by their display limits, and
+all text is sanitized before styling. A session without card metadata
 (for example, one written by an older psi) shows the call title only, with the
 retained outcome and no invented counts or previews.
 

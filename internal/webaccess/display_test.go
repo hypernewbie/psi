@@ -78,7 +78,7 @@ func TestWebFetchCallDisplay(t *testing.T) {
 
 func TestWebPageResultDisplayBounds(t *testing.T) {
 	client := New(Config{FetchModes: []string{"readable", "raw"}})
-	text := "FIRST LINE\r\n" + strings.Repeat("😀", 600) + "\n\x1b[31mTAIL\n\nTHIRD"
+	text := "FIRST LINE\r\n\x1b[31m" + strings.Repeat("😀", 600)
 	result := client.pageResultDisplay(pageData{Title: " Title\nWith Break ", Text: text}, true, 350*time.Millisecond)
 	if result == nil {
 		t.Fatal("missing result display")
@@ -92,18 +92,16 @@ func TestWebPageResultDisplayBounds(t *testing.T) {
 	if !result.Truncated {
 		t.Fatal("truncation flag lost")
 	}
-	if len(result.Preview) == 0 || len(result.Preview) > event.WebMaxPreviewLines {
-		t.Fatalf("preview lines = %d", len(result.Preview))
+	if !strings.HasPrefix(result.PagePreview, "FIRST LINE \n ") || strings.ContainsAny(result.PagePreview, "\x1b\r") {
+		t.Fatalf("preview did not preserve whitespace and fold controls: %q", result.PagePreview)
 	}
-	units := 0
-	for _, line := range result.Preview {
-		if strings.ContainsAny(line, "\x1b\n\r") {
-			t.Fatalf("preview retained a control character: %q", line)
-		}
-		units += utf16Units(line)
+	if units := utf16Units(result.PagePreview); units > event.WebMaxPreviewUnits || units < event.WebMaxPreviewUnits-1 {
+		t.Fatalf("preview used %d UTF-16 units; want the longest prefix without splitting a rune", units)
 	}
-	if units > event.WebMaxPreviewUnits {
-		t.Fatalf("preview units = %d", units)
+	// Even empty source lines count toward the page preview's line cap.
+	throughLastLine := strings.Repeat("\n", event.WebMaxPreviewLines-1) + "LAST LINE"
+	if got := pagePreview(throughLastLine + "\nOMITTED"); got != throughLastLine {
+		t.Fatalf("newline-heavy preview = %q, want %q", got, throughLastLine)
 	}
 	if empty := client.pageResultDisplay(pageData{Text: "body"}, false, 0); empty.Title != "Untitled" {
 		t.Fatalf("title fallback = %q", empty.Title)

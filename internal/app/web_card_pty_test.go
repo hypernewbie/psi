@@ -220,6 +220,74 @@ func rowIndex(t *testing.T, rows []string, want string) int {
 	return found
 }
 
+func TestWebCardPTYRawFetchPreview(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	prefix := "<!doctype html>\n\n  \t<script>😀\n"
+	at200 := prefix + strings.Repeat("x", 200-len(utf16.Encode([]rune(prefix)))-len(" CUT200")) + " CUT200"
+	middle := "-MORE\n"
+	at500 := at200 + middle + strings.Repeat("y", 300-len(middle)-len(" CUT500")) + " CUT500"
+	page := newHeldWebPage(t, at500+"-HIDDEN</script>")
+	page.letGo()
+	provider := newWebCardProvider(t, []webCardTurn{
+		{toolName: "fetch_content", args: fmt.Sprintf(`{"url":%q,"mode":"raw"}`, page.url("/raw"))},
+		{text: "RAW_FETCH_DONE"},
+	})
+	webCardHome(t, agentDir, provider)
+	store := webCardSession(t, home, work, agentDir)
+	start := func() *reviewPTY {
+		q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--session", store.File(), "--tools", "fetch_content")
+		q.prompt()
+		return q
+	}
+	check := func(q *reviewPTY, expanded bool) {
+		t.Helper()
+		rows := webCardRows(q)
+		want, hidden := "CUT200...", "CUT500"
+		if expanded {
+			want, hidden = "CUT500...", "CUT200..."
+		}
+		if !containsRow(rows, want) || containsRow(rows, hidden) || containsRow(rows, "-HIDDEN") {
+			t.Fatalf("expanded=%v: expected the preview to end at %q: %#v", expanded, want, rows)
+		}
+		start := rowIndex(t, rows, "<!doctype html>")
+		if start < 0 || start+2 >= len(rows) || strings.TrimSpace(rows[start+1]) != "" {
+			t.Fatalf("preview lost its blank line: %#v", rows)
+		}
+		// Pi expands the tab to three spaces after it counts it as one
+		// UTF-16 unit. Compare against the first row's card padding.
+		padding := strings.TrimSuffix(rows[start], "<!doctype html>")
+		if want := padding + "     <script>😀"; rows[start+2] != want {
+			t.Fatalf("indented preview row = %q, want %q", rows[start+2], want)
+		}
+	}
+
+	q := start()
+	q.write("FETCH_RAW\r")
+	q.wait("RAW_FETCH_DONE")
+	q.prompt()
+	check(q, false)
+	q.write("\x0f")
+	q.wait("Skill and web cards: expanded")
+	check(q, true)
+	q.write("\x0f")
+	q.wait("Skill and web cards: collapsed")
+	check(q, false)
+	q.write("/quit\r")
+	q.finish()
+
+	replay := start()
+	check(replay, false)
+	replay.write("\x0f")
+	replay.wait("Skill and web cards: expanded")
+	check(replay, true)
+	replay.write("/quit\r")
+	replay.finish()
+	if page.requests.Load() != 1 || provider.requests() != 2 {
+		t.Fatalf("unexpected requests: page=%d provider=%d", page.requests.Load(), provider.requests())
+	}
+}
+
 func TestWebCardPTYFetchMVP(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")

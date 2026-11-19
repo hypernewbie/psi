@@ -68,16 +68,16 @@ func formatWebCardRows(call event.WebCall, result *event.WebResult, name, state 
 	if boxWidth < 10 {
 		boxPad = ""
 	}
-	render := func(text string, token ThemeToken, bold bool) []string {
+	render := func(text string, token ThemeToken, bold, keepPreviewLayout bool) []string {
 		text = SanitizeStatusRow(text)
-		if text == "" {
+		if text == "" && !keepPreviewLayout {
 			return nil
 		}
 		var prefix []StyledSpan
 		if boxPad != "" {
 			prefix = []StyledSpan{{Text: boxPad, Token: token}}
 		}
-		wrapped := wrapMarkdown([]StyledSpan{{Text: text, Token: token, Bold: bold}}, boxWidth, prefix, prefix)
+		wrapped := wrapMarkdownWithOptions([]StyledSpan{{Text: text, Token: token, Bold: bold}}, boxWidth, prefix, prefix, keepPreviewLayout)
 		out := make([]string, 0, len(wrapped))
 		for _, row := range wrapped {
 			row.Surface = surface
@@ -86,7 +86,7 @@ func formatWebCardRows(call event.WebCall, result *event.WebResult, name, state 
 		return out
 	}
 	add := func(text string, token ThemeToken, bold bool) {
-		rows = append(rows, render(text, token, bold)...)
+		rows = append(rows, render(text, token, bold, false)...)
 	}
 	// addPreview clips lines to a UTF-16 unit budget and returns the number of
 	// terminal rows the lines occupy at this width.
@@ -116,7 +116,7 @@ func formatWebCardRows(call event.WebCall, result *event.WebResult, name, state 
 			if line == "" {
 				break
 			}
-			count += len(render(line, TokenToolOutput, false))
+			count += len(render(line, TokenToolOutput, false, false))
 			remaining -= utf16UnitsIn(line)
 		}
 		return count
@@ -153,7 +153,20 @@ func formatWebCardRows(call event.WebCall, result *event.WebResult, name, state 
 			title += " · " + webDuration(result.DurationMs) + " total"
 		}
 		add(title, TokenToolTitle, false)
-		if display.ExpandWeb {
+		if result.PagePreview != "" {
+			budget := webCollapsedPreviewUnits
+			if display.ExpandWeb {
+				budget = webExpandedPreviewUnits
+			}
+			preview := utf16PrefixUnits(result.PagePreview, budget)
+			if int64(utf16UnitsIn(preview)) < result.Chars {
+				preview += "..."
+			}
+			// Pi's Text expands each tab to three spaces after clipping.
+			for _, line := range strings.Split(strings.ReplaceAll(preview, "\t", "   "), "\n") {
+				rows = append(rows, render(line, TokenToolOutput, false, true)...)
+			}
+		} else if display.ExpandWeb {
 			addPreview(webExpandedPreview(*result), webExpandedPreviewUnits)
 		} else if result.Kind == event.WebResultPage || result.Kind == event.WebResultSearch || result.Kind == "" {
 			collapsedUnits := webCollapsedPreviewUnits
@@ -224,7 +237,7 @@ const (
 	// webSearchCollapsedPreviewUnits is Pi's shorter collapsed search budget.
 	webSearchCollapsedPreviewUnits = 120
 	// webExpandedPreviewUnits is the shared preview bound retained on disk.
-	webExpandedPreviewUnits = 500
+	webExpandedPreviewUnits = event.WebMaxPreviewUnits
 )
 
 // utf16PrefixUnits returns the prefix that fits in max UTF-16 units without
