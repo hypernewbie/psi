@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"os"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -51,7 +53,7 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 			textParts = append(textParts, item.Text)
 			content = append(content, tools.Block{Type: "text", Text: item.Text})
 		case *sdk.ImageContent:
-			if converted, ok := imageBlock(item.Data, item.MIMEType); ok {
+			if converted, ok := imageBlock(item.Data, baseMediaType(item.MIMEType)); ok {
 				content = append(content, converted)
 			} else {
 				notice := fmt.Sprintf("MCP image omitted: unsupported MIME type %q or image larger than 3 MiB", safeMIME(item.MIMEType))
@@ -100,14 +102,12 @@ func Convert(result *sdk.CallToolResult, opts ConvertOptions) tools.Result {
 		textParts = append(textParts, string(data))
 		content = append(content, tools.Block{Type: "text", Text: string(data)})
 	}
-	if len(content) == 0 {
-		if result.IsError {
-			text := fmt.Sprintf("MCP tool %s/%s returned an error", opts.Server, opts.Tool)
-			textParts = append(textParts, text)
-			content = append(content, tools.Block{Type: "text", Text: text})
-		} else {
-			content = append(content, tools.Block{Type: "text", Text: "(no output)"})
-		}
+	if result.IsError && !slices.ContainsFunc(textParts, func(text string) bool { return strings.TrimSpace(text) != "" }) {
+		text := fmt.Sprintf("MCP tool %s/%s returned an error", opts.Server, opts.Tool)
+		textParts = append(textParts, text)
+		content = append(content, tools.Block{Type: "text", Text: text})
+	} else if len(content) == 0 {
+		content = append(content, tools.Block{Type: "text", Text: "(no output)"})
 	}
 	combined := strings.Join(textParts, "\n")
 	details := toolDetails{Server: opts.Server, Tool: opts.Tool}
@@ -148,8 +148,17 @@ func safeMIME(mime string) string {
 	return mime
 }
 
+// baseMediaType removes valid parameters for type checks and provider image
+// blocks. Keep the previous classification for malformed media types.
+func baseMediaType(value string) string {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+	return mediaType
+}
+
 func imageBlock(data []byte, mime string) (tools.Block, bool) {
-	mime = strings.ToLower(strings.TrimSpace(mime))
 	switch mime {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":
 	default:
@@ -172,7 +181,7 @@ func convertResource(resource *sdk.ResourceContents) (*tools.Block, string, erro
 	if len(resource.Blob) == 0 {
 		return nil, "", fmt.Errorf("empty resource")
 	}
-	mime := strings.ToLower(strings.TrimSpace(resource.MIMEType))
+	mime := baseMediaType(resource.MIMEType)
 	if strings.HasPrefix(mime, "image/") {
 		if block, ok := imageBlock(resource.Blob, mime); ok {
 			return &block, "", nil

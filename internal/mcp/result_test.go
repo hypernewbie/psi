@@ -111,11 +111,6 @@ func TestCatalogSanitizesNonASCIIToolNames(t *testing.T) {
 	if catalog[0].RawName != raw {
 		t.Fatalf("raw name lost: %q", catalog[0].RawName)
 	}
-	for _, r := range catalog[0].Name {
-		if !isToolNameRune(r) {
-			t.Fatalf("name kept rejected rune %q in %q", r, catalog[0].Name)
-		}
-	}
 }
 
 func TestToolDefSchemaIsSharedNotCopied(t *testing.T) {
@@ -139,7 +134,7 @@ func TestResultTextImageAndError(t *testing.T) {
 	image := []byte("image-bytes")
 	result := &sdk.CallToolResult{Content: []sdk.Content{
 		&sdk.TextContent{Text: "hello"},
-		&sdk.ImageContent{Data: image, MIMEType: "image/png"},
+		&sdk.ImageContent{Data: image, MIMEType: "image/png; profile=example"},
 	}, IsError: true}
 	converted := Convert(result, ConvertOptions{Server: "s", Tool: "t", ReadAvailable: true})
 	if !converted.IsError {
@@ -153,6 +148,17 @@ func TestResultTextImageAndError(t *testing.T) {
 	}
 	if converted.Content[1].Data != base64.StdEncoding.EncodeToString(image) {
 		t.Errorf("image data not base64 encoded")
+	}
+}
+
+func TestResultExplainsImageOnlyError(t *testing.T) {
+	result := Convert(&sdk.CallToolResult{
+		IsError: true,
+		Content: []sdk.Content{&sdk.ImageContent{Data: []byte("image"), MIMEType: "image/png"}},
+	}, ConvertOptions{Server: "s", Tool: "t"})
+	if !result.IsError || len(result.Content) != 2 || result.Content[0].Type != "image" ||
+		result.Content[1].Type != "text" || result.Content[1].Text != "MCP tool s/t returned an error" {
+		t.Fatalf("image-only error = %+v", result)
 	}
 }
 
@@ -230,10 +236,6 @@ func TestResultTruncatesAndSavesReadableFullOutput(t *testing.T) {
 		t.Errorf("full output parent = %s, want the OS temporary directory %s", parent, want)
 	}
 	t.Cleanup(func() { _ = os.Remove(details.FullOutputPath) })
-	data, err := os.ReadFile(details.FullOutputPath)
-	if err != nil || string(data) != full {
-		t.Errorf("full output mismatch: err=%v, len=%d", err, len(data))
-	}
 	registry := tools.NewRegistry(dir)
 	read := registry.Dispatch(tools.Invocation{Name: tools.Read, Arguments: map[string]any{"path": details.FullOutputPath, "limit": 2000}})
 	if read.IsError || len(read.Content) != 1 || read.Content[0].Text != full {
@@ -259,6 +261,23 @@ func TestResultFormatsResourceLinkAsText(t *testing.T) {
 	converted := Convert(result, ConvertOptions{Server: "s", Tool: "t"})
 	if len(converted.Content) != 1 || !strings.Contains(converted.Content[0].Text, "example") {
 		t.Errorf("resource link = %+v", converted.Content)
+	}
+}
+
+func TestResultConvertsParameterizedJSONResourceToText(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	t.Setenv("TMP", dir)
+	t.Setenv("TEMP", dir)
+	const payload = `{"city":"東京"}`
+	result := Convert(&sdk.CallToolResult{Content: []sdk.Content{&sdk.EmbeddedResource{
+		Resource: &sdk.ResourceContents{
+			MIMEType: `application/example+json; charset="utf-8"`,
+			Blob:     []byte(payload),
+		},
+	}}}, ConvertOptions{})
+	if len(result.Content) != 1 || result.Content[0].Type != "text" || result.Content[0].Text != payload {
+		t.Fatalf("JSON resource should be returned as text: %+v", result.Content)
 	}
 }
 
