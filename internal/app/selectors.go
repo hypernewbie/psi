@@ -19,6 +19,8 @@ const (
 	AuthNone AuthMode = iota
 	AuthLogin
 	AuthLogout
+	// AuthCodexMethods is the browser-or-device picker for OpenAI Codex.
+	AuthCodexMethods
 )
 
 type Selector struct {
@@ -184,6 +186,8 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		label, noMatch = "Providers", "  No matching providers"
 	} else if s.AuthMode == AuthLogout {
 		label, noMatch = "Stored API keys", "  No matching providers"
+	} else if s.AuthMode == AuthCodexMethods {
+		label = "Select OpenAI Codex login method:"
 	}
 	var rows []string
 	appendRow := func(text string, token terminal.ThemeToken) {
@@ -192,7 +196,11 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 	// At short heights retain real selectable rows, not a duplicate selected
 	// label in a header. Optional metadata disappears before list entries.
 	if rowBudget >= 3 {
-		appendRow(fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), terminal.TokenMuted)
+		if s.AuthMode == AuthCodexMethods {
+			rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: label, Token: terminal.TokenAccent, Bold: true}}}, width, noColor, selectedTheme))
+		} else {
+			appendRow(fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), terminal.TokenMuted)
+		}
 	}
 	if len(s.Filtered) == 0 {
 		appendRow(noMatch, terminal.TokenMuted)
@@ -242,10 +250,12 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 			}
 		}
 		spans := []terminal.StyledSpan{{Text: marker, Token: markerToken}}
-		if item.ID == s.ActiveID {
-			spans = append(spans, terminal.StyledSpan{Text: "✓ ", Token: terminal.TokenAccent})
-		} else {
-			spans = append(spans, terminal.StyledSpan{Text: "  ", Token: terminal.TokenMuted})
+		if s.AuthMode != AuthCodexMethods {
+			if item.ID == s.ActiveID {
+				spans = append(spans, terminal.StyledSpan{Text: "✓ ", Token: terminal.TokenAccent})
+			} else {
+				spans = append(spans, terminal.StyledSpan{Text: "  ", Token: terminal.TokenMuted})
+			}
 		}
 		name, metadata := s.pickerText(item, now)
 		name = terminal.SanitizeStatusRow(name)
@@ -294,6 +304,8 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		hint := pickerHelpText(width)
 		if s.Thinking && !s.ModelThinkingLevel {
 			hint = thinkingPickerHelpText(width)
+		} else if s.AuthMode == AuthCodexMethods {
+			hint = terminal.FitHint(width, "↑↓ navigate · Enter select · Esc cancel", "↑↓ · Enter · Esc", "Enter Esc")
 		}
 		appendRow(hint, terminal.TokenMuted)
 	}
@@ -325,6 +337,9 @@ func pickerHelpText(width int) string {
 }
 
 func (s *Selector) pickerText(item session.SessionInfo, now time.Time) (string, string) {
+	if s.AuthMode == AuthCodexMethods {
+		return item.Name, ""
+	}
 	if s.AuthMode != AuthNone {
 		return item.ID, item.FirstMessage
 	}

@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,7 @@ func TestWriteAuthDocumentCountsFinalNewlineAtLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAuthDocument(target, atLimit, 0o600, func() bool { return true }); err != nil {
+	if err := writeAuthDocument(target, atLimit, 0o600, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -69,8 +70,8 @@ func TestWriteAuthDocumentCountsFinalNewlineAtLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAuthDocument(target, overLimit, 0o600, func() bool { return true }); err == nil {
-		t.Fatal("one-byte-over document was accepted")
+	if err := writeAuthDocument(target, overLimit, 0o600, func() error { return nil }); !errors.Is(err, errAuthDocumentTooLarge) {
+		t.Fatalf("one-byte-over document: %v", err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(after, data) {

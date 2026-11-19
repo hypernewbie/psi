@@ -396,6 +396,9 @@ func doOpenAITokenRequest(client *http.Client, req *http.Request) ([]byte, error
 	}
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, openAITokenBodyLimit+1))
 	if readErr != nil || len(data) > openAITokenBodyLimit {
+		// A partial or oversized body can already contain token material.
+		// Wipe it before discarding the only reference.
+		secretmem.Wipe(data[:cap(data)])
 		return nil, errOpenAITokenBody
 	}
 	return data, nil

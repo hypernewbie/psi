@@ -489,7 +489,7 @@ type pickerRegion struct {
 }
 
 // SetPicker installs the app-owned picker in place of the editor region.
-// The picker owns its borders, and a search picker also owns the query row.
+// The picker owns its borders and any search or masked input row.
 func (c *Console) SetPicker(rows []string, mode PickerMode) {
 	if len(rows) == 0 {
 		c.picker = nil
@@ -502,7 +502,7 @@ func (c *Console) SetPicker(rows []string, mode PickerMode) {
 // SetPickerRows installs the searchable picker that owns a query row.
 func (c *Console) SetPickerRows(rows []string) { c.SetPicker(rows, PickerSearch) }
 
-// SetPickerChoiceRows installs the startup choice picker, which has no query.
+// SetPickerChoiceRows installs a choice picker without a query.
 func (c *Console) SetPickerChoiceRows(rows []string) { c.SetPicker(rows, PickerChoice) }
 
 func (c *Console) ClearPickerRows() {

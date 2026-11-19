@@ -29,8 +29,9 @@ Each provider has exactly one variable. A stored `auth.json` entry or a
 | `MISTRAL_API_KEY` | `mistral` |
 | `GEMINI_API_KEY` | `google` |
 
-`openai-codex` has no environment variable. It uses the ChatGPT OAuth entry in
-`auth.json`. See [Providers](providers.md).
+`openai-codex` has no environment variable. It uses the separate Codex OAuth
+entry in `auth.json`; run `/login openai-codex` to create it. See
+[Providers](providers.md).
 
 `openai` also accepts a ChatGPT OAuth login from `/login openai`. A stored
 `openai` entry, including an invalid or expired OAuth login, never falls back

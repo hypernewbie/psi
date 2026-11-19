@@ -168,7 +168,7 @@ Existing `modelOverrides` apply without a duplicate `models[]` entry.
 Codex uses the `openai-codex` OAuth credential in `auth.json`, including token
 refresh. Psi updates only that entry and preserves other providers and unknown
 fields. Startup reads credentials locally; refresh occurs on submission. It never
-uses `OPENAI_API_KEY` as a fallback. Run `/login openai-codex` in Pi to log in.
+uses `OPENAI_API_KEY` as a fallback. Run `/login openai-codex` to sign in.
 
 Configure explicit model definitions in Pi's normal shape. The following is an Anthropic example; use the API registered for the selected provider:
 

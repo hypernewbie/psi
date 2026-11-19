@@ -29,7 +29,7 @@ func TestOpenAILoginBrowserDoesNotInheritOutputPipes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	if err := openOpenAILoginBrowser(context.Background(), "https://example.invalid/sign-in"); err != nil {
+	if err := openOAuthLoginBrowser(context.Background(), "https://example.invalid/sign-in"); err != nil {
 		t.Fatalf("fake browser launcher did not get null-device output: %v", err)
 	}
 }

@@ -22,9 +22,10 @@ import (
 const codexTokenURL = "https://auth.openai.com/oauth/token"
 const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-// CodexAuth reuses Pi's existing subscription login. Refresh updates only that
-// provider and uses the shared lease in internal/lockfile. There is deliberately
-// no API-key fallback and no interactive login flow.
+// CodexAuth reads the subscription credential created by
+// /login openai-codex. Refresh updates only that provider and uses the shared
+// lease in internal/lockfile. There is deliberately no API-key fallback; the
+// interactive login lives in codex_login.go and codex_device_login.go.
 type CodexAuth struct {
 	Path     string
 	HTTP     *http.Client
@@ -65,7 +66,7 @@ func (a *CodexAuth) loadLocked() (map[string]json.RawMessage, codexCredential, e
 // must call ReleaseAuthEntries after the last use.
 func (a *CodexAuth) loadTarget(target authTarget) (map[string]json.RawMessage, codexCredential, error) {
 	if !target.exists {
-		return nil, codexCredential{}, fmt.Errorf("cannot read Codex login; run /login openai-codex in Pi")
+		return nil, codexCredential{}, fmt.Errorf("cannot read Codex login; run /login openai-codex")
 	}
 	all, _, _, err := readAuthDocument(target)
 	if err != nil {
@@ -74,7 +75,7 @@ func (a *CodexAuth) loadTarget(target authTarget) (map[string]json.RawMessage, c
 	var entry codexCredential
 	if json.Unmarshal(all["openai-codex"], &entry) != nil || entry.Type != "oauth" || (entry.Access == "" && entry.Refresh == "") {
 		ReleaseAuthEntries(all)
-		return nil, entry, fmt.Errorf("no Codex OAuth login; run /login openai-codex in Pi (no API-key fallback)")
+		return nil, entry, fmt.Errorf("no Codex OAuth login; run /login openai-codex (no API-key fallback)")
 	}
 	return all, entry, nil
 }
@@ -96,7 +97,7 @@ func codexAccount(entry codexCredential) (string, error) {
 			return claims.Auth.AccountID, nil
 		}
 	}
-	return "", fmt.Errorf("Codex login is missing its ChatGPT account ID; log in again through Pi")
+	return "", fmt.Errorf("Codex login is missing its ChatGPT account ID; run /login openai-codex again")
 }
 
 // loadShared reads auth.json through the shared lease so a reader never inspects
@@ -133,11 +134,11 @@ func (a *CodexAuth) Check() error {
 func codexCredentialCheck(entries map[string]json.RawMessage) error {
 	var entry codexCredential
 	if json.Unmarshal(entries["openai-codex"], &entry) != nil || entry.Type != "oauth" || (entry.Access == "" && entry.Refresh == "") {
-		return fmt.Errorf("no Codex OAuth login; run /login openai-codex in Pi (no API-key fallback)")
+		return fmt.Errorf("no Codex OAuth login; run /login openai-codex (no API-key fallback)")
 	}
 	if entry.Expires <= time.Now().UnixMilli() {
 		if entry.Refresh == "" {
-			return fmt.Errorf("Codex login expired; log in again through Pi")
+			return fmt.Errorf("Codex login expired; run /login openai-codex again")
 		}
 		return nil
 	}
@@ -162,7 +163,7 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	}
 	if entry.Refresh == "" {
 		ReleaseAuthEntries(all)
-		return "", "", fmt.Errorf("Codex login expired; log in again through Pi")
+		return "", "", fmt.Errorf("Codex login expired; run /login openai-codex again")
 	}
 	ReleaseAuthEntries(all)
 
@@ -219,7 +220,7 @@ func (a *CodexAuth) Get(ctx context.Context) (string, string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("Codex OAuth refresh failed (HTTP %d); log in again through Pi", resp.StatusCode)
+		return "", "", fmt.Errorf("Codex OAuth refresh failed (HTTP %d); run /login openai-codex again", resp.StatusCode)
 	}
 	// If a complete valid token response arrived before cancellation, retain
 	// the rotated refresh token even if the final body read was interrupted.
@@ -361,7 +362,7 @@ func acquireAuthLock(ctx context.Context, path string, staleAfter, heartbeat, wa
 		return nil, nil, ctx.Err()
 	}
 	if errors.Is(err, lockfile.ErrBusy) {
-		return nil, nil, fmt.Errorf("auth.json is busy; retry or refresh the login in Pi")
+		return nil, nil, fmt.Errorf("auth.json is busy; retry /login openai-codex or refresh the credential")
 	}
 	if errors.Is(err, lockfile.ErrInspect) {
 		return nil, nil, fmt.Errorf("cannot inspect auth.json lock")

@@ -23,6 +23,8 @@ const (
 	apiKeyAuthLockWait = 5 * time.Second
 )
 
+var errAuthDocumentTooLarge = errors.New("auth.json exceeds the size limit")
+
 // SaveAPIKey atomically stores a literal API key in Pi-compatible auth.json.
 // The caller owns key and must wipe it after SaveAPIKey returns.
 func SaveAPIKey(ctx context.Context, authPath, providerID string, key []byte) error {
@@ -84,7 +86,15 @@ func SaveAPIKey(ctx context.Context, authPath, providerID string, key []byte) er
 	if err != nil {
 		return fmt.Errorf("cannot encode auth.json")
 	}
-	valid := func() bool { return ctx.Err() == nil && leaseValid() }
+	valid := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !leaseValid() {
+			return fmt.Errorf("auth.json lock changed; refusing to write")
+		}
+		return nil
+	}
 	if err := writeAuthDocument(target, entries, mode, valid); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -150,7 +160,15 @@ func RemoveAPIKey(ctx context.Context, authPath, providerID string) (bool, error
 	}
 	delete(entries, providerID)
 	secretmem.Wipe(raw[:cap(raw)])
-	valid := func() bool { return ctx.Err() == nil && leaseValid() }
+	valid := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !leaseValid() {
+			return fmt.Errorf("auth.json lock changed; refusing to write")
+		}
+		return nil
+	}
 	if err := writeAuthDocument(target, entries, mode, valid); err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
@@ -318,17 +336,25 @@ func storedEntryType(entry map[string]json.RawMessage, providerID string) (strin
 	return credentialType, nil
 }
 
-func writeAuthDocument(target authTarget, entries map[string]json.RawMessage, mode os.FileMode, valid func() bool) error {
+func writeAuthDocument(target authTarget, entries map[string]json.RawMessage, mode os.FileMode, valid func() error) error {
+	return writeAuthDocumentWithHooks(target, entries, mode, valid, authFileHooks{})
+}
+
+// writeAuthDocumentWithHooks adds the filesystem fault seams used by
+// deterministic commit tests. A nil hook selects the os default.
+func writeAuthDocumentWithHooks(target authTarget, entries map[string]json.RawMessage, mode os.FileMode, valid func() error, hooks authFileHooks) error {
 	encoded, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return fmt.Errorf("cannot encode auth.json")
 	}
 	defer secretmem.Wipe(encoded[:cap(encoded)])
 	if len(encoded)+1 > maxAuthJSONSize {
-		return fmt.Errorf("auth.json exceeds the size limit")
+		return errAuthDocumentTooLarge
 	}
-	if !valid() {
-		return fmt.Errorf("auth.json lock changed; refusing to write")
+	if valid != nil {
+		if err := valid(); err != nil {
+			return err
+		}
 	}
 	if err := target.recheck(); err != nil {
 		return err
@@ -346,7 +372,12 @@ func writeAuthDocument(target authTarget, entries map[string]json.RawMessage, mo
 		}
 		_ = os.Remove(tempPath)
 	}()
-	if err := temp.Chmod(mode); err != nil {
+	chmod := hooks.Chmod
+	if chmod != nil {
+		if err := chmod(tempPath, mode); err != nil {
+			return fmt.Errorf("cannot set auth.json permissions")
+		}
+	} else if err := temp.Chmod(mode); err != nil {
 		return fmt.Errorf("cannot set auth.json permissions")
 	}
 	if _, err := temp.Write(encoded); err != nil {
@@ -363,13 +394,19 @@ func writeAuthDocument(target authTarget, entries map[string]json.RawMessage, mo
 		return fmt.Errorf("cannot close auth.json")
 	}
 	closed = true
-	if !valid() {
-		return fmt.Errorf("auth.json lock changed; refusing to write")
+	if valid != nil {
+		if err := valid(); err != nil {
+			return err
+		}
 	}
 	if err := target.recheck(); err != nil {
 		return err
 	}
-	if err := os.Rename(tempPath, target.path); err != nil {
+	rename := hooks.Rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	if err := rename(tempPath, target.path); err != nil {
 		return fmt.Errorf("cannot replace auth.json")
 	}
 	if dirFile, err := os.Open(dir); err == nil {

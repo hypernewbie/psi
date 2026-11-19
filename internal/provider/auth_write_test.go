@@ -350,7 +350,7 @@ func TestWriteAuthDocumentLostLeaseLeavesOriginalAndNoTemp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAuthDocument(target, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, func() bool { return false }); err == nil {
+	if err := writeAuthDocument(target, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, func() error { return errors.New("lease lost") }); err == nil {
 		t.Fatal("lost lease did not refuse commit")
 	}
 	after, err := os.ReadFile(path)
@@ -384,7 +384,7 @@ func TestWriteAuthDocumentRefusesRetargetedAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	valid := func() bool {
+	valid := func() error {
 		calls++
 		if calls == 2 {
 			if err := os.Remove(authPath); err != nil {
@@ -394,7 +394,7 @@ func TestWriteAuthDocumentRefusesRetargetedAuth(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return true
+		return nil
 	}
 	err = writeAuthDocument(target, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, valid)
 	if err == nil || !strings.Contains(err.Error(), "target changed") {
@@ -425,7 +425,7 @@ func TestWriteAuthDocumentRefusesReplacedAbsentParent(t *testing.T) {
 	}
 	older := filepath.Join(dir, "agent-old")
 	calls := 0
-	valid := func() bool {
+	valid := func() error {
 		calls++
 		if calls == 1 {
 			if err := os.Rename(parent, older); err != nil {
@@ -435,7 +435,7 @@ func TestWriteAuthDocumentRefusesReplacedAbsentParent(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return true
+		return nil
 	}
 	err = writeAuthDocument(target, map[string]json.RawMessage{"deepseek": json.RawMessage(`{"type":"api_key","key":"new"}`)}, 0o600, valid)
 	if err == nil || !strings.Contains(err.Error(), "target changed") {

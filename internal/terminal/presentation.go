@@ -812,16 +812,17 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 		footerRows, footerWidths = footerRows[len(footerRows)-1:], footerWidths[len(footerWidths)-1:]
 		footerCount = 1
 	}
-	withQuery := mode == PickerSearch
-	queryRows := 0
-	if withQuery {
-		queryRows = 1
+	withInput := mode == PickerSearch || mode == PickerSecret
+	inputRows := 0
+	if withInput {
+		inputRows = 1
 	}
 
-	// At the smallest sizes keep the focused query usable before chrome.
-	if height <= 2 {
+	// At the smallest sizes keep the focus usable before chrome. A masked
+	// panel also keeps its first instruction above the field if it fits.
+	if height <= 2 && !(mode == PickerSecret && height == 2 && len(pickerRows) > 0) {
 		row, col := "", 0
-		if withQuery {
+		if withInput {
 			row, col = pickerQueryRow(buf, pos, width)
 		} else if len(pickerRows) > 0 {
 			row = TruncateToWidth(Sanitize(pickerRows[0]), max(0, width-1))
@@ -829,23 +830,22 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 		return EditorView{Rows: []string{row}, CellWidth: []int{CellWidth(row)}, CursorRow: 0, CursorCol: col}
 	}
 
-	// The picker owns its top border, the optional search input, and its
-	// bottom border. The query and one list row outrank the chrome on a very
-	// short terminal, so the footer and borders give way first.
+	// The picker owns its borders and any input. The input and one body
+	// row outrank the chrome, so the footer and borders give way first.
 	minBody := 0
 	if len(pickerRows) > 0 {
 		minBody = 1
 	}
 	keepTop, keepBottom := true, true
-	if height < queryRows+minBody+2+footerCount {
+	if height < inputRows+minBody+2+footerCount {
 		// The footer is the first thing to give way.
 		footerRows, footerWidths = nil, nil
 		footerCount = 0
 	}
-	if height < queryRows+minBody+2 {
+	if height < inputRows+minBody+2 {
 		keepBottom = false
 	}
-	if height < queryRows+minBody+1 {
+	if height < inputRows+minBody+1 {
 		keepTop = false
 	}
 	chromeRows := 0
@@ -855,7 +855,7 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 	if keepBottom {
 		chromeRows++
 	}
-	bodySpace := max(0, height-queryRows-chromeRows-footerCount)
+	bodySpace := max(0, height-inputRows-chromeRows-footerCount)
 	bodyCount := min(len(pickerRows), bodySpace)
 
 	fragment := fragmentRows
@@ -884,7 +884,7 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 	borderText := border.SerializeWithTheme(snapshot.Theme, noColor)
 	borderCells := border.Width()
 
-	rows := make([]string, 0, len(fragment)+queryRows+chromeRows+bodyCount+footerCount+1)
+	rows := make([]string, 0, len(fragment)+inputRows+chromeRows+bodyCount+footerCount+1)
 	cells := make([]int, 0, cap(rows))
 	for _, row := range fragment {
 		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
@@ -896,10 +896,13 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 	if keepTop {
 		rows, cells = append(rows, borderText), append(cells, borderCells)
 	}
-	if withQuery {
-		queryRow, col := pickerQueryRow(buf, pos, width)
-		rows, cells = append(rows, queryRow), append(cells, CellWidth(queryRow))
+	appendInput := func() {
+		row, col := pickerQueryRow(buf, pos, width)
+		rows, cells = append(rows, row), append(cells, CellWidth(row))
 		cursorRow, cursorCol = len(rows)-1, col
+	}
+	if mode == PickerSearch {
+		appendInput()
 	}
 	for _, row := range pickerRows[:bodyCount] {
 		plain := Sanitize(row)
@@ -907,6 +910,9 @@ func ComposeConsoleViewPicker(width, height int, buf []rune, pos int, snapshot P
 			row = TruncateToWidth(plain, max(0, width-1))
 		}
 		rows, cells = append(rows, row), append(cells, CellWidth(Sanitize(row)))
+	}
+	if mode == PickerSecret {
+		appendInput()
 	}
 	if keepBottom {
 		rows, cells = append(rows, borderText), append(cells, borderCells)

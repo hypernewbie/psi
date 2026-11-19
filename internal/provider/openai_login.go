@@ -293,10 +293,9 @@ func parseOpenAILoginCallback(r *http.Request, expectedState string) (openAILogi
 	return outcome, http.StatusOK, true
 }
 
-// writeOpenAILoginPage sends one static browser page. The caller ignores
-// write errors: a disconnected browser does not invalidate an accepted
-// code.
-func writeOpenAILoginPage(w http.ResponseWriter, status int, page string) {
+// writeOAuthCallbackPage sends one static browser page. A disconnected
+// browser does not invalidate an accepted code.
+func writeOAuthCallbackPage(w http.ResponseWriter, status int, page string) {
 	header := w.Header()
 	header.Set("Content-Type", "text/html; charset=utf-8")
 	header.Set("Cache-Control", "no-store")
@@ -329,17 +328,17 @@ func (g *openAILoginCallbackGate) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		outcome, status, ok := parseOpenAILoginCallback(r, g.state)
 		if !ok {
-			writeOpenAILoginPage(w, status, openAILoginInvalidPage)
+			writeOAuthCallbackPage(w, status, openAILoginInvalidPage)
 			return
 		}
 		if !g.claimed.CompareAndSwap(false, true) {
-			writeOpenAILoginPage(w, http.StatusOK, openAILoginSuccessPage)
+			writeOAuthCallbackPage(w, http.StatusOK, openAILoginSuccessPage)
 			return
 		}
 		if outcome.denied {
-			writeOpenAILoginPage(w, http.StatusBadRequest, openAILoginDeniedPage)
+			writeOAuthCallbackPage(w, http.StatusBadRequest, openAILoginDeniedPage)
 		} else {
-			writeOpenAILoginPage(w, http.StatusOK, openAILoginSuccessPage)
+			writeOAuthCallbackPage(w, http.StatusOK, openAILoginSuccessPage)
 		}
 		g.result <- outcome
 	})

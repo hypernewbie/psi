@@ -21,6 +21,7 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
 - On Unix, `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
+- Codex login panel: `Esc` cancels and `Ctrl+D` cancels and quits. In browser mode, `Enter` submits an optional masked redirect URL or code. In device-code mode, `Enter` opens the verification page.
 - Secret prompt: keys are masked and never enter prompt recall. `Enter` saves, `Esc` or `Ctrl+C` cancels. Paste must fit within 256 KiB and contain no newline. `Ctrl+J` does not submit.
 - Draft budget 256 KiB UTF-8, never splits grapheme
 
@@ -28,7 +29,7 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 
 - `/settings` — change supported live settings, including during a run. Display changes apply immediately. Request settings apply to the next request. Persisted values merge into the user `settings.json`.
 - `/trust` — save a project trust decision for future sessions; restart psi for the decision to take effect
-- `/login [provider]` — pick a provider; OpenAI opens ChatGPT sign-in and other supported providers open a masked key prompt. Anthropic and Codex login are unavailable in psi
+- `/login [provider]` — pick a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device-code sign-in, and other supported providers open a masked key prompt. Anthropic API-key login is unavailable in psi
 - `/logout` — remove a stored built-in API key, including Anthropic; leave OAuth, environment variables, and `models.json` unchanged
 - `/model [provider/model]` — open the model picker or set a model directly
 - `/thinking [level]` — open the supported-level picker or set a level directly; `Ctrl+S` saves the highlighted level as the global default
