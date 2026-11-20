@@ -2386,6 +2386,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
 			bumpAwaitingStart = false
+			bridge.runStarting = false
 			r.clearInFlight()
 			r.bridgeRunStarted()
 		case event.SteeringDelivered, event.FollowUpDelivered:
@@ -2676,6 +2677,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			events <- e
 		})
 		activeLoop = loop
+		bridge.runStarting = !compact
 		// RunStart proves the initial append completed. Until then the input is
 		// retained so a run that dies early can be recovered without re-asking
 		// Phi or flattening verified content into the editor. Only a new
@@ -2846,7 +2848,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if r.store == nil {
 			return errors.New("no session")
 		}
-		if manualCompact != nil || compacting || r.compactActive || r.compactPending {
+		if manualCompact != nil || compacting || r.compactActive || r.compactPending || r.ac.Snapshot().Compacting ||
+			(busy && pendingACCompactFocus != nil) {
 			return errors.New("compaction is already running")
 		}
 		if exiting {
@@ -3244,25 +3247,23 @@ func (r *runtime) repl(console *terminal.Console) error {
 			bumpAwaitingStart = false
 			cancel()
 			busy = false
+			bridge.runStarting = false
 			bridge.runCancelling = false
-			manualWasStarted := manualCompact != nil && manualCompact.started
-			outgoingManual := manualCompact != nil && !manualWasStarted
-			switch {
-			case manualWasStarted:
-				// This settlement belongs to the compaction worker. The receipt
-				// moves here from the reservation so the outgoing run cannot
-				// answer it.
-				bridge.resolveCompactRun(err)
+			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
+			outgoingManual := manualCompact != nil && !manualCompact.started
+			manualCompleted := manualCompact != nil && manualCompact.started && compactionCommitted
+			if manualCompact != nil && manualCompact.started {
+				// A failure in input delivered after the checkpoint cannot undo
+				// the compaction. The normal run error path still reports it.
+				compactErr := err
+				if manualCompleted {
+					compactErr = nil
+				}
+				bridge.resolveCompactRun(compactErr)
 				manualCompact = nil
 				r.compactPending = false
 				r.syncBridge()
-			case outgoingManual:
-				// The run that was cancelled for compaction cannot answer the
-				// receipt; the worker that actually starts will.
-			default:
-				bridge.resolveCompactRun(err)
 			}
-			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
 			// Queued input can arrive after the run's last queue poll but before
 			// its settled event reaches this loop. Continue it after a clean run;
 			// on cancellation or failure, restore it to the editor instead.
@@ -3353,7 +3354,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				default:
 					notice(terminal.NoticeError, err.Error())
 				}
-			} else if compacting || compactionCommitted {
+			}
+			if manualCompleted || (err == nil && !bumpBeforeStart && (compacting || compactionCommitted)) {
 				// Pi renders the committed compaction entry as a collapsed
 				// summary box with the token count; the summary stays hidden.
 				tokens := 0.0
@@ -3435,6 +3437,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.state = StateWaiting
 					setActivity("Working")
 					activeLoop = lateQueueLoop
+					bridge.runStarting = true
 					compactionCountAtStart = r.ac.Snapshot().CompactionCount
 					lateLoop, cfg := lateQueueLoop, activeConfig
 					go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
@@ -4056,7 +4059,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "ac" || cmd.Name == "autocompact") {
 						parts := strings.Fields(cmd.Arg)
 						if len(parts) > 0 && strings.EqualFold(parts[0], "compact") {
-							if compacting {
+							if compacting || manualCompact != nil {
 								notice(terminal.NoticeInfo, "Compaction is already running.")
 							} else if pendingACCompactFocus != nil {
 								notice(terminal.NoticeInfo, "An /ac compact request is already queued.")

@@ -184,6 +184,12 @@ func TestActualAppCompactCleanFinishKeepsQueuedInput(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatalf("run never reached the settlement gate: %q", out.String())
 	}
+	// The waiting manual compact owns the slot even though its summary
+	// worker has not started. /ac compact must not queue a second summary.
+	if _, err := inputWrite.WriteString("/ac compact\r"); err != nil {
+		t.Fatal(err)
+	}
+	compactFinishOutputWait(t, out, "Compaction is already running.")
 	// The final queue read already happened. This input is accepted, then
 	// must be recovered instead of continued after the worker settles.
 	if _, err := inputWrite.WriteString("RECOVER_ME\r"); err != nil {

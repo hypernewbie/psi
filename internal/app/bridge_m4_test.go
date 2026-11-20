@@ -327,6 +327,16 @@ func TestBridgeCompactV2RefusesStaleRunAndIdentity(t *testing.T) {
 			t.Fatalf("identity %d = %+v, want stale", i, got)
 		}
 	}
+	// A successor can own the worker slot before its RunStart updates the
+	// bridge counter. An unchanged leaf is possible for bump, or before
+	// the successor's first append. The old fence must still refuse.
+	r.bridge.RunSettled(pibridge.OutcomeCompleted)
+	h.runStarting = true
+	f.inject <- compactRequestV2("5", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "")
+	h.handle(nextRequest(t, r.bridge), true)
+	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "stale" {
+		t.Fatalf("request from previous run = %+v, want stale", got)
+	}
 	if *dispatched != 0 {
 		t.Fatalf("dispatched = %d after refusals, want 0", *dispatched)
 	}

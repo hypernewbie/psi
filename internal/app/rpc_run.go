@@ -237,11 +237,12 @@ func runRPC(o Options, version string) error {
 func (s *rpcRunner) cancelActive() {
 	s.mu.Lock()
 	var cancels []context.CancelFunc
-	if s.run != nil {
-		cancels = append(cancels, s.run.cancel)
-	}
+	// Cancel the reservation first: settling the run can wake its worker.
 	if s.reservation != nil {
 		cancels = append(cancels, s.reservation.cancel)
+	}
+	if s.run != nil {
+		cancels = append(cancels, s.run.cancel)
 	}
 	s.mu.Unlock()
 	for _, cancel := range cancels {

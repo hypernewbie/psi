@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -93,14 +94,10 @@ type rpcRunner struct {
 	run           *rpcRunWorker
 	reservation   *rpcCompactReservation
 	running       bool
-	compacting    bool
 	compactActive bool
 	emitted       int
 	streamOpen    bool
 	toolIndex     int
-	// compactionReason carries the last CompactionStart state to the explicit
-	// compact command, which publishes compaction_end with the real outcome.
-	compactionReason string
 	// shutdown closes when stdin ends or a termination signal arrives.
 	// Admissions refuse once it closes; tests that drive handle directly
 	// leave it nil, which never reads as shut down.
@@ -124,6 +121,9 @@ type rpcCompactReservation struct {
 	ctx    context.Context
 	done   chan struct{}
 	cancel context.CancelFunc
+	// Set by the worker's event sink, before any queued turn runs.
+	summaryFinished bool
+	committed       bool
 }
 
 func (s *rpcRunner) emit(v any) {
@@ -240,28 +240,27 @@ func (s *rpcRunner) sink(ev event.Event) {
 	case event.SummarizationRetryFinished:
 		s.emit(map[string]any{"type": "summarization_retry_finished"})
 	case event.CompactionStart:
-		s.sweepDurable()
-		reason := rpcCompactionReason(ev.State)
 		s.mu.Lock()
-		s.compactionReason = reason
+		s.compactActive = true
 		s.mu.Unlock()
-		s.emit(map[string]any{"type": "compaction_start", "reason": reason})
+		s.sweepDurable()
+		s.emit(map[string]any{"type": "compaction_start", "reason": rpcCompactionReason(ev.State)})
 	case event.CompactionEnd:
+		s.mu.Lock()
+		s.compactActive = false
+		res := s.reservation
+		s.mu.Unlock()
+		manual := ev.State == event.CompactionManual
+		if manual && res != nil {
+			res.summaryFinished = true
+			res.committed = ev.Err == nil
+		}
 		if ev.Err == nil {
 			if proj, err := s.r.store.Projection(); err == nil {
 				s.emitted = len(proj.Flat)
 			}
 		}
-		// Explicit compact publishes its outcome when Compact returns.
-		// Auto-summaries from the outgoing run still route while a
-		// reservation waits; only the worker inside Compact suppresses.
-		s.mu.Lock()
-		explicit := s.compactActive
-		s.mu.Unlock()
-		if explicit {
-			return
-		}
-		result := map[string]any{"type": "compaction_end", "reason": rpcCompactionReason(ev.State), "aborted": false}
+		result := map[string]any{"type": "compaction_end", "reason": rpcCompactionReason(ev.State), "aborted": manual && errors.Is(ev.Err, context.Canceled)}
 		if ev.Err != nil {
 			result["errorMessage"] = ev.Err.Error()
 		} else {
@@ -459,13 +458,13 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 func (s *rpcRunner) isCompacting() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.compacting
+	return s.reservation != nil
 }
 
 // getState answers with the live runtime shape pi's wire format defines.
 func (s *rpcRunner) getState(cmd rpcCommand) *rpcResponse {
 	s.mu.Lock()
-	running, compacting := s.running, s.compacting
+	running, compacting := s.running, s.reservation != nil
 	s.mu.Unlock()
 	r := s.r
 	pending := s.pendingCount()
@@ -620,7 +619,7 @@ func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 		return &out
 	default:
 	}
-	if s.reservation != nil || s.compacting {
+	if s.reservation != nil || s.compactActive {
 		s.mu.Unlock()
 		cancel()
 		out := rpcErr(cmd.ID, "compact", "Cannot compact while compaction is in progress.")
@@ -636,8 +635,6 @@ func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 		return &out
 	}
 	s.reservation = res
-	s.compacting = true
-	s.compactionReason = ""
 	s.mu.Unlock()
 	if oldRun != nil {
 		oldRun.cancel()
@@ -647,57 +644,41 @@ func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
 }
 
 func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWorker) {
+	defer s.finishCompact(res)
 	if oldRun != nil {
 		<-oldRun.done
 	}
 	if res.ctx.Err() != nil {
-		// Aborted while waiting: no summary starts. With no summary
-		// started there is no compaction_end either, the same way a
-		// no-work compact answers with the terminal response only.
+		// An aborted reservation never starts a summary or emits its events.
 		s.emit(rpcErr(res.id, "compact", "compaction aborted"))
-		s.finishCompact(res)
 		return
 	}
-	s.mu.Lock()
-	s.compactActive = true
-	s.mu.Unlock()
 	compactErr := s.loop.Compact(res.ctx, res.cfg, res.focus)
-	s.mu.Lock()
-	s.compactActive = false
-	reason := s.compactionReason
-	s.mu.Unlock()
-	aborted := res.ctx.Err() != nil
-	if compactErr != nil {
-		if reason != "" {
-			s.emit(map[string]any{
-				"type": "compaction_end", "reason": reason,
-				"aborted": aborted, "errorMessage": compactErr.Error(),
-			})
-			s.emit(map[string]any{"type": "agent_settled", "aborted": aborted})
+	if res.summaryFinished {
+		aborted := errors.Is(compactErr, context.Canceled)
+		if res.committed {
+			// A queued turn is separate from the checkpoint. Its failure
+			// must not turn a committed compact into a retryable failure.
+			s.sweepDurable()
+			if compactErr != nil && !aborted {
+				s.emit(map[string]any{"type": "extension_error", "error": compactErr.Error()})
+			}
 		}
+		s.emit(map[string]any{"type": "agent_settled", "aborted": aborted})
+	}
+	if compactErr != nil && !res.committed {
 		s.emit(rpcErr(res.id, "compact", compactErr.Error()))
-		s.finishCompact(res)
 		return
 	}
-	s.emit(map[string]any{
-		"type": "compaction_end", "reason": reason,
-		"aborted": false, "result": map[string]any{},
-	})
-	s.emit(map[string]any{"type": "agent_settled", "aborted": false})
 	s.emit(rpcOK(res.id, "compact", map[string]any{}))
-	s.finishCompact(res)
 }
 
-// finishCompact ends the reservation after the terminal response goes out.
-// done closes first so shutdown either waits on this worker or observes a
-// fully finished one; the reservation clears immediately after.
+// finishCompact releases ownership only after the terminal response was written.
 func (s *rpcRunner) finishCompact(res *rpcCompactReservation) {
-	close(res.done)
+	res.cancel()
 	s.mu.Lock()
-	if s.reservation == res {
-		s.reservation = nil
-		s.compacting = false
-	}
+	s.reservation = nil
+	close(res.done)
 	s.mu.Unlock()
 }
 

@@ -68,6 +68,9 @@ func TestRPCModelSwitchRebuildsLoop(t *testing.T) {
 func TestRPCAutomaticCompactionPublishesCompletion(t *testing.T) {
 	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
 	s.sink(event.Event{Type: event.CompactionStart, State: event.CompactionThreshold})
+	if resp := s.handle(rpcCommand{Type: "compact"}); resp == nil || resp.Success {
+		t.Fatalf("manual compact displaced the active automatic summary: %+v", resp)
+	}
 	s.sink(event.Event{Type: event.CompactionEnd, State: event.CompactionThreshold, Err: errors.New("failed")})
 	if !hasEvent(log.objects(t), "compaction_end", map[string]any{"reason": "threshold", "errorMessage": "failed"}) {
 		t.Fatalf("missing automatic compaction outcome: %v", log.objects(t))

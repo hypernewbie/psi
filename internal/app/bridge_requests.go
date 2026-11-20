@@ -83,6 +83,7 @@ type bridgeHandler struct {
 	start         func(text, display, focus, invocation, source string, compact bool)
 	startInput    func(input agent.UserInput, focus string, compact bool) (bool, string)
 	activeLoop    *agent.Loop
+	runStarting   bool // the active worker has not yet established its bridge run ID
 	runCancelling bool // late run events can still change the displayed State
 
 	// searchDone receives finished pages. searches counts live workers on the
@@ -297,8 +298,8 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 		// New fields are valid only after pi.compact.v2 negotiation.
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
 		return
-	case v2 && (h.r.bridge == nil || runID != h.r.bridge.RunID()):
-		// A stale request must never cancel a different run.
+	case v2 && (h.runStarting || h.r.bridge == nil || runID != h.r.bridge.RunID()):
+		// Until RunStart is applied, the bridge still holds the previous ID.
 		req.ReplyCompact(pibridge.CompactRefused, "stale")
 		return
 	case h.prep != nil:

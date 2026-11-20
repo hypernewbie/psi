@@ -34,10 +34,11 @@ settle, compacts, then resumes the task.
 ```
 
 `/compact` calls the provider for a real summary and reports start and outcome.
-It is cancellable. Cancelling leaves the original context untouched. Transient
-provider or stream failures retry according to `retry` settings; quota and
-billing errors do not retry. If summary generation still fails, psi reports the
-error and leaves the original context unchanged.
+It is cancellable. Cancelling before the checkpoint does not replace the
+original context with a summary. Transient provider or stream failures retry
+according to `retry` settings; quota and billing errors do not retry. If summary
+generation still fails, psi reports the error and leaves the original context
+unchanged.
 
 The command runs one manual operation whether the pane is idle or a run is
 active. With an active run, psi reserves the compaction, cancels the run once,
@@ -45,7 +46,9 @@ waits for its durable settlement, and only then requests the summary. The
 interrupted prompt is not replayed. Accepted steering or follow-up input that
 was not delivered returns to the editor instead of being sent into the
 summary. A second `/compact` is refused while the first reservation or worker
-owns the operation. A successful run saves one checkpoint.
+owns the operation. Manual compact does not interrupt an active summary. A
+successful operation saves one checkpoint. Cancelling a turn that delivers
+queued input after that checkpoint does not undo the compaction.
 
 The same operation is used by the Phi bridge (`pi.compact.v2`) and by RPC
 `compact`. Bridge `pi.compact.v1` peers keep idle-only admission. Phi's browser

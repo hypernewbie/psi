@@ -3,6 +3,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,13 +27,13 @@ type rpcCompactStub struct {
 
 	mu           sync.Mutex
 	calls        int
-	bodies       []string
 	firstSeen    chan struct{}
 	firstCancel  chan struct{}
 	summarySeen  chan string
 	continuation chan string
 
-	releaseSummary chan struct{}
+	releaseSummary      chan struct{}
+	releaseContinuation chan struct{}
 }
 
 func startRPCCompactStub(t *testing.T) *rpcCompactStub {
@@ -40,7 +41,7 @@ func startRPCCompactStub(t *testing.T) *rpcCompactStub {
 	stub := &rpcCompactStub{
 		firstSeen: make(chan struct{}), firstCancel: make(chan struct{}),
 		summarySeen: make(chan string, 1), continuation: make(chan string, 1),
-		releaseSummary: make(chan struct{}),
+		releaseSummary: make(chan struct{}), releaseContinuation: make(chan struct{}),
 	}
 	var firstOnce, cancelOnce sync.Once
 	stub.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +53,6 @@ func startRPCCompactStub(t *testing.T) *rpcCompactStub {
 		stub.mu.Lock()
 		stub.calls++
 		index := stub.calls
-		stub.bodies = append(stub.bodies, string(body))
 		stub.mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.(http.Flusher).Flush()
@@ -72,9 +72,16 @@ func startRPCCompactStub(t *testing.T) *rpcCompactStub {
 				return
 			}
 			fmt.Fprint(w, rpcCompactSSEText("SUMMARY_COMMITTED"))
-		default:
+		case 3:
 			stub.continuation <- string(body)
+			select {
+			case <-stub.releaseContinuation:
+			case <-r.Context().Done():
+				return
+			}
 			fmt.Fprint(w, rpcCompactSSEText("STEER_DELIVERED"))
+		default:
+			t.Errorf("unexpected provider request %d", index)
 		}
 	}))
 	t.Cleanup(stub.server.Close)
@@ -189,6 +196,12 @@ func TestRPCProcessCompactSettlement(t *testing.T) {
 }
 
 func TestRPCCompactDeliversPreviouslyQueuedSteering(t *testing.T) {
+	t.Run("completed", func(t *testing.T) { testRPCCompactQueuedSteering(t, false) })
+	t.Run("aborted after checkpoint", func(t *testing.T) { testRPCCompactQueuedSteering(t, true) })
+}
+
+func testRPCCompactQueuedSteering(t *testing.T, abort bool) {
+	t.Helper()
 	stub := startRPCCompactStub(t)
 	f, sessionPath := rpcCompactFixture(t, stub.server.URL)
 	child := startRPCChild(t, f, "--session", sessionPath)
@@ -216,10 +229,35 @@ func TestRPCCompactDeliversPreviouslyQueuedSteering(t *testing.T) {
 	if !strings.Contains(continuation, "queued steer") {
 		t.Fatalf("continuation request lost queued steering: %s", continuation)
 	}
-	child.log.waitObjects(t, "compact response", func(objects []map[string]any) bool {
-		got := rpcCompactResponse(objects, "c1")
-		return got != nil && got["success"] == true
+	// The queued turn starts only after the checkpoint is durable. Aborting
+	// that turn must not report the already committed compact as failed.
+	if abort {
+		child.send(map[string]any{"id": "a1", "type": "abort"})
+	} else {
+		close(stub.releaseContinuation)
+	}
+	objects := child.log.waitObjects(t, "compact response", func(objects []map[string]any) bool {
+		return rpcCompactResponse(objects, "c1") != nil
 	})
+	if got := rpcCompactResponse(objects, "c1"); got["success"] != true {
+		t.Fatalf("compaction result after queued turn (abort=%v): %v", abort, got)
+	}
+	if !hasEvent(objects, "compaction_end", map[string]any{"reason": "manual", "aborted": false}) {
+		t.Fatalf("missing successful compaction event: %v", objects)
+	}
+	if !abort {
+		var delivered bool
+		for _, obj := range objects {
+			message, _ := obj["message"].(map[string]any)
+			if obj["type"] == "message_end" && message["role"] == "assistant" {
+				raw, _ := json.Marshal(message["content"])
+				delivered = delivered || strings.Contains(string(raw), "STEER_DELIVERED")
+			}
+		}
+		if !delivered {
+			t.Fatal("compact response preceded the queued turn's durable assistant event")
+		}
+	}
 	child.closeStdin()
 	child.waitExit()
 	if calls := stub.callCount(); calls != 3 {
@@ -229,14 +267,22 @@ func TestRPCCompactDeliversPreviouslyQueuedSteering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompts := 0
+	prompts, queued, checkpoints := 0, 0, 0
 	for _, entry := range entries {
-		if entry.Message != nil && entry.Message.Message.User != nil && entry.Message.Message.User.Content == "second work" {
-			prompts++
+		if entry.Compaction != nil {
+			checkpoints++
+		}
+		if entry.Message != nil && entry.Message.Message.User != nil {
+			switch entry.Message.Message.User.Content {
+			case "second work":
+				prompts++
+			case "queued steer":
+				queued++
+			}
 		}
 	}
-	if prompts != 1 {
-		t.Fatalf("interrupted prompt records = %d, want no replay", prompts)
+	if prompts != 1 || queued != 1 || checkpoints != 1 {
+		t.Fatalf("original/queued prompts/checkpoints = %d/%d/%d, want 1/1/1", prompts, queued, checkpoints)
 	}
 }
 
