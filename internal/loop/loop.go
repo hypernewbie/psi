@@ -1,16 +1,19 @@
 // Package loop ports the MIT-licensed pi-loop-minimal behavior into psi's
 // agent and session lifecycle. See LICENSE for the upstream notice.
 //
-// Two loop forms remain:
+// Three loop forms:
 //
 //	/loop goal <description>  — iterate until the goal is confirmed
+//	/loop <N> <task>          — run exactly N iterations
 //	/loop forever <task>      — iterate until the user stops it
 //
-// A goal loop runs in two phases. In the working phase only loop_done is
-// exposed; the model can claim completion, never advance the loop itself. The
-// turn boundary advances the loop, so a turn that ends starts the next
-// iteration. A claim starts a checking phase where only loop_approve is
-// exposed; "reached" closes the loop and anything else resumes the work.
+// A goal or count loop runs in two phases. In the working phase the model gets
+// loop_next (end this iteration) and loop_done (claim the goal is met). A turn
+// that ends advances the loop too, so an iteration can never stall it, and a
+// turn end right after loop_next does not count that iteration twice. Count
+// loops close themselves after the last pass. A claim starts a checking phase
+// where only loop_approve is exposed; "reached" closes the loop and anything
+// else resumes the work.
 package loop
 
 import (
@@ -26,6 +29,7 @@ import (
 )
 
 const (
+	NextToolName          = "loop_next"
 	DoneToolName          = "loop_done"
 	ApproveToolName       = "loop_approve"
 	StateEntryType        = "psi.loop.state"
@@ -33,17 +37,22 @@ const (
 	IterationMessageType  = "psi.loop.iteration"
 	EvaluationMessageType = "psi.loop.evaluation"
 	ResumeMessageType     = "psi.loop.resume"
+	CompleteMessageType   = "psi.loop.complete"
 )
 
 // State is durable loop control state. A goal loop runs until a completion
-// claim is confirmed; a forever loop runs until the user stops it.
+// claim is confirmed; a count loop runs exactly MaxSteps iterations; a forever
+// loop runs until the user stops it.
 type State struct {
-	Active      bool   `json:"active"`
-	CurrentStep int    `json:"currentStep"`
-	Goal        string `json:"goal"`
-	Done        bool   `json:"done"`
-	ReasonDone  string `json:"reasonDone"`
-	Forever     bool   `json:"forever"`
+	Active      bool `json:"active"`
+	CurrentStep int  `json:"currentStep"`
+	// MaxSteps is the exact pass count for a count loop. Zero means unbounded
+	// (goal and forever loops).
+	MaxSteps   int    `json:"maxSteps,omitempty"`
+	Goal       string `json:"goal"`
+	Done       bool   `json:"done"`
+	ReasonDone string `json:"reasonDone"`
+	Forever    bool   `json:"forever"`
 	// Evaluating is set while a completion claim is being checked. The claim
 	// only closes the loop once loop_approve confirms it.
 	Evaluating  bool   `json:"evaluating"`
@@ -55,7 +64,7 @@ func EmptyState() State { return State{} }
 func Parse(args string) (State, error) {
 	parts := strings.Fields(strings.TrimSpace(args))
 	if len(parts) == 0 {
-		return State{}, errors.New("usage: /loop goal <description> | /loop forever <task>")
+		return State{}, errors.New("usage: /loop goal <description> | /loop <N> <task> | /loop forever <task>")
 	}
 	state := State{Active: true}
 	switch parts[0] {
@@ -71,10 +80,18 @@ func Parse(args string) (State, error) {
 		}
 		state.Forever = true
 	default:
-		if decimal(parts[0]) {
-			return State{}, errors.New("exact-count loops were removed; use /loop goal <description> or /loop forever <task>")
+		if !decimal(parts[0]) {
+			return State{}, fmt.Errorf("unknown loop mode %q; use goal, forever, or <N> for a count loop", parts[0])
 		}
-		return State{}, fmt.Errorf("unknown loop mode %q; use goal or forever", parts[0])
+		count, err := strconv.Atoi(parts[0])
+		if err != nil || count < 1 {
+			return State{}, errors.New("provide a valid number of passes (N >= 1)")
+		}
+		state.MaxSteps = count
+		state.Goal = strings.Join(parts[1:], " ")
+		if state.Goal == "" {
+			return State{}, errors.New("provide a task description")
+		}
 	}
 	return state, nil
 }
@@ -91,8 +108,45 @@ func decimal(value string) bool {
 	return true
 }
 
+// advanceState counts one finished iteration. A count loop closes itself when
+// it reaches its cap; every other loop keeps going.
+func advanceState(state State) State {
+	completed := state.CurrentStep + 1
+	if state.MaxSteps > 0 && completed >= state.MaxSteps {
+		state.CurrentStep = completed
+		state.Active, state.Done = false, true
+		state.ReasonDone = "Completed all passes"
+		return state
+	}
+	state.CurrentStep = completed
+	return state
+}
+
+// CompletionText is the visible notice for a count loop that finished all of
+// its passes.
+func CompletionText(state State) string {
+	return fmt.Sprintf("✓ Loop complete — all %d passes done.", state.MaxSteps)
+}
+
 // BuildPrompt is the iteration prompt for the working phase.
 func BuildPrompt(state State) string {
+	if state.MaxSteps > 0 {
+		step := state.CurrentStep
+		instruction := "This is a refinement pass. Review and improve on the previous pass."
+		if step == 0 {
+			instruction = "This is the first pass. Do an initial implementation/analysis."
+		} else if step >= state.MaxSteps-1 {
+			instruction = "This is the **final pass**. Do a final polish."
+		}
+		return strings.Join([]string{
+			fmt.Sprintf("## Loop — Pass %d of %d", step+1, state.MaxSteps),
+			"Task: " + state.Goal,
+			instruction,
+			"",
+			"A pass ends when you call loop_next or when you end your turn.",
+			"If the goal is fully met earlier, call loop_done and give the reason why.",
+		}, "\n")
+	}
 	if state.Forever {
 		return strings.Join([]string{
 			"## Forever Loop",
@@ -105,7 +159,7 @@ func BuildPrompt(state State) string {
 		fmt.Sprintf("## Loop — Iteration %d", state.CurrentStep+1),
 		"Goal: " + state.Goal,
 		"Work toward the goal.",
-		"Each iteration ends when you end your turn — the loop continues automatically.",
+		"An iteration ends when you call loop_next or when you end your turn — the loop continues automatically.",
 		"When the goal is fully met, call loop_done and give the reason why.",
 	}, "\n")
 }
@@ -139,13 +193,23 @@ func BuildResumePrompt(state State, why string) string {
 	return strings.Join(lines, "\n")
 }
 
-// NudgePrompt continues a forever loop. Forever loops expose no loop tool and
-// have no iteration counter.
+// NudgePrompt keeps the current iteration going after the model advanced the
+// loop itself, or continues a forever loop.
 func NudgePrompt(state State) string {
+	if state.Forever {
+		return strings.Join([]string{
+			"The forever loop remains active.",
+			"Continue working on: " + state.Goal,
+			"Only the user can stop this work session.",
+		}, "\n")
+	}
+	label := fmt.Sprintf("iteration %d", state.CurrentStep+1)
+	if state.MaxSteps > 0 {
+		label = fmt.Sprintf("pass %d/%d", state.CurrentStep+1, state.MaxSteps)
+	}
 	return strings.Join([]string{
-		"The forever loop remains active.",
+		"The loop is still active — " + label + ".",
 		"Continue working on: " + state.Goal,
-		"Only the user can stop this work session.",
 	}, "\n")
 }
 
@@ -163,32 +227,56 @@ func SystemPromptAddition(state State) string {
 			"A completion claim is being checked. Call `loop_approve` with your verdict.",
 		}, "\n")
 	}
+	if state.MaxSteps > 0 {
+		return strings.Join([]string{
+			"", "", "## Active Loop",
+			"Goal: " + state.Goal,
+			fmt.Sprintf("Pass: %d/%d", state.CurrentStep+1, state.MaxSteps),
+			"Call `loop_next` when this pass is complete.",
+			"Call `loop_done` only when the goal is fully met — a claim is confirmed in a follow-up check before the loop closes.",
+		}, "\n")
+	}
 	return strings.Join([]string{
 		"", "", "## Active Loop",
 		"Goal: " + state.Goal,
 		"Iteration: " + strconv.Itoa(state.CurrentStep+1),
 		"The loop advances automatically when you end your turn.",
+		"Call `loop_next` to end this iteration and start the next one.",
 		"Call `loop_done` only when the goal is fully met — a claim is confirmed in a follow-up check before the loop closes.",
 	}, "\n")
 }
 
-// ToolDefinition returns the one tool the current phase exposes. The model
-// never sees both tools at once, and a forever loop exposes neither.
-func ToolDefinition(state State) *provider.ToolDef {
+// ToolDefinitions returns the tools the current phase exposes. The working
+// phase gets loop_next and loop_done; the checking phase gets loop_approve
+// alone; a forever loop and an inactive loop expose none.
+func ToolDefinitions(state State) []provider.ToolDef {
 	if !state.Active || state.Forever {
 		return nil
 	}
 	if state.Evaluating {
-		def := approveToolDefinition()
-		return &def
+		return []provider.ToolDef{approveToolDefinition()}
 	}
-	def := doneToolDefinition()
-	return &def
+	return []provider.ToolDef{nextToolDefinition(), doneToolDefinition()}
 }
 
 // IsTool reports whether name is one of the loop tools.
 func IsTool(name string) bool {
-	return name == DoneToolName || name == ApproveToolName
+	return name == NextToolName || name == DoneToolName || name == ApproveToolName
+}
+
+func nextToolDefinition() provider.ToolDef {
+	return provider.ToolDef{
+		Name: NextToolName,
+		Description: "End this iteration and start the next one. " +
+			"An iteration also ends when you end your turn, so this is only needed to move on without ending the turn. " +
+			"summary: what was accomplished in this iteration (optional).",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary": map[string]any{"type": "string", "description": "What was accomplished in this iteration"},
+			},
+		},
+	}
 }
 
 func doneToolDefinition() provider.ToolDef {
@@ -234,6 +322,9 @@ type Controller struct {
 	mu    sync.Mutex
 	store *session.Store
 	state State
+	// advanced is runtime-only: the model called loop_next during the current
+	// run. A turn end must not count that iteration a second time.
+	advanced bool
 }
 
 func NewController(store *session.Store) *Controller {
@@ -243,7 +334,7 @@ func NewController(store *session.Store) *Controller {
 func (c *Controller) SetStore(store *session.Store) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.store, c.state = store, EmptyState()
+	c.store, c.state, c.advanced = store, EmptyState(), false
 	return c.reconstructLocked()
 }
 
@@ -255,6 +346,7 @@ func (c *Controller) Reconstruct() error {
 
 func (c *Controller) reconstructLocked() error {
 	c.state = EmptyState()
+	c.advanced = false
 	if c.store == nil {
 		return nil
 	}
@@ -287,6 +379,13 @@ func validState(state State) bool {
 	if state.Evaluating && (!state.Active || state.Forever) {
 		return false
 	}
+	// A count needs at least one pass and cannot combine with a forever loop.
+	if state.MaxSteps < 0 || (state.MaxSteps > 0 && state.Forever) {
+		return false
+	}
+	if state.MaxSteps > 0 && state.CurrentStep > state.MaxSteps {
+		return false
+	}
 	return true
 }
 
@@ -309,7 +408,7 @@ func (c *Controller) Start(args string) (State, error) {
 	if err := c.persistLocked(state); err != nil {
 		return State{}, err
 	}
-	c.state = state
+	c.state, c.advanced = state, false
 	return state, nil
 }
 
@@ -326,7 +425,7 @@ func (c *Controller) Stop(reason string) (State, bool, error) {
 	if err := c.persistLocked(state); err != nil {
 		return c.state, false, err
 	}
-	c.state = state
+	c.state, c.advanced = state, false
 	return state, true, nil
 }
 
@@ -408,9 +507,52 @@ func (c *Controller) HandleApprove(args map[string]any) ControlResult {
 	return ControlResult{Text: "Not confirmed. The loop stays open — keep working on the goal.", State: state}
 }
 
+// HandleNext ends the current iteration and starts the next one. A count loop
+// closes when it reaches its cap; every other loop keeps going.
+func (c *Controller) HandleNext(args map[string]any) ControlResult {
+	summary, _ := args["summary"].(string)
+	summary = strings.TrimSpace(summary)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.state.Active {
+		return ControlResult{Text: "No active loop. Start one with /loop.", State: c.state, Error: true}
+	}
+	if c.state.Forever {
+		return ControlResult{Text: "loop_next is unavailable during a forever loop.", State: c.state, Error: true}
+	}
+	if c.state.Evaluating {
+		return ControlResult{Text: "A completion claim is being checked. Wait for its verdict.", State: c.state, Error: true}
+	}
+	state := advanceState(c.state)
+	if err := c.persistLocked(state); err != nil {
+		return ControlResult{Text: "Could not save loop state: " + err.Error(), State: c.state, Error: true}
+	}
+	c.state, c.advanced = state, true
+	if state.Done {
+		return ControlResult{Text: CompletionText(state), State: state}
+	}
+	text := fmt.Sprintf("→ Continuing to iteration %d.", state.CurrentStep+1)
+	if summary != "" {
+		text += " Summary: " + summary
+	}
+	return ControlResult{Text: text, State: state}
+}
+
+// IterationPrompt is appended after loop_next so the same run starts working
+// on the iteration it moved to.
+func (c *Controller) IterationPrompt() (string, bool) {
+	state := c.Snapshot()
+	if !state.Active || state.Forever || state.Evaluating {
+		return "", false
+	}
+	return BuildPrompt(state), true
+}
+
 // ContinuePrompt advances the loop when a turn ends and returns the message
-// to append. The controller owns iteration boundaries: the model cannot
-// advance the loop itself.
+// to append. A turn end right after loop_next must not count the same
+// iteration twice: it keeps the current iteration going instead. A count loop
+// that reaches its cap appends its visible completion notice and returns no
+// continuation.
 func (c *Controller) ContinuePrompt() (messageType, content string, ok bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -420,23 +562,35 @@ func (c *Controller) ContinuePrompt() (messageType, content string, ok bool, err
 	if c.state.Forever {
 		return NudgeMessageType, NudgePrompt(c.state), true, nil
 	}
-	state := c.state
-	if state.Evaluating {
+	if c.state.Evaluating {
 		// A check turn ended without a verdict; resume rather than accepting it.
+		state := c.state
 		state.Evaluating = false
-		messageType = ResumeMessageType
-		content = BuildResumePrompt(state, "the claim was not confirmed")
-	} else {
-		state.CurrentStep++
-		messageType = IterationMessageType
-		content = BuildPrompt(state)
+		if err := c.persistLocked(state); err != nil {
+			return "", "", false, err
+		}
+		c.state = state
+		return ResumeMessageType, BuildResumePrompt(state, "the claim was not confirmed"), true, nil
 	}
+	if c.advanced {
+		// The model already advanced the loop during this run. Keep working on
+		// the iteration it moved to instead of counting it again.
+		c.advanced = false
+		return NudgeMessageType, NudgePrompt(c.state), true, nil
+	}
+	state := advanceState(c.state)
 	// Never advance in memory when the durable state could not be saved.
 	if err := c.persistLocked(state); err != nil {
 		return "", "", false, err
 	}
 	c.state = state
-	return messageType, content, true, nil
+	if state.Done {
+		if _, err := c.store.AppendCustomMessage(CompleteMessageType, CompletionText(state), true, nil); err != nil {
+			return "", "", false, err
+		}
+		return "", "", false, nil
+	}
+	return IterationMessageType, BuildPrompt(state), true, nil
 }
 
 // EvaluationPrompt is appended after a recorded claim so the same run checks
@@ -468,6 +622,9 @@ func (c *Controller) StatusLine() string {
 		return ""
 	}
 	label := fmt.Sprintf("iter %d", state.CurrentStep+1)
+	if state.MaxSteps > 0 {
+		label = fmt.Sprintf("pass %d/%d", state.CurrentStep+1, state.MaxSteps)
+	}
 	if state.Forever {
 		label = "forever"
 	} else if state.Evaluating {

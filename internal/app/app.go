@@ -467,7 +467,7 @@ Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 Inline search content requires selected and enabled fetch_content.
 Readable fetch_content may use a configured Crawl4AI fallback (crawl4aiBaseUrl) after a direct failure; raw mode is direct HTTP only.
-read_session remains available independently of tool-selection flags. loop_done/loop_approve and syncboard have separate availability checks.
+read_session remains available independently of tool-selection flags. loop_next/loop_done/loop_approve and syncboard have separate availability checks.
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. OpenAI Codex uses /login openai-codex and never falls back to an API key.
@@ -2589,9 +2589,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
 			definitions := append(tools.Definitions(defaultTools), webDefinitions...)
-			if definition := loop.ToolDefinition(state); definition != nil {
-				definitions = append(definitions, *definition)
-			}
+			definitions = append(definitions, loop.ToolDefinitions(state)...)
 			if r.syncboardAvailable() {
 				definitions = append(definitions, syncboardToolDefinition())
 			}
@@ -2611,6 +2609,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				result := r.loops.HandleApprove(invocation.Arguments)
 				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
 			},
+			loop.NextToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {
+				result := r.loops.HandleNext(invocation.Arguments)
+				return tools.Result{Content: []tools.Block{{Type: "text", Text: result.Text}}, Details: result.State, IsError: result.Error}
+			},
 			syncboardToolName:   r.syncboardInternalHandler,
 			readSessionToolName: r.readSessionHandler,
 		}
@@ -2622,6 +2624,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 				return nil
 			}
 			switch invocation.Name {
+			case loop.NextToolName:
+				// A completed count loop announces itself once; otherwise the
+				// same run starts working on the iteration it advanced to.
+				if state := r.loops.Snapshot(); state.Done {
+					_, err := r.store.AppendCustomMessage(loop.CompleteMessageType, loop.CompletionText(state), true, nil)
+					return err
+				}
+				if content, ok := r.loops.IterationPrompt(); ok {
+					_, err := r.store.AppendCustomMessage(loop.IterationMessageType, content, false, nil)
+					return err
+				}
 			case loop.DoneToolName:
 				// A recorded claim is checked in the same run: the next request
 				// must carry the confirmation prompt.

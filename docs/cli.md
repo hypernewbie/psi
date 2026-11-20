@@ -182,8 +182,9 @@ These flags apply only to the tools listed under `--tools`. Web tools honor the
 `fetch_content` also blocks `web_search` with `includeContent: true` before any
 network request; metadata-only search remains available. A readable
 `fetch_content` call may use a configured Crawl4AI fallback (`crawl4aiBaseUrl`)
-after a direct failure; `raw` mode is direct HTTP only. `loop_done`/`loop_approve`
-remains available during an active goal loop (one at a time, by phase). `read_session`
+after a direct failure; `raw` mode is direct HTTP only. `loop_next`/`loop_done` are
+available during an active goal or count loop, and `loop_approve` alone while a
+claim is checked. `read_session`
 is always available, independently of these flags, and reads bounded excerpts from
 the raw active branch, including entries hidden by compaction or context edits.
 `syncboard` remains available while the connected Phi bridge accepts that capability.

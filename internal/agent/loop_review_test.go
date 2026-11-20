@@ -30,10 +30,7 @@ func TestLoopApprovalRequiresAnAdvertisedCheckTurn(t *testing.T) {
 	cfg := Config{
 		Model: modelMeta(),
 		DynamicConfig: func() (string, []config.PromptSection, []provider.ToolDef) {
-			if def := loopctl.ToolDefinition(controller.Snapshot()); def != nil {
-				return "", nil, []provider.ToolDef{*def}
-			}
-			return "", nil, nil
+			return "", nil, loopctl.ToolDefinitions(controller.Snapshot())
 		},
 		InternalTools: map[string]InternalToolHandler{
 			loopctl.DoneToolName: func(_ context.Context, inv tools.Invocation) tools.Result {

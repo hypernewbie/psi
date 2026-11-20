@@ -16,19 +16,20 @@ func newTestController(t *testing.T) (*session.Store, *Controller) {
 	return store, NewController(store)
 }
 
-func TestParseLoopModesAndRejectsCounts(t *testing.T) {
+func TestParseLoopModesAndCounts(t *testing.T) {
 	goal, err := Parse("goal finish the migration")
-	if err != nil || !goal.Active || goal.Forever || goal.Goal != "finish the migration" {
+	if err != nil || !goal.Active || goal.Forever || goal.MaxSteps != 0 || goal.Goal != "finish the migration" {
 		t.Fatalf("goal = %+v, err=%v", goal, err)
 	}
 	forever, err := Parse("forever keep checking tests")
-	if err != nil || !forever.Active || !forever.Forever || forever.Goal != "keep checking tests" {
+	if err != nil || !forever.Active || !forever.Forever || forever.MaxSteps != 0 || forever.Goal != "keep checking tests" {
 		t.Fatalf("forever = %+v, err=%v", forever, err)
 	}
-	if _, err := Parse("3 improve the result"); err == nil || !strings.Contains(err.Error(), "exact-count") {
-		t.Fatalf("count form error = %v, want exact-count removal message", err)
+	counted, err := Parse("3 improve the result")
+	if err != nil || !counted.Active || counted.Forever || counted.MaxSteps != 3 || counted.Goal != "improve the result" {
+		t.Fatalf("count = %+v, err=%v", counted, err)
 	}
-	for _, input := range []string{"", "goal", "forever", "3abc task", "-2 task", "unknown task"} {
+	for _, input := range []string{"", "goal", "forever", "0 task", "3abc task", "-2 task", "3", "unknown task"} {
 		if _, err := Parse(input); err == nil {
 			t.Errorf("Parse(%q) accepted invalid input", input)
 		}
@@ -163,8 +164,8 @@ func TestForeverLoopHasNoToolAndCannotBeControlled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ToolDefinition(state) != nil {
-		t.Fatal("forever loop exposed a loop tool")
+	if defs := ToolDefinitions(state); len(defs) != 0 {
+		t.Fatalf("forever loop exposed loop tools: %+v", defs)
 	}
 	addition := SystemPromptAddition(state)
 	for _, tool := range []string{"loop_done", "loop_approve"} {
@@ -196,6 +197,14 @@ func TestBuildPromptAndNudgePromptAllModes(t *testing.T) {
 		t.Errorf("NudgePrompt forever = %q", np)
 	}
 
+	countState := State{Active: true, CurrentStep: 1, MaxSteps: 3, Goal: "polish"}
+	if bp := BuildPrompt(countState); !strings.Contains(bp, "Pass 2 of 3") || !strings.Contains(bp, "refinement pass") {
+		t.Errorf("BuildPrompt count = %q", bp)
+	}
+	if np := NudgePrompt(countState); !strings.Contains(np, "pass 2/3") {
+		t.Errorf("NudgePrompt count = %q", np)
+	}
+
 	goalState := State{Active: true, CurrentStep: 1, Goal: "fix bugs"}
 	bp = BuildPrompt(goalState)
 	if !strings.Contains(bp, "Iteration 2") || !strings.Contains(bp, "fix bugs") || !strings.Contains(bp, "loop_done") {
@@ -220,12 +229,19 @@ func TestSystemPromptAdditionAndToolDefinition(t *testing.T) {
 	if !strings.Contains(gotWorking, "Iteration: 1") || !strings.Contains(gotWorking, "loop_done") {
 		t.Errorf("SystemPromptAddition(working) = %q", gotWorking)
 	}
-	done := ToolDefinition(working)
-	if done == nil || done.Name != DoneToolName || done.Schema == nil {
-		t.Fatalf("working tool definition = %+v", done)
+	workingDefs := ToolDefinitions(working)
+	if len(workingDefs) != 2 || workingDefs[0].Name != NextToolName || workingDefs[1].Name != DoneToolName {
+		t.Fatalf("working tool definitions = %+v", workingDefs)
+	}
+	done := workingDefs[1]
+	if done.Schema == nil {
+		t.Fatalf("loop_done schema missing: %+v", done)
 	}
 	if required, _ := done.Schema["required"].([]string); len(required) != 1 || required[0] != "reason" {
 		t.Errorf("loop_done required = %#v", done.Schema["required"])
+	}
+	if next := workingDefs[0]; next.Schema == nil || next.Schema["required"] != nil {
+		t.Errorf("loop_next schema = %+v", next.Schema)
 	}
 
 	checking := State{Active: true, CurrentStep: 2, Goal: "ship feature", Evaluating: true, ClaimReason: "shipped"}
@@ -233,16 +249,17 @@ func TestSystemPromptAdditionAndToolDefinition(t *testing.T) {
 	if !strings.Contains(gotChecking, "Confirmation check") || !strings.Contains(gotChecking, "loop_approve") {
 		t.Errorf("SystemPromptAddition(checking) = %q", gotChecking)
 	}
-	approve := ToolDefinition(checking)
-	if approve == nil || approve.Name != ApproveToolName {
-		t.Fatalf("checking tool definition = %+v", approve)
+	checkingDefs := ToolDefinitions(checking)
+	if len(checkingDefs) != 1 || checkingDefs[0].Name != ApproveToolName {
+		t.Fatalf("checking tool definitions = %+v", checkingDefs)
 	}
+	approve := checkingDefs[0]
 	if required, _ := approve.Schema["required"].([]string); len(required) != 2 {
 		t.Errorf("loop_approve required = %#v", approve.Schema["required"])
 	}
 
-	if ToolDefinition(State{Active: false, Goal: "x"}) != nil {
-		t.Error("inactive loop exposed a tool")
+	if defs := ToolDefinitions(State{Active: false, Goal: "x"}); len(defs) != 0 {
+		t.Errorf("inactive loop exposed tools: %+v", defs)
 	}
 }
 

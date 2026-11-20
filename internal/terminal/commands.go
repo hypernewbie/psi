@@ -48,7 +48,7 @@ var commandSpecs = []CommandSpec{
 	// Embedded extensions requested for psi: adaptive compaction and the loop.
 	{Name: "ac", Description: "adaptive automatic compaction controls"},
 	{Name: "autocompact", Description: "alias for /ac"},
-	{Name: "loop", Description: "repeat work until the goal is confirmed or the user stops"},
+	{Name: "loop", Description: "repeat work until the goal is confirmed, N passes, or the user stops"},
 	{Name: "loop-stop", Description: "stop the active loop"},
 }
 
