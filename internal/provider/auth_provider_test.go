@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,7 +63,7 @@ func TestProviderAPIKeyPrecedenceAndProviderIsolation(t *testing.T) {
 	}
 }
 
-// Credentials resolves every provider from one auth.json read. The model
+// CredentialsBatch resolves every provider from one auth.json read. The model
 // lists call it once per list, so a busy login file must not cost one lock
 // wait per provider, and the resolution must keep the per-provider precedence
 // and the no-fallback rules.
@@ -75,10 +76,23 @@ func TestCredentialsResolveEveryProviderFromOneSnapshot(t *testing.T) {
 		"GEMINI_API_KEY":    "env-google",
 	}
 	configured := map[string]string{"minimax": "configured-minimax"}
+	legacyStates := func() map[string]CredentialState {
+		ids := providerregistry.IDs()
+		requests := make([]CredentialRequest, len(ids))
+		for i, id := range ids {
+			requests[i] = CredentialRequest{ProviderID: id, Key: legacyAPIKeyInput(configured[id])}
+		}
+		states := CredentialsBatch(env, path, requests)
+		out := make(map[string]CredentialState, len(states))
+		for i, id := range ids {
+			out[id] = states[i]
+		}
+		return out
+	}
 
 	// No auth.json: the environment and models.json keys still apply.
 	ResetAuthReads()
-	states := Credentials(env, path, configured, providerregistry.IDs())
+	states := legacyStates()
 	if reads := AuthReads(); reads != 1 {
 		t.Fatalf("credential resolution read auth.json %d times, want one read for every provider", reads)
 	}
@@ -92,13 +106,31 @@ func TestCredentialsResolveEveryProviderFromOneSnapshot(t *testing.T) {
 		t.Fatalf("codex without a login = %+v", state)
 	}
 
+	// One batch request can mix strict and legacy key inputs. It still reads
+	// auth.json once, and strict absence stays typed.
+	ResetAuthReads()
+	batch := CredentialsBatch(env, path, []CredentialRequest{
+		{ProviderID: "minimax", Key: legacyAPIKeyInput("configured-minimax")},
+		{ProviderID: "local-openai", Key: APIKeyInput{Strict: true}},
+	})
+	if reads := AuthReads(); reads != 1 {
+		t.Fatalf("batch credential resolution read auth.json %d times, want one read", reads)
+	}
+	if state := batch[0]; !state.Usable || state.Source != "models.json:minimax" {
+		t.Fatalf("legacy batch input = %+v", state)
+	}
+	var missing *MissingAPIKeyError
+	if state := batch[1]; state.Usable || !errors.As(state.Err, &missing) {
+		t.Fatalf("strict batch input with no key = %+v", state)
+	}
+
 	// A stored key wins over the environment, and an unsupported stored
 	// credential never falls back to the environment.
 	stored := `{"anthropic":{"type":"api_key","key":"stored-anthropic"},"google":{"type":"oauth","access":"token"},"openai-codex":{"type":"oauth","access":"dummy-access","refresh":"dummy-refresh","accountId":"synthetic-account","expires":` + fmt.Sprint(time.Now().Add(time.Hour).UnixMilli()) + `}}`
 	if err := os.WriteFile(path, []byte(stored), 0600); err != nil {
 		t.Fatal(err)
 	}
-	states = Credentials(env, path, configured, providerregistry.IDs())
+	states = legacyStates()
 	if reads := AuthReads(); reads != 2 {
 		t.Fatalf("credential resolution read auth.json %d times, want one read per call", reads)
 	}
@@ -118,7 +150,7 @@ func TestCredentialsResolveEveryProviderFromOneSnapshot(t *testing.T) {
 		if err := os.WriteFile(path, []byte(doc), 0600); err != nil {
 			t.Fatal(err)
 		}
-		states = Credentials(env, path, configured, providerregistry.IDs())
+		states = legacyStates()
 		for _, providerID := range []string{"anthropic", "minimax", "zai", "openai-codex"} {
 			if state := states[providerID]; state.Usable || state.Err == nil || !strings.Contains(state.Err.Error(), "malformed") {
 				t.Fatalf("%s with a malformed auth.json = %+v", providerID, state)

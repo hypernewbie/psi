@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -34,6 +35,12 @@ func SelectAPIKey(env map[string]string, authPath string) (key, source string, e
 // credential commands and never crosses billing sources after an unsupported
 // stored credential is found.
 func SelectProviderAPIKey(env map[string]string, authPath, providerID, configuredKey string) (key, source string, err error) {
+	return SelectProviderAPIKeyInput(env, authPath, providerID, legacyAPIKeyInput(configuredKey))
+}
+
+// SelectProviderAPIKeyInput resolves one provider's API key with the
+// models.json field presence and strictness that the caller observed.
+func SelectProviderAPIKeyInput(env map[string]string, authPath, providerID string, input APIKeyInput) (key, source string, err error) {
 	spec, builtin := providerregistry.Lookup(providerID)
 	if builtin && spec.Auth != providerregistry.AuthAPIKey && spec.Auth != providerregistry.AuthAPIKeyOrOAuth {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
@@ -44,8 +51,32 @@ func SelectProviderAPIKey(env map[string]string, authPath, providerID, configure
 		return "", "", err
 	}
 	defer ReleaseAuthEntries(entries)
-	return apiKeyFromEntries(env, entries, authPath, providerID, configuredKey)
+	return apiKeyFromEntriesInput(env, entries, authPath, providerID, input)
 }
+
+// APIKeyInput describes the models.json apiKey field for one provider.
+// Present distinguishes an omitted field from an explicit empty or null one.
+// Strict rejects a consulted blank value, and a whitespace-only resolution,
+// instead of treating it as an absent credential.
+type APIKeyInput struct {
+	Value   string
+	Present bool
+	Strict  bool
+}
+
+// legacyAPIKeyInput keeps the callers that only pass a string on the old
+// policy: an empty configured value is omitted, never invalid.
+func legacyAPIKeyInput(value string) APIKeyInput {
+	return APIKeyInput{Value: value, Present: value != ""}
+}
+
+// MissingAPIKeyError reports genuine absence after every configured source was
+// consulted. Callers may grant a keyless request only for this typed result.
+type MissingAPIKeyError struct {
+	Message string
+}
+
+func (e *MissingAPIKeyError) Error() string { return e.Message }
 
 // resolveAuthPath uses the agent directory when the caller has no path.
 func resolveAuthPath(env map[string]string, authPath string) string {
@@ -98,10 +129,11 @@ func authPathAbsent(path string, err error) bool {
 	return errors.Is(statErr, os.ErrNotExist)
 }
 
-// apiKeyFromEntries resolves one provider's API key from one auth.json
+// apiKeyFromEntriesInput resolves one provider's API key from one auth.json
 // snapshot. It keeps the precedence and the no-fallback rules of
-// SelectProviderAPIKey.
-func apiKeyFromEntries(env map[string]string, entries map[string]json.RawMessage, authPath, providerID, configuredKey string) (key, source string, err error) {
+// SelectProviderAPIKey. A stored or configured credential is validated before
+// any lower-priority source is consulted.
+func apiKeyFromEntriesInput(env map[string]string, entries map[string]json.RawMessage, authPath, providerID string, input APIKeyInput) (key, source string, err error) {
 	spec, builtin := providerregistry.Lookup(providerID)
 	if builtin && spec.Auth != providerregistry.AuthAPIKey && spec.Auth != providerregistry.AuthAPIKeyOrOAuth {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
@@ -139,6 +171,9 @@ func apiKeyFromEntries(env map[string]string, entries map[string]json.RawMessage
 		if err != nil {
 			return "", "", credentialError(providerID, err)
 		}
+		if input.Strict && strings.TrimSpace(key) == "" {
+			return "", "", credentialError(providerID, fmt.Errorf("auth.json %s API key is blank", providerID))
+		}
 		return key, "auth.json:" + providerID, nil
 	}
 	if providerID == "anthropic" {
@@ -146,28 +181,34 @@ func apiKeyFromEntries(env map[string]string, entries map[string]json.RawMessage
 			return "", "", fmt.Errorf("Anthropic OAuth subscription credentials are unsupported; no silent API-key fallback")
 		}
 	}
-	if configuredKey != "" {
-		key, err := config.ResolveCredentialWithEnv(configuredKey, envLookup(env))
+	if input.Present {
+		if input.Strict && strings.TrimSpace(input.Value) == "" {
+			return "", "", fmt.Errorf("models.json %s API key is empty", providerID)
+		}
+		key, err := config.ResolveCredentialWithEnv(input.Value, envLookup(env))
 		if err != nil {
 			return "", "", credentialError(providerID, err)
 		}
-		if key == "" {
+		if key == "" || (input.Strict && strings.TrimSpace(key) == "") {
 			return "", "", fmt.Errorf("models.json %s API key is empty", providerID)
 		}
 		return key, "models.json:" + providerID, nil
 	}
 	if builtin {
-		if key := env[spec.Environment]; key != "" {
-			return key, spec.Environment, nil
+		if value, present := env[spec.Environment]; present && (value != "" || input.Strict) {
+			if input.Strict && strings.TrimSpace(value) == "" {
+				return "", "", fmt.Errorf("%s is blank", spec.Environment)
+			}
+			return value, spec.Environment, nil
 		}
 	}
 	if providerID == "anthropic" {
-		return "", "", fmt.Errorf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)
+		return "", "", &MissingAPIKeyError{Message: fmt.Sprintf("no Anthropic credential: set ANTHROPIC_API_KEY or add an API-key entry to %s", authPath)}
 	}
 	if !builtin {
-		return "", "", fmt.Errorf("no %s credential: add an API-key entry to auth.json or configure providers.%s.apiKey in models.json", providerID, providerID)
+		return "", "", &MissingAPIKeyError{Message: fmt.Sprintf("no %s credential: add an API-key entry to auth.json or configure providers.%s.apiKey in models.json", providerID, providerID)}
 	}
-	return "", "", fmt.Errorf("no %s credential: set %s, add an API-key entry to auth.json, or configure providers.%s.apiKey in models.json", spec.Name, spec.Environment, providerID)
+	return "", "", &MissingAPIKeyError{Message: fmt.Sprintf("no %s credential: set %s, add an API-key entry to auth.json, or configure providers.%s.apiKey in models.json", spec.Name, spec.Environment, providerID)}
 }
 
 // CredentialState is one provider's resolved credential.
@@ -184,63 +225,72 @@ type CredentialState struct {
 	Err error
 }
 
-// Credentials resolves every provider's credential from one consistent
-// auth.json read. Reading once keeps the model lists fast and gives every
-// provider the same view of the login file, so a busy lock cannot stall the
-// list once per provider. The provider list is the effective set: the
-// built-in providers plus the providers models.json declares.
-func Credentials(env map[string]string, authPath string, configured map[string]string, providerIDs []string) map[string]CredentialState {
+// CredentialRequest asks for one provider credential with the models.json key
+// input that applies to its models.
+type CredentialRequest struct {
+	ProviderID string
+	Key        APIKeyInput
+}
+
+// CredentialsBatch resolves each request from one consistent auth.json read
+// and returns the states in request order. Reading once keeps the model lists
+// fast and gives every provider the same view of the login file, so a busy
+// lock cannot stall the list once per provider. Each request may use a
+// different key input because one provider can declare models with different
+// credential policies.
+func CredentialsBatch(env map[string]string, authPath string, requests []CredentialRequest) []CredentialState {
 	authPath = resolveAuthPath(env, authPath)
 	entries, readErr := AuthEntries(authPath)
 	if readErr == nil {
 		defer ReleaseAuthEntries(entries)
 	}
-	out := map[string]CredentialState{}
-	for _, providerID := range providerIDs {
+	out := make([]CredentialState, len(requests))
+	for i, request := range requests {
+		providerID := request.ProviderID
 		spec, builtin := providerregistry.Lookup(providerID)
 		if builtin {
 			switch spec.Auth {
 			case providerregistry.AuthCodexOAuth:
 				if readErr != nil {
-					out[providerID] = CredentialState{Err: readErr}
+					out[i] = CredentialState{Err: readErr}
 					continue
 				}
 				if err := codexCredentialCheck(entries); err != nil {
-					out[providerID] = CredentialState{Err: err}
+					out[i] = CredentialState{Err: err}
 					continue
 				}
-				out[providerID] = CredentialState{Usable: true, Source: "auth.json:" + providerID}
+				out[i] = CredentialState{Usable: true, Source: "auth.json:" + providerID}
 			case providerregistry.AuthAPIKeyOrOAuth:
 				if readErr != nil {
-					out[providerID] = CredentialState{Err: readErr}
+					out[i] = CredentialState{Err: readErr}
 					continue
 				}
-				out[providerID] = openAICredentialState(env, entries, authPath, configured[providerID])
+				out[i] = openAICredentialStateAt(env, entries, authPath, request.Key, time.Now())
 			case providerregistry.AuthAPIKey:
 				if readErr != nil {
-					out[providerID] = CredentialState{Err: readErr}
+					out[i] = CredentialState{Err: readErr}
 					continue
 				}
-				_, source, err := apiKeyFromEntries(env, entries, authPath, providerID, configured[providerID])
+				_, source, err := apiKeyFromEntriesInput(env, entries, authPath, providerID, request.Key)
 				if err != nil {
-					out[providerID] = CredentialState{Err: err}
+					out[i] = CredentialState{Err: err}
 					continue
 				}
-				out[providerID] = CredentialState{Usable: true, Source: source}
+				out[i] = CredentialState{Usable: true, Source: source}
 			}
 			continue
 		}
 		// A provider that models.json declares uses an API key only.
 		if readErr != nil {
-			out[providerID] = CredentialState{Err: readErr}
+			out[i] = CredentialState{Err: readErr}
 			continue
 		}
-		_, source, err := apiKeyFromEntries(env, entries, authPath, providerID, configured[providerID])
+		_, source, err := apiKeyFromEntriesInput(env, entries, authPath, providerID, request.Key)
 		if err != nil {
-			out[providerID] = CredentialState{Err: err}
+			out[i] = CredentialState{Err: err}
 			continue
 		}
-		out[providerID] = CredentialState{Usable: true, Source: source}
+		out[i] = CredentialState{Usable: true, Source: source}
 	}
 	return out
 }

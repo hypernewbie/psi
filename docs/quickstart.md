@@ -70,10 +70,14 @@ unconfirmed. This does not remove environment variables or credentials in
 `models.json`. If Pi uses the same `auth.json`, its next successful read sees
 the deletion.
 
-Use `/model` to select a provider and model with a usable credential. Providers
-without a credential are not listed. A provider that `models.json` declares
-uses a key from `auth.json` or from its `apiKey` entry instead. The `--provider`
-and `--model` options accept the exact IDs shown by `/model`.
+Use `/model` to select a provider and model. The picker excludes models
+with invalid credentials and models that require a key but have none. A provider that `models.json`
+declares uses a key from `auth.json` or from its `apiKey` entry instead, unless
+it uses an eligible keyless protocol. Custom providers may omit the key for
+`openai-completions`, `openai-responses`, and `anthropic-messages`; built-in
+`openai` and `anthropic` may omit it only on an explicit non-default `baseUrl`
+override. The `--provider` and `--model` options accept the exact IDs shown by
+`/model`.
 
 Model lists come from the bundled public snapshot and Pi's local cache. Psi
 does not fetch catalogs from the network. OpenCode Go's API and endpoint are

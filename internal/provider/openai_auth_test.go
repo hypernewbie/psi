@@ -57,7 +57,7 @@ func TestOpenAICredentialPrecedenceAndAbsentFallback(t *testing.T) {
 	path := filepath.Join(dir, "auth.json")
 	writeAuthDoc(t, path, `{"openai":{"type":"api_key","key":"stored-openai-key"}}`)
 	env := map[string]string{"OPENAI_API_KEY": "env-openai-key"}
-	auth := &OpenAIAuth{Path: path, Env: env, ConfiguredKey: "configured-openai-key"}
+	auth := &OpenAIAuth{Path: path, Env: env, ConfiguredKey: legacyAPIKeyInput("configured-openai-key")}
 	if err := auth.Check(); err != nil {
 		t.Fatalf("stored API key Check: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestOpenAICredentialPrecedenceAndAbsentFallback(t *testing.T) {
 	if key, err := auth.Get(context.Background()); err != nil || key != "configured-openai-key" {
 		t.Fatalf("configured fallback = %q, %v", key, err)
 	}
-	auth.ConfiguredKey = ""
+	auth.ConfiguredKey = APIKeyInput{}
 	if key, err := auth.Get(context.Background()); err != nil || key != "env-openai-key" {
 		t.Fatalf("environment fallback = %q, %v", key, err)
 	}
@@ -92,7 +92,7 @@ func TestOpenAICredentialPrecedenceAndAbsentFallback(t *testing.T) {
 		t.Fatal("absent credential lookup created state")
 	}
 	missingFile := filepath.Join(t.TempDir(), "auth.json")
-	absentFile := &OpenAIAuth{Path: missingFile, Env: env, ConfiguredKey: "configured-key"}
+	absentFile := &OpenAIAuth{Path: missingFile, Env: env, ConfiguredKey: legacyAPIKeyInput("configured-key")}
 	if err := absentFile.Check(); err != nil {
 		t.Fatalf("missing file Check: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestOpenAICredentialPrecedenceAndAbsentFallback(t *testing.T) {
 		`{"openai":{"type":"oauth","access":"expired","refresh":"r","expires":"not-a-number","clientId":"cid"}}`,
 	} {
 		writeAuthDoc(t, path, doc)
-		blocked := &OpenAIAuth{Path: path, Env: env, ConfiguredKey: "configured-fallback", HTTP: &http.Client{Transport: tokenTransportFunc(func(*http.Request) (*http.Response, error) {
+		blocked := &OpenAIAuth{Path: path, Env: env, ConfiguredKey: legacyAPIKeyInput("configured-fallback"), HTTP: &http.Client{Transport: tokenTransportFunc(func(*http.Request) (*http.Response, error) {
 			t.Error("invalid stored credential attempted refresh")
 			return nil, errors.New("unexpected refresh")
 		})}}
@@ -133,7 +133,7 @@ func TestOpenAIDanglingAuthSymlinkDoesNotPermitFallback(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "missing.json"), path); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	auth := &OpenAIAuth{Path: path, ConfiguredKey: "synthetic-fallback-key"}
+	auth := &OpenAIAuth{Path: path, ConfiguredKey: legacyAPIKeyInput("synthetic-fallback-key")}
 	if err := auth.Check(); err == nil {
 		t.Error("local check treated the broken symlink as absent")
 	}
@@ -332,7 +332,7 @@ func TestOpenAIRefreshFailuresDoNotFallbackOrRewrite(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "auth.json")
 		writeAuthDoc(t, path, openAIDoc("expired-access", "stored-refresh", 1, "issued-client"))
 		fake := &openAIFakeToken{}
-		auth := &OpenAIAuth{Path: path, HTTP: &http.Client{Transport: fake}, Env: map[string]string{"OPENAI_API_KEY": "env-fallback"}, ConfiguredKey: "configured-fallback"}
+		auth := &OpenAIAuth{Path: path, HTTP: &http.Client{Transport: fake}, Env: map[string]string{"OPENAI_API_KEY": "env-fallback"}, ConfiguredKey: legacyAPIKeyInput("configured-fallback")}
 		return path, auth, fake
 	}
 	t.Run("failed exchange", func(t *testing.T) {

@@ -104,6 +104,14 @@ precede `models.json` credentials, then the selected provider's environment vari
 A provider that `models.json` declares has no environment variable: its key
 comes from `auth.json` or from its `apiKey` entry.
 
+A custom provider that uses `openai-completions`, `openai-responses`, or
+`anthropic-messages` can omit the key. Built-in `openai` and `anthropic` can
+omit it only when an explicit provider or model `baseUrl` selects a non-default
+endpoint. An omitted key sends no generated `Authorization` or `x-api-key`
+header; explicit `headers` still apply, and `authHeader: true` still needs a
+key. A blank, malformed, or unsupported credential stops selection instead of
+falling back to a keyless request. See [Providers](providers.md#optional-keys).
+
 An unsupported stored auth type stops key selection instead of silently changing
 the billing path. Codex uses its OAuth entry and never falls back to an API key.
 
@@ -117,9 +125,9 @@ Psi reads the cache at startup and uses it only when it is newer than the bundle
 After Pi updates the cache, restart Psi to load the new data.
 Explicit models and overrides in `models.json` take precedence over the cache.
 `/model` searches the local catalog and configured models without a network request.
-It lists only models the session can use: a provider without a credential in `auth.json`, `models.json`, or its environment variable does not appear, and neither does a model whose request cannot be built.
+It lists only models the session can use: a provider without a usable credential does not appear, and neither does a model whose request cannot be built. A custom provider on an eligible protocol, or a built-in `openai`/`anthropic` non-default override, can be usable without a key; other providers need one.
 The bridge `pi.models.v1` list and the RPC `get_available_models` command apply the same rule.
-`--list-models` reports every catalog entry that passes activation, including models whose provider is not logged in; unlike `/model`, it does not apply the request-construction filter.
+`--list-models` reports every catalog entry that passes activation, including models whose provider is not logged in; unlike `/model`, it does not apply the request-construction filter. It does not promise that a listed model can make a request.
 
 Provider model lists change over time. Use `/model` to select a model in the local catalog. Do not assume that an example model ID is present or available. OpenCode Go models select their own registered API and catalog endpoint.
 

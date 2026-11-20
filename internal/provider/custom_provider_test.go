@@ -93,11 +93,14 @@ func TestCredentialsCoverConfiguredProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	ResetAuthReads()
-	states := Credentials(map[string]string{}, path, map[string]string{}, []string{"local"})
+	states := CredentialsBatch(map[string]string{}, path, []CredentialRequest{{ProviderID: "local", Key: legacyAPIKeyInput("")}})
 	if reads := AuthReads(); reads != 1 {
 		t.Fatalf("credential resolution read auth.json %d times", reads)
 	}
-	state := states["local"]
+	if len(states) != 1 {
+		t.Fatalf("batch returned %d states, want one", len(states))
+	}
+	state := states[0]
 	if !state.Usable || state.Source != "auth.json:local" {
 		t.Fatalf("configured provider credential = %+v", state)
 	}

@@ -36,8 +36,9 @@ eleven otherwise.
 - `pi.state.v2`: state snapshots (session, leaf, model, thinking, optional
   context telemetry, optional compact readiness) and replies to
   `StateRequest`.
-- `pi.models.v1`: list the live session's selectable models (providers with a
-  usable credential only, like `/model`) and switch the live model.
+- `pi.models.v1`: list the live session's selectable models (usable-credential
+  only, like `/model`; an eligible keyless endpoint counts as usable) and switch
+  the live model.
 - `pi.thinking.v1`: list the live model's advertised thinking levels and
   switch. A switch accepts any of `off`, `minimal`, `low`, `medium`, `high`,
   `xhigh`, and `max`; the provider clamps a level the model does not advertise
