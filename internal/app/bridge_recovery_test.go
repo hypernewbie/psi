@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/agent"
-	pibridgepb "psi/internal/pibridge/pb"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/agent"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func recoveryInput(bytes uint64) agent.UserInput {

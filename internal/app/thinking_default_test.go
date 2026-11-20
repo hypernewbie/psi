@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // newThinkingRuntime builds a runtime for thinking-default tests. The seed runs

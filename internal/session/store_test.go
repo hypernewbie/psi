@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 func TestOpenFileRecoversPastTornInteriorRecord(t *testing.T) {

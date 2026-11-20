@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"psi/internal/event"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // P2-003: resume must display conversation through every entry point.

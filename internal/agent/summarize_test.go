@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func TestSummaryOutputTokenLimitMatchesPi(t *testing.T) {

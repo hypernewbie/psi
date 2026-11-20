@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestActualAppACCommandsAndAlias(t *testing.T) {

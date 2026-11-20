@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestTranscriptGapUsesCommittedRowsAndPendingFrames(t *testing.T) {

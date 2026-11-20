@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestActualAppPiStyleInitialPromptAndSessionNameFlags(t *testing.T) {

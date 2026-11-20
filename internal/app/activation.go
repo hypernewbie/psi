@@ -3,7 +3,7 @@ package app
 import (
 	"fmt"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // Activation transaction (P2-012, Section 6.4). Every path uses one code path:

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/agent"
-	"psi/internal/pibridge"
-	pibridgepb "psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/pibridge"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 func reloadRequest(id, session, leaf, provider, model string, runID, ctxRev *uint64) *pibridgepb.PhiToPi {

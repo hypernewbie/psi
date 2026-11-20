@@ -9,8 +9,8 @@ import (
 	goruntime "runtime"
 	"testing"
 
-	"psi/internal/config"
-	pibridgepb "psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/config"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // A browser launcher may start children that keep its stdout/stderr open.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 const (

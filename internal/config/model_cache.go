@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 //go:embed data/catalog-source.json

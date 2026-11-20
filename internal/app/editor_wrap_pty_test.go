@@ -16,7 +16,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 const (

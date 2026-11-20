@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // TestActualAppShowsLiveThinkingAndCollapsesItWithCtrlT is the end-to-end

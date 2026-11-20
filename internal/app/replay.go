@@ -3,9 +3,9 @@ package app
 import (
 	"strings"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // toolBatchSpacing keeps adjacent calls compact and separates the next block.

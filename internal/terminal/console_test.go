@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil"
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 func newTestConsole(w, h int) (*Console, *testutil.VTModel, *bytes.Buffer) {

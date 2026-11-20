@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	"psi/internal/testutil/leakcheck"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func TestThemeStateReloadIsTransactionalAndRetainsLastGoodSnapshot(t *testing.T) {

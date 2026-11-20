@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // oauthRevokeURL is the fixed OpenAI token-revocation endpoint used by Codex

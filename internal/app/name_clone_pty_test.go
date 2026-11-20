@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestActualAppNameAndCloneCommands(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/modelmeta"
 )
 
 func completionCompat(t *testing.T, fields map[string]any) modelmeta.Compat {

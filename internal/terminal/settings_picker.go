@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // SettingsValue is one selectable value for a settings row.

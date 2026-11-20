@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/agent"
-	"psi/internal/config"
-	"psi/internal/pibridge"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/skills"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/pibridge"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/skills"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // bridgeModelLimit caps one catalog answer. Phi marks such a list truncated

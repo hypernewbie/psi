@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/provider"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // TestLiveSettingsApplyAtTheNextTurnBoundary proves that a live configuration

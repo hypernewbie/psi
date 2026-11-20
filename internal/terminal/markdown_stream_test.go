@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func renderMarkdownChunks(chunks []string, width int) ([]string, int, *MarkdownStream) {

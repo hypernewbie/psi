@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 const contextUsageAPIKey = "synthetic-context-usage-key"

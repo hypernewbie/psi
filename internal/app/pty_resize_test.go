@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"psi/internal/terminal"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestActualAppPTYResize(t *testing.T) {

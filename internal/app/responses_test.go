@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/modelmeta"
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func TestConfigureDispatchesOpenCodeResponsesWithProviderKey(t *testing.T) {

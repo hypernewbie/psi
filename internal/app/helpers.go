@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/providerregistry"
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func modelSelector(r *runtime) *Selector {

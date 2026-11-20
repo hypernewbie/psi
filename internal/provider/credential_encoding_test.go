@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"psi/internal/config"
+	"github.com/hypernewbie/psi/internal/config"
 )
 
 func TestEncodeCredentialLiteralPiAndJSONEscaping(t *testing.T) {

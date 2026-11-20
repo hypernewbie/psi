@@ -5,8 +5,8 @@ import (
 	"math"
 	"strings"
 
-	"psi/internal/event"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/event"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // FormatToolRowsWithDisplay renders one tool block at the current width. Web

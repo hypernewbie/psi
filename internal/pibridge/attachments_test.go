@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 func TestAttachmentRequestDispatchCopiesRefs(t *testing.T) {

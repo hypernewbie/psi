@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 func TestFakeProvider(t *testing.T) {

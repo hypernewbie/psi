@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // OpenAI Codex sign-in constants. The client ID, token endpoint, credential

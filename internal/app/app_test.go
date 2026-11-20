@@ -23,13 +23,13 @@ import (
 
 	"github.com/creack/pty"
 
-	"psi/internal/agent"
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/providerregistry"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestParseBoundary(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestActualAppPTYProviderToolCycleAndRestart(t *testing.T) {

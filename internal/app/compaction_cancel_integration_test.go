@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestActualCompactionCancellationKeepsSessionWithoutCheckpoint(t *testing.T) {

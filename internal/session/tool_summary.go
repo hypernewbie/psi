@@ -1,8 +1,8 @@
 package session
 
 import (
-	"psi/internal/event"
-	toolsummary "psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	toolsummary "github.com/hypernewbie/psi/internal/tools"
 )
 
 const maxToolSummariesPerEntry = 64

@@ -4,8 +4,8 @@ import (
 	"io"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func TestCycleModelWhenCurrentIsUnavailable(t *testing.T) {

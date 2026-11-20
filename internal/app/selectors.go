@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // Selector owns a stable, searchable collection. The regular-mode picker uses

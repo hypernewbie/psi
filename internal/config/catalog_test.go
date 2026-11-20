@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"psi/internal/modelmeta"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // P2-069,070,071,075: catalog snapshot, request construction, thinking, accounting.

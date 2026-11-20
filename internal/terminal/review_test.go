@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func reviewConsole() (*Console, *testutil.VTModel, *bytes.Buffer) {

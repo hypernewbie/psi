@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 func TestCommandMetadataDescribesAuthenticationCommands(t *testing.T) {

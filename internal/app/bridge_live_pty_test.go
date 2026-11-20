@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 func TestBridgeProcessLiveSettingsNextRequest(t *testing.T) {

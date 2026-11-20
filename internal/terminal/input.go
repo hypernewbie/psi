@@ -5,7 +5,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // Decoder is the bounded input state machine (P2-018).

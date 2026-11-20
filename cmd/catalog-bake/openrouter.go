@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // OpenRouter's default model listing. Only the fields the projection consumes

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 var errPoison = errors.New("injected storage failure")

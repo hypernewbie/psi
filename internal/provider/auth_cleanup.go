@@ -3,7 +3,7 @@ package provider
 import (
 	"encoding/json"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // releaseRawEntries wipes and removes every owned raw-message value. It must

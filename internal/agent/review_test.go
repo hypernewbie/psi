@@ -10,10 +10,10 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 type reviewProvider func(context.Context, provider.Request, func(provider.Delta)) (*provider.Response, error)

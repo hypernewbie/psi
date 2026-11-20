@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/ac"
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/ac"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func TestAdaptiveCompactionRunsBeforeNextToolTurn(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/secretmem"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func startSecretTest(t *testing.T) (*Console, *testutil.VTModel, *bytes.Buffer) {

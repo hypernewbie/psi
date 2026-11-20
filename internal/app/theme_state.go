@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/terminal"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/terminal"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func resolveCLIThemePaths(cwd string, paths []string) []string {

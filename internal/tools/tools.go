@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 // Names in the supported subset.

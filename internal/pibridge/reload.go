@@ -1,7 +1,7 @@
 package pibridge
 
 import (
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // ReloadExpect is the identity a reload request was admitted against.

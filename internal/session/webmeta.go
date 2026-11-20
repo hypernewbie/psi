@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 const (

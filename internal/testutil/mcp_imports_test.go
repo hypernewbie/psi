@@ -33,11 +33,28 @@ func TestMCPSDKImportBoundaryFixtures(t *testing.T) {
 	if err := checkMCPSDKImports(source); err == nil || !strings.HasPrefix(err.Error(), forbidden+" imports ") {
 		t.Fatalf("production SDK import outside internal/mcp was not rejected: %v", err)
 	}
+	delete(source, forbidden)
+
+	// The command lives at the module root, so root Go files need the same rule.
+	source["main.go"] = &fstest.MapFile{Data: []byte("package main\nimport \"github.com/modelcontextprotocol/go-sdk/mcp\"\n")}
+	if err := checkMCPSDKImports(source); err == nil || !strings.HasPrefix(err.Error(), "main.go imports ") {
+		t.Fatalf("root package main SDK import was not rejected: %v", err)
+	}
 }
 
 func checkMCPSDKImports(source fs.FS) error {
 	const sdkModule = "github.com/modelcontextprotocol/go-sdk"
-	for _, root := range []string{"cmd", "internal"} {
+	roots := []string{"cmd", "internal"}
+	rootEntries, err := fs.ReadDir(source, ".")
+	if err != nil {
+		return err
+	}
+	for _, entry := range rootEntries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
+			roots = append(roots, entry.Name())
+		}
+	}
+	for _, root := range roots {
 		if err := fs.WalkDir(source, root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err

@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/agent"
-	"psi/internal/pibridge"
-	pibridgepb "psi/internal/pibridge/pb"
-	"psi/internal/session"
-	"psi/internal/skills"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/pibridge"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/skills"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func skillsRequest(id string) *pibridgepb.PhiToPi {

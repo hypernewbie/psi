@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // The startup banner shows psi's Ψ mark with the version on its baseline,

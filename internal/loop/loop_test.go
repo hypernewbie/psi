@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func newTestController(t *testing.T) (*session.Store, *Controller) {

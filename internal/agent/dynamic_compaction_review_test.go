@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func TestDynamicToolsRefreshBeforeFirstRequestAfterCompaction(t *testing.T) {

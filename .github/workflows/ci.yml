@@ -32,7 +32,7 @@ jobs:
       - name: gofmt
         shell: bash
         run: |
-          unformatted=$(gofmt -l cmd internal docs)
+          unformatted=$(gofmt -l ./*.go cmd internal docs)
           if [ -n "$unformatted" ]; then
             echo "Files need gofmt:"
             echo "$unformatted"

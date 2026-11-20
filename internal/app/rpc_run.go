@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/session"
-	"psi/internal/skills"
-	"psi/internal/terminal"
-	"psi/internal/webaccess"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/skills"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/webaccess"
 )
 
 // activateSession loads the console-free core of startup: tool defaults, the

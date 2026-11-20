@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"testing"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 var testPNG = append(append([]byte{}, pngMagic...), 0x00, 0x01, 0x02, 0x03)

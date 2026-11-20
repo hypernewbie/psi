@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/provider"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // TestLiveGroqBake proves the fetch, normalization, validation, serialization,

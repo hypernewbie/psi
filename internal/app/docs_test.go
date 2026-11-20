@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/docs"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/docs"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestParseDocsFlag(t *testing.T) {

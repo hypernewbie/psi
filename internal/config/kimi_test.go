@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // Kimi For Coding ships with the bundled public catalog and uses the Chat

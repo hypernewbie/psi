@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // P2-094: terminal matrix — no-color, synchronized fallback, resize, selection, scrollback.

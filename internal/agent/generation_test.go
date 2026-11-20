@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // TestFailedContextSendsNoRequest corrupts a persisted payload and requires

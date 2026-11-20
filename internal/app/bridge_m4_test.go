@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/agent"
-	"psi/internal/pibridge"
-	pibridgepb "psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/pibridge"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 func compactRequest(id, session, leaf, provider, model string) *pibridgepb.PhiToPi {

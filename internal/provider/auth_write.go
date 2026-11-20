@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/providerregistry"
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 const (

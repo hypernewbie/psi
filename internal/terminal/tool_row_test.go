@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 func TestToolRowKeepsPreviewAndOutcomeOnOneBoundedLine(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func batchDetails(t *testing.T, result tools.Result) map[string]any {

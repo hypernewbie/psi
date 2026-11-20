@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func markdownHeadingTheme(t *testing.T, color string) *pitheme.Theme {

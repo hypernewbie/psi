@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // queuedLoop is the smallest loop that can deliver queued input: delivery only

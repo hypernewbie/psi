@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func sessionUsage(usage provider.Usage) session.Usage {

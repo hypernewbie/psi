@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func TestActivationReplayRetainsCompletedMessageSource(t *testing.T) {

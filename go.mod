@@ -1,4 +1,4 @@
-module psi
+module github.com/hypernewbie/psi
 
 go 1.25.0
 

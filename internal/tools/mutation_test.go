@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 // Parallel-plan tool tests: the shared mutation queue orders same-file

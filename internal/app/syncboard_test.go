@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/pibridge"
+	"github.com/hypernewbie/psi/internal/pibridge"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // Validation rejects operation/input mismatches before any bridge work, with

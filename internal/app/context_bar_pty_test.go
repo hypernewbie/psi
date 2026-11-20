@@ -14,8 +14,8 @@ import (
 
 	"github.com/creack/pty"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // contextBarTrackCells returns the track width between the bar brackets.

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"psi/internal/event"
-	"psi/internal/pibridge"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/pibridge"
 )
 
 func TestRunOutcomeOf(t *testing.T) {

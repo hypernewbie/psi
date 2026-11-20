@@ -3,7 +3,7 @@ package terminal
 import (
 	"strings"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // PickerMode selects how the picker region is composed.

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/session"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func TestActualStartupUsesUnmodifiedPiDarkAndLightThemes(t *testing.T) {

@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/skills"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/skills"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // P2-051, P2-082: declined project resources cannot enter prompt via later activation.

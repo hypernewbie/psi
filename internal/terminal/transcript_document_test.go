@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 // fullClear is the retained-document rebuild sequence: clear viewport, home,

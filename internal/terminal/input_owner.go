@@ -1,6 +1,6 @@
 package terminal
 
-import "psi/internal/secretmem"
+import "github.com/hypernewbie/psi/internal/secretmem"
 
 // Release wipes the owned payload and detaches it from this Input. Borrowed
 // inputs are left untouched. Copies alias the same payload: after an ownership

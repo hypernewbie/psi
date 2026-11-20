@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // OpenAI Codex device sign-in endpoints and bounds. The client ID, token

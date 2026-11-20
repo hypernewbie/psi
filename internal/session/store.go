@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 // Store owns mutation of one active session. One goroutine owns mutation;

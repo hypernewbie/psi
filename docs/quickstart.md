@@ -1,13 +1,33 @@
 # Quickstart (matches binary)
 
-Build with Go alone (no Node, npm, or Pi packages):
+Install with Go 1.25 or later (no Node, npm, or Pi packages). Go installation
+requires psi v0.5.0 or later:
 
 ```sh
-go build -o psi ./cmd/psi
+go install github.com/hypernewbie/psi@latest
+psi --help
+```
+
+The install directory must be on `PATH`. Find it with `go env GOBIN`. If that
+prints nothing, use `bin` under the first directory from `go env GOPATH`.
+
+To build from a checkout instead:
+
+```sh
+go build -o psi .
 ./psi --help
 ./psi --version
 ./psi
 ```
+
+On Windows, build and run as:
+
+```sh
+go build -o psi.exe .
+.\psi.exe --help
+```
+
+When an example below uses `./psi`, use `psi` if you installed the binary.
 
 ## Add a credential
 

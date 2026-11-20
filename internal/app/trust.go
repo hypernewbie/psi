@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // Project trust follows pi's project-trust contract:

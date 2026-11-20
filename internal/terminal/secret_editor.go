@@ -7,7 +7,7 @@ import (
 
 	"github.com/rivo/uniseg"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // secretNavigationWidth matches the wrapped-draft width used by Editor.HandleKey.

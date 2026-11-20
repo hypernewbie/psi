@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestStreamFragmentKeepsEditorFooterAndStableScrollback(t *testing.T) {

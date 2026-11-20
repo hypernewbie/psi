@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func TestReplayHonorsNoColorAndUsesCompactMetadataRole(t *testing.T) {

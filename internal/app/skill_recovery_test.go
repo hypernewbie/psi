@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"psi/internal/agent"
-	"psi/internal/event"
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 // A failed stream must keep skill queues out of storage and the provider, then

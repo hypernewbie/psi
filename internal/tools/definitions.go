@@ -1,6 +1,6 @@
 package tools
 
-import "psi/internal/provider"
+import "github.com/hypernewbie/psi/internal/provider"
 
 // Definitions declares the actual inputs accepted by the four built-in tools.
 // The same declarations are persisted in system messages and sent to the model.

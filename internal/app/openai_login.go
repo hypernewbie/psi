@@ -4,9 +4,9 @@ import (
 	"context"
 	"path/filepath"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // runOpenAILogin executes one attempt: device identity, baseline, browser

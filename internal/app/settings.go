@@ -11,11 +11,11 @@ import (
 	"strconv"
 	"strings"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // settingsEntry is one live setting. persist is nil for session-only rows.

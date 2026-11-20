@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func openAISyntheticEvent(event string, payload map[string]any) string {

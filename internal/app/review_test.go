@@ -27,10 +27,10 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // Explicit test flag, never an inherited environment switch. Every launch

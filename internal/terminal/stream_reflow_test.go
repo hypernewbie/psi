@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestResizeReflowsStableAndActiveMarkdownWithoutDuplication(t *testing.T) {

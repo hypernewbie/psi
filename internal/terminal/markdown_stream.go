@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 const maxMarkdownActiveSource = 64 * 1024

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"psi/internal/app"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/app"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 var version = "0.4.0"

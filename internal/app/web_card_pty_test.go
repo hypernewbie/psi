@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // Fixture text for the web card PTY regressions. The title is distinct so the

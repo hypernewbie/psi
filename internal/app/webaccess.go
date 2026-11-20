@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"psi/internal/agent"
-	"psi/internal/provider"
-	"psi/internal/tools"
-	"psi/internal/webaccess"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/webaccess"
 )
 
 // loadWebAccess reads the plugin configuration once per runtime. Callers must

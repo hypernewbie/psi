@@ -3,8 +3,8 @@ package terminal
 import (
 	"strings"
 
-	"psi/internal/skills"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/skills"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // formatSkillInvocation renders Pi's skill block as its custom message group,

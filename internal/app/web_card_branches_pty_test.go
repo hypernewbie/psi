@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // batchWebPage serves the ordered batch URLs. The held response proves the

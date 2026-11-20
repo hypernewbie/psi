@@ -47,7 +47,7 @@ if [ "$no_js_only" = true ]; then
   exit 0
 fi
 
-unformatted=$(gofmt -l cmd internal docs)
+unformatted=$(gofmt -l ./*.go cmd internal docs)
 if [ -n "$unformatted" ]; then
   printf 'Files need gofmt:\n%s\n' "$unformatted" >&2
   exit 1

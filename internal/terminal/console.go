@@ -12,9 +12,9 @@ import (
 	"github.com/rivo/uniseg"
 	"golang.org/x/term"
 
-	"psi/internal/event"
-	"psi/internal/secretmem"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/secretmem"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 type Input struct {

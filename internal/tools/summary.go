@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"psi/internal/event"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 const displaySummaryBytes = 512

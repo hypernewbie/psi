@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/config"
-	"psi/internal/providerregistry"
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // authReads counts shared auth.json reads. The model lists resolve every

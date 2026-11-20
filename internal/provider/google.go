@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // GoogleClient speaks the Google Generative AI REST streaming protocol. It is

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func externalToolDef(name string) provider.ToolDef {

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // ResponsesClient speaks the generic OpenAI Responses protocol. It uses API-key

@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"psi/internal/attachments"
-	pibridgepb "psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/attachments"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // Environment keys provided by Phi at spawn time. They are read once and

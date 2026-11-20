@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/theme"
 )
 
 const bannerHints = "esc interrupt · ctrl+c/ctrl+d clear/exit · / commands"

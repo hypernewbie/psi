@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/provider"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 const (

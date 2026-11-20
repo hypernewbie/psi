@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // Tool batch execution, modeled on Pi's agent-loop executeToolCalls:

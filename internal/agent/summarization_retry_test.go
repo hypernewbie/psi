@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/event"
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func TestSummaryRequestRetriesTransientStreamFailure(t *testing.T) {
