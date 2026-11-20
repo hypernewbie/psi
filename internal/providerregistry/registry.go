@@ -99,7 +99,7 @@ var registry = map[string]Spec{
 	"qwen-token-plan": {
 		ID: "qwen-token-plan", Name: "Qwen Token Plan", Auth: AuthAPIKey,
 		Environment: "QWEN_TOKEN_PLAN_API_KEY", DefaultAPI: "openai-completions",
-		Endpoints: map[string]string{"openai-completions": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
+		Endpoints: map[string]string{"openai-completions": "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1"},
 	},
 	"openrouter": {
 		ID: "openrouter", Name: "OpenRouter", Auth: AuthAPIKey,

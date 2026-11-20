@@ -247,6 +247,7 @@ var (
 		"gpt-5.4": true, "gpt-5.5": true, "gpt-5.6-sol": true, "gpt-5.6-terra": true,
 		"gpt-5.6-luna": true, "gpt-6-astra": true, "gpt-6-sol": true, "gpt-6-luna": true,
 		"gpt-6.1-sol": true, "gpt-6.1-terra": true,
+		"gpt-6.2-astra": true, "gpt-6.2-sol": true,
 	}
 	openAINoneReasoning = map[string]bool{
 		"gpt-5.1": true, "gpt-5.2": true, "gpt-5.3-codex": true, "gpt-5.4": true,
@@ -255,10 +256,12 @@ var (
 	}
 	openAIMidConvoEffort = map[string]bool{
 		"gpt-6-astra": true, "gpt-6-sol": true, "gpt-6-luna": true, "gpt-6.1-sol": true, "gpt-6.1-terra": true,
+		"gpt-6.2-astra": true, "gpt-6.2-sol": true,
 	}
 	openAIToolSearchModelIDs = map[string]bool{
 		"gpt-5.6-sol": true, "gpt-5.6-terra": true, "gpt-5.6-luna": true, "gpt-6-astra": true,
 		"gpt-6-sol": true, "gpt-6-luna": true, "gpt-6.1-sol": true, "gpt-6.1-terra": true,
+		"gpt-6.2-astra": true, "gpt-6.2-sol": true,
 	}
 	openAIMidConvoModelIDs = func() map[string]bool {
 		ids := map[string]bool{"gpt-5.4": true, "gpt-5.4-mini": true, "gpt-5.4-pro": true, "gpt-5.5": true}
@@ -275,6 +278,7 @@ var openAICacheWritePrices = map[string]float64{
 	"gpt-5.6-luna": 0.25, "gpt-5.6-sol": 5, "gpt-5.6-terra": 2.5,
 	"gpt-6-astra": 12.5, "gpt-6-luna": 0.125, "gpt-6-sol": 2.5,
 	"gpt-6.1-sol": 2.5, "gpt-6.1-terra": 1.25,
+	"gpt-6.2-astra": 10, "gpt-6.2-sol": 2.5,
 }
 
 func correctOpenAIUpstream(model *catalogModel) {
@@ -381,6 +385,8 @@ func openAICodexProvider() *providerDef {
 		contextWindow int
 	}
 	authored := []codexModel{
+		{"gpt-6.2-astra", "GPT-6.2 Astra", 272000},
+		{"gpt-6.2-sol", "GPT-6.2 Sol", 500000},
 		{"gpt-6.1-sol", "GPT-6.1 Sol", 500000},
 		{"gpt-6.1-terra", "GPT-6.1 Terra", 500000},
 		{"gpt-6-astra", "GPT-6 Astra", 272000},
@@ -422,6 +428,9 @@ func openAICodexProvider() *providerDef {
 				})
 			}
 			enableOpenAIMidConvoSystemMessages(model, false)
+			if openAIMidConvoEffort[model.ID] {
+				mergeCompat(model, map[string]any{"supportsMidConvoEffort": true})
+			}
 		},
 	}
 }
@@ -929,7 +938,13 @@ func kimiCodingProvider() *providerDef {
 
 // ---- Qwen Token Plan -----------------------------------------------------
 
-var qwenExcludedModelIDs = map[string]bool{"qwen3.8-max-preview": true}
+var qwenExcludedModelIDs = map[string]bool{
+	"qwen3.8-max-preview": true,
+	// Retired upstream; models.dev lists them again but the Qwen Token Plan
+	// endpoint no longer serves them.
+	"deepseek-v3.2":     true,
+	"deepseek-v4-flash": true,
+}
 
 var qwenFallbackThinkingLevels = map[string]*string{
 	"minimal": nil, "low": nil, "medium": nil, "high": stringPointer("high"), "xhigh": nil, "max": stringPointer("max"),

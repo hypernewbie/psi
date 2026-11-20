@@ -467,6 +467,8 @@ var gpt6ModelIDs = map[string]bool{
 	"gpt-6-luna":    true,
 	"gpt-6.1-sol":   true,
 	"gpt-6.1-terra": true,
+	"gpt-6.2-astra": true,
+	"gpt-6.2-sol":   true,
 }
 
 func isResponsesAPI(api string) bool {
@@ -479,7 +481,7 @@ func applyOpenAIFamilyRules(model *catalogModel) {
 	}
 	if gpt6ModelIDs[model.ID] && isResponsesAPI(model.API) {
 		off := stringPointer("none")
-		if model.ID == "gpt-6-astra" || model.ID == "gpt-6.1-sol" {
+		if model.ID == "gpt-6-astra" || model.ID == "gpt-6.1-sol" || model.ID == "gpt-6.2-astra" || model.ID == "gpt-6.2-sol" {
 			off = nil
 		}
 		mergeThinking(model, map[string]*string{

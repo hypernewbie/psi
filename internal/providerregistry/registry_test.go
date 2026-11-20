@@ -30,7 +30,7 @@ func TestProviderRegistryIsExplicitAndTableDriven(t *testing.T) {
 		{"xiaomi-token-plan-sgp", "openai-completions", "XIAOMI_TOKEN_PLAN_SGP_API_KEY", "https://token-plan-sgp.xiaomimimo.com/v1"},
 		{"moonshotai", "openai-completions", "MOONSHOT_API_KEY", "https://api.moonshot.ai/v1"},
 		{"kimi-coding", "openai-completions", "KIMI_API_KEY", "https://api.kimi.com/coding/v1"},
-		{"qwen-token-plan", "openai-completions", "QWEN_TOKEN_PLAN_API_KEY", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-token-plan", "openai-completions", "QWEN_TOKEN_PLAN_API_KEY", "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1"},
 		{"openrouter", "openai-completions", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"},
 		{"xai", "openai-responses", "XAI_API_KEY", "https://api.x.ai/v1"},
 		{"groq", "openai-completions", "GROQ_API_KEY", "https://api.groq.com/openai/v1"},

@@ -158,6 +158,20 @@ func TestOpenAIAndCodexRules(t *testing.T) {
 	if enabled, present := compatBool(direct, "supportsExplicitPromptCacheMode"); !present || !enabled {
 		t.Fatal("direct gpt-6.1-sol lacks explicit prompt-cache support")
 	}
+	gpt62 := catalogWith("openai", mdRow("gpt-6.2-sol", withReasoning("low", "medium", "high", "xhigh", "max"), withLimits(1050000, 128000), withAPIs(responsesAPI)))
+	gpt62Rows := buildRows(t, gpt62, []*providerDef{openAIProvider()})
+	direct62 := rowByID(gpt62Rows["openai"], "gpt-6.2-sol")
+	if direct62 == nil || direct62.ContextWindow != 272000 || direct62.MaxTokens != 128000 {
+		t.Fatalf("direct gpt-6.2-sol = %+v", direct62)
+	}
+	if value, present := direct62.ThinkingLevelMap["off"]; !present || value != nil {
+		t.Fatalf("direct gpt-6.2-sol off = %v present=%v, want explicit null", value, present)
+	}
+	for _, field := range []string{"supportsMidConvoEffort", "supportsMidConvoSystemMessages", "supportsToolSearch"} {
+		if enabled, present := compatBool(direct62, field); !present || !enabled {
+			t.Fatalf("direct gpt-6.2-sol lacks %s", field)
+		}
+	}
 	if rowByID(rows["openai"], "gpt-5.6") != nil || rowByID(rows["openai"], "gpt-5.6-sol") == nil {
 		t.Fatal("direct Responses must exclude gpt-5.6 but keep gpt-5.6-sol")
 	}
@@ -192,6 +206,13 @@ func TestOpenAIAndCodexRules(t *testing.T) {
 	}
 	if _, exists := rowByID(codexRows["openai-codex"], "gpt-5.6-luna").ThinkingLevelMap["off"]; exists {
 		t.Fatal("direct Responses off override leaked into Codex GPT-5.6")
+	}
+	codex62 := rowByID(codexRows["openai-codex"], "gpt-6.2-astra")
+	if codex62 == nil || codex62.ContextWindow != 272000 || codex62.MaxTokens != 128000 {
+		t.Fatalf("Codex gpt-6.2-astra = %+v", codex62)
+	}
+	if enabled, present := compatBool(codex62, "supportsMidConvoEffort"); !present || !enabled {
+		t.Fatal("Codex gpt-6.2-astra lacks mid-conversation effort support")
 	}
 }
 
