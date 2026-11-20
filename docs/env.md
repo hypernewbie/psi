@@ -40,6 +40,11 @@ permission to omit the key. See
 entry in `auth.json`; run `/login openai-codex` to create it. See
 [Providers](providers.md).
 
+`kimi-coding-global` has no environment variable. It uses the Global Kimi Code
+(OAuth) trial entry in `auth.json`; run `/login kimi-coding-global` to create
+it. A stored Global entry, including an invalid or expired login, never falls
+back to `KIMI_API_KEY`.
+
 `openai` also accepts a ChatGPT OAuth login from `/login openai`. A stored
 `openai` entry, including an invalid or expired OAuth login, never falls back
 to `OPENAI_API_KEY`; only a missing entry permits `models.json`, then the

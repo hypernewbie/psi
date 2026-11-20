@@ -63,12 +63,12 @@ export ANTHROPIC_API_KEY="..."
 ./psi
 ```
 
-Use `/logout` to remove a stored built-in API key or OAuth credential. OAuth
-logout attempts one best-effort OpenAI revocation request; local deletion
-continues if that request fails, and the status says remote revocation is
-unconfirmed. This does not remove environment variables or credentials in
-`models.json`. If Pi uses the same `auth.json`, its next successful read sees
-the deletion.
+Use `/logout` to remove a stored built-in API key or OAuth credential.
+For OpenAI and Codex OAuth, psi attempts one revocation request. If that
+request fails, local deletion continues and the status says revocation is
+unconfirmed. Kimi logout is local only. This does not remove environment
+variables or credentials in `models.json`. If Pi uses the same `auth.json`,
+its next successful read sees the deletion.
 
 Use `/model` to select a provider and model. The picker excludes models
 with invalid credentials and models that require a key but have none. A provider that `models.json`

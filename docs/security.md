@@ -87,10 +87,11 @@ budget. For OAuth logout, psi checks that the document entries and permission
 bits still match the original read before staging and again before replacement.
 `/logout` removes the selected stored API key or OAuth credential, not
 environment variables or `models.json` credentials. An API-key logout removes
-the stored copy only; it does not revoke the key at the provider. ChatGPT
-sign-in and refresh refuse to write through an `auth.json` symlink.
+the stored copy only; it does not revoke the key at the provider. Kimi Code
+(Global) logout also makes no provider request. ChatGPT sign-in and refresh
+refuse to write through an `auth.json` symlink.
 
-OAuth logout sends one best-effort JSON request to the fixed
+OpenAI and Codex OAuth logout send one best-effort JSON request to the fixed
 `https://auth.openai.com/oauth/revoke` endpoint. It sends a nonblank refresh
 token when the provider has a usable client ID, otherwise a nonblank access
 token. It does not follow redirects, retry, or read the response body. The
