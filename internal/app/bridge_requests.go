@@ -268,6 +268,13 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 		req.ReplyCompact(pibridge.CompactRefused, "stale")
 		return
 	}
+	v2 := req.CompactV2()
+	// The stream checks its envelope before enqueueing, but the REPL may
+	// have replaced the runtime before it drains that request.
+	if v2 && req.Generation() != uint64(h.r.generation) {
+		req.ReplyCompact(pibridge.CompactRefused, "stale")
+		return
+	}
 	if id <= h.compactHigh {
 		req.ReplyCompact(pibridge.CompactRefused, "duplicate")
 		return
@@ -280,7 +287,6 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 	expect := req.CompactExpectation()
 	instructions := req.CompactInstructions()
 	runID, hasRunID := req.CompactRunID()
-	v2 := req.CompactV2()
 	switch {
 	case req.Expired():
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")

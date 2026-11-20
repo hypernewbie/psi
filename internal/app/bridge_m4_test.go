@@ -337,8 +337,20 @@ func TestBridgeCompactV2RefusesStaleRunAndIdentity(t *testing.T) {
 	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "stale" {
 		t.Fatalf("request from previous run = %+v, want stale", got)
 	}
+	// A request delivered by the old stream can remain in the host queue
+	// after the REPL replaces the runtime. The same session can be reopened
+	// at the same leaf, with the same model and no intervening run.
+	h.runStarting = false
+	r.state = StateIdle
+	f.inject <- compactRequestV2("6", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "")
+	queued := nextRequest(t, r.bridge)
+	r.generation++
+	h.handle(queued, false)
 	if *dispatched != 0 {
-		t.Fatalf("dispatched = %d after refusals, want 0", *dispatched)
+		t.Fatalf("stale request reached compact admission: %d dispatches", *dispatched)
+	}
+	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "stale" {
+		t.Fatalf("previous generation = %+v, want stale", got)
 	}
 }
 
