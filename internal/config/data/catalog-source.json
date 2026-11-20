@@ -1,57 +1,40 @@
 {
-  "package": "@earendil-works/pi-ai",
-  "version": "1.5.2",
-  "generatedAt": "2026-11-15T07:33:20.027Z",
-  "sha256": {
-    "anthropic": "d628e327801836a5849abe0f0da73fff14b9524efd084cbb3581c2e12ada1f42",
-    "openai-codex": "d1b7d4a422cdc80ed3815bbbf830e05381bf32ebe6e4a99148ae35a3b9680662",
-    "minimax": "4055e88afdcb84f6f58bdeb9eaf4c72b768739762016022e48357c5dc4bb419c",
-    "opencode-go": "7d2328027c9a53c3d9fd5204046cbade85059544797511bbc9175fa8bc2c220b",
-    "deepseek": "00035ae10780139006b479719f8b894c7dbe4e3bdfeddbf0fbb059729867aa2c",
-    "zai": "7cae7d6026f53bbc9b434df6ceecaf52462ae38ea334d264de59acee462bcac8",
-    "google": "c565fc46df69910fba3bf915b4685b8aa0cc2a7056b197b0c43aa2056e50efc6",
-    "xiaomi": "1ead4ecdd28f1f8ee5fd54b8b37f3af6a2e82d74db9520e4f3f6799b98ae5c6c",
-    "xiaomi-token-plan-cn": "7b597b49b522bfc5024c9a3f2af1fd0502da3a0e997fffdaa45e64672bae6272",
-    "xiaomi-token-plan-ams": "56708d5fdb8a6d9dfa80ec515c6b8ba04e1cd8221acc52b04b56d97365de6c32",
-    "xiaomi-token-plan-sgp": "350ec5c7c85e6002cc30619f220ea54ccb59179b887cb05783731653bfa6c0ce",
-    "moonshotai": "fcc694aef6dc00a26d93c8590497700f6d10e6d37be9ee5ed501d6fbfd42f65f",
-    "kimi-coding": "b0ad89a7b2f3cfb5421cada911fdc7267a1ce3267107ae8787744539a2486949",
-    "qwen-token-plan": "52eb3109a5e8b8c45bb60e42d995aceacec36a578faf6c339704e3f954387f5f",
-    "openrouter": "d3ac1b82069dbce0fe4fea2834e9b10fad4c8202fc37f2b4fa3ea7b945276dae",
-    "xai": "042df11214a789bb80d43a0411cf8402e1330b25227d1383457b81ee2dca8bfa",
-    "groq": "09f21ff0296101cec1acef86f4f8ed95951c5924fd798ff8f64de3d3e08c95e2",
-    "mistral": "03ef13d8911f37db4cb04e2521b60d78207ae61c172dec7aae00f4dc36042900"
-  },
+  "generator": "catalog-bake-go-v1",
+  "catalogRuleRevision": "b9e94bb8d08d06c1028b0e3baab55bb1c5c51d53",
   "protocolReference": "c3cc91632d0a1950fb122605b190233f2aa0006e",
-  "generator": "snapshot-models-v2",
-  "providers": [
-    "anthropic",
-    "openai-codex",
-    "minimax",
-    "opencode-go",
-    "deepseek",
-    "zai",
-    "google",
-    "xiaomi",
-    "xiaomi-token-plan-cn",
-    "xiaomi-token-plan-ams",
-    "xiaomi-token-plan-sgp",
-    "moonshotai",
-    "kimi-coding",
-    "qwen-token-plan",
-    "openrouter",
-    "xai",
-    "groq",
-    "mistral",
-    "openai"
-  ],
-  "scope": "chat model IDs, APIs, public endpoints, input/reasoning metadata, thinking maps, and compatibility metadata only; no credentials or headers",
-  "providerSources": {
-    "openai": {
+  "generatedAt": "2026-11-20T09:19:49.464853935Z",
+  "inputs": {
+    "models-dev": {
       "url": "https://models.dev/experimental/v2.0/api.json",
-      "fetchedAt": "2026-11-18T08:15:35Z",
-      "sha256": "0b4912a578f53bdafb9f4c7ac27d75f10e97e8a359a4ae8f4bcfccf545f9a49f",
-      "piRevision": "b4afdddf44e059c67ccf5097e5317d913521b470"
+      "sha256": "8aebaf9e9183c17c7dee38f1572afb39d7750a47b530b08efacb97e3e2e3aa36",
+      "fetchedAt": "2026-11-20T09:19:48.836319494Z"
+    },
+    "openrouter": {
+      "url": "https://openrouter.ai/api/v1/models",
+      "sha256": "f494e90843061bb9e5ca95e8c5bf116ce473a458735cadbe75a41451908aa3d0",
+      "fetchedAt": "2026-11-20T09:19:49.182722395Z"
     }
-  }
+  },
+  "providerSources": {
+    "anthropic": "models-dev",
+    "deepseek": "authored",
+    "google": "models-dev",
+    "groq": "models-dev",
+    "kimi-coding": "models-dev",
+    "minimax": "models-dev",
+    "mistral": "models-dev",
+    "moonshotai": "models-dev",
+    "openai": "models-dev",
+    "openai-codex": "authored",
+    "opencode-go": "models-dev",
+    "openrouter": "openrouter",
+    "qwen-token-plan": "models-dev",
+    "xai": "models-dev",
+    "xiaomi": "models-dev",
+    "xiaomi-token-plan-ams": "models-dev",
+    "xiaomi-token-plan-cn": "models-dev",
+    "xiaomi-token-plan-sgp": "models-dev",
+    "zai": "models-dev"
+  },
+  "catalogSHA256": "2789419950f3330ef5f2e2ba61759db87886d9958485121dc3f9ee48802ad6df"
 }

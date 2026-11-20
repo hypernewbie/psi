@@ -748,7 +748,7 @@ type catalogProvenance struct {
 
 const (
 	catalogGenerator    = "catalog-bake-go-v1"
-	catalogRuleRevision = "b4afdddf44e059c67ccf5097e5317d913521b470"
+	catalogRuleRevision = "b9e94bb8d08d06c1028b0e3baab55bb1c5c51d53"
 	protocolReference   = "c3cc91632d0a1950fb122605b190233f2aa0006e"
 	modelsDevInputName  = "models-dev"
 	openRouterInputName = "openrouter"

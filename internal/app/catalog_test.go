@@ -84,8 +84,14 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 						}
 					}
 				} else {
-					if body["store"] != false || body["stream"] != true || body["max_tokens"] != nil || body["max_output_tokens"] != nil {
+					if body["store"] != false || body["stream"] != true || body["max_tokens"] != nil {
 						t.Fatal("wrong Codex endpoint request profile")
+					}
+					if maxOutput, _ := body["max_output_tokens"].(int); maxOutput < 16 {
+						t.Fatalf("Codex max_output_tokens = %#v", body["max_output_tokens"])
+					}
+					if _, exists := body["instructions"]; exists {
+						t.Fatal("Codex still sends top-level instructions")
 					}
 					encoded, _ := json.Marshal(body)
 					for _, needed := range []string{"synthetic-encrypted-reasoning", "msg_synthetic", "commentary", "call_a", "call_b", "function_call_output"} {
@@ -103,7 +109,7 @@ func TestEveryAdvertisedCatalogModelHasAnAppRequestPath(t *testing.T) {
 			})
 		}
 	}
-	if count != 26 {
+	if count != 28 {
 		t.Fatalf("public snapshot model count changed: %d", count)
 	}
 	// The picker lists only providers with a credential, so the catalog paging
@@ -234,7 +240,9 @@ func TestAdaptiveThinkingDescriptionsAreExplicit(t *testing.T) {
 	if err := r.configure(config.StartupOverrides{Provider: "openai-codex", Model: "gpt-6-astra", Thinking: "off"}); err != nil {
 		t.Fatal(err)
 	}
-	if description := provider.ThinkingDescription(r.cfg.Model, "off"); !strings.Contains(description, "provider default") {
+	// gpt-6-astra does not accept effort none, so off clamps to the lowest
+	// level and is sent as a configuration_update item.
+	if description := provider.ThinkingDescription(r.cfg.Model, "off"); !strings.Contains(description, "effective effort low") {
 		t.Fatal(description)
 	}
 }
