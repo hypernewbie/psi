@@ -227,7 +227,7 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.NoTools, "nt", false, "disable all selectable tools (Pi alias)")
 	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "alias for --no-tools")
 	fs.BoolVar(&o.NoTools, "nbt", false, "alias for --no-tools (Pi alias)")
-	fs.BoolVar(&o.NoMCP, "no-mcp", false, "disable MCP config reads and stdio servers (HTTP unavailable)")
+	fs.BoolVar(&o.NoMCP, "no-mcp", false, "disable MCP config reads, processes, and network requests")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -445,7 +445,7 @@ Pi-compatible options:
   --exclude-tools, -xt <list> Disable selected tools
   --no-tools, -nt            Disable all selectable tools
   --no-builtin-tools, -nbt   Alias for --no-tools
-  --no-mcp                   Disable MCP config reads and stdio servers (HTTP unavailable)
+  --no-mcp                   Disable MCP config reads, processes, and network requests
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
   --theme <path>             Load a theme (repeatable)
@@ -476,7 +476,7 @@ Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. OpenAI Codex uses /login openai-codex and never falls back to an API key.
 The built-in openai-codex provider periodically reads its primary ChatGPT quota, backs off after failures, and shows the remaining percentage in unused footer space when available.
-MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; this layer supports stdio only. --no-mcp disables MCP.
+MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; --no-mcp disables them.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }

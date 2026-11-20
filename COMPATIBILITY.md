@@ -76,8 +76,7 @@ Unknown harmless UI prefs need no per-key warning.
 ## MCP tools
 
 psi reads `~/.pi/agent/mcp.json` and, for a trusted project, `.pi/mcp.json`.
-This layer supports stdio only; enabled HTTP entries report `unsupported`
-before any endpoint request. It includes Pi tool names and schemas, direct
+It supports stdio and streamable HTTP, Pi tool names and schemas, direct
 `codemode` declaration, `direct`/`deferred`/`hidden` exposure, `toolExposure`,
 `${NAME}` and whole-value `!command` interpolation in `env`/`headers`, and a
 status-only `/mcp` command. `--no-mcp` disables the client for one run.
@@ -192,10 +191,9 @@ a configured Pi reader and writer across both continuation directions and the
 supported provider/API pairs. It was retired with the Node reference harness.
 The recorded run used the installed Pi 1.4.0 package adapter, not a verified
 build from the pinned source revision.
-The tagged MCP acceptance suite exercises synthetic stdio servers; the
-optional Chrome acceptance uses the pinned `chrome-devtools-mcp.13.0` package
-and an isolated browser profile. HTTP acceptance is not part of this layer.
-Exact executable Pi parity remains
+The tagged MCP acceptance suite drives the delivered binary against synthetic
+stdio and streamable HTTP servers; the local Chrome run used the pinned
+`chrome-devtools-mcp.13.0` package and an isolated browser profile. Exact executable Pi parity remains
 unclaimed. A JSON-shape test alone is not evidence of complete Pi interchange.
 
 See `docs/limitations.md` for explicit size limits, reasoning-protocol limits,

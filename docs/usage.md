@@ -177,11 +177,10 @@ configuration, limits, and the network guard.
 ## Use MCP tools
 
 MCP servers are configured in `<agentDir>/mcp.json` and, for a trusted
-project, `.pi/mcp.json`. This layer supports stdio only; HTTP entries are
-unavailable. psi starts stdio servers in the background, so the first request
-can proceed before they are ready. Use `/mcp` to check server state and
-exposed tool counts. `/reload` re-reads the configuration. `--no-mcp` disables
-the client for one run. See [MCP servers](mcp.md).
+project, `.pi/mcp.json`. psi starts them in the background, so the first
+request can proceed before they are ready. Use `/mcp` to check server state and
+discovered or exposed tool counts. `/reload` re-reads the configuration.
+`--no-mcp` disables the client for one run. See [MCP servers](mcp.md).
 
 ## Adjust the terminal
 

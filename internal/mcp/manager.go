@@ -134,21 +134,22 @@ type connection struct {
 	lastList time.Time
 	catalog  []Tool
 
-	mu                  sync.Mutex
-	tokens              map[string]*callState
-	errClass            atomic.Value
-	closed              atomic.Bool
-	closing             atomic.Bool
-	retired             atomic.Bool
-	sessionEnded        atomic.Bool
-	transient           atomic.Bool
-	listenerUnavailable atomic.Bool
-	setupDisarm         func() bool
-	retryMu             sync.Mutex
-	retryDelay          time.Duration
-	retryStop           bool
-	listenerStarted     chan struct{}
-	listenerOnce        sync.Once
+	mu                   sync.Mutex
+	tokens               map[string]*callState
+	errClass             atomic.Value
+	closed               atomic.Bool
+	closing              atomic.Bool
+	retired              atomic.Bool
+	sessionEnded         atomic.Bool
+	transient            atomic.Bool
+	listenerUnavailable  atomic.Bool
+	setupDisarm          func() bool
+	closeIdleConnections func()
+	retryMu              sync.Mutex
+	retryDelay           time.Duration
+	retryStop            bool
+	listenerChecked      chan struct{}
+	listenerOnce         sync.Once
 }
 
 type callState struct {
@@ -209,27 +210,29 @@ type Manager struct {
 	stopped    bool
 	stopOnce   sync.Once
 
-	snapshot  atomic.Pointer[Snapshot]
-	reloads   chan reloadRequest
-	setupSlot chan struct{}
-	callSlot  chan struct{}
-	callSeq   atomic.Uint64
-	pending   int
-	idle      *sync.Cond
+	snapshot       atomic.Pointer[Snapshot]
+	snapshotChange chan struct{}
+	reloads        chan reloadRequest
+	setupSlot      chan struct{}
+	callSlot       chan struct{}
+	callSeq        atomic.Uint64
+	pending        int
+	idle           *sync.Cond
 }
 
 // NewManager creates a manager. Call Start to schedule configuration loading.
 func NewManager(opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		opts:      opts,
-		ctx:       ctx,
-		cancel:    cancel,
-		servers:   map[string]*serverState{},
-		input:     opts.Input,
-		reloads:   make(chan reloadRequest, 1),
-		setupSlot: make(chan struct{}, maxSetupWorkers),
-		callSlot:  make(chan struct{}, maxCallsPerManager),
+		opts:           opts,
+		ctx:            ctx,
+		cancel:         cancel,
+		servers:        map[string]*serverState{},
+		input:          opts.Input,
+		snapshotChange: make(chan struct{}, 1),
+		reloads:        make(chan reloadRequest, 1),
+		setupSlot:      make(chan struct{}, maxSetupWorkers),
+		callSlot:       make(chan struct{}, maxCallsPerManager),
 	}
 	m.snapshot.Store(&Snapshot{})
 	m.idle = sync.NewCond(&m.mu)
@@ -636,26 +639,22 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 }
 
 func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64, server Server, input Input) (*sdk.ClientSession, *connection, error) {
-	connCtx, connCancel := context.WithCancel(context.Background())
+	connCtx, cancel := context.WithCancel(context.Background())
 	conn := &connection{
 		manager:         m,
 		server:          state.cfg.Name,
 		epoch:           epoch,
 		ctx:             connCtx,
-		cancel:          connCancel,
+		cancel:          cancel,
 		permits:         make(chan struct{}, maxCallsPerServer),
 		listCh:          make(chan struct{}, 1),
 		tokens:          map[string]*callState{},
-		listenerStarted: make(chan struct{}),
+		listenerChecked: make(chan struct{}),
 	}
 	conn.errClass.Store("")
 	if !policyAllowsInput(input, server) {
-		connCancel()
+		conn.cancel()
 		return nil, conn, configErr("permission", "MCP server is no longer permitted")
-	}
-	if server.Transport == TransportHTTP {
-		connCancel()
-		return nil, conn, configErr("unsupported", "MCP HTTP transport is not available yet")
 	}
 	client := sdk.NewClient(&sdk.Implementation{Name: "psi", Version: m.opts.Version}, &sdk.ClientOptions{
 		Capabilities:   &sdk.ClientCapabilities{},
@@ -677,13 +676,24 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 			return next(ctx, method, req)
 		}
 	})
-	transport := newStdioTransport(server, input.Cwd)
+	var transport sdk.Transport
+	if server.Transport == TransportHTTP {
+		transport = m.newHTTPTransport(server, conn)
+		// Failed attempts never reach the published connection's cleanup worker.
+		defer func() {
+			if connCtx.Err() != nil && conn.closeIdleConnections != nil {
+				conn.closeIdleConnections()
+			}
+		}()
+	} else {
+		transport = newStdioTransport(server, input.Cwd)
+	}
 	conn.clearRetryAdvice()
 	var disarm func() bool
 	if server.Transport == TransportHTTP {
 		// The SDK detaches its standalone GET from the setup context. Keep
 		// the setup budget armed until publication disarms it.
-		disarm = context.AfterFunc(ctx, connCancel)
+		disarm = context.AfterFunc(ctx, conn.cancel)
 	}
 	stopDisarm := func() {
 		if disarm != nil {
@@ -699,20 +709,20 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 		} else if conn.transient.Load() {
 			err = &transientError{err: err}
 		}
-		connCancel()
+		conn.cancel()
 		return nil, conn, err
 	}
 	if class := conn.terminalClass(); class != "" {
 		stopDisarm()
 		_ = session.Close()
-		connCancel()
+		conn.cancel()
 		return nil, conn, configErr(class, "MCP connection failed: %s", class)
 	}
 	init := session.InitializeResult()
 	if init != nil && protocolTooNew(init.ProtocolVersion) {
 		stopDisarm()
 		_ = session.Close()
-		connCancel()
+		conn.cancel()
 		return nil, conn, configErr("unsupported", "server selected an unsupported protocol version")
 	}
 	conn.clearRetryAdvice()
@@ -725,30 +735,30 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 			err = &transientError{err: err}
 		}
 		_ = session.Close()
-		connCancel()
+		conn.cancel()
 		return nil, conn, err
 	}
 	if server.Transport == TransportHTTP {
 		select {
-		case <-conn.listenerStarted:
+		case <-conn.listenerChecked:
 		case <-ctx.Done():
 			stopDisarm()
 			_ = session.Close()
-			connCancel()
+			conn.cancel()
 			return nil, conn, ctx.Err()
 		}
 	}
 	if class := conn.terminalClass(); class != "" {
 		stopDisarm()
 		_ = session.Close()
-		connCancel()
+		conn.cancel()
 		return nil, conn, configErr(class, "MCP discovery failed: %s", class)
 	}
 	catalog, err := buildCatalog(server, epoch, raw)
 	if err != nil {
 		stopDisarm()
 		_ = session.Close()
-		connCancel()
+		conn.cancel()
 		return nil, conn, err
 	}
 	conn.session = session
@@ -758,7 +768,7 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch {
 		m.mu.Unlock()
 		_ = session.Close()
-		connCancel()
+		conn.cancel()
 		return nil, conn, context.Canceled
 	}
 	conn.lastList = m.opts.now()
@@ -889,7 +899,6 @@ func (m *Manager) withdrawLocked(state *serverState, reason string) {
 			conn.setupDisarm()
 			conn.setupDisarm = nil
 		}
-		conn.cancel()
 		conn.closeAsyncLocked()
 	}
 	state.catalog = nil
@@ -1112,6 +1121,12 @@ func (m *Manager) publishLocked() {
 		snap.Servers = append(snap.Servers, status)
 	}
 	m.snapshot.Store(snap)
+	// Coalesce notifications. Waiters read the snapshot before blocking and
+	// again after each notification, so one token can represent many updates.
+	select {
+	case m.snapshotChange <- struct{}{}:
+	default:
+	}
 }
 
 // Snapshot returns the latest immutable view.
@@ -1130,7 +1145,6 @@ func (m *Manager) Stop() {
 				conn := state.conn
 				state.conn = nil
 				conn.closing.Store(true)
-				conn.cancel()
 				conn.closeAsyncLocked()
 			}
 			state.catalog = nil
@@ -1403,6 +1417,9 @@ func (c *connection) closeAsyncLocked() {
 	c.manager.pending++
 	go func() {
 		defer c.manager.workerDone()
+		if c.closeIdleConnections != nil {
+			c.closeIdleConnections()
+		}
 		_ = c.session.Close()
 	}()
 }

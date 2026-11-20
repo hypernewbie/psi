@@ -32,15 +32,6 @@ import (
 	"github.com/hypernewbie/psi/internal/testutil"
 )
 
-func TestHelpTextReportsMCPTransportAvailability(t *testing.T) {
-	help := helpText("test")
-	for _, want := range []string{"stdio only", "HTTP unavailable", "--no-mcp"} {
-		if !strings.Contains(help, want) {
-			t.Errorf("CLI help missing %q", want)
-		}
-	}
-}
-
 func TestParseBoundary(t *testing.T) {
 	o, _, err := Parse([]string{"--provider", "anthropic", "--model", "m", "--thinking", "high", "--session-dir", "/tmp", "--tools", "read,bash", "--no-session", "--use-theme", "light/dark", "--theme", "./themes/a.json", "--theme", "./themes/b.json", "--no-themes"})
 	if err != nil || o.Model != "m" || !o.NoSession || o.UseTheme != "light/dark" || !o.NoThemes || len(o.ThemePaths) != 2 {
