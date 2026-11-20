@@ -23,9 +23,7 @@ import (
 )
 
 type compactCleanFinishProvider struct {
-	mu       sync.Mutex
-	calls    int
-	bodies   []string
+	calls    atomic.Int32
 	first    chan struct{}
 	release  chan struct{}
 	summary  chan string
@@ -34,12 +32,7 @@ type compactCleanFinishProvider struct {
 
 func (p *compactCleanFinishProvider) Send(_ context.Context, req provider.Request, onDelta func(provider.Delta)) (*provider.Response, error) {
 	raw, _ := json.Marshal(req)
-	p.mu.Lock()
-	p.calls++
-	index := p.calls
-	p.bodies = append(p.bodies, string(raw))
-	p.mu.Unlock()
-	switch index {
+	switch p.calls.Add(1) {
 	case 1:
 		onDelta(provider.Delta{Kind: provider.DeltaText, Text: "ORIGINAL_PARTIAL"})
 		close(p.first)
@@ -119,12 +112,30 @@ func compactFinishOutputWait(t *testing.T, out *synchronizedBuffer, marker strin
 // its undelivered steering must return to the editor instead of continuing the
 // old loop or being sent into the summary.
 func TestActualAppCompactCleanFinishKeepsQueuedInput(t *testing.T) {
+	t.Run("compacted", func(t *testing.T) { testActualAppCompactCleanFinish(t, false) })
+	t.Run("cancelled while waiting", func(t *testing.T) { testActualAppCompactCleanFinish(t, true) })
+}
+
+func testActualAppCompactCleanFinish(t *testing.T, abort bool) {
+	t.Helper()
 	work := t.TempDir()
 	p := &compactCleanFinishProvider{
 		first: make(chan struct{}), release: make(chan struct{}),
 		summary: make(chan string, 1), complete: make(chan struct{}),
 	}
 	r, store := compactCleanFinishRuntime(t, p, work)
+	var armed atomic.Bool
+	atSync := make(chan struct{})
+	releaseSync := make(chan struct{})
+	r.modelSyncHook = func() {
+		if armed.CompareAndSwap(true, false) {
+			close(atSync)
+			<-releaseSync
+		}
+	}
+	releaseRun := sync.OnceFunc(func() { close(p.release) })
+	releaseSettlement := sync.OnceFunc(func() { close(releaseSync) })
+	releaseSummary := sync.OnceFunc(func() { close(p.complete) })
 
 	input, inputWrite, err := os.Pipe()
 	if err != nil {
@@ -142,6 +153,9 @@ func TestActualAppCompactCleanFinishKeepsQueuedInput(t *testing.T) {
 	stopped := false
 	defer func() {
 		_ = inputWrite.Close()
+		releaseRun()
+		releaseSettlement()
+		releaseSummary()
 		if !stopped {
 			_ = input.Close()
 			select {
@@ -163,22 +177,13 @@ func TestActualAppCompactCleanFinishKeepsQueuedInput(t *testing.T) {
 	}
 	compactFinishOutputWait(t, out, "ORIGINAL_PARTIAL")
 
-	var armed atomic.Bool
 	armed.Store(true)
-	atSync := make(chan struct{})
-	releaseSync := make(chan struct{})
-	r.modelSyncHook = func() {
-		if armed.CompareAndSwap(true, false) {
-			close(atSync)
-			<-releaseSync
-		}
-	}
 
 	if _, err := inputWrite.WriteString("/compact FOCUS_MARKER\r"); err != nil {
 		t.Fatal(err)
 	}
 	compactFinishOutputWait(t, out, "Cancelling the run for compaction.")
-	close(p.release)
+	releaseRun()
 	select {
 	case <-atSync:
 	case <-time.After(8 * time.Second):
@@ -190,53 +195,67 @@ func TestActualAppCompactCleanFinishKeepsQueuedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	compactFinishOutputWait(t, out, "Compaction is already running.")
+	if abort {
+		// The steering submission below acknowledges that the REPL has
+		// processed Ctrl+C before the old worker is allowed to settle.
+		if _, err := inputWrite.WriteString("\x03"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// The final queue read already happened. This input is accepted, then
 	// must be recovered instead of continued after the worker settles.
 	if _, err := inputWrite.WriteString("RECOVER_ME\r"); err != nil {
 		t.Fatal(err)
 	}
 	compactFinishOutputWait(t, out, "Steering: RECOVER_ME")
-	close(releaseSync)
+	releaseSettlement()
 
-	var summary string
-	select {
-	case summary = <-p.summary:
-	case <-time.After(8 * time.Second):
-		t.Fatalf("summary request never arrived: %q", out.String())
+	wantCalls := int32(1)
+	if abort {
+		compactFinishOutputWait(t, out, "Compaction cancelled.")
+	} else {
+		wantCalls = 2
+		select {
+		case summary := <-p.summary:
+			if !strings.Contains(summary, "FOCUS_MARKER") || strings.Contains(summary, "RECOVER_ME") {
+				t.Fatalf("summary must include the focus, not the queued input: %s", summary)
+			}
+		case <-time.After(8 * time.Second):
+			t.Fatalf("summary request never arrived: %q", out.String())
+		}
+		releaseSummary()
+		compactFinishOutputWait(t, out, "Compacted from")
 	}
-	if strings.Contains(summary, "RECOVER_ME") {
-		t.Fatalf("queued input leaked into the summary request: %s", summary)
-	}
-	close(p.complete)
-	compactFinishOutputWait(t, out, "Compacted from")
 
 	_ = inputWrite.Close()
 	select {
-	case <-result:
+	case err := <-result:
 		stopped = true
+		if err != nil {
+			t.Fatalf("REPL exit: %v", err)
+		}
 	case <-time.After(8 * time.Second):
 		t.Fatalf("REPL did not stop after compaction: %q", out.String())
 	}
 	if got := console.Editor.Text(); strings.Count(got, "RECOVER_ME") != 1 {
 		t.Fatalf("recovered editor text = %q, want one RECOVER_ME", got)
 	}
-	p.mu.Lock()
-	calls := p.calls
-	bodies := append([]string(nil), p.bodies...)
-	p.mu.Unlock()
-	if calls != 2 {
-		t.Fatalf("provider calls = %d, want the clean run and one summary", calls)
+	if calls := p.calls.Load(); calls != wantCalls {
+		t.Fatalf("provider calls = %d, want %d (abort=%v)", calls, wantCalls, abort)
 	}
-	if len(bodies) != 2 || !strings.Contains(bodies[1], "FOCUS_MARKER") {
-		t.Fatalf("summary request lacks the focus marker: %v", bodies)
-	}
-	entries := store.Entries()
-	for _, entry := range entries {
+	checkpoints := 0
+	for _, entry := range store.Entries() {
+		if entry.Compaction != nil {
+			checkpoints++
+		}
 		if entry.Message != nil && entry.Message.Message.User != nil && entry.Message.Message.User.Content == "RECOVER_ME" {
 			t.Fatal("recovered input was persisted as a user message")
 		}
 		if strings.Contains(fmt.Sprint(entry.Raw), "RECOVER_ME") {
 			t.Fatalf("recovered input reached the session: %s", entry.Raw)
 		}
+	}
+	if want := int(wantCalls) - 1; checkpoints != want {
+		t.Fatalf("checkpoints = %d, want %d", checkpoints, want)
 	}
 }

@@ -938,8 +938,9 @@ const (
 // captured at admission; started distinguishes the outgoing run that is being
 // cancelled from the compaction worker that actually summarizes.
 type manualCompactReservation struct {
-	focus   string
-	started bool
+	focus     string
+	started   bool
+	cancelled bool
 }
 
 // checkBump reports whether an interactive bump may start. Sticky storage and
@@ -1999,7 +2000,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		lastSpinner = time.Now()
 		console.Status(activityFrame())
 	}
-	cancelActive := func() {
+	cancelRun := func() {
 		if !busy || cancel == nil {
 			return
 		}
@@ -2007,6 +2008,21 @@ func (r *runtime) repl(console *terminal.Console) error {
 		bridge.runCancelling = true
 		console.SetThinking(false)
 		cancel()
+	}
+	cancelActive := func() {
+		if manualCompact != nil && !manualCompact.started {
+			// The outgoing run has already been cancelled. Keep its owner
+			// until settlement so undelivered input is still recovered.
+			manualCompact.cancelled = true
+			return
+		}
+		cancelRun()
+	}
+	finishManualCompact := func(err error) {
+		bridge.resolveCompactRun(err)
+		manualCompact = nil
+		r.compactPending = false
+		r.syncBridge()
 	}
 	showLoginStatus := func(text string) {
 		if login.panel != nil {
@@ -2873,15 +2889,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 		r.syncBridge()
 		if !busy {
 			if err := startManualCompactWorker(); err != nil {
-				manualCompact = nil
-				r.compactPending = false
-				r.syncBridge()
+				finishManualCompact(err)
 				return err
 			}
 			return nil
 		}
 		notice(terminal.NoticeInfo, "Cancelling the run for compaction.")
-		cancelActive()
+		cancelRun()
 		return nil
 	}
 	bridge.compactRun = startManualCompact
@@ -3259,10 +3273,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if manualCompleted {
 					compactErr = nil
 				}
-				bridge.resolveCompactRun(compactErr)
-				manualCompact = nil
-				r.compactPending = false
-				r.syncBridge()
+				finishManualCompact(compactErr)
 			}
 			// Queued input can arrive after the run's last queue poll but before
 			// its settled event reaches this loop. Continue it after a clean run;
@@ -3381,10 +3392,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if manualCompact != nil {
 					// Quit wins over a reservation that has not started. Report the
 					// pre-start failure exactly once and never dispatch.
-					bridge.resolveCompactRun(context.Canceled)
-					manualCompact = nil
-					r.compactPending = false
-					r.syncBridge()
+					finishManualCompact(context.Canceled)
 				}
 				_, doneFramesAfter, _, _ := console.FrameStats()
 				r.eventFrames += doneFramesAfter - doneFramesBefore
@@ -3410,17 +3418,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.draw(console)
 			}
 			manualStarted := false
-			if manualCompact != nil && !manualCompact.started {
-				if startErr := startManualCompactWorker(); startErr != nil {
+			if manualCompact != nil {
+				if manualCompact.cancelled {
+					notice(terminal.NoticeInfo, "Compaction cancelled.")
+					finishManualCompact(context.Canceled)
+				} else if startErr := startManualCompactWorker(); startErr != nil {
 					notice(terminal.NoticeError, "Compaction could not start. "+startErr.Error())
 					if writeErr := r.store.WriteError(); writeErr != nil {
 						r.state = StateStorageBlocked
 						notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
 					}
-					bridge.resolveCompactRun(startErr)
-					manualCompact = nil
-					r.compactPending = false
-					r.syncBridge()
+					finishManualCompact(startErr)
 				} else {
 					manualStarted = true
 					r.draw(console)

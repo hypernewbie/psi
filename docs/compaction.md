@@ -42,7 +42,8 @@ unchanged.
 
 The command runs one manual operation whether the pane is idle or a run is
 active. With an active run, psi reserves the compaction, cancels the run once,
-waits for its durable settlement, and only then requests the summary. The
+waits for its durable settlement, and only then requests the summary. Press
+Escape or Ctrl+C to cancel the compaction, including while it waits. The
 interrupted prompt is not replayed. Accepted steering or follow-up input that
 was not delivered returns to the editor instead of being sent into the
 summary. A second `/compact` is refused while the first reservation or worker
