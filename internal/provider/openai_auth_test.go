@@ -611,12 +611,13 @@ func TestOpenAIHTTP429With1308StaysPrivate(t *testing.T) {
 
 func TestOpenAISubscriptionRequestProfile(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		token     string
-		wantLimit bool
+		name        string
+		token       string
+		wantLimit   bool
+		wantUpdates bool
 	}{
-		{"subscription omits limit", "synthetic-oauth-token", false},
-		{"api key retains limit", "sk-synthetic-key", true},
+		{"subscription uses the plain reasoning profile", "synthetic-oauth-token", false, false},
+		{"api key uses configuration updates", "sk-synthetic-key", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotAuth, gotSession, gotRequestID string
@@ -640,8 +641,18 @@ func TestOpenAISubscriptionRequestProfile(t *testing.T) {
 			client.HTTP = &http.Client{Transport: transport}
 			client.SessionID = "synthetic-session"
 			client.ResolveAuth = func(context.Context) (string, error) { return tc.token, nil }
-			model := ModelMeta{ID: "gpt-6.1-sol", API: "openai-responses", Provider: "openai", BaseURL: "https://api.openai.com/v1", MaxTokens: 512, ContextWindow: 4096}
-			resp, err := client.Send(context.Background(), Request{Model: model, Thinking: "off", Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hi"}}}}}, nil)
+			model := ModelMeta{
+				ID: "gpt-6.1-sol", API: "openai-responses", Provider: "openai", BaseURL: "https://api.openai.com/v1",
+				MaxTokens: 512, ContextWindow: 4096, Reasoning: true,
+				ThinkingLevelMap: map[string]*string{"off": responsesString("none"), "low": responsesString("low"), "high": responsesString("high")},
+				Compat:           modelmeta.Compat{"supportsMidConvoEffort": json.RawMessage(`true`)},
+			}
+			req := Request{Model: model, Thinking: "high", Messages: []Message{
+				{Role: "user", Content: []Block{{Type: "text", Text: "hi"}}},
+				{Role: "assistant", Provider: "openai", API: "openai-responses", Model: model.ID, ThinkingLevel: "low", Content: []Block{{Type: "text", Text: "first"}}},
+				{Role: "user", Content: []Block{{Type: "text", Text: "again"}}},
+			}}
+			resp, err := client.Send(context.Background(), req, nil)
 			if err != nil || resp == nil {
 				t.Fatalf("subscription request failed: %v", err)
 			}
@@ -657,6 +668,22 @@ func TestOpenAISubscriptionRequestProfile(t *testing.T) {
 			_, hasLimit := gotBody["max_output_tokens"]
 			if hasLimit != tc.wantLimit {
 				t.Fatalf("max_output_tokens present = %v, want %v (%v)", hasLimit, tc.wantLimit, gotBody)
+			}
+			updates := configurationUpdates(gotBody["input"].([]any))
+			if tc.wantUpdates {
+				if len(updates) != 2 || updates[0] != "low" || updates[1] != "high" {
+					t.Fatalf("API-key configuration updates = %v", updates)
+				}
+				if gotBody["reasoning"].(map[string]any)["effort"] != "medium" || resp.ThinkingLevel != "high" {
+					t.Fatalf("API-key reasoning/response effort = %v/%q", gotBody["reasoning"], resp.ThinkingLevel)
+				}
+			} else {
+				if len(updates) != 0 {
+					t.Fatalf("ChatGPT sign-in sent configuration updates: %v", updates)
+				}
+				if gotBody["reasoning"].(map[string]any)["effort"] != "high" || resp.ThinkingLevel != "" {
+					t.Fatalf("ChatGPT sign-in reasoning/response effort = %v/%q", gotBody["reasoning"], resp.ThinkingLevel)
+				}
 			}
 			if client.APIKey != "" {
 				t.Fatal("callback token mutated the shared key")

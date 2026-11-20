@@ -30,7 +30,7 @@ func BuildCodexRequest(req Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	configEffort, _, err := responsesConfigurationEffort(req, compat)
+	configEffort, err := responsesConfigurationEffort(req, compat, true)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,8 @@ func BuildCodexRequest(req Request) (map[string]any, error) {
 		}
 		// Only a level recorded for this exact model can be replayed as its
 		// configuration_update item.
-		if m.Role == "assistant" && configUpdates && sameModel && m.ThinkingLevel != "" && len(input) > inputStart {
+		recordedByModel := m.Provider == req.Model.ProviderID() && m.API == req.Model.API && m.Model == req.Model.ID
+		if m.Role == "assistant" && configUpdates && recordedByModel && m.ThinkingLevel != "" && len(input) > inputStart {
 			input = append(input, nil)
 			copy(input[inputStart+1:], input[inputStart:])
 			input[inputStart] = responsesConfigurationUpdate(m.ThinkingLevel)

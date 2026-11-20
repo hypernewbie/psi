@@ -40,18 +40,16 @@ func responsesEffort(model ModelMeta, level string) (effort string, ok bool, err
 	return level, true, nil
 }
 
-// responsesThinkingLevel is the provider-native effort for recording on a
-// response, so later requests can replay it as a configuration_update item.
+// responsesThinkingLevel returns the effort to record for later replay. Like
+// pi's providerThinkingLevel, it is set only when this request actually uses
+// configuration_update items.
 func responsesThinkingLevel(req Request) string {
-	if !req.Model.Reasoning {
+	compat, err := resolveResponsesCompat(req.Model)
+	if err != nil {
 		return ""
 	}
-	level, ok := clampModelThinkingLevel(req.Model, req.Thinking)
-	if !ok {
-		return ""
-	}
-	effort, ok, err := responsesEffort(req.Model, level)
-	if err != nil || !ok {
+	effort, err := responsesConfigurationEffort(req, compat, req.Model.API == "openai-codex-responses")
+	if err != nil {
 		return ""
 	}
 	return effort
@@ -64,16 +62,27 @@ func responsesConfigurationUpdate(effort string) map[string]any {
 }
 
 // responsesConfigurationEffort returns the effort to send when the model takes
-// thinking-level changes as configuration_update items.
-func responsesConfigurationEffort(req Request, compat responsesCompat) (effort string, ok bool, err error) {
-	if !compat.supportsMidConvoEffort {
-		return "", false, nil
+// thinking-level changes as configuration_update items. Codex sends off as an
+// update too; generic Responses leaves off in the top-level reasoning field.
+func responsesConfigurationEffort(req Request, compat responsesCompat, codex bool) (string, error) {
+	if !compat.supportsMidConvoEffort || !req.Model.Reasoning || req.chatGPTSignIn {
+		return "", nil
+	}
+	if req.Thinking == "" {
+		req.Thinking = "off"
 	}
 	level, supported := clampModelThinkingLevel(req.Model, req.Thinking)
 	if !supported {
-		return "", false, fmt.Errorf("model %q has no supported thinking level", req.Model.ID)
+		return "", fmt.Errorf("model %q has no supported thinking level", req.Model.ID)
 	}
-	return responsesEffort(req.Model, level)
+	if level == "off" && !codex {
+		return "", nil
+	}
+	effort, present, err := responsesEffort(req.Model, level)
+	if err != nil || !present {
+		return "", err
+	}
+	return effort, nil
 }
 
 // BuildResponsesRequest builds the generic OpenAI Responses API request. It
@@ -119,7 +128,7 @@ func BuildResponsesRequest(req Request) (map[string]any, error) {
 		}
 	}
 	if req.Model.Reasoning {
-		configEffort, _, err := responsesConfigurationEffort(req, compat)
+		configEffort, err := responsesConfigurationEffort(req, compat, false)
 		if err != nil {
 			return nil, err
 		}
@@ -178,6 +187,7 @@ func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
 		"supportsAdditionalTools":        &compat.supportsAdditionalTools,
 		"supportsMaxOutputTokens":        &compat.supportsMaxOutputTokens,
 		"supportsStrictMode":             &compat.supportsStrictMode,
+		"supportsMidConvoEffort":         &compat.supportsMidConvoEffort,
 	} {
 		if model.Compat.IsNull(field) {
 			continue
@@ -187,14 +197,6 @@ func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
 				return responsesCompat{}, fmt.Errorf("model %q has invalid openai-responses compatibility field %q", model.ID, field)
 			}
 			*destination = value
-		}
-	}
-	if !model.Compat.IsNull("supportsMidConvoEffort") {
-		if value, hasValue, present := model.Compat.Bool("supportsMidConvoEffort"); present {
-			if !hasValue {
-				return responsesCompat{}, fmt.Errorf("model %q has invalid openai-responses compatibility field %q", model.ID, "supportsMidConvoEffort")
-			}
-			compat.supportsMidConvoEffort = value
 		}
 	}
 	if !model.Compat.IsNull("sessionAffinityFormat") {
@@ -271,7 +273,7 @@ func convertResponsesMessages(req Request, compat responsesCompat) ([]any, error
 	}
 	declaredAdditionalTools := changesToolsInPlace && !hasSystem && len(req.Tools) > 0
 	unavailable := responsesUnavailableTools{set: make(map[string]bool)}
-	configEffort, _, err := responsesConfigurationEffort(req, compat)
+	configEffort, err := responsesConfigurationEffort(req, compat, false)
 	if err != nil {
 		return nil, err
 	}

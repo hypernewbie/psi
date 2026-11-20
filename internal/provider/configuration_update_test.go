@@ -114,6 +114,47 @@ func TestCodexThinkingChangesUseConfigurationUpdates(t *testing.T) {
 	if got := configurationUpdates(body["input"].([]any)); len(got) != 1 || got[0] != "high" {
 		t.Fatalf("foreign level replay = %v", got)
 	}
+	// Missing source metadata is not proof that this model recorded the reply.
+	req.Messages[1].Model = model.ID
+	req.Messages[1].Provider = ""
+	body, err = BuildCodexRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configurationUpdates(body["input"].([]any)); len(got) != 1 || got[0] != "high" {
+		t.Fatalf("unattributed level replay = %v", got)
+	}
+}
+
+func TestConfigurationUpdateOffRulesMatchPi(t *testing.T) {
+	model := midConvoModel("openai-codex-responses", "openai-codex")
+	model.ThinkingLevelMap["off"] = responsesString("none")
+	req := Request{Model: model, Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "go"}}}}}
+	body, err := BuildCodexRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configurationUpdates(body["input"].([]any)); len(got) != 1 || got[0] != "none" {
+		t.Fatalf("Codex default-off updates = %v, want none", got)
+	}
+	if body["reasoning"].(map[string]any)["effort"] != "medium" {
+		t.Fatalf("Codex default-off reasoning = %v", body["reasoning"])
+	}
+
+	model.API = "openai-responses"
+	model.Provider = "openai"
+	req.Model = model
+	body, err = BuildResponsesRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configurationUpdates(body["input"].([]any)); len(got) != 0 {
+		t.Fatalf("generic Responses off updates = %v, want none", got)
+	}
+	reasoning := body["reasoning"].(map[string]any)
+	if reasoning["effort"] != "none" || reasoning["summary"] != nil {
+		t.Fatalf("generic Responses off reasoning = %v", reasoning)
+	}
 }
 
 func TestResponsesThinkingLevelMatchesTheRequest(t *testing.T) {
@@ -124,11 +165,23 @@ func TestResponsesThinkingLevelMatchesTheRequest(t *testing.T) {
 		t.Fatalf("recorded off effort = %q, want the clamped level", got)
 	}
 	model.ThinkingLevelMap = map[string]*string{"high": responsesString("high")}
-	if got := responsesThinkingLevel(Request{Model: model, Thinking: "off"}); got != "none" {
-		t.Fatalf("recorded off effort = %q, want none", got)
+	// Generic Responses sends off as a top-level effort and records nothing.
+	if got := responsesThinkingLevel(Request{Model: model, Thinking: "off"}); got != "" {
+		t.Fatalf("generic recorded off effort = %q, want empty", got)
 	}
 	if got := responsesThinkingLevel(Request{Model: model, Thinking: "high"}); got != "high" {
 		t.Fatalf("recorded high effort = %q", got)
+	}
+	model.Compat = modelmeta.Compat{}
+	if got := responsesThinkingLevel(Request{Model: model, Thinking: "high"}); got != "" {
+		t.Fatalf("effort recorded without configuration updates = %q", got)
+	}
+
+	// Codex sends default off as configuration_update effort none.
+	model = midConvoModel("openai-codex-responses", "openai-codex")
+	model.ThinkingLevelMap = map[string]*string{"high": responsesString("high")}
+	if got := responsesThinkingLevel(Request{Model: model}); got != "none" {
+		t.Fatalf("Codex recorded default-off effort = %q, want none", got)
 	}
 }
 

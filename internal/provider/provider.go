@@ -63,6 +63,10 @@ type Request struct {
 	Tools     []ToolDef
 	Thinking  string
 	MaxTokens int
+
+	// chatGPTSignIn is set by ResponsesClient after resolving the bearer.
+	// Direct ChatGPT subscription tokens reject configuration_update items.
+	chatGPTSignIn bool
 }
 
 // Message is a normalized Pi message (system/user/assistant/toolResult only;

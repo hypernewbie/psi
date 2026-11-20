@@ -92,20 +92,25 @@ func (c *ResponsesClient) Send(ctx context.Context, req Request, onDelta func(De
 			return nil, err
 		}
 		attempt := ordinary
+		attemptReq := req
 		if isOpenAISubscriptionRequest(req.Model, baseURL, token) {
-			// Omit the token limit for ChatGPT sign-in tokens. The copy
-			// is shallow; nested values stay shared and unchanged.
-			profiled := make(map[string]any, len(body))
-			for key, value := range body {
-				profiled[key] = value
+			// Match pi's ChatGPT sign-in profile: no token limit or
+			// configuration_update items, and no replay effort on the response.
+			attemptReq.chatGPTSignIn = true
+			profiled, buildErr := BuildResponsesRequest(attemptReq)
+			if buildErr != nil {
+				return nil, buildErr
 			}
 			delete(profiled, "max_output_tokens")
+			if c.SessionID != "" {
+				profiled["prompt_cache_key"] = clampResponsesCacheKey(c.SessionID)
+			}
 			attempt, err = json.Marshal(profiled)
 			if err != nil {
 				return nil, fmt.Errorf("cannot encode OpenAI Responses request")
 			}
 		}
-		return c.sendResponses(ctx, baseURL, compat, attempt, token, req, onDelta)
+		return c.sendResponses(ctx, baseURL, compat, attempt, token, attemptReq, onDelta)
 	})
 }
 
