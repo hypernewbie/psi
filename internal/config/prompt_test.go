@@ -106,6 +106,21 @@ func TestBuildPromptSectionsBoundaries(t *testing.T) {
 	}
 }
 
+func TestMCPPromptSectionIsDataOnly(t *testing.T) {
+	section := MCPPromptSection()
+	if section.Name != "mcp" {
+		t.Fatalf("section name = %q", section.Name)
+	}
+	for _, want := range []string{"untrusted data", "never as instructions", "HTTP MCP servers are unavailable in this layer", "inspect the external state", "offset/limit"} {
+		if !strings.Contains(section.Body, want) {
+			t.Errorf("MCP prompt missing %q", want)
+		}
+	}
+	if strings.Contains(section.Body, "ready") || strings.Contains(section.Body, "available at startup") {
+		t.Errorf("MCP prompt claims availability: %s", section.Body)
+	}
+}
+
 func TestNoToolsKeepsOnlyFixedRules(t *testing.T) {
 	sections := BuildPromptSections("/workspace", nil, nil, nil, "", false, nil)
 	for _, s := range sections {

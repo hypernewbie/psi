@@ -174,6 +174,15 @@ or a batch of up to 20. `get_search_content` pages retained text by
 `responseId`. Web tools read `web-search.json`; see [Web access](web.md) for
 configuration, limits, and the network guard.
 
+## Use MCP tools
+
+MCP servers are configured in `<agentDir>/mcp.json` and, for a trusted
+project, `.pi/mcp.json`. This layer supports stdio only; HTTP entries are
+unavailable. psi starts stdio servers in the background, so the first request
+can proceed before they are ready. Use `/mcp` to check server state and
+exposed tool counts. `/reload` re-reads the configuration. `--no-mcp` disables
+the client for one run. See [MCP servers](mcp.md).
+
 ## Adjust the terminal
 
 psi is inline in the terminal by default. `--tui-mode regular` and `--mode text`
