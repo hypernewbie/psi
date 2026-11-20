@@ -7,13 +7,14 @@
 //	/loop <N> <task>          — run exactly N iterations
 //	/loop forever <task>      — iterate until the user stops it
 //
-// A goal or count loop runs in two phases. In the working phase the model gets
-// loop_next (end this iteration) and loop_done (claim the goal is met). A turn
-// that ends advances the loop too, so an iteration can never stall it, and a
-// turn end right after loop_next does not count that iteration twice. Count
-// loops close themselves after the last pass. A claim starts a checking phase
-// where only loop_approve is exposed; "reached" closes the loop and anything
-// else resumes the work.
+// A goal or count loop runs in two phases. In the working phase every loop gets
+// loop_done (claim the goal is met); a count loop also gets loop_next (end this
+// pass), so a goal loop has exactly one model-facing verb and the controller
+// owns its iteration boundaries. A turn that ends advances the loop, so an
+// iteration can never stall it, and a turn end right after loop_next does not
+// count that iteration twice. Count loops close themselves after the last pass.
+// A claim starts a checking phase where only loop_approve is exposed;
+// "reached" closes the loop and anything else resumes the work.
 package loop
 
 import (
@@ -159,7 +160,7 @@ func BuildPrompt(state State) string {
 		fmt.Sprintf("## Loop — Iteration %d", state.CurrentStep+1),
 		"Goal: " + state.Goal,
 		"Work toward the goal.",
-		"An iteration ends when you call loop_next or when you end your turn — the loop continues automatically.",
+		"Each iteration ends when you end your turn — the loop continues automatically.",
 		"When the goal is fully met, call loop_done and give the reason why.",
 	}, "\n")
 }
@@ -241,14 +242,14 @@ func SystemPromptAddition(state State) string {
 		"Goal: " + state.Goal,
 		"Iteration: " + strconv.Itoa(state.CurrentStep+1),
 		"The loop advances automatically when you end your turn.",
-		"Call `loop_next` to end this iteration and start the next one.",
 		"Call `loop_done` only when the goal is fully met — a claim is confirmed in a follow-up check before the loop closes.",
 	}, "\n")
 }
 
-// ToolDefinitions returns the tools the current phase exposes. The working
-// phase gets loop_next and loop_done; the checking phase gets loop_approve
-// alone; a forever loop and an inactive loop expose none.
+// ToolDefinitions returns the tools the current phase and mode expose. The
+// working phase gets loop_done, plus loop_next in a count loop; the checking
+// phase gets loop_approve alone; a forever loop and an inactive loop expose
+// none.
 func ToolDefinitions(state State) []provider.ToolDef {
 	if !state.Active || state.Forever {
 		return nil
@@ -256,7 +257,10 @@ func ToolDefinitions(state State) []provider.ToolDef {
 	if state.Evaluating {
 		return []provider.ToolDef{approveToolDefinition()}
 	}
-	return []provider.ToolDef{nextToolDefinition(), doneToolDefinition()}
+	if state.MaxSteps > 0 {
+		return []provider.ToolDef{nextToolDefinition(), doneToolDefinition()}
+	}
+	return []provider.ToolDef{doneToolDefinition()}
 }
 
 // IsTool reports whether name is one of the loop tools.
@@ -519,6 +523,11 @@ func (c *Controller) HandleNext(args map[string]any) ControlResult {
 	}
 	if c.state.Forever {
 		return ControlResult{Text: "loop_next is unavailable during a forever loop.", State: c.state, Error: true}
+	}
+	// The advance tool belongs to count loops. In a goal loop the controller
+	// owns iteration boundaries, and the model only claims completion.
+	if c.state.MaxSteps == 0 {
+		return ControlResult{Text: "loop_next is only available in a count loop. The loop advances itself here.", State: c.state, Error: true}
 	}
 	if c.state.Evaluating {
 		return ControlResult{Text: "A completion claim is being checked. Wait for its verdict.", State: c.state, Error: true}

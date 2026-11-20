@@ -229,18 +229,25 @@ func TestSystemPromptAdditionAndToolDefinition(t *testing.T) {
 	if !strings.Contains(gotWorking, "Iteration: 1") || !strings.Contains(gotWorking, "loop_done") {
 		t.Errorf("SystemPromptAddition(working) = %q", gotWorking)
 	}
-	workingDefs := ToolDefinitions(working)
-	if len(workingDefs) != 2 || workingDefs[0].Name != NextToolName || workingDefs[1].Name != DoneToolName {
-		t.Fatalf("working tool definitions = %+v", workingDefs)
+	if strings.Contains(gotWorking, "loop_next") {
+		t.Errorf("goal loop advertises loop_next: %q", gotWorking)
 	}
-	done := workingDefs[1]
+	workingDefs := ToolDefinitions(working)
+	if len(workingDefs) != 1 || workingDefs[0].Name != DoneToolName {
+		t.Fatalf("goal working tool definitions = %+v", workingDefs)
+	}
+	done := workingDefs[0]
 	if done.Schema == nil {
 		t.Fatalf("loop_done schema missing: %+v", done)
 	}
 	if required, _ := done.Schema["required"].([]string); len(required) != 1 || required[0] != "reason" {
 		t.Errorf("loop_done required = %#v", done.Schema["required"])
 	}
-	if next := workingDefs[0]; next.Schema == nil || next.Schema["required"] != nil {
+	countDefs := ToolDefinitions(State{Active: true, MaxSteps: 3, Goal: "ship feature"})
+	if len(countDefs) != 2 || countDefs[0].Name != NextToolName || countDefs[1].Name != DoneToolName {
+		t.Fatalf("count working tool definitions = %+v", countDefs)
+	}
+	if next := countDefs[0]; next.Schema == nil || next.Schema["required"] != nil {
 		t.Errorf("loop_next schema = %+v", next.Schema)
 	}
 

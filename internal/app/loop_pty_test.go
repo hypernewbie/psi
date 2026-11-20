@@ -129,14 +129,14 @@ func TestActualAppGoalLoopConfirmsClaimBeforeClosing(t *testing.T) {
 		}
 		requestsJSON = append(requestsJSON, request)
 	}
-	// Request 1 exposes both working tools and the always-available history tool.
+	// Request 1 exposes the goal loop's single verb and the always-available
+	// history tool. A goal loop has no loop_next: the controller advances it.
 	if !strings.Contains(string(bodies[0]), "loop_done") || !strings.Contains(string(bodies[0]), "Iteration 1") {
 		t.Fatalf("request 1 lacks the working-phase tool/instructions: %s", bodies[0])
 	}
-	if tools := requestsJSON[0]["tools"].([]any); len(tools) != 3 ||
-		tools[0].(map[string]any)["name"] != "loop_next" ||
-		tools[1].(map[string]any)["name"] != "loop_done" ||
-		tools[2].(map[string]any)["name"] != "read_session" {
+	if tools := requestsJSON[0]["tools"].([]any); len(tools) != 2 ||
+		tools[0].(map[string]any)["name"] != "loop_done" ||
+		tools[1].(map[string]any)["name"] != "read_session" {
 		t.Fatalf("request 1 tools = %#v", tools)
 	}
 	// Request 2 replaces loop_done with loop_approve.

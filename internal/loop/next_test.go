@@ -35,7 +35,9 @@ func TestLoopNextAdvancesAndCountLoopCloses(t *testing.T) {
 // counting it a second time.
 func TestTurnEndAfterLoopNextDoesNotDoubleCount(t *testing.T) {
 	_, controller := newTestController(t)
-	if _, err := controller.Start("goal keep working"); err != nil {
+	// loop_next belongs to count loops; the turn end after it must not count
+	// the same pass again.
+	if _, err := controller.Start("3 keep working"); err != nil {
 		t.Fatal(err)
 	}
 	if result := controller.HandleNext(nil); result.Error {
@@ -48,7 +50,7 @@ func TestTurnEndAfterLoopNextDoesNotDoubleCount(t *testing.T) {
 	if state := controller.Snapshot(); state.CurrentStep != 1 {
 		t.Fatalf("iteration counted twice: %+v", state)
 	}
-	if !strings.Contains(prompt, "iteration 2") || !strings.Contains(prompt, "Continue working") {
+	if !strings.Contains(prompt, "pass 2/3") || !strings.Contains(prompt, "Continue working") {
 		t.Fatalf("nudge prompt = %q", prompt)
 	}
 	messageType, prompt, ok, err = controller.ContinuePrompt()
@@ -58,7 +60,7 @@ func TestTurnEndAfterLoopNextDoesNotDoubleCount(t *testing.T) {
 	if state := controller.Snapshot(); state.CurrentStep != 2 {
 		t.Fatalf("plain turn end did not advance: %+v", state)
 	}
-	if !strings.Contains(prompt, "Iteration 3") {
+	if !strings.Contains(prompt, "Pass 3 of 3") {
 		t.Fatalf("iteration prompt = %q", prompt)
 	}
 }
@@ -113,7 +115,9 @@ func TestLoopNextUnavailableInForeverAndDuringCheck(t *testing.T) {
 	if _, _, err := controller.Stop("done"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controller.Start("goal check first"); err != nil {
+	// A count loop can have a stale loop_next in flight while a claim is checked;
+	// a goal loop refuses the call before that phase.
+	if _, err := controller.Start("3 check first"); err != nil {
 		t.Fatal(err)
 	}
 	if result := controller.HandleDone(map[string]any{"reason": "looks done"}); result.Error {
