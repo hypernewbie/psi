@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 const turnPrefixSummaryPrompt = `The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.

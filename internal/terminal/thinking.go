@@ -1,6 +1,6 @@
 package terminal
 
-import pitheme "psi/internal/theme"
+import pitheme "github.com/hypernewbie/psi/internal/theme"
 
 // FormatThinkingRow is a quiet activity label, not provider reasoning content.
 func FormatThinkingRow(width int, noColor bool, display DisplaySettings, palette *pitheme.Theme) string {

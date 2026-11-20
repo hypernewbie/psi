@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 // TestWriteCreatesIntermediateDirectories: verifies deep parent directory creation.

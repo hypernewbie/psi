@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 var summaryAllocationSink event.ToolSummary

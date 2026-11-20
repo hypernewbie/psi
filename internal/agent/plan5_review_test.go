@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func TestReviewSplitTurnCompactionPreservesRequestedFocus(t *testing.T) {

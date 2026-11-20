@@ -14,12 +14,12 @@ import (
 
 	"google.golang.org/grpc"
 
-	"psi/internal/config"
-	"psi/internal/pibridge"
-	pibridgepb "psi/internal/pibridge/pb"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/pibridge"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // bridgePhi is the smallest Phi the app tests need: it accepts the handshake

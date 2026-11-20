@@ -9,7 +9,7 @@ import (
 
 	"github.com/rivo/uniseg"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // ThemeToken names the Pi semantic roles used by psi's regular-mode components.

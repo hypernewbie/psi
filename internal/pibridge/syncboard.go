@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // Reverse-direction native Syncboard calls. Psi is the requester here: the

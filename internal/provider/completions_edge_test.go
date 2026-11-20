@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/modelmeta"
 )
 
 func TestCompletionsToolDeltasResolveByCallIDWithoutIndex(t *testing.T) {

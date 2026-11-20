@@ -8,9 +8,9 @@ import (
 	goruntime "runtime"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // oauthLoginBrowserTimeout bounds one browser-launcher wait. The launcher is

@@ -3,7 +3,7 @@ package provider
 import (
 	"testing"
 
-	"psi/internal/config"
+	"github.com/hypernewbie/psi/internal/config"
 )
 
 // Kimi For Coding uses the Chat Completions protocol with the metadata of the

@@ -7,9 +7,9 @@ import (
 	"time"
 	"unicode"
 
-	"psi/internal/agent"
-	"psi/internal/attachments"
-	"psi/internal/pibridge"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/attachments"
+	"github.com/hypernewbie/psi/internal/pibridge"
 )
 
 // attachPrepareBudget bounds one preparation. Phi waits 20 s for the ack, so

@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf16"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 // DisplayCall returns the bounded card data for one web tool invocation. It

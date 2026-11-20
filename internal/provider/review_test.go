@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestReviewAuthLeaseChild(t *testing.T) {

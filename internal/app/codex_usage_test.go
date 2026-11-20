@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func codexQuotaOAuthEntry(access string, expires time.Time) string {

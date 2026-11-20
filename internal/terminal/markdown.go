@@ -14,8 +14,8 @@ import (
 	east "github.com/yuin/goldmark/extension/ast"
 	gmtext "github.com/yuin/goldmark/text"
 
-	"psi/internal/skills"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/skills"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 const (

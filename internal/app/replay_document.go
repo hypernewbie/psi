@@ -1,8 +1,8 @@
 package app
 
 import (
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func transcriptDocumentBlock(it session.TranscriptItem) terminal.DocumentBlock {

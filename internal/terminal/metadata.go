@@ -3,7 +3,7 @@ package terminal
 import (
 	"strings"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // formatStatusMessage renders Pi's showStatus output: one blank spacer row

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/ac"
-	"psi/internal/agent"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/ac"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func (r *runtime) handleACCommand(args string, out io.Writer, compact func(string), cancelTimer func(), timerPending func() bool, rescheduleTimer func()) {

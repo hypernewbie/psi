@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func bumpReviewSettings(t *testing.T, agentDir, url string) {

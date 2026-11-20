@@ -18,9 +18,9 @@ import (
 
 	"github.com/creack/pty"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 type settingsAppSession struct {

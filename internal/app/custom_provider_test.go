@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/agent"
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // A command line reference to a provider from models.json resolves after the

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/testutil"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 // TestThinkingBlockIsItalicWithTheme covers Pi's reasoning style: the block

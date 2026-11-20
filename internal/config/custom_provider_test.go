@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/modelmeta"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // A provider that models.json declares composes its models the way Pi does:

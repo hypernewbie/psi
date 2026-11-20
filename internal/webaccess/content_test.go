@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func extractResponseID(t *testing.T, text string) string {

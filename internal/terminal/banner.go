@@ -1,7 +1,7 @@
 package terminal
 
 import (
-	"psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/theme"
 )
 
 // Pi's startup logo (pi-logo.ts) is a two-line half-block pixel mark, four

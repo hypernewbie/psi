@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"psi/internal/provider"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // searchResponse is the common bounded shape for every search transport.

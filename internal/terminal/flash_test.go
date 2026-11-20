@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // P2-002: flashing repro — typed text, long paste, cursor motion, resize.

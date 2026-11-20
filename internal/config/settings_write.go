@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"psi/internal/lockfile"
+	"github.com/hypernewbie/psi/internal/lockfile"
 )
 
 // SettingsUpdate sets or removes one settings.json value at a 1- or 2-element

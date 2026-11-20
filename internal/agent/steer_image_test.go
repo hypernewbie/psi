@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // gatedProvider holds the first request until released, so a test can steer

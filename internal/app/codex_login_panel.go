@@ -1,8 +1,8 @@
 package app
 
 import (
-	"psi/internal/terminal"
-	"psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/theme"
 )
 
 // codexLoginPanel is REPL-owned. Its contents are only rendered in the editor

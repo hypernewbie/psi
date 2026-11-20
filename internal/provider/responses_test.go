@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/modelmeta"
 )
 
 func responsesHaveStrictToolField(t *testing.T, body map[string]any) (map[string]any, bool) {

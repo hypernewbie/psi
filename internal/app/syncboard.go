@@ -9,11 +9,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/pibridge"
-	"psi/internal/provider"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/pibridge"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // Native Syncboard tool. It is advertised only while the Phi bridge

@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"psi/internal/config"
-	loopctl "psi/internal/loop"
-	"psi/internal/provider"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/config"
+	loopctl "github.com/hypernewbie/psi/internal/loop"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // A provider may return a tool it was not offered. An approval in the same

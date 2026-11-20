@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestReloadResourcesRefreshesInstructionsAndSkills(t *testing.T) {

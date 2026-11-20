@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // Compaction estimates, boundaries, and compatible entries (Phase 9).

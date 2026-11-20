@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"psi/internal/event"
-	"psi/internal/skills"
-	toolsummary "psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/skills"
+	toolsummary "github.com/hypernewbie/psi/internal/tools"
 )
 
 type TranscriptKind string

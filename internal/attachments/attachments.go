@@ -18,7 +18,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 func TestMain(m *testing.M) {

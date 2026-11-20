@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 const exactBumpCompletionRow = "→ /bump  Request another response without a new prompt"

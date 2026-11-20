@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"psi/internal/session"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // This is entirely synthetic: a temporary HOME, dummy OAuth credentials,

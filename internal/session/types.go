@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 // CurrentSessionVersion matches Pi CURRENT_SESSION_VERSION at the pinned revision.

@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"time"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // terminalLifecycle is the one owner of raw mode, the input reader, and the

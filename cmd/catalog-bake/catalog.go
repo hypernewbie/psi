@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/modelmeta"
-	"psi/internal/provider"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // catalogModel is one emitted catalog row plus rule-only values that never

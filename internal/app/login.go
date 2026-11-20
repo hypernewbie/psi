@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/providerregistry"
-	"psi/internal/secretmem"
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 type loginPrompt struct {

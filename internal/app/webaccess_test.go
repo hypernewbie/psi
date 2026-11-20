@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/tools"
-	"psi/internal/webaccess"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/webaccess"
 )
 
 func testWebConfig() webaccess.Config {

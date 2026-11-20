@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // A reload request dispatches by request id and carries the pinned identity,

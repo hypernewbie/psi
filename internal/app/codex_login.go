@@ -4,8 +4,8 @@ import (
 	"context"
 	"path/filepath"
 
-	"psi/internal/provider"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // runCodexLogin executes one Codex browser attempt: baseline, loopback

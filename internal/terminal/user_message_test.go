@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func TestUserMessageSurfaceAndMonochromeMarker(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // Pi's editor stays active while the agent runs. Enter queues a steering

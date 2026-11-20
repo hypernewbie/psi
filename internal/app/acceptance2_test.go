@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // A19: model/thinking change, restart, continue — session-local, protocol agrees.

@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"psi/internal/modelmeta"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // Thinking levels supported in the first release.

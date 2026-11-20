@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func busyWaitBody(t *testing.T, bodies <-chan []byte) []byte {

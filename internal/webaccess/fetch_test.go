@@ -17,7 +17,7 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func testConfig() Config {

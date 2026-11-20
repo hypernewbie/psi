@@ -15,7 +15,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func startBranchFooterApp(t *testing.T, dir, home, agentDir string) (screen *testutil.VTModel, wait func(string), waitIdle func(), waitScreen func(string), write func(string), quit func()) {

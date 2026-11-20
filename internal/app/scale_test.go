@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/psi/internal/session"
 	"golang.org/x/sys/unix"
-	"psi/internal/session"
 )
 
 func TestScaleActivationProcess(t *testing.T) {

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestReviewCancelledHTTPStreamPersistsUsage(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 func TestProviderAPIKeyPrecedenceAndProviderIsolation(t *testing.T) {

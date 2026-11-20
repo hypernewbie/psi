@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"psi/internal/lockfile"
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/lockfile"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 const codexTokenURL = "https://auth.openai.com/oauth/token"

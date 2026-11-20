@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"psi/internal/config"
+	"github.com/hypernewbie/psi/internal/config"
 )
 
 // resolveConfiguredModelOption resolves a provider or model reference that

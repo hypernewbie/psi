@@ -15,7 +15,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 const (

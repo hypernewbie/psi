@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // drainOutputAfterExit closes the harness's extra slave descriptor, then

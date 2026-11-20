@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	pitheme "psi/internal/theme"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func writeThemeRole(t *testing.T, path, role, color string, atomic bool) string {

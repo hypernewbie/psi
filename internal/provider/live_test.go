@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // PLAN6 live smoke: one bounded text prompt using an explicitly selected

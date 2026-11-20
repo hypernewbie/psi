@@ -3,8 +3,8 @@ package agent
 import (
 	"encoding/json"
 
-	"psi/internal/event"
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 // webCallDisplay builds the retained call-display map in assistant order. The

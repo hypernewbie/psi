@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func replayedSkillText(name, body, args string) string {

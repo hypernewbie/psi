@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // Client owns immutable configuration, guarded transports, and the store. The

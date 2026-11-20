@@ -14,12 +14,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/ac"
-	"psi/internal/config"
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/ac"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 type InternalToolHandler func(context.Context, tools.Invocation) tools.Result

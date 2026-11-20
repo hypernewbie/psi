@@ -3,7 +3,7 @@ package terminal
 import (
 	"testing"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // P2-004: screen-state assertions — cells, scrollback, cursor, modes, erase ops.

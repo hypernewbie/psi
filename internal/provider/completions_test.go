@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/modelmeta"
 )
 
 func completionsTestModel(providerID, modelID string) ModelMeta {

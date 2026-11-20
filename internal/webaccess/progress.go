@@ -1,6 +1,6 @@
 package webaccess
 
-import "psi/internal/event"
+import "github.com/hypernewbie/psi/internal/event"
 
 // reportWebProgress sends one bounded display-only snapshot. A nil callback
 // (RPC, tests without a host) is a no-op, and the callback itself is

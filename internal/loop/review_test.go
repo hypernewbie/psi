@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func TestContinueDoesNotAdvanceWhenStateCannotBeSaved(t *testing.T) {

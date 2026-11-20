@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	pb "psi/internal/pibridge/pb"
+	pb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 func TestSyncboardDropCapsDiscardsUnsentQueue(t *testing.T) {

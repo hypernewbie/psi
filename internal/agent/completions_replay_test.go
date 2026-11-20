@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/modelmeta"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func TestDeepSeekAndOpenCodeCompletionsReplayAfterRestart(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // TestActivationReplayKeepsThinkingBeforeText covers the resume path: the

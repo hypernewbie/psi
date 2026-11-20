@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // P2-043, P2-054: skill provenance ordering — user, then psi.input, no context change.

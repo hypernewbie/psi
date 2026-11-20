@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // systemRecords returns the "message" payload of every system record in the

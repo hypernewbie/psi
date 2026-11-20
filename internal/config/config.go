@@ -20,8 +20,8 @@ import (
 	"strconv"
 	"strings"
 
-	"psi/internal/modelmeta"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // Thinking levels in the supported mapping.

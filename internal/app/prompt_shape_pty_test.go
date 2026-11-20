@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // sessionSystems returns the message payload of every system record in path.

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/session"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // A08: every startup resume form yields equivalent context/timeline/recall.

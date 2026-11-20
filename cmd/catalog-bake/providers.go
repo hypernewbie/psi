@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // groqProvider is the smallest provider slice. It also serves as the

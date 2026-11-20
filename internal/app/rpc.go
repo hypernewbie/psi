@@ -20,12 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"psi/internal/agent"
-	"psi/internal/config"
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/skills"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/skills"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // rpcScannerBuffer is the longest accepted stdin line: a 10 MiB JSONL bound.

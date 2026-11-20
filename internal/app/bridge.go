@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"math"
 
-	"psi/internal/agent"
-	"psi/internal/event"
-	"psi/internal/pibridge"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/pibridge"
 )
 
 // bridgeSnapshot publishes pane identity and context telemetry. The client

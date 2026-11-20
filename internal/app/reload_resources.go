@@ -3,8 +3,8 @@ package app
 import (
 	"path/filepath"
 
-	"psi/internal/config"
-	"psi/internal/skills"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/skills"
 )
 
 // reloadResources refreshes the prompt inputs, skill catalog, and queue modes

@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 // OpenAI ChatGPT subscription constants, matching Pi 1.5.0's openai provider.

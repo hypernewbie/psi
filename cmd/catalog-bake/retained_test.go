@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // TestRetainedCatalogBake replays the captured public inputs through the

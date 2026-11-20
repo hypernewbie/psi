@@ -19,9 +19,9 @@ import (
 
 	"golang.org/x/term"
 
-	"psi/internal/session"
-	"psi/internal/terminal"
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 func TestInlineProjectTrustPickerOffersPiChoices(t *testing.T) {

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/agent"
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/terminal"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/terminal"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func testSettingsRuntime(t *testing.T) *runtime {

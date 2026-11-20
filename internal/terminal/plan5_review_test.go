@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/event"
-	pitheme "psi/internal/theme"
+	"github.com/hypernewbie/psi/internal/event"
+	pitheme "github.com/hypernewbie/psi/internal/theme"
 )
 
 func TestReviewUserMarkerDoesNotDiscardWrappedPromptText(t *testing.T) {

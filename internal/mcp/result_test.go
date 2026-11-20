@@ -12,7 +12,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func sdkTool(name, description string, schema any) *sdk.Tool {

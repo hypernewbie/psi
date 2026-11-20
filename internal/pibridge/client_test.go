@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 type fakePhi struct {

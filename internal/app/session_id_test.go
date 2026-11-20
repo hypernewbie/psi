@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // Pi --session-id semantics: use the current directory's existing session

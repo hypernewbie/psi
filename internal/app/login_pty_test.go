@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func TestActualAppLogoutMVP(t *testing.T) {

@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // Activation restores the model state and the prompt history from the loaded

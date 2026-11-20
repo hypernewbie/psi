@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"psi/internal/event"
-	"psi/internal/provider"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // Tool names keep pi-web-access compatibility so the plugin's tools.* switches

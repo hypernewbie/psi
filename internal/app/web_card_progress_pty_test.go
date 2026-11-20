@@ -19,7 +19,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // webCardResize changes both sides of the PTY regression: the kernel viewport

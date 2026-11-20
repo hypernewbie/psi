@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 func TestWebFetchCallDisplay(t *testing.T) {

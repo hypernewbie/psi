@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func TestGoogleToolRoundTripAndThoughtSignatureReplayAfterRestart(t *testing.T) {

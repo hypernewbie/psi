@@ -1,6 +1,7 @@
 package main
 
 import (
+	"debug/buildinfo"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -26,14 +27,21 @@ func TestBinarySmoke(t *testing.T) {
 		t.Fatalf("go build failed: %v\nOutput: %s", err, string(out))
 	}
 
+	// A checkout build can succeed even if the documented go install path is wrong.
+	info, err := buildinfo.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read binary build info: %v", err)
+	}
+	const installPath = "github.com/hypernewbie/psi"
+	if info.Path != installPath || info.Main.Path != installPath {
+		t.Fatalf("binary package = %q, module = %q; want both %q", info.Path, info.Main.Path, installPath)
+	}
+
 	// 1. --version
 	cmd := exec.Command(binPath, "--version")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("--version failed: %v\nOutput: %s", err, string(out))
-	}
-	if !strings.Contains(string(out), "psi "+version) {
-		t.Errorf("expected version output containing %q, got: %s", version, string(out))
 	}
 	// The report identifies the build: release, VCS stamp, and toolchain. Only the
 	// line prefixes are asserted because the commit and toolchain vary per build.

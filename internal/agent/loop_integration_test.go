@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 func TestHiddenContinuationAddsModelContextWithoutVisibleTranscript(t *testing.T) {

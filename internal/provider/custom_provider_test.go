@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/modelmeta"
 )
 
 // A provider that models.json declares uses the generic protocol adapters.

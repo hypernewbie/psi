@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/event"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestF10StatusRowAccounting(t *testing.T) {

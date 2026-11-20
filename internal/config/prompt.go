@@ -3,7 +3,7 @@ package config
 import (
 	"strings"
 
-	"psi/docs"
+	"github.com/hypernewbie/psi/docs"
 )
 
 // PromptSection is one ordered system-prompt section. Body is stored already

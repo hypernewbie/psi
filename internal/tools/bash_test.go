@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"psi/internal/testutil/leakcheck"
+	"github.com/hypernewbie/psi/internal/testutil/leakcheck"
 )
 
 func TestBashTimeoutReportsShellExitBeforeDeadline(t *testing.T) {

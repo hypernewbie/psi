@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func readDefaultThinkingLevel(t *testing.T, r *runtime) (string, bool) {

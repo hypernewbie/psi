@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/agent"
-	pibridgepb "psi/internal/pibridge/pb"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/agent"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 var attachmentPNG = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3}

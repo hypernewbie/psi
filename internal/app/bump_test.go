@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/agent"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func appendBumpUser(t *testing.T, store *session.Store, text string) {

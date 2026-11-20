@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // P4-002: the picker rows are compared with a Pi-derived expected fixture.

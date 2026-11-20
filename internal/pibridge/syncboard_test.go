@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	pibridgepb "psi/internal/pibridge/pb"
+	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
 )
 
 // One reverse-direction call reaches Phi and its answer resolves the caller,

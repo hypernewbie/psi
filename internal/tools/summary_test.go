@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"psi/internal/event"
+	"github.com/hypernewbie/psi/internal/event"
 )
 
 func TestSummarizeArgumentsBoundsBodiesAndUsesLexicalWorkspacePaths(t *testing.T) {

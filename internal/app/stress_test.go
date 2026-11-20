@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"psi/internal/agent"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/testutil"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // P2-095: failure and restart stress — repeat cancellation + activation under load,

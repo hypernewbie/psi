@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // waitAppOutput waits for want in the console output. The watchdog only

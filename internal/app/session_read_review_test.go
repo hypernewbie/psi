@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 func TestRPCSessionHistoryToolWorksBeforeCompaction(t *testing.T) {

@@ -1,7 +1,7 @@
 package app
 
 import (
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 	"testing"
 )
 

@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/terminal"
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // Each exit path cancels and joins an in-flight poll without saving credentials.

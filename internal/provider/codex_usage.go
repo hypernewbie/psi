@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 const (

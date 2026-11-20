@@ -20,11 +20,13 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25.x"
           cache: true
+          # Keep checksum-based keys; setup-go v7 defaults to go.mod.
+          cache-dependency-path: go.sum
       - name: tagged-acceptance
         # PLAN2/PLAN4/PLAN5 resource profiles: idle frames, 10k metadata
         # first page, and the 512 MiB compacted-session activation.

@@ -3,11 +3,11 @@ package app
 import (
 	"testing"
 
-	"psi/internal/config"
-	"psi/internal/modelmeta"
-	"psi/internal/provider"
-	"psi/internal/providerregistry"
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/providerregistry"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 // Every advertised model either has a request path or stays out of the

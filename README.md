@@ -2,11 +2,34 @@
 
 Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`, plus native web access: `web_search`, `fetch_content`, and `get_search_content`. See [Web access](docs/web.md), [Providers](docs/providers.md), and [Sessions](docs/sessions.md). Sessions use Pi-compatible v3 JSONL.
 
-## Build
+## Install
+
+Go 1.25 or later is required. Go installation requires psi v0.5.0 or later:
 
 ```sh
-go build -o psi ./cmd/psi
+go install github.com/hypernewbie/psi@latest
+psi --help
 ```
+
+The install directory must be on `PATH`. Find it with `go env GOBIN`. If that prints nothing, use `bin` under the first directory from `go env GOPATH`.
+
+## Build
+
+To build from a checkout:
+
+```sh
+go build -o psi .
+./psi --help
+```
+
+On Windows:
+
+```sh
+go build -o psi.exe .
+.\psi.exe --help
+```
+
+In the examples below, use `psi` instead of `./psi` when you run an installed binary.
 
 ## Run
 

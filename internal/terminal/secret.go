@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 
-	"psi/internal/secretmem"
+	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 const (

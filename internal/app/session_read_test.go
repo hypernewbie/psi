@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // The tool reads the raw active branch, so a detail that a compaction summary

@@ -6,8 +6,8 @@ package session
 import (
 	"encoding/json"
 
-	"psi/internal/event"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // fillEntryMetadata fills the display metadata of a loaded entry.

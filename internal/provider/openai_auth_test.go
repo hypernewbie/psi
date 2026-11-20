@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/modelmeta"
+	"github.com/hypernewbie/psi/internal/modelmeta"
 )
 
 // openAIDoc builds a synthetic auth.json with an openai OAuth entry, unknown

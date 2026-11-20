@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 func TestTenIdleSecondsProduceNoScheduledFrames(t *testing.T) {

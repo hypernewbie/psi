@@ -12,7 +12,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 // TestCrawl4AILive requires an existing plugin config with a real Crawl4AI

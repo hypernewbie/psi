@@ -12,11 +12,13 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25.x"
           cache: true
+          # Keep checksum-based keys; setup-go v7 defaults to go.mod.
+          cache-dependency-path: go.sum
       - name: git-bash-on-path
         if: runner.os == 'Windows'
         # bash, sleep, and seq live in Git\usr\bin (see the bash.EXE
@@ -32,7 +34,7 @@ jobs:
       - name: gofmt
         shell: bash
         run: |
-          unformatted=$(gofmt -l cmd internal docs)
+          unformatted=$(gofmt -l ./*.go cmd internal docs)
           if [ -n "$unformatted" ]; then
             echo "Files need gofmt:"
             echo "$unformatted"

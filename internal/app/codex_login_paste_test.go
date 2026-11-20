@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/config"
-	"psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // codexReplyTestModels points openai-codex at a local Responses endpoint

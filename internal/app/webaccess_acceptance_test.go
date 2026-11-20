@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/testutil"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 // These tests drive the built binary over RPC against a loopback Anthropic
