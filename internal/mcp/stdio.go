@@ -82,7 +82,7 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 		stdoutPipe: stdout,
 		stderrPipe: stderr,
 		frames:     make(chan []byte),
-		readerStop: make(chan struct{}),
+		stopping:   make(chan struct{}),
 		writeCh:    make(chan struct{}, 1),
 		done:       make(chan struct{}),
 		stderr:     &ringBuffer{limit: maxStderrRetain},
@@ -104,7 +104,8 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 
 type stdioConnection struct {
 	cmd *exec.Cmd
-	// stdin is nil after close; every access runs under writeMu.
+	// stdin is nil when closed or owned by an in-flight write. stdinMu
+	// protects that handoff, not the write syscall.
 	stdin io.WriteCloser
 
 	// stdout and stdoutPipe are owned by readLoop: it performs every read
@@ -122,16 +123,15 @@ type stdioConnection struct {
 	// receive on the closed channel observes the stored error.
 	frames  chan []byte
 	readErr error
-	// readerStop is closed by Close and abort. It releases Reads blocked on
-	// frames without the reader's cooperation, so Close never waits for a
-	// peer that holds stdout open.
-	readerStop chan struct{}
+	// Close and abort close stopping to release blocked Reads and Writes
+	// without waiting for the pipe peer.
+	stopping chan struct{}
 
 	writeCh chan struct{}
 	done    chan struct{}
 	stderr  *ringBuffer
 
-	writeMu   sync.Mutex
+	stdinMu   sync.Mutex
 	stderrMu  sync.Mutex
 	closeOnce sync.Once
 	closed    atomic.Bool
@@ -145,30 +145,25 @@ func (c *stdioConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	stop := context.AfterFunc(ctx, func() { c.abort() })
-	defer stop()
+	var line []byte
+	var ok bool
 	select {
-	case line, ok := <-c.frames:
-		if !ok {
-			return nil, c.readErr
-		}
-		return c.decodeFrame(line)
+	case line, ok = <-c.frames:
 	case <-ctx.Done():
+		c.abort()
 		return nil, ctx.Err()
-	case <-c.readerStop:
-		// The connection closed while this Read was blocked. Prefer a frame
-		// or terminal error the reader already delivered over a generic
-		// closed error, so reads after a clean EOF stay deterministic.
+	case <-c.stopping:
+		// Preserve a terminal frame error already published by readLoop.
 		select {
-		case line, ok := <-c.frames:
-			if !ok {
-				return nil, c.readErr
-			}
-			return c.decodeFrame(line)
+		case line, ok = <-c.frames:
 		default:
 			return nil, sdk.ErrConnectionClosed
 		}
 	}
+	if !ok {
+		return nil, c.readErr
+	}
+	return c.decodeFrame(line)
 }
 
 // decodeFrame parses one delivered frame. A malformed frame fails the
@@ -187,17 +182,25 @@ func (c *stdioConnection) decodeFrame(line []byte) (jsonrpc.Message, error) {
 // stdout can delay its exit, but never Close, which does not wait for this
 // goroutine.
 func (c *stdioConnection) readLoop() {
-	defer func() { _ = c.stdoutPipe.Close() }()
+	defer func() {
+		_ = c.stdoutPipe.Close()
+		close(c.frames)
+		// Publish the oversized-frame error before abort wakes Read.
+		var limit *limitError
+		if errors.As(c.readErr, &limit) {
+			c.abort()
+		}
+	}()
 	for {
 		line, err := c.readFrame()
 		if err != nil {
 			c.readErr = err
-			close(c.frames)
 			return
 		}
 		select {
 		case c.frames <- line:
-		case <-c.readerStop:
+		case <-c.stopping:
+			c.readErr = sdk.ErrConnectionClosed
 			return
 		}
 	}
@@ -205,11 +208,15 @@ func (c *stdioConnection) readLoop() {
 
 func (c *stdioConnection) readFrame() ([]byte, error) {
 	for {
+		select {
+		case <-c.stopping:
+			return nil, sdk.ErrConnectionClosed
+		default:
+		}
 		var buf bytes.Buffer
 		for {
 			chunk, err := c.stdout.ReadSlice('\n')
 			if buf.Len()+len(chunk) > maxStdinFrame {
-				c.abort()
 				return nil, errLimit("stdio frame")
 			}
 			buf.Write(chunk)
@@ -244,6 +251,8 @@ func (c *stdioConnection) Write(ctx context.Context, msg jsonrpc.Message) error 
 	case <-c.writeCh:
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-c.stopping:
+		return sdk.ErrConnectionClosed
 	case <-c.done:
 		return sdk.ErrConnectionClosed
 	}
@@ -255,61 +264,61 @@ func (c *stdioConnection) Write(ctx context.Context, msg jsonrpc.Message) error 
 	if err != nil {
 		return err
 	}
-	frame := append(append([]byte(nil), data...), '\n')
+	frame := append(data, '\n')
 	writeDone := make(chan error, 1)
-	go func() {
-		c.writeMu.Lock()
-		defer c.writeMu.Unlock()
-		if c.stdin == nil {
-			writeDone <- sdk.ErrConnectionClosed
-			return
-		}
-		_, err := c.stdin.Write(frame)
-		writeDone <- err
-	}()
+	go func() { writeDone <- c.writeFrame(frame) }()
 	select {
 	case err := <-writeDone:
-		if err != nil {
+		if err != nil && !errors.Is(err, sdk.ErrConnectionClosed) {
 			c.abort()
-			return err
 		}
-		return nil
+		return err
 	case <-ctx.Done():
 		c.abort()
 		return ctx.Err()
+	case <-c.stopping:
+		return sdk.ErrConnectionClosed
 	case <-c.done:
 		return sdk.ErrConnectionClosed
 	}
 }
 
+func (c *stdioConnection) writeFrame(frame []byte) error {
+	c.stdinMu.Lock()
+	if c.closed.Load() || c.stdin == nil {
+		c.stdinMu.Unlock()
+		return sdk.ErrConnectionClosed
+	}
+	stdin := c.stdin
+	c.stdin = nil
+	c.stdinMu.Unlock()
+
+	_, err := stdin.Write(frame)
+
+	c.stdinMu.Lock()
+	defer c.stdinMu.Unlock()
+	if c.closed.Load() {
+		_ = stdin.Close()
+	} else {
+		c.stdin = stdin
+	}
+	return err
+}
+
 func (c *stdioConnection) Close() error {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
-		close(c.readerStop)
-		// Offer stdin EOF for a graceful exit while no write is in flight.
-		// A write blocked on a child that never reads would wedge a locked
-		// close, and that child would ignore the EOF anyway, so skip the
-		// graceful close rather than wait for the mutex.
-		c.closeStdinIfIdle()
-		exited := c.waitExit(500 * time.Millisecond)
-		if !exited {
-			signalCommand(c.cmd, false)
-			exited = c.waitExit(1500 * time.Millisecond)
+		close(c.stopping)
+		// Offer stdin EOF if no write is in flight. Otherwise the writer
+		// owns the pipe and closes it when its syscall returns.
+		c.closeStdin()
+		if c.waitExit(500 * time.Millisecond) {
+			return
 		}
-		if !exited {
+		signalCommand(c.cmd, false)
+		if !c.waitExit(1500 * time.Millisecond) {
 			signalCommand(c.cmd, true)
-			exited = c.waitExit(2 * time.Second)
-		}
-		if exited {
-			// The process is dead, so a straggler write drains with a
-			// broken-pipe error instead of blocking: reclaim stdin under
-			// the write mutex.
-			c.closeStdin()
-		} else {
-			// An unkillable child can hold a write, and this mutex, forever.
-			// Skip the reclaim rather than hang Close; one pipe FD leaks
-			// with the wedged writer.
-			c.closeStdinIfIdle()
+			c.waitExit(2 * time.Second)
 		}
 	})
 	c.waitMu.Lock()
@@ -328,41 +337,21 @@ func (c *stdioConnection) waitExit(d time.Duration) bool {
 }
 
 // abort is the cancellation path: force-stop the owned process or group
-// without waiting for a graceful protocol shutdown. It performs no I/O waits:
-// the kill releases the reader and a stuck write, the stop release fails
-// blocked Reads, and the stdin reclaim skips when a write is in flight (wait
-// reclaims it once the process exits).
+// without waiting for a graceful protocol shutdown or outstanding pipe I/O.
 func (c *stdioConnection) abort() {
 	c.closed.Store(true)
 	c.closeOnce.Do(func() {
 		signalCommand(c.cmd, true)
-		close(c.readerStop)
-		c.closeStdinIfIdle()
+		close(c.stopping)
+		c.closeStdin()
 	})
 }
 
-// closeStdin closes the stdin pipe exactly once. It runs under writeMu so the
-// close can never race an in-flight write syscall: on Windows that race
-// deadlocks File.Close against the write. Callers must ensure no write can
-// stay blocked first; after process exit a straggler write drains with a
-// broken-pipe error instead.
+// closeStdin closes only idle stdin. File.Close must not race a write syscall
+// on Windows, even after the launcher exits: a descendant can keep stdin open.
 func (c *stdioConnection) closeStdin() {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	c.closeStdinLocked()
-}
-
-// closeStdinIfIdle closes stdin only when no write holds the mutex. It backs
-// the graceful EOF offer and the paths that must never block.
-func (c *stdioConnection) closeStdinIfIdle() {
-	if !c.writeMu.TryLock() {
-		return
-	}
-	defer c.writeMu.Unlock()
-	c.closeStdinLocked()
-}
-
-func (c *stdioConnection) closeStdinLocked() {
+	c.stdinMu.Lock()
+	defer c.stdinMu.Unlock()
 	if c.stdin == nil {
 		return
 	}
@@ -373,8 +362,6 @@ func (c *stdioConnection) closeStdinLocked() {
 func (c *stdioConnection) wait() {
 	err := c.cmd.Wait()
 	c.closed.Store(true)
-	// The process is dead, so no write can stay blocked: reclaim stdin here
-	// to cover every path, including an abort that skipped it mid-write.
 	c.closeStdin()
 	// Close can return as soon as done closes. Signal remaining owned
 	// descendants before publishing exit, even if the launcher exits first.

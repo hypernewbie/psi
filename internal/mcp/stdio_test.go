@@ -9,9 +9,12 @@ import (
 	"flag"
 	"io"
 	"os"
+	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -129,30 +132,18 @@ func TestStdioDrainsFramesAfterProcessExit(t *testing.T) {
 }
 
 func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
-	pipe := func() (*os.File, *os.File) {
-		t.Helper()
-		reader, writer, err := os.Pipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
-			_ = reader.Close()
-			_ = writer.Close()
-		})
-		return reader, writer
+	stdout, stdoutPeer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, stdin := pipe()
-	stdout, stdoutPeer := pipe()
-	stderr, _ := pipe()
+	t.Cleanup(func() { _ = stdoutPeer.Close() })
 	done := make(chan struct{})
 	close(done)
 	connection := &stdioConnection{
-		stdin:      stdin,
 		stdout:     bufio.NewReader(stdout),
 		stdoutPipe: stdout,
-		stderrPipe: stderr,
 		frames:     make(chan []byte),
-		readerStop: make(chan struct{}),
+		stopping:   make(chan struct{}),
 		done:       done,
 	}
 	go connection.readLoop()
@@ -163,9 +154,12 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 		_, err := connection.Read(context.Background())
 		result <- err
 	}()
-	if err := connection.Close(); err != nil {
-		t.Fatal(err)
-	}
+	closed := make(chan struct{})
+	go func() {
+		_ = connection.Close()
+		close(closed)
+	}()
+	awaitStdioEvent(t, closed, "Close with an open stdout peer")
 	select {
 	case err := <-result:
 		if !errors.Is(err, sdk.ErrConnectionClosed) {
@@ -174,9 +168,8 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("transport close left Read blocked on an open peer")
 	}
-	// Join the reader before cleanup closes the pipe ends: with the peer
-	// gone it must report EOF and exit, proving cleanup cannot race a
-	// lingering read on Windows.
+	// Only the reader closes its end. Once the peer goes away, the reader
+	// must release that pipe and stop.
 	_ = stdoutPeer.Close()
 	drained := make(chan struct{})
 	go func() {
@@ -184,13 +177,141 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 		}
 		close(drained)
 	}()
+	awaitStdioEvent(t, drained, "reader exit after the peer closed stdout")
+}
+
+func TestStdioReadCancellationStopsConnection(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		connection := &stdioConnection{frames: make(chan []byte), stopping: make(chan struct{})}
+		result := make(chan error, 1)
+		go func() {
+			_, err := connection.Read(ctx)
+			result <- err
+		}()
+		synctest.Wait() // Read is waiting for a frame.
+		cancel()
+		if err := <-result; !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled Read returned %v; want context.Canceled", err)
+		}
+		select {
+		case <-connection.stopping:
+		default:
+			t.Fatal("canceled Read returned without stopping the connection")
+		}
+	})
+}
+
+type stdioTestWriter struct {
+	write func([]byte) (int, error)
+	close func()
+}
+
+func (w stdioTestWriter) Write(p []byte) (int, error) { return w.write(p) }
+
+func (w stdioTestWriter) Close() error {
+	w.close()
+	return nil
+}
+
+func awaitStdioEvent(t *testing.T, event <-chan struct{}, operation string) {
+	t.Helper()
 	select {
-	case <-drained:
+	case <-event:
 	case <-time.After(10 * time.Second):
-		t.Fatal("reader did not exit after the peer closed stdout")
+		t.Fatalf("timed out waiting for %s", operation)
 	}
-	if _, err := connection.Read(context.Background()); !errors.Is(err, io.EOF) {
-		t.Fatalf("Read after peer exit = %v; want EOF", err)
+}
+
+func TestStdioReapsLeaderWithBlockedWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPStdioTailHelper$")
+	cmd.Env = append(os.Environ(), "PSI_MCP_TAIL_HELPER=1")
+	prepareCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	started, release, inputClosed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	connection := &stdioConnection{
+		cmd: cmd,
+		stdin: stdioTestWriter{
+			write: func(p []byte) (int, error) {
+				close(started)
+				<-release
+				return len(p), nil
+			},
+			close: func() { close(inputClosed) },
+		},
+		stopping: make(chan struct{}),
+		writeCh:  make(chan struct{}, 1),
+		done:     make(chan struct{}),
+	}
+	connection.writeCh <- struct{}{}
+	result := make(chan error, 1)
+	go func() {
+		result <- connection.Write(ctx, &jsonrpc.Request{Method: "notification"})
+	}()
+	// Wait on the process only after a write is in flight. The fake stdin
+	// models a surviving descendant that retains the pipe after leader exit.
+	select {
+	case <-started:
+	case <-ctx.Done():
+		go connection.wait() // Reap the fixture even if Write did not start.
+		t.Fatal("write never reached stdin")
+	}
+	go connection.wait()
+	awaitStdioEvent(t, connection.done, "leader exit with stdin still blocked")
+	select {
+	case err := <-result:
+		if !errors.Is(err, sdk.ErrConnectionClosed) {
+			t.Fatalf("blocked Write after leader exit = %v; want %v", err, sdk.ErrConnectionClosed)
+		}
+	case <-ctx.Done():
+		t.Fatal("leader exit left Write blocked")
+	}
+	select {
+	case <-inputClosed:
+		t.Fatal("stdin closed while a write still owned it")
+	default:
+	}
+	unblock()
+	awaitStdioEvent(t, inputClosed, "stdin close by the writer")
+}
+
+func TestStdioReportsOversizedFrameDuringAbort(t *testing.T) {
+	stdout, err := os.CreateTemp(t.TempDir(), "stdout-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stdout.Truncate(maxStdinFrame + 1); err != nil {
+		_ = stdout.Close()
+		t.Fatal(err)
+	}
+	closing, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	connection := &stdioConnection{
+		stdin: stdioTestWriter{close: func() {
+			close(closing)
+			<-release
+		}},
+		stdout:     bufio.NewReaderSize(stdout, 64<<10),
+		stdoutPipe: stdout,
+		frames:     make(chan []byte),
+		stopping:   make(chan struct{}),
+	}
+	go connection.readLoop()
+	// Read after abort starts but before it finishes closing stdin. Shutdown
+	// must not mask the frame-size error that caused it.
+	awaitStdioEvent(t, closing, "abort on oversized stdout frame")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var limit *limitError
+	if _, err := connection.Read(ctx); !errors.As(err, &limit) || limit.what != "stdio frame" {
+		t.Fatalf("oversized frame returned %v; want stdio frame limit error", err)
 	}
 }
 

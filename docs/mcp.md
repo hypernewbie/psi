@@ -140,16 +140,19 @@ fill the pipe or grow retained diagnostics without bound.
 
 A launcher exit does not discard complete frames already written to stdout.
 The transport reads those frames before EOF and rejects an incomplete trailing
-frame. Explicit close or cancellation closes the pipes and releases blocked
-reads. Close first closes stdin, then uses platform-specific bounded shutdown.
-Cancellation skips the graceful wait and force-stops the process or owned group.
+frame. Close and cancellation release blocked transport reads and writes without
+waiting for the pipe peer. Close offers stdin EOF if no write is in progress,
+then uses platform-specific bounded shutdown. Cancellation can skip the graceful
+wait and force-stop the process or owned group.
 
 On Unix, graceful close waits 500 ms, then sends SIGTERM. If the launcher has
 not exited after another 1.5 seconds, psi sends SIGKILL. The launcher starts in
 its own process group. Cleanup signals that group and kills remaining group
 members when the launcher exits. A child that leaves the group is not owned or
 cleaned up. On Windows, psi waits 500 ms and then stops only the launched
-process; descendants can outlive cancellation.
+process; descendants can outlive cancellation. On either platform, a surviving
+descendant that inherited a pipe can delay the release of that pipe, but it does
+not prevent psi from reaping the launcher or closing the connection.
 
 The configuration API, catalog/result conversion, and stdio transport are not
 yet wired into application startup. HTTP transport, application lifecycle
