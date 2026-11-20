@@ -210,6 +210,7 @@ func parseCodexSSE(r io.Reader, idle time.Duration, ctx context.Context, onDelta
 		return nil, fmt.Errorf("Codex response did not complete successfully")
 	}
 	result := &Response{ResponseID: terminal.ID, Model: terminal.Model, StopReason: "stop"}
+	result.ThinkingLevel = responsesThinkingLevel(req)
 	if result.Model == "" {
 		result.Model = req.Model.ID
 	}

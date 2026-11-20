@@ -26,10 +26,26 @@ func BuildCodexRequest(req Request) (map[string]any, error) {
 	if level != "off" && !req.Model.Reasoning {
 		return nil, fmt.Errorf("model %q does not support thinking", req.Model.ID)
 	}
+	compat, err := resolveResponsesCompat(req.Model)
+	if err != nil {
+		return nil, err
+	}
+	configEffort, _, err := responsesConfigurationEffort(req, compat)
+	if err != nil {
+		return nil, err
+	}
+	configUpdates := configEffort != ""
+	// The system prompt goes into a leading developer item, not top-level
+	// `instructions`: GPT-6.2 places `instructions` after the conversation, so
+	// every new turn invalidated the cached system prompt.
 	input := []any{}
+	if req.System != "" {
+		input = append(input, map[string]any{"role": "developer", "content": req.System})
+	}
 	for i, m := range req.Messages {
 		sameAPI := (m.Provider == "" || m.Provider == req.Model.ProviderID()) && (m.API == "" || m.API == req.Model.API)
 		sameModel := sameAPI && (m.Model == "" || m.Model == req.Model.ID)
+		inputStart := len(input)
 		switch m.Role {
 		case "user":
 			content, err := codexInputContent(m.Content, req.Model.InputImage)
@@ -120,33 +136,40 @@ func BuildCodexRequest(req Request) (map[string]any, error) {
 		default:
 			return nil, fmt.Errorf("unsupported Codex message role %q", m.Role)
 		}
+		// Only a level recorded for this exact model can be replayed as its
+		// configuration_update item.
+		if m.Role == "assistant" && configUpdates && sameModel && m.ThinkingLevel != "" && len(input) > inputStart {
+			input = append(input, nil)
+			copy(input[inputStart+1:], input[inputStart:])
+			input[inputStart] = responsesConfigurationUpdate(m.ThinkingLevel)
+		}
 	}
-	instructions := req.System
-	if instructions == "" {
-		instructions = "You are a helpful assistant."
+	if configEffort != "" {
+		input = append(input, responsesConfigurationUpdate(configEffort))
 	}
-	out := map[string]any{"model": req.Model.ID, "store": false, "stream": true, "instructions": instructions, "input": input,
+	out := map[string]any{"model": req.Model.ID, "store": false, "stream": true, "input": input,
 		"include": []string{"reasoning.encrypted_content"}, "text": map[string]any{"verbosity": "low"}, "tool_choice": "auto", "parallel_tool_calls": true}
 	if req.Model.Reasoning {
-		effort := level
-		if level == "off" {
-			effort = "none"
-		}
-		if mapped, ok := req.Model.ThinkingLevelMap[level]; ok {
-			if mapped == nil {
-				if level != "off" {
-					return nil, fmt.Errorf("model %q does not support thinking level %q", req.Model.ID, level)
-				}
-				effort = ""
-			} else {
-				effort = *mapped
+		if configUpdates {
+			// configuration_update items carry the level; keep one fixed effort
+			// so the cached prefix stays stable.
+			out["reasoning"] = map[string]any{"effort": "medium", "summary": "auto"}
+		} else {
+			effort, present, err := responsesEffort(req.Model, level)
+			if err != nil {
+				return nil, err
 			}
-		} else if level == "xhigh" || level == "max" {
-			return nil, fmt.Errorf("model %q needs a thinkingLevelMap entry for %q", req.Model.ID, level)
+			if present && effort != "" {
+				out["reasoning"] = map[string]any{"effort": effort, "summary": "auto"}
+			}
 		}
-		if effort != "" {
-			out["reasoning"] = map[string]any{"effort": effort, "summary": "auto"}
-		}
+	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = req.Model.MaxTokens
+	}
+	if maxTokens > 0 && compat.supportsMaxOutputTokens {
+		out["max_output_tokens"] = max(16, clampMaxTokensToContext(req.Model, req, maxTokens))
 	}
 	if len(req.Tools) > 0 {
 		var tools []any

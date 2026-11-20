@@ -285,6 +285,9 @@ func parseResponsesSSE(r io.Reader, idle time.Duration, ctx context.Context, onD
 	scanner := bufio.NewScanner(io.LimitReader(reader, maxStreamBytes+1))
 	scanner.Buffer(make([]byte, 64*1024), maxStreamBytes+1)
 	response := &Response{Model: req.Model.ID}
+	// Provider-native effort, so a later request can replay it as a
+	// configuration_update item.
+	response.ThinkingLevel = responsesThinkingLevel(req)
 	slots := make(map[int]*responsesSlot)
 	var terminal *responsesFinal
 	var terminalType string

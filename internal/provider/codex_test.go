@@ -88,18 +88,25 @@ func TestCodexRequestReplaysOpaqueItemsAndPairsToolIDs(t *testing.T) {
 	if body["store"] != false || body["reasoning"].(map[string]any)["effort"] != "xhigh" {
 		t.Fatal("Codex protocol/reasoning was not selected")
 	}
-	if _, exists := body["max_output_tokens"]; exists {
-		t.Fatal("ChatGPT rejects max_output_tokens")
+	if body["max_output_tokens"] != 4096 {
+		t.Fatalf("Codex max_output_tokens = %#v", body["max_output_tokens"])
 	}
 	input := body["input"].([]any)
-	if string(input[0].(json.RawMessage)) != reasoning {
+	system := input[0].(map[string]any)
+	if system["role"] != "developer" || system["content"] != "synthetic instructions" {
+		t.Fatalf("Codex system prompt is not a leading developer item: %#v", system)
+	}
+	if _, exists := body["instructions"]; exists {
+		t.Fatal("Codex still sends top-level instructions")
+	}
+	if string(input[1].(json.RawMessage)) != reasoning {
 		t.Fatal("opaque reasoning was rewritten")
 	}
-	call, result := input[1].(map[string]any), input[2].(map[string]any)
+	call, result := input[2].(map[string]any), input[3].(map[string]any)
 	if call["id"] != "fc_test" || call["call_id"] != "call_test" || result["call_id"] != call["call_id"] || call["namespace"] != "functions" {
 		t.Fatal("tool item and call IDs were conflated")
 	}
-	text := input[3].(map[string]any)
+	text := input[4].(map[string]any)
 	if text["id"] != "msg_test" || text["phase"] != "final_answer" {
 		t.Fatal("text replay metadata was dropped")
 	}

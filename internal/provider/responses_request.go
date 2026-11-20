@@ -8,6 +8,74 @@ import (
 	"unicode/utf16"
 )
 
+// responsesEffort resolves a thinking level to the provider-native reasoning
+// effort. ok is false when the model takes no reasoning field for that level.
+func responsesEffort(model ModelMeta, level string) (effort string, ok bool, err error) {
+	if level == "" {
+		level = "off"
+	}
+	// "off" is not a member of the ladder: an absent map entry means the
+	// provider's "none", and an explicit null means the model takes no
+	// reasoning field at all. Clamping would turn it into the lowest level.
+	if level == "off" {
+		mapped, present := model.ThinkingLevelMap["off"]
+		if !present {
+			return "none", true, nil
+		}
+		if mapped == nil {
+			return "", false, nil
+		}
+		return *mapped, true, nil
+	}
+	level, supported := clampModelThinkingLevel(model, level)
+	if !supported {
+		return "", false, fmt.Errorf("model %q has no supported thinking level", model.ID)
+	}
+	if mapped, present := model.ThinkingLevelMap[level]; present {
+		if mapped == nil {
+			return "", false, fmt.Errorf("model %q does not support thinking level %q", model.ID, level)
+		}
+		return *mapped, true, nil
+	}
+	return level, true, nil
+}
+
+// responsesThinkingLevel is the provider-native effort for recording on a
+// response, so later requests can replay it as a configuration_update item.
+func responsesThinkingLevel(req Request) string {
+	if !req.Model.Reasoning {
+		return ""
+	}
+	level, ok := clampModelThinkingLevel(req.Model, req.Thinking)
+	if !ok {
+		return ""
+	}
+	effort, ok, err := responsesEffort(req.Model, level)
+	if err != nil || !ok {
+		return ""
+	}
+	return effort
+}
+
+// responsesConfigurationUpdate is a mid-conversation thinking-level change.
+// The request keeps a fixed reasoning.effort so earlier items stay cacheable.
+func responsesConfigurationUpdate(effort string) map[string]any {
+	return map[string]any{"type": "configuration_update", "reasoning": map[string]any{"effort": effort}}
+}
+
+// responsesConfigurationEffort returns the effort to send when the model takes
+// thinking-level changes as configuration_update items.
+func responsesConfigurationEffort(req Request, compat responsesCompat) (effort string, ok bool, err error) {
+	if !compat.supportsMidConvoEffort {
+		return "", false, nil
+	}
+	level, supported := clampModelThinkingLevel(req.Model, req.Thinking)
+	if !supported {
+		return "", false, fmt.Errorf("model %q has no supported thinking level", req.Model.ID)
+	}
+	return responsesEffort(req.Model, level)
+}
+
 // BuildResponsesRequest builds the generic OpenAI Responses API request. It
 // does not implement the ChatGPT Codex subscription protocol.
 func BuildResponsesRequest(req Request) (map[string]any, error) {
@@ -51,25 +119,28 @@ func BuildResponsesRequest(req Request) (map[string]any, error) {
 		}
 	}
 	if req.Model.Reasoning {
+		configEffort, _, err := responsesConfigurationEffort(req, compat)
+		if err != nil {
+			return nil, err
+		}
 		level, ok := clampModelThinkingLevel(req.Model, req.Thinking)
 		if !ok {
 			return nil, fmt.Errorf("model %q has no supported thinking level", req.Model.ID)
 		}
-		if level == "off" {
-			mapped, present := req.Model.ThinkingLevelMap["off"]
-			if !present {
-				body["reasoning"] = map[string]any{"effort": "none"}
-			} else if mapped != nil {
-				body["reasoning"] = map[string]any{"effort": *mapped}
-			}
-		} else {
-			if mapped, present := req.Model.ThinkingLevelMap[level]; present {
-				if mapped == nil {
-					return nil, fmt.Errorf("model %q does not support thinking level %q", req.Model.ID, level)
-				}
-				level = *mapped
-			}
-			body["reasoning"] = map[string]any{"effort": level, "summary": "auto"}
+		effort, present, err := responsesEffort(req.Model, level)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case configEffort != "":
+			// The configuration_update items carry the level; the request keeps
+			// one fixed effort so the cached prefix stays stable.
+			body["reasoning"] = map[string]any{"effort": "medium", "summary": "auto"}
+			body["include"] = []string{"reasoning.encrypted_content"}
+		case present && effort != "" && level == "off":
+			body["reasoning"] = map[string]any{"effort": effort}
+		case present && effort != "":
+			body["reasoning"] = map[string]any{"effort": effort, "summary": "auto"}
 			body["include"] = []string{"reasoning.encrypted_content"}
 		}
 	}
@@ -82,7 +153,11 @@ type responsesCompat struct {
 	supportsAdditionalTools        bool
 	supportsMaxOutputTokens        bool
 	supportsStrictMode             bool
-	sessionAffinityFormat          string
+	// supportsMidConvoEffort sends thinking-level changes as configuration_update
+	// items instead of a changing reasoning.effort, which would invalidate the
+	// prompt cache.
+	supportsMidConvoEffort bool
+	sessionAffinityFormat  string
 }
 
 func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
@@ -91,8 +166,8 @@ func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
 		switch field {
 		case "supportsDeveloperRole", "supportsMidConvoSystemMessages", "supportsAdditionalTools", "supportsMaxOutputTokens", "supportsStrictMode", "sessionAffinityFormat", "supportsLongCacheRetention", "supportsOpenAIGrammarTools", "supportsToolSearch", "supportsExplicitPromptCacheMode", "supportsMidConvoEffort":
 			// The last four are known OpenAI catalog metadata. psi accepts them
-			// but does not send grammar tools, tool search, explicit cache
-			// modes, or mid-conversation effort updates.
+			// but does not send grammar tools, tool search, or explicit cache
+			// modes.
 		default:
 			return responsesCompat{}, fmt.Errorf("model %q uses unsupported openai-responses compatibility field %q", model.ID, field)
 		}
@@ -112,6 +187,14 @@ func resolveResponsesCompat(model ModelMeta) (responsesCompat, error) {
 				return responsesCompat{}, fmt.Errorf("model %q has invalid openai-responses compatibility field %q", model.ID, field)
 			}
 			*destination = value
+		}
+	}
+	if !model.Compat.IsNull("supportsMidConvoEffort") {
+		if value, hasValue, present := model.Compat.Bool("supportsMidConvoEffort"); present {
+			if !hasValue {
+				return responsesCompat{}, fmt.Errorf("model %q has invalid openai-responses compatibility field %q", model.ID, "supportsMidConvoEffort")
+			}
+			compat.supportsMidConvoEffort = value
 		}
 	}
 	if !model.Compat.IsNull("sessionAffinityFormat") {
@@ -188,6 +271,11 @@ func convertResponsesMessages(req Request, compat responsesCompat) ([]any, error
 	}
 	declaredAdditionalTools := changesToolsInPlace && !hasSystem && len(req.Tools) > 0
 	unavailable := responsesUnavailableTools{set: make(map[string]bool)}
+	configEffort, _, err := responsesConfigurationEffort(req, compat)
+	if err != nil {
+		return nil, err
+	}
+	configUpdates := configEffort != ""
 	msgIndex := 0
 	for _, message := range messages {
 		leadingSystem := msgIndex == 0 && message.Role == "system"
@@ -320,6 +408,11 @@ func convertResponsesMessages(req Request, compat responsesCompat) ([]any, error
 			if len(input) == inputStart {
 				continue
 			}
+			if configUpdates && sameModel && message.ThinkingLevel != "" {
+				input = append(input, nil)
+				copy(input[inputStart+1:], input[inputStart:])
+				input[inputStart] = responsesConfigurationUpdate(message.ThinkingLevel)
+			}
 		case "toolResult":
 			callID, _ := splitResponsesToolID(message.ToolCallID)
 			if callID == "" {
@@ -336,6 +429,9 @@ func convertResponsesMessages(req Request, compat responsesCompat) ([]any, error
 		if !leadingSystem {
 			msgIndex++
 		}
+	}
+	if configEffort != "" {
+		input = append(input, responsesConfigurationUpdate(configEffort))
 	}
 	return input, nil
 }

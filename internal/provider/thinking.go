@@ -35,12 +35,44 @@ func SupportedThinking(model ModelMeta) []string {
 	}
 	return levels
 }
+
+// configurationUpdateEffort returns the last mid-conversation effort item of a
+// built request. It is what the model will actually use when the request keeps
+// a fixed reasoning.effort for prompt-cache stability.
+func configurationUpdateEffort(request map[string]any) (string, bool) {
+	input, ok := request["input"].([]any)
+	if !ok {
+		return "", false
+	}
+	effort := ""
+	found := false
+	for _, item := range input {
+		fields, ok := item.(map[string]any)
+		if !ok || fields["type"] != "configuration_update" {
+			continue
+		}
+		reasoning, ok := fields["reasoning"].(map[string]any)
+		if !ok {
+			continue
+		}
+		value, ok := reasoning["effort"].(string)
+		if !ok {
+			continue
+		}
+		effort, found = value, true
+	}
+	return effort, found
+}
+
 func ThinkingDescription(model ModelMeta, level string) string {
 	request, err := BuildRequest(Request{Model: model, Thinking: level})
 	if err != nil {
 		return "unavailable: " + err.Error()
 	}
 	if model.API == "openai-codex-responses" {
+		if effort, ok := configurationUpdateEffort(request); ok {
+			return fmt.Sprintf("%s (effective effort %s)", level, effort)
+		}
 		if r, ok := request["reasoning"].(map[string]any); ok {
 			return fmt.Sprintf("%s (effective effort %s)", level, r["effort"])
 		}
@@ -72,6 +104,9 @@ func ThinkingDescription(model ModelMeta, level string) string {
 		return level + " (provider default)"
 	}
 	if model.API == "openai-responses" {
+		if effort, ok := configurationUpdateEffort(request); ok {
+			return fmt.Sprintf("%s (effective effort %s)", level, effort)
+		}
 		if request["reasoning"] == nil {
 			return level + " (provider default)"
 		}
