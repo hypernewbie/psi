@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,39 +20,147 @@ func TestActualAppLogoutMVP(t *testing.T) {
 		t.Skip("requires -psi-test-binary for the delivered executable")
 	}
 
+	t.Run("anthropic", func(t *testing.T) {
+		home, work := t.TempDir(), t.TempDir()
+		agentDir := filepath.Join(home, ".pi", "agent")
+		authPath := filepath.Join(agentDir, "auth.json")
+		writeAppFile(t, authPath, `{"anthropic":{"type":"api_key","key":"anthropic-secret-canary"},"deepseek":{"type":"api_key","key":"deepseek-secret"},"openai-codex":{"type":"oauth","access":"oauth-token"},"custom":{"type":"api_key","key":"custom-secret"}}`)
+		writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"deepseek","defaultModel":"deepseek-v4-pro"}`)
+
+		q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
+		closeLoginPTYWatch(t, q)
+		waitLoginReady(t, q, "initial prompt", "anthropic-secret-canary")
+		q.write("/logout\r")
+		waitLoginScreen(t, q, "logout provider picker", "Stored credentials", "anthropic-secret-canary")
+		q.write("anthropic\r")
+		waitLoginOutput(t, q, "Anthropic key removed", "Removed stored API key for Anthropic", "anthropic-secret-canary")
+		q.write("/quit\r")
+		finishLoginPTY(t, q, "anthropic-secret-canary")
+
+		data, err := os.ReadFile(authPath)
+		if err != nil {
+			t.Fatal("could not read auth.json")
+		}
+		var entries map[string]struct {
+			Type   string `json:"type"`
+			Key    string `json:"key"`
+			Access string `json:"access"`
+		}
+		if err := json.Unmarshal(data, &entries); err != nil {
+			t.Fatal("could not decode auth.json")
+		}
+		if _, ok := entries["anthropic"]; ok {
+			t.Fatal("logout retained the selected API key")
+		}
+		if entries["deepseek"].Key != "deepseek-secret" || entries["openai-codex"].Type != "oauth" || entries["openai-codex"].Access != "oauth-token" || entries["custom"].Key != "custom-secret" {
+			t.Fatal("logout changed an unrelated API key, OAuth entry, or custom entry")
+		}
+	})
+
+	t.Run("codex", func(t *testing.T) {
+		const (
+			canary     = "codex-pty-fixture-canary"
+			targetMode = 0o640
+		)
+		home, work := t.TempDir(), t.TempDir()
+		agentDir := filepath.Join(home, ".pi", "agent")
+		authPath := filepath.Join(agentDir, "auth.json")
+		writeAppFile(t, authPath, `{"custom":{"type":"api_key","key":"custom-secret"},"deepseek":{"type":"api_key","key":"`+canary+`"},"openai-codex":{"type":"oauth"}}`)
+		if err := os.Chmod(authPath, targetMode); err != nil {
+			t.Fatal("could not set auth mode")
+		}
+		writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"deepseek","defaultModel":"deepseek-v4-pro"}`)
+
+		q := startReviewProcessEnv(t, home, work, agentDir, *reviewBinary, "", []string{
+			"HTTP_PROXY=http://127.0.0.1:0",
+			"HTTPS_PROXY=http://127.0.0.1:0",
+		}, "--deny-project", "--tools", "read")
+		closeLoginPTYWatch(t, q)
+		waitLoginReady(t, q, "initial prompt", canary)
+		q.write("/logout\r")
+		waitLoginScreen(t, q, "logout provider picker", "OpenAI Codex · OAuth credential", canary)
+		q.write("openai-codex\r")
+		waitLoginOutput(t, q, "Codex OAuth credential removed", "Removed stored OAuth credential for OpenAI Codex", canary)
+		waitLoginOutput(t, q, "Codex remote outcome", "No usable token", canary)
+		q.write("/quit\r")
+		finishLoginPTY(t, q, canary)
+
+		data, err := os.ReadFile(authPath)
+		if err != nil {
+			t.Fatal("could not read auth.json")
+		}
+		var got map[string]any
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal("could not decode auth.json")
+		}
+		want := map[string]any{
+			"custom":   map[string]any{"type": "api_key", "key": "custom-secret"},
+			"deepseek": map[string]any{"type": "api_key", "key": canary},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("logout changed unrelated entries: %v", got)
+		}
+		info, err := os.Stat(authPath)
+		if err != nil {
+			t.Fatal("could not inspect auth mode")
+		}
+		if info.Mode().Perm() != targetMode {
+			t.Fatalf("auth mode = %o, want %o", info.Mode().Perm(), targetMode)
+		}
+	})
+
+	t.Run("openai-oauth", func(t *testing.T) {
+		runOpenAILogoutFixture(t, `{"type":"oauth"}`, "OpenAI · OAuth credential", "Removed stored OAuth credential for OpenAI", "No usable token")
+	})
+
+	t.Run("openai-api-key", func(t *testing.T) {
+		runOpenAILogoutFixture(t, `{"type":"api_key","key":"openai-pty-key-canary"}`, "OpenAI · API key", "Removed stored API key for OpenAI", "")
+	})
+}
+
+// runOpenAILogoutFixture exercises one direct-openai stored credential through
+// the delivered binary. The DeepSeek key keeps the active model offline from
+// Codex quota polling and gives the PTY a secret canary.
+func runOpenAILogoutFixture(t *testing.T, openAIEntry, row, success, remote string) {
+	t.Helper()
+	const canary = "openai-pty-fixture-canary"
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, ".pi", "agent")
 	authPath := filepath.Join(agentDir, "auth.json")
-	writeAppFile(t, authPath, `{"anthropic":{"type":"api_key","key":"anthropic-secret-canary"},"deepseek":{"type":"api_key","key":"deepseek-secret"},"openai-codex":{"type":"oauth","access":"oauth-token"},"custom":{"type":"api_key","key":"custom-secret"}}`)
+	doc := `{"custom":{"type":"api_key","key":"custom-secret"},"deepseek":{"type":"api_key","key":"` + canary + `"},"openai":` + openAIEntry + `}`
+	writeAppFile(t, authPath, doc)
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"deepseek","defaultModel":"deepseek-v4-pro"}`)
 
-	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
+	q := startReviewProcessEnv(t, home, work, agentDir, *reviewBinary, "", []string{
+		"HTTP_PROXY=http://127.0.0.1:0",
+		"HTTPS_PROXY=http://127.0.0.1:0",
+	}, "--deny-project", "--tools", "read")
 	closeLoginPTYWatch(t, q)
-	waitLoginReady(t, q, "initial prompt", "anthropic-secret-canary")
+	waitLoginReady(t, q, "initial prompt", canary)
 	q.write("/logout\r")
-	waitLoginScreen(t, q, "logout provider picker", "Stored API keys", "anthropic-secret-canary")
-	q.write("anthropic\r")
-	waitLoginOutput(t, q, "Anthropic key removed", "Removed stored API key for Anthropic", "anthropic-secret-canary")
+	waitLoginScreen(t, q, "logout provider picker", row, canary)
+	q.write("openai\r")
+	waitLoginOutput(t, q, "OpenAI credential removed", success, canary)
+	if remote != "" {
+		waitLoginOutput(t, q, "OpenAI remote outcome", remote, canary)
+	}
 	q.write("/quit\r")
-	finishLoginPTY(t, q, "anthropic-secret-canary")
+	finishLoginPTY(t, q, canary)
 
 	data, err := os.ReadFile(authPath)
 	if err != nil {
 		t.Fatal("could not read auth.json")
 	}
-	var entries map[string]struct {
-		Type   string `json:"type"`
-		Key    string `json:"key"`
-		Access string `json:"access"`
-	}
-	if err := json.Unmarshal(data, &entries); err != nil {
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal("could not decode auth.json")
 	}
-	if _, ok := entries["anthropic"]; ok {
-		t.Fatal("logout retained the selected API key")
+	want := map[string]any{
+		"custom":   map[string]any{"type": "api_key", "key": "custom-secret"},
+		"deepseek": map[string]any{"type": "api_key", "key": canary},
 	}
-	if entries["deepseek"].Key != "deepseek-secret" || entries["openai-codex"].Type != "oauth" || entries["openai-codex"].Access != "oauth-token" || entries["custom"].Key != "custom-secret" {
-		t.Fatal("logout changed an unrelated API key, OAuth entry, or custom entry")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("logout changed unrelated entries: %v", got)
 	}
 }
 
@@ -87,7 +196,11 @@ func TestActualAppAuthSymlinkMVP(t *testing.T) {
 	}
 	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)
 
-	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
+	proxyGuard := []string{
+		"HTTP_PROXY=http://127.0.0.1:0",
+		"HTTPS_PROXY=http://127.0.0.1:0",
+	}
+	q := startReviewProcessEnv(t, home, work, agentDir, *reviewBinary, "", proxyGuard, "--deny-project", "--tools", "read")
 	closeLoginPTYWatch(t, q)
 	waitLoginReady(t, q, "initial prompt", "")
 	q.write("/login deepseek\r")
@@ -141,7 +254,7 @@ func TestActualAppAuthSymlinkMVP(t *testing.T) {
 	q.write("/quit\r")
 	finishLoginPTY(t, q, enteredKey)
 
-	q2 := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
+	q2 := startReviewProcessEnv(t, home, work, agentDir, *reviewBinary, "", proxyGuard, "--deny-project", "--tools", "read")
 	closeLoginPTYWatch(t, q2)
 	waitLoginReady(t, q2, "restart prompt", enteredKey)
 	if strings.Contains(q2.raw.String(), "no DeepSeek credential") || strings.Contains(q2.raw.String(), "offline commands still work") {
@@ -152,7 +265,7 @@ func TestActualAppAuthSymlinkMVP(t *testing.T) {
 	}
 	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)
 	q2.write("/logout\r")
-	waitLoginScreen(t, q2, "logout provider picker", "Stored API keys", enteredKey)
+	waitLoginScreen(t, q2, "logout provider picker", "Stored credentials", enteredKey)
 	q2.write("deepseek\r")
 	waitLoginOutput(t, q2, "DeepSeek key removed", "Removed stored API key for DeepSeek", enteredKey)
 	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)

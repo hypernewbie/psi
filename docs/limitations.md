@@ -55,7 +55,7 @@ Anthropic, MiniMax, OpenCode Go, DeepSeek, Z.AI, Xiaomi MiMo, Moonshot AI, Kimi 
 
 A provider that `models.json` declares uses an API key from `auth.json` or from its own `apiKey` entry. It has no environment variable, and an unsupported stored credential stops the selection.
 
-Interactive `/login` supports OpenAI ChatGPT sign-in, OpenAI Codex browser or device-code sign-in, and 16 built-in API-key providers. Anthropic API-key login is unavailable. `/logout` removes stored built-in API keys, including Anthropic, but never OAuth credentials, environment variables, or `models.json` credentials. API-key login stores the key without a provider request. See [Providers](providers.md) for the supported login providers.
+Interactive `/login` supports OpenAI ChatGPT sign-in, OpenAI Codex browser or device-code sign-in, and 16 built-in API-key providers. Anthropic API-key login is unavailable. `/logout` removes a selected stored built-in API key or OAuth credential. OAuth logout attempts one bounded request to OpenAI's revocation endpoint. Request failure alone does not block local deletion. API keys are removed locally and are not revoked at the provider. `/logout` never removes environment variables or `models.json` credentials. API-key login stores the key without a provider request. See [Providers](providers.md) for the supported login providers.
 
 psi does not support Anthropic OAuth or execute `!command` credentials. OpenAI Codex sign-in is native, but device-code availability depends on the account. An OS-assigned callback port is best-effort because OpenAI can reject its redirect; use 1455/1457 or device code when possible. psi does not substitute a billed OpenAI API key for Codex OAuth. Partial streams do not permit an invisible request replay.
 
@@ -86,7 +86,10 @@ Memory is not locked. A hostile local process with process-inspection rights is
 outside this boundary.
 
 `auth.json` writes preserve an existing symlink by replacing the resolved
-regular-file target under the logical-path lock. The link and target identity
+regular-file target under the logical-path lock. `/logout` also holds Pi's
+resolved-target lease when it differs, for the whole read, revocation request,
+and write. The lease acquisitions share a five-second budget; the revocation
+request has a separate ten-second limit. The link and target identity
 are rechecked before staging and immediately before replacement. A change
 observed by those checks is refused. A retarget after the final check remains a
 filesystem race and is not made transactional. Broader filesystem behavior,

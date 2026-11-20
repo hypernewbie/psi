@@ -53,10 +53,13 @@ Pi and psi write compatible `auth.json` entries. For API-key providers the shape
 
 API-key login and `/logout` preserve an existing `auth.json` symlink. They use
 the logical path for the shared lock, resolve the regular-file target under
-that lock, and rename beside that target. Link text, target mode, unknown
-fields, and unrelated entries stay unchanged. Broken, cyclic, and nonregular
-targets fail closed. A link retargeted before a final recheck is refused; the
-final rename remains subject to filesystem races.
+that lock, and rename beside that target. `/logout` also takes Pi's
+resolved-target lease when that lock path differs, so deletion coordinates
+with Pi writers that use the resolved file. The acquisitions share a
+five-second budget. Link text, target mode, unknown fields, and unrelated
+entries stay unchanged. Broken, cyclic, and nonregular targets fail closed. A
+link retargeted before a final recheck is refused; the final rename remains
+subject to filesystem races.
 
 `openai-codex` uses a separate ChatGPT OAuth grant. Run `/login openai-codex`
 in psi and choose **Browser login** or **Device code login**. Browser login
@@ -64,13 +67,14 @@ tries `127.0.0.1:1455`, then `1457`, then one OS-assigned port; the masked
 sign-in field also accepts a redirect URL, `code#state`, query string, or bare
 code. Device-code availability depends on the account. psi refreshes an expired
 Codex token, preserves unrelated fields, and never substitutes a billed OpenAI
-API key for Codex OAuth. An `auth.json` symlink is preserved during login and
-refresh; the logical path remains the lock target, while the resolved regular
-file receives the atomic replacement.
+API key for Codex OAuth. An `auth.json` symlink is preserved during login, refresh, and logout; the
+logical path remains the lock target, while the resolved regular file receives
+the atomic replacement. Logout holds the logical lease and, when distinct,
+Pi's resolved-target lease across the revocation request and the local write.
 
 By default, Codex credential checks and refreshes wait up to thirty seconds for
-each shared lock, matching Pi. API-key writes from `/login` and `/logout` wait
-up to five seconds. Both paths respect cancellation. An incomplete or invalid
+each shared lock, matching Pi. API-key login and `/logout` lease acquisition
+wait up to five seconds. Both paths respect cancellation. An incomplete or invalid
 Codex token response leaves the auth file unchanged. If a valid rotated token
 response arrives and the lease and target checks pass, psi commits it before
 returning cancellation so Pi can use the new refresh token. psi reclaims a stale
@@ -128,11 +132,19 @@ selects that model and saves the new defaults. Otherwise, it keeps the current
 model. Anthropic API-key login is not available in psi; use the matching
 environment variable or `models.json`. OpenAI Codex uses `/login openai-codex`.
 
-Use `/logout` to select and remove a stored built-in API key. It includes
-Anthropic API keys, but does not remove OAuth credentials, environment
-variables, or credentials from `models.json`. Removing the active provider key
-reloads that provider from the remaining credential sources; if none exists,
-psi goes offline until you configure a credential again.
+Use `/logout` to select and remove a stored built-in credential. The picker
+lists API keys for built-in API-key providers, direct OpenAI ChatGPT OAuth,
+and OpenAI Codex OAuth. For OAuth, psi sends one bounded request to
+`https://auth.openai.com/oauth/revoke` and reports the remote outcome
+separately. Local deletion continues if that request is rejected, redirected,
+times out, or cannot be sent. A 2xx response only accepts the request; it does
+not prove that already-issued access tokens stopped working. Removal does not
+affect environment variables or credentials from `models.json`; an API key is
+removed locally and is not revoked at the provider. Removing the active
+provider credential reloads that provider from the remaining credential
+sources; if none exists, psi goes offline until you configure a credential
+again. If Pi uses the same `auth.json`, its next successful read sees the
+deletion.
 
 ## Choose a model
 

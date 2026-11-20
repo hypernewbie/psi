@@ -80,10 +80,26 @@ unrelated entries, and unknown fields. Broken, cyclic, and nonregular targets
 fail closed. psi rechecks the logical target and file identity before staging
 and immediately before replacement. It refuses a change observed by those
 checks; a retarget after the final check remains a filesystem race and is not
-made atomic. Codex login and refresh use the same logical-lock and
-resolved-target rule. `/logout` removes only the selected stored API key, not
-OAuth credentials, environment variables, or `models.json` credentials.
-ChatGPT sign-in and refresh refuse to write through an `auth.json` symlink.
+made atomic. Codex login, refresh, and `/logout` use the same logical-lock and
+resolved-target rule. `/logout` also takes Pi's resolved-target lease when it
+differs from the logical lease, and both acquisitions share a five-second
+budget. For OAuth logout, psi checks that the document entries and permission
+bits still match the original read before staging and again before replacement.
+`/logout` removes the selected stored API key or OAuth credential, not
+environment variables or `models.json` credentials. An API-key logout removes
+the stored copy only; it does not revoke the key at the provider. ChatGPT
+sign-in and refresh refuse to write through an `auth.json` symlink.
+
+OAuth logout sends one best-effort JSON request to the fixed
+`https://auth.openai.com/oauth/revoke` endpoint. It sends a nonblank refresh
+token when the provider has a usable client ID, otherwise a nonblank access
+token. It does not follow redirects, retry, or read the response body. The
+request has a ten-second limit, separate from the five-second lock budget. A
+rejected request still permits local deletion and is reported as unconfirmed.
+The transport closes and wipes the application's mutable request buffer.
+Decoded strings and copies made within the standard library are not wiped by
+psi. A 2xx response does not prove that the issuer will reject a refresh token
+or that already-issued access tokens have expired.
 
 The `openai-codex` quota indicator reads the selected OAuth entry locally and
 makes periodic best-effort usage requests to the fixed ChatGPT endpoint. It

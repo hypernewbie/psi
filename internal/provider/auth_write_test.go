@@ -5,12 +5,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func offlineLogoutClient() *http.Client {
+	return &http.Client{Transport: tokenTransportFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("synthetic logout transport disabled")
+	})}
+}
 
 func requireAuthWriteMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
@@ -514,9 +522,16 @@ func TestDanglingAuthSymlinkFailsClosed(t *testing.T) {
 	if err == nil || key != "" || source != "" {
 		t.Fatalf("dangling auth symlink allowed fallback: key=%q source=%q err=%v", key, source, err)
 	}
-	providers, err := StoredAPIKeyProviders(authPath)
-	if err == nil || providers != nil {
-		t.Fatalf("dangling auth symlink was reported as an empty logout list: providers=%v err=%v", providers, err)
+	credentials, err := StoredCredentials(authPath)
+	if err == nil || credentials != nil {
+		t.Fatalf("dangling auth symlink was reported as an empty logout list: credentials=%v err=%v", credentials, err)
+	}
+	result, err := LogoutCredential(context.Background(), authPath, StoredCredential{ProviderID: "deepseek", Kind: CredentialAPIKey}, nil)
+	if err == nil || result.Removed {
+		t.Fatalf("dangling auth symlink allowed logout: result=%+v err=%v", result, err)
+	}
+	if link, linkErr := os.Readlink(authPath); linkErr != nil || link != filepath.Join(dir, "missing.json") {
+		t.Fatalf("logout changed the dangling link: %q error=%v", link, linkErr)
 	}
 }
 
@@ -540,9 +555,17 @@ func TestInvalidAuthDocumentRejectsCredentialFallbackAndLogoutListing(t *testing
 			if err == nil || key != "" || source != "" {
 				t.Fatalf("invalid auth.json resolved a credential: key=%q source=%q err=%v", key, source, err)
 			}
-			providers, err := StoredAPIKeyProviders(authPath)
-			if err == nil || providers != nil {
-				t.Fatalf("invalid auth.json was reported as an empty logout list: providers=%v err=%v", providers, err)
+			credentials, err := StoredCredentials(authPath)
+			if err == nil || credentials != nil {
+				t.Fatalf("invalid auth.json was reported as an empty logout list: credentials=%v err=%v", credentials, err)
+			}
+			result, err := LogoutCredential(context.Background(), authPath, StoredCredential{ProviderID: "deepseek", Kind: CredentialAPIKey}, nil)
+			if err == nil || result.Removed {
+				t.Fatalf("invalid auth.json allowed logout: result=%+v err=%v", result, err)
+			}
+			after, readErr := os.ReadFile(authPath)
+			if readErr != nil || !bytes.Equal(after, tc.data) {
+				t.Fatalf("refused logout changed auth.json: error=%v", readErr)
 			}
 		})
 	}
@@ -603,18 +626,18 @@ func TestSaveAPIKeyLeavesBorrowedInputUnchanged(t *testing.T) {
 	})
 }
 
-func TestStoredAPIKeyProvidersInspectsKeyWithoutDecoding(t *testing.T) {
+func TestStoredCredentialsInspectsKeyWithoutDecoding(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
-		want []string
+		want []StoredCredential
 		err  bool
 	}{
 		{name: "absent", body: `{"deepseek":{"type":"api_key"}}`},
 		{name: "null", body: `{"deepseek":{"type":"api_key","key":null}}`},
 		{name: "empty", body: `{"deepseek":{"type":"api_key","key":""}}`},
-		{name: "escaped", body: `{"deepseek":{"type":"api_key","key":"\\u0000"}}`, want: []string{"deepseek"}},
-		{name: "spaces", body: `{"deepseek":{"type":"api_key","key":" "}}`, want: []string{"deepseek"}},
+		{name: "escaped", body: `{"deepseek":{"type":"api_key","key":"\\u0000"}}`, want: []StoredCredential{{ProviderID: "deepseek", Kind: CredentialAPIKey}}},
+		{name: "spaces", body: `{"deepseek":{"type":"api_key","key":" "}}`, want: []StoredCredential{{ProviderID: "deepseek", Kind: CredentialAPIKey}}},
 		{name: "number", body: `{"deepseek":{"type":"api_key","key":7}}`, err: true},
 		{name: "boolean", body: `{"deepseek":{"type":"api_key","key":true}}`, err: true},
 	}
@@ -624,7 +647,7 @@ func TestStoredAPIKeyProvidersInspectsKeyWithoutDecoding(t *testing.T) {
 			if err := os.WriteFile(authPath, []byte(tc.body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := StoredAPIKeyProviders(authPath)
+			got, err := StoredCredentials(authPath)
 			if tc.err {
 				if err == nil {
 					t.Fatalf("malformed key type was accepted: %v", got)
@@ -635,13 +658,193 @@ func TestStoredAPIKeyProvidersInspectsKeyWithoutDecoding(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(got) != len(tc.want) {
-				t.Fatalf("providers = %v, want %v", got, tc.want)
+				t.Fatalf("credentials = %v, want %v", got, tc.want)
 			}
 			for i := range tc.want {
 				if got[i] != tc.want[i] {
-					t.Fatalf("providers = %v, want %v", got, tc.want)
+					t.Fatalf("credentials = %v, want %v", got, tc.want)
 				}
 			}
 		})
+	}
+}
+
+func TestStoredCredentialsClassifiesBuiltInEntries(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []StoredCredential
+	}{
+		{
+			name: "OAuth and API-key providers",
+			body: `{"anthropic":{"type":"api_key","key":"anthropic-key"},"deepseek":{"type":"api_key","key":"deepseek-key"},"openai":{"type":"oauth","access":"openai-access"},"openai-codex":{"type":"oauth"},"minimax":{"type":"oauth","access":"not-listed"},"custom":{"type":"api_key","key":"custom-key"},"zai":{"type":"oauth_token","access":"unsupported"}}`,
+			want: []StoredCredential{
+				{ProviderID: "anthropic", Kind: CredentialAPIKey},
+				{ProviderID: "deepseek", Kind: CredentialAPIKey},
+				{ProviderID: "openai", Kind: CredentialOAuth},
+				{ProviderID: "openai-codex", Kind: CredentialOAuth},
+			},
+		},
+		{
+			name: "OpenAI API key",
+			body: `{"openai":{"type":"api_key","key":"openai-key"},"openai-codex":{"type":"api_key","key":42}}`,
+			want: []StoredCredential{{ProviderID: "openai", Kind: CredentialAPIKey}},
+		},
+		{
+			name: "untyped API key",
+			body: `{"deepseek":{"key":"untyped-key"}}`,
+			want: []StoredCredential{{ProviderID: "deepseek", Kind: CredentialAPIKey}},
+		},
+		{
+			name: "OAuth token type is not OAuth",
+			body: `{"openai":{"type":"oauth_token","access":"not-oauth"}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authPath := filepath.Join(t.TempDir(), "auth.json")
+			if err := os.WriteFile(authPath, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := StoredCredentials(authPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("credentials = %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("credentials = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestLogoutCredentialRemovesOnlySelectedEntry(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	const before = `{"anthropic":{"type":"api_key","key":"anthropic-key"},"openai-codex":{"type":"oauth","access":"codex-access","refresh":"codex-refresh","accountId":"synthetic-account"},"custom":{"type":"api_key","key":"custom-key"}}`
+	if err := os.WriteFile(authPath, []byte(before), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(authPath, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	result, err := LogoutCredential(context.Background(), authPath, StoredCredential{ProviderID: "openai-codex", Kind: CredentialOAuth}, offlineLogoutClient())
+	if err != nil || !result.Removed {
+		t.Fatalf("logout result=%+v error=%v", result, err)
+	}
+	requireAuthWriteMode(t, authPath, 0o640)
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries map[string]any
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := entries["openai-codex"]; ok {
+		t.Fatal("logout retained the selected OAuth entry")
+	}
+	want := map[string]any{
+		"anthropic": map[string]any{"type": "api_key", "key": "anthropic-key"},
+		"custom":    map[string]any{"type": "api_key", "key": "custom-key"},
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("logout changed unrelated entries: %s", data)
+	}
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(authPath), ".psi-auth-*"))
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files remain: %v, error=%v", temps, err)
+	}
+}
+
+func TestLogoutCredentialLeavesEmptyObjectAfterLastEntry(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"openai":{"type":"oauth"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := LogoutCredential(context.Background(), authPath, StoredCredential{ProviderID: "openai", Kind: CredentialOAuth}, nil)
+	if err != nil || !result.Removed {
+		t.Fatalf("logout result=%+v error=%v", result, err)
+	}
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(data)) != "{}" {
+		t.Fatalf("last-entry logout left %q, want {}", data)
+	}
+}
+
+func TestLogoutCredentialRefusesMismatchedKindAndUnsupportedProviders(t *testing.T) {
+	cases := []struct {
+		name     string
+		doc      string
+		selected StoredCredential
+	}{
+		{name: "API key for Codex", doc: `{"openai-codex":{"type":"oauth","access":"codex-access"}}`, selected: StoredCredential{ProviderID: "openai-codex", Kind: CredentialAPIKey}},
+		{name: "OAuth for API-key provider", doc: `{"anthropic":{"type":"oauth","access":"anthropic-access"}}`, selected: StoredCredential{ProviderID: "anthropic", Kind: CredentialOAuth}},
+		{name: "stale picker kind", doc: `{"openai":{"type":"oauth","access":"openai-access"}}`, selected: StoredCredential{ProviderID: "openai", Kind: CredentialAPIKey}},
+		{name: "unsupported type", doc: `{"openai":{"type":"oauth_token","access":"not-oauth"}}`, selected: StoredCredential{ProviderID: "openai", Kind: CredentialOAuth}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authPath := filepath.Join(t.TempDir(), "auth.json")
+			if err := os.WriteFile(authPath, []byte(tc.doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := LogoutCredential(context.Background(), authPath, tc.selected, nil)
+			if err == nil || result.Removed {
+				t.Fatalf("logout result=%+v error=%v, want refusal", result, err)
+			}
+			after, readErr := os.ReadFile(authPath)
+			if readErr != nil || string(after) != tc.doc {
+				t.Fatalf("refusal changed auth.json: %q error=%v", after, readErr)
+			}
+		})
+	}
+}
+
+func TestLogoutCredentialAbsentFileIsNotCreated(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "missing", "auth.json")
+	result, err := LogoutCredential(context.Background(), authPath, StoredCredential{ProviderID: "deepseek", Kind: CredentialAPIKey}, nil)
+	if err != nil || result.Removed {
+		t.Fatalf("absent logout result=%+v error=%v", result, err)
+	}
+	if _, err := os.Stat(filepath.Dir(authPath)); !os.IsNotExist(err) {
+		t.Fatalf("logout created the missing directory: %v", err)
+	}
+}
+
+func TestLogoutCredentialPreservesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink logout test is POSIX-only")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(target, []byte(`{"deepseek":{"type":"api_key","key":"keep"},"openai-codex":{"type":"oauth"}}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(target), authPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	result, err := LogoutCredential(context.Background(), authPath, StoredCredential{ProviderID: "openai-codex", Kind: CredentialOAuth}, nil)
+	if err != nil || !result.Removed {
+		t.Fatalf("logout result=%+v error=%v", result, err)
+	}
+	info, err := os.Lstat(authPath)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("logout replaced the auth symlink")
+	}
+	requireAuthWriteMode(t, target, 0o640)
+	data, err := os.ReadFile(target)
+	if err != nil || !strings.Contains(string(data), `"key": "keep"`) {
+		t.Fatalf("logout changed the linked target: %s error=%v", data, err)
 	}
 }

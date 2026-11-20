@@ -7,9 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 	"unicode/utf8"
 
@@ -23,7 +24,24 @@ const (
 	apiKeyAuthLockWait = 5 * time.Second
 )
 
-var errAuthDocumentTooLarge = errors.New("auth.json exceeds the size limit")
+var (
+	errAuthDocumentTooLarge = errors.New("auth.json exceeds the size limit")
+	errAuthLogoutBusy       = errors.New("auth.json is busy; retry /logout")
+)
+
+// CredentialKind is the stored representation used by /logout.
+type CredentialKind string
+
+const (
+	CredentialAPIKey CredentialKind = "api_key"
+	CredentialOAuth  CredentialKind = "oauth"
+)
+
+// StoredCredential identifies one removable credential entry for /logout.
+type StoredCredential struct {
+	ProviderID string
+	Kind       CredentialKind
+}
 
 // SaveAPIKey atomically stores a literal API key in Pi-compatible auth.json.
 // The caller owns key and must wipe it after SaveAPIKey returns.
@@ -104,95 +122,195 @@ func SaveAPIKey(ctx context.Context, authPath, providerID string, key []byte) er
 	return nil
 }
 
-// RemoveAPIKey removes one stored API-key credential without touching other
-// provider entries or creating a missing auth.json.
-func RemoveAPIKey(ctx context.Context, authPath, providerID string) (bool, error) {
-	if _, err := apiKeyProvider(providerID); err != nil {
-		return false, err
+// LogoutCredential removes one stored API-key or OAuth credential without
+// touching other provider entries or creating a missing auth.json. The
+// selected kind must still match the entry on disk; a refresh may have
+// replaced it while the picker was open. OAuth removal attempts one bounded
+// revocation request and reports that outcome separately from local removal.
+func LogoutCredential(ctx context.Context, authPath string, selected StoredCredential, client *http.Client) (LogoutResult, error) {
+	return logoutCredential(ctx, authPath, selected, client, authFileHooks{})
+}
+
+func logoutCredential(ctx context.Context, authPath string, selected StoredCredential, client *http.Client, hooks authFileHooks) (LogoutResult, error) {
+	result := LogoutResult{}
+	spec, ok := providerregistry.Lookup(selected.ProviderID)
+	if !ok || !credentialKindAllowed(spec.Auth, selected.Kind) {
+		return result, fmt.Errorf("unsupported credential for %s", selected.ProviderID)
 	}
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return result, err
 	}
 	authPath = resolvedWriteAuthPath(authPath)
 	if _, err := os.Lstat(authPath); errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return result, nil
 	} else if err != nil {
-		return false, fmt.Errorf("cannot inspect auth.json")
+		return result, fmt.Errorf("cannot inspect auth.json")
 	}
-	unlock, leaseValid, err := acquireAuthLock(ctx, authPath+".lock", 0, 0, apiKeyAuthLockWait)
+	lockCtx, cancelLock := context.WithTimeout(ctx, apiKeyAuthLockWait)
+	defer cancelLock()
+	unlockLogical, logicalValid, err := acquireLogoutLock(ctx, lockCtx, authPath+".lock")
 	if err != nil {
-		return false, err
+		return result, err
 	}
-	defer unlock()
+	defer unlockLogical()
 	target, err := resolveAuthTarget(authPath)
 	if err != nil {
-		return false, err
+		return result, err
 	}
 	if !target.exists {
-		return false, nil
+		return result, ctx.Err()
 	}
-	entries, mode, exists, err := readAuthDocument(target)
-	if err != nil {
-		return false, err
+	// Pi locks the resolved file. A shared auth.json needs both leases when the
+	// logical and resolved lock paths name different physical directories.
+	// Taking the same lease twice would make logout wait on itself.
+	var resolvedValid func() bool
+	resolvedLock := target.path + ".lock"
+	if !sameAuthLockLocation(authPath+".lock", resolvedLock) {
+		unlock, valid, err := acquireLogoutLock(ctx, lockCtx, resolvedLock)
+		if err != nil {
+			return result, err
+		}
+		defer unlock()
+		resolvedValid = valid
 	}
-	defer releaseRawEntries(entries)
-	if !exists {
-		return false, nil
-	}
-	raw, present := entries[providerID]
-	if !present {
-		return false, nil
-	}
-	entry, err := decodeStoredEntry(raw, providerID)
-	if err != nil {
-		return false, err
-	}
-	defer releaseRawEntries(entry)
-	credentialType, err := storedEntryType(entry, providerID)
-	if err != nil {
-		return false, err
-	}
-	if credentialType == "oauth" || credentialType == "oauth_token" {
-		return false, fmt.Errorf("refusing to remove the OAuth credential for %s", providerID)
-	}
-	if credentialType != "" && credentialType != "api_key" {
-		return false, fmt.Errorf("unsupported credential type for %s", providerID)
-	}
-	delete(entries, providerID)
-	secretmem.Wipe(raw[:cap(raw)])
-	valid := func() error {
+	cancelLock()
+	checkLeases := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !leaseValid() {
+		if !logicalValid() {
 			return fmt.Errorf("auth.json lock changed; refusing to write")
 		}
-		return nil
-	}
-	if err := writeAuthDocument(target, entries, mode, valid); err != nil {
-		if ctx.Err() != nil {
-			return false, ctx.Err()
+		if resolvedValid != nil && !resolvedValid() {
+			return fmt.Errorf("auth.json target lock changed; refusing to write")
 		}
-		return false, err
+		return ctx.Err()
 	}
-	return true, nil
+	if err := target.recheck(); err != nil {
+		return result, err
+	}
+	if err := checkLeases(); err != nil {
+		return result, err
+	}
+	entries, mode, _, err := readAuthDocument(target)
+	if err != nil {
+		return result, err
+	}
+	defer releaseRawEntries(entries)
+	raw, present := entries[selected.ProviderID]
+	if !present {
+		return result, nil
+	}
+	entry, err := decodeStoredEntry(raw, selected.ProviderID)
+	if err != nil {
+		return result, err
+	}
+	defer releaseRawEntries(entry)
+	kind, err := classifyStoredCredential(entry, spec)
+	if err != nil {
+		return result, err
+	}
+	if kind != selected.Kind {
+		return result, fmt.Errorf("stored credential for %s changed; reopen /logout", selected.ProviderID)
+	}
+
+	valid := checkLeases
+	if kind == CredentialOAuth {
+		request, usable := selectRevokeRequest(selected.ProviderID, entry)
+		if !usable {
+			result.Revocation = RevocationNoUsableToken
+		} else {
+			if err := target.recheck(); err != nil {
+				return result, err
+			}
+			if err := checkLeases(); err != nil {
+				return result, err
+			}
+			result.Revocation = revokeOAuthToken(ctx, request, client)
+		}
+		// The writer calls this before staging and again before replacement.
+		// A non-cooperating writer can change the file without replacing it.
+		valid = func() error {
+			if err := checkLeases(); err != nil {
+				return err
+			}
+			current, currentMode, exists, err := readAuthDocument(target)
+			defer releaseRawEntries(current)
+			matches := exists && authSnapshotMatches(entries, mode, current, currentMode)
+			if leaseErr := checkLeases(); leaseErr != nil {
+				return leaseErr
+			}
+			if err != nil {
+				return err
+			}
+			if !matches {
+				return fmt.Errorf("auth.json changed during logout; reopen /logout")
+			}
+			return nil
+		}
+	}
+	// The write map borrows raw values; entries remains the sole owner.
+	remaining := maps.Clone(entries)
+	delete(remaining, selected.ProviderID)
+	if err := writeAuthDocumentWithHooks(target, remaining, mode, valid, hooks); err != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		return result, err
+	}
+	result.Removed = true
+	return result, nil
 }
 
-// StoredAPIKeyProviders returns sorted built-in providers with a stored key.
-// It reads auth.json once and excludes OAuth and custom-provider entries.
-func StoredAPIKeyProviders(authPath string) ([]string, error) {
+func acquireLogoutLock(ctx, lockCtx context.Context, path string) (func(), func() bool, error) {
+	unlock, valid, err := acquireAuthLock(lockCtx, path, 0, 0, 0)
+	if err == nil {
+		return unlock, valid, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, nil, errAuthLogoutBusy
+	}
+	return nil, nil, err
+}
+
+// sameAuthLockLocation reports whether two lock paths name the same lease. A
+// missing path, a symlink, or a non-directory does not count as a match; those
+// cases fall through to the normal lease acquisition, which fails closed.
+func sameAuthLockLocation(a, b string) bool {
+	if absA, errA := filepath.Abs(a); errA == nil {
+		if absB, errB := filepath.Abs(b); errB == nil && absA == absB {
+			return true
+		}
+	}
+	infoA, errA := os.Lstat(a)
+	infoB, errB := os.Lstat(b)
+	if errA != nil || errB != nil || !infoA.IsDir() || !infoB.IsDir() {
+		return false
+	}
+	statA, errA := statAuthIdentity(a)
+	statB, errB := statAuthIdentity(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return os.SameFile(statA, statB)
+}
+
+// StoredCredentials returns sorted built-in credentials that /logout can
+// remove. It reads auth.json once, excludes custom providers, and lists one
+// entry per provider because a provider stores either an API key or OAuth.
+func StoredCredentials(authPath string) ([]StoredCredential, error) {
 	entries, err := AuthEntries(resolvedWriteAuthPath(authPath))
 	if err != nil {
 		return nil, err
 	}
 	defer ReleaseAuthEntries(entries)
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	var providers []string
+	var credentials []StoredCredential
 	for _, providerID := range providerregistry.IDs() {
 		spec, ok := providerregistry.Lookup(providerID)
-		if !ok || spec.Auth != providerregistry.AuthAPIKey {
+		if !ok {
 			continue
 		}
 		raw, present := entries[providerID]
@@ -203,31 +321,60 @@ func StoredAPIKeyProviders(authPath string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		hasKey, err := storedAPIKeyPresent(entry, providerID)
+		kind, err := classifyStoredCredential(entry, spec)
+		releaseRawEntries(entry)
 		if err != nil {
 			return nil, err
 		}
-		if hasKey {
-			providers = append(providers, providerID)
+		if kind != "" {
+			credentials = append(credentials, StoredCredential{ProviderID: providerID, Kind: kind})
 		}
 	}
-	sort.Strings(providers)
-	return providers, nil
+	return credentials, nil
 }
 
-// storedAPIKeyPresent owns entry for the duration of the inspection and
-// releases its decoded raw-message allocations before returning. It inspects
-// the JSON string token directly so the logout listing does not create a
-// second secret string from the key.
-func storedAPIKeyPresent(entry map[string]json.RawMessage, providerID string) (bool, error) {
-	defer releaseRawEntries(entry)
-	credentialType, err := storedEntryType(entry, providerID)
+// credentialKindAllowed maps the registry auth kind to the entries logout may
+// list and remove. Custom and unknown kinds fail closed in the caller.
+func credentialKindAllowed(auth providerregistry.AuthKind, kind CredentialKind) bool {
+	switch auth {
+	case providerregistry.AuthAPIKey:
+		return kind == CredentialAPIKey
+	case providerregistry.AuthAPIKeyOrOAuth:
+		return kind == CredentialAPIKey || kind == CredentialOAuth
+	case providerregistry.AuthCodexOAuth:
+		return kind == CredentialOAuth
+	default:
+		return false
+	}
+}
+
+// classifyStoredCredential borrows entry. Unsupported kinds are ignored;
+// an allowed OAuth entry stays removable without a usable token.
+func classifyStoredCredential(entry map[string]json.RawMessage, spec providerregistry.Spec) (CredentialKind, error) {
+	credentialType, err := storedEntryType(entry, spec.ID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	if credentialType != "" && credentialType != "api_key" {
-		return false, nil
+	kind := CredentialKind(credentialType)
+	if kind == "" {
+		kind = CredentialAPIKey
 	}
+	if !credentialKindAllowed(spec.Auth, kind) {
+		return "", nil
+	}
+	if kind == CredentialAPIKey {
+		present, err := storedAPIKeyPresent(entry, spec.ID)
+		if err != nil || !present {
+			return "", err
+		}
+	}
+	return kind, nil
+}
+
+// storedAPIKeyPresent borrows entry and inspects the JSON string token directly
+// so the logout listing does not create a second secret string from the key.
+// The caller releases the decoded entry once.
+func storedAPIKeyPresent(entry map[string]json.RawMessage, providerID string) (bool, error) {
 	rawKey, present := entry["key"]
 	if !present {
 		return false, nil
@@ -287,7 +434,7 @@ func readAuthDocument(target authTarget) (map[string]json.RawMessage, os.FileMod
 		releaseRawEntries(entries)
 		return nil, 0, false, fmt.Errorf("auth.json must be a JSON object")
 	}
-	return entries, target.info.Mode().Perm(), true, nil
+	return entries, opened.Mode().Perm(), true, nil
 }
 
 func selectedAPIKeyEntry(entries map[string]json.RawMessage, providerID string) (map[string]json.RawMessage, string, error) {

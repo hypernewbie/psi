@@ -142,7 +142,7 @@ func TestBareLoginOpensProviderPicker(t *testing.T) {
 	}
 }
 
-func TestLogoutPickerRemovesOnlyStoredBuiltInAPIKey(t *testing.T) {
+func TestLogoutPickerRemovesOnlyStoredBuiltInCredentials(t *testing.T) {
 	r := testRuntime(t)
 	t.Setenv("ANTHROPIC_API_KEY", "fallback-key")
 	r.state = StateIdle
@@ -170,7 +170,7 @@ func TestLogoutPickerRemovesOnlyStoredBuiltInAPIKey(t *testing.T) {
 	for _, item := range r.selector.Items {
 		got = append(got, item.ID)
 	}
-	if !reflect.DeepEqual(got, []string{"anthropic", "deepseek"}) {
+	if !reflect.DeepEqual(got, []string{"anthropic", "deepseek", "openai-codex"}) {
 		t.Fatalf("logout picker included non-stored or non-built-in credentials: %v", got)
 	}
 	r.selector.SetFilter("anthropic")
@@ -178,7 +178,7 @@ func TestLogoutPickerRemovesOnlyStoredBuiltInAPIKey(t *testing.T) {
 	if selected == nil || selected.ID != "anthropic" {
 		t.Fatalf("search did not select Anthropic: %v", selected)
 	}
-	r.finishLogout(selected.ID, console, &out)
+	r.finishLogout(provider.StoredCredential{ProviderID: selected.ID, Kind: r.selector.CredentialKinds[selected.ID]}, console, &out)
 	if strings.Contains(out.String(), "fallback-key") || !strings.Contains(out.String(), "Removed stored API key for Anthropic") {
 		t.Fatalf("logout status is incorrect or disclosed a credential: %q", out.String())
 	}
@@ -275,7 +275,7 @@ func TestActiveAPIKeyChangesReachProviderRequests(t *testing.T) {
 				t.Fatal("replacing the active key changed the model selection")
 			}
 			send("after login", replacementKey)
-			r.finishLogout("deepseek", console, io.Discard)
+			r.finishLogout(provider.StoredCredential{ProviderID: "deepseek", Kind: provider.CredentialAPIKey}, console, io.Discard)
 			fallback := configuredKey
 			if fallback == "" {
 				fallback = environmentKey
@@ -304,7 +304,7 @@ func TestLogoutActiveProviderWithoutFallbackGoesOffline(t *testing.T) {
 	console := authCommandConsole(t)
 	r.lifecycle = &terminalLifecycle{console: console}
 	var out bytes.Buffer
-	r.finishLogout("deepseek", console, &out)
+	r.finishLogout(provider.StoredCredential{ProviderID: "deepseek", Kind: provider.CredentialAPIKey}, console, &out)
 	if r.authErr == nil || r.state != StateOffline || r.prov != nil {
 		t.Fatalf("logout without a fallback did not take the runtime offline: authErr=%v state=%s provider=%T", r.authErr, r.state, r.prov)
 	}
@@ -325,7 +325,7 @@ func TestLogoutWithNoStoredKeysLeavesAuthFileAbsent(t *testing.T) {
 	if err := r.logoutCommand("", console, &out); err != nil {
 		t.Fatal(err)
 	}
-	if r.selector != nil || !strings.Contains(out.String(), "No stored API keys to remove") {
+	if r.selector != nil || !strings.Contains(out.String(), "No stored credentials to remove") {
 		t.Fatalf("empty logout result selector=%+v output=%q", r.selector, out.String())
 	}
 	if _, err := os.Stat(filepath.Join(r.agentDir, "auth.json")); !os.IsNotExist(err) {
@@ -409,4 +409,166 @@ func authCommandConsole(t *testing.T) *terminal.Console {
 	console := terminal.NewConsole(input, io.Discard)
 	t.Cleanup(console.Close)
 	return console
+}
+
+func TestLogoutPickerKindChangeRefusesWrite(t *testing.T) {
+	r := testRuntime(t)
+	r.state = StateIdle
+	authPath := filepath.Join(r.agentDir, "auth.json")
+	writeAppFile(t, authPath, `{"deepseek":{"type":"api_key","key":"keep"},"openai":{"type":"api_key","key":"old-openai-key"}}`)
+	console := authCommandConsole(t)
+	r.lifecycle = &terminalLifecycle{console: console}
+	var out bytes.Buffer
+	if err := r.logoutCommand("", console, &out); err != nil {
+		t.Fatal(err)
+	}
+	if r.selector == nil || r.selector.CredentialKinds["openai"] != provider.CredentialAPIKey {
+		t.Fatalf("logout picker did not record the displayed OpenAI kind: %+v", r.selector)
+	}
+	replacement := `{"deepseek":{"type":"api_key","key":"keep"},"openai":{"type":"oauth","access":"new-openai-access"}}`
+	writeAppFile(t, authPath, replacement)
+	r.finishLogout(provider.StoredCredential{ProviderID: "openai", Kind: provider.CredentialAPIKey}, console, &out)
+	if !strings.Contains(out.String(), "reopen /logout") || strings.Contains(out.String(), "unconfirmed") {
+		t.Fatalf("stale picker kind did not ask for a reopen without implying a request: %q", out.String())
+	}
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries map[string]struct {
+		Type   string `json:"type"`
+		Access string `json:"access"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if entries["openai"].Type != "oauth" || entries["openai"].Access != "new-openai-access" {
+		t.Fatalf("stale picker action overwrote the replacement credential: %s", data)
+	}
+}
+
+func TestLogoutActiveCodexRevocationFailureGoesOffline(t *testing.T) {
+	r := testRuntime(t)
+	r.state = StateIdle
+	models, err := config.LoadModels(filepath.Join(r.agentDir, "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.models = models
+	authPath := filepath.Join(r.agentDir, "auth.json")
+	writeAppFile(t, authPath, `{"openai-codex":{"type":"oauth","access":"synthetic-expired-access","refresh":"synthetic-refresh","expires":1}}`)
+	selection, err := models.SelectModel("openai-codex", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.configure(config.StartupOverrides{Provider: "openai-codex", Model: selection.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.publishLive()
+	r.state = StateIdle
+	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		_ = req.Body.Close()
+		return nil, io.ErrUnexpectedEOF
+	})
+	console := authCommandConsole(t)
+	r.lifecycle = &terminalLifecycle{console: console}
+	var out bytes.Buffer
+	r.finishLogout(provider.StoredCredential{ProviderID: "openai-codex", Kind: provider.CredentialOAuth}, console, &out)
+	if !strings.Contains(out.String(), "Removed stored OAuth credential for OpenAI Codex") || !strings.Contains(out.String(), "Revocation unconfirmed.") {
+		t.Fatalf("logout status missing local or remote outcome: %q", out.String())
+	}
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "openai-codex") {
+		t.Fatalf("logout retained the Codex entry: %s", data)
+	}
+	if r.authErr == nil || r.state != StateOffline || r.prov != nil {
+		t.Fatalf("Codex logout without a fallback did not go offline: authErr=%v state=%s provider=%T", r.authErr, r.state, r.prov)
+	}
+	live := r.liveSettings()
+	if live.AuthErr == nil || live.Provider != nil {
+		t.Fatalf("live settings kept a Codex provider online: %+v", live)
+	}
+}
+
+func TestLogoutShowsBothOutcomesWhenLocalCommitFails(t *testing.T) {
+	r := testRuntime(t)
+	authPath := filepath.Join(r.agentDir, "auth.json")
+	const before = `{"openai-codex":{"type":"oauth","refresh":"synthetic-refresh"}}`
+	const updated = `{"openai-codex":{"type":"oauth","refresh":"synthetic-new-refresh"}}`
+	writeAppFile(t, authPath, before)
+	r.codexTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		writeAppFile(t, authPath, updated)
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	})
+	var transcript bytes.Buffer
+	r.finishLogout(provider.StoredCredential{ProviderID: "openai-codex", Kind: provider.CredentialOAuth}, authCommandConsole(t), terminal.RawOutput{W: &transcript})
+	if !strings.Contains(transcript.String(), "Failed to remove stored OAuth credential for OpenAI Codex") ||
+		!strings.Contains(transcript.String(), "reopen /logout") ||
+		!strings.Contains(transcript.String(), "OpenAI accepted the refresh-token revocation request.") {
+		t.Fatal("rendered logout notice lost the local failure or remote outcome")
+	}
+	if strings.Contains(transcript.String(), "synthetic-") {
+		t.Fatal("logout notice disclosed the synthetic credential")
+	}
+}
+
+func TestOpenAILogoutKeepsActiveProviderWithFallback(t *testing.T) {
+	for _, configuredKey := range []string{"", "configured-openai-key"} {
+		name := "OPENAI_API_KEY"
+		environmentKey := "environment-openai-key"
+		if configuredKey != "" {
+			name = "models.json key"
+			environmentKey = ""
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("OPENAI_API_KEY", environmentKey)
+			r := testRuntime(t)
+			r.state = StateIdle
+			models, err := config.LoadModels(filepath.Join(r.agentDir, "models.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.models = models
+			if configuredKey != "" {
+				if models.Providers == nil {
+					models.Providers = map[string]config.ProviderMeta{}
+				}
+				models.Providers["openai"] = config.ProviderMeta{APIKey: configuredKey}
+			} else {
+				delete(models.Providers, "openai")
+			}
+			authPath := filepath.Join(r.agentDir, "auth.json")
+			writeAppFile(t, authPath, `{"openai":{"type":"api_key","key":"stored-openai-key"}}`)
+			selection, err := models.SelectModel("openai", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.configure(config.StartupOverrides{Provider: "openai", Model: selection.ID}); err != nil {
+				t.Fatal(err)
+			}
+			r.publishLive()
+			r.state = StateIdle
+			console := authCommandConsole(t)
+			r.lifecycle = &terminalLifecycle{console: console}
+			var out bytes.Buffer
+			r.finishLogout(provider.StoredCredential{ProviderID: "openai", Kind: provider.CredentialAPIKey}, console, &out)
+			if !strings.Contains(out.String(), "Removed stored API key for OpenAI") {
+				t.Fatalf("logout status missing: %q", out.String())
+			}
+			if r.authErr != nil || r.state != StateIdle || r.prov == nil {
+				t.Fatalf("fallback did not keep OpenAI online: authErr=%v state=%s provider=%T", r.authErr, r.state, r.prov)
+			}
+			if r.ov.Provider != "openai" || r.ov.Model != selection.ID {
+				t.Fatalf("fallback changed the active model: %s/%s", r.ov.Provider, r.ov.Model)
+			}
+			live := r.liveSettings()
+			if live.AuthErr != nil || live.Provider == nil {
+				t.Fatalf("live settings are not usable after OpenAI logout: %+v", live)
+			}
+		})
+	}
 }

@@ -17,7 +17,7 @@ go build -o psi ./cmd/psi
 ./psi --resume
 ```
 
-For interactive credential setup, start `./psi` and enter `/login`. Select a provider and enter an API key at the masked prompt, or choose OpenAI or OpenAI Codex for subscription sign-in. psi stores Pi-compatible credentials in `auth.json`. API-key login does not check the key with the provider. `/logout` removes stored built-in API keys, not OAuth credentials, environment variables, or `models.json` credentials.
+For interactive credential setup, start `./psi` and enter `/login`. Select a provider and enter an API key at the masked prompt, or choose OpenAI or OpenAI Codex for subscription sign-in. psi stores Pi-compatible credentials in `auth.json`. API-key login does not check the key with the provider. `/logout` removes the selected stored API key or OAuth credential. OAuth logout attempts one best-effort OpenAI revocation request; local deletion continues if that request fails. `/logout` does not remove environment variables or `models.json` credentials.
 
 Interactive login supports ChatGPT sign-in, OpenAI Codex browser or device-code sign-in, and 16 built-in API-key providers. Anthropic API-key login remains unavailable. Use `/login openai-codex` for the separate Codex OAuth grant; there is no OpenAI API key fallback.
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"psi/internal/provider"
 	"psi/internal/session"
 	"psi/internal/terminal"
 )
@@ -276,17 +277,21 @@ func TestAuthSelectorsSearchAndRenderModeSpecificRows(t *testing.T) {
 	}
 
 	logout := NewSelector([]session.SessionInfo{
-		{ID: "anthropic", FirstMessage: "Anthropic · ANTHROPIC_API_KEY"},
-		{ID: "deepseek", FirstMessage: "DeepSeek · DEEPSEEK_API_KEY"},
+		{ID: "anthropic", FirstMessage: "Anthropic · API key"},
+		{ID: "openai-codex", FirstMessage: "OpenAI Codex · OAuth credential"},
 	}, "deepseek")
 	logout.AuthMode = AuthLogout
+	logout.CredentialKinds = map[string]provider.CredentialKind{
+		"anthropic":    provider.CredentialAPIKey,
+		"openai-codex": provider.CredentialOAuth,
+	}
 	rows = strings.Join(logout.RenderPickerRows(80, 19, true), "\n")
-	if !strings.Contains(rows, "Stored API keys · 2 matches") || !strings.Contains(rows, "→ ✓ deepseek") || !strings.Contains(rows, "DEEPSEEK_API_KEY") {
-		t.Fatalf("logout selector rows missing stored-key details: %q", rows)
+	if !strings.Contains(rows, "Stored credentials · 2 matches") || !strings.Contains(rows, "→   anthropic") || !strings.Contains(rows, "OAuth credential") {
+		t.Fatalf("logout selector rows missing stored-credential details: %q", rows)
 	}
 	logout.Move(1)
-	if item := logout.SelectedItem(); item == nil || item.ID != "anthropic" {
-		t.Fatalf("logout selector did not move to the next stored key: %v", item)
+	if item := logout.SelectedItem(); item == nil || item.ID != "openai-codex" {
+		t.Fatalf("logout selector did not move to the next stored credential: %v", item)
 	}
 }
 
