@@ -76,14 +76,15 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	}
 	defer stderrWriter.Close()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinReader, stdoutWriter, stderrWriter
+	stopping := make(chan struct{})
 	c := &stdioConnection{
 		cmd:        cmd,
 		stdin:      stdin,
-		stdout:     bufio.NewReaderSize(stdout, stdioReadBufferSize),
+		stdout:     newStdioReader(stdout, stopping),
 		stdoutPipe: stdout,
 		stderrPipe: stderr,
 		messages:   make(chan jsonrpc.Message),
-		stopping:   make(chan struct{}),
+		stopping:   stopping,
 		writeCh:    make(chan struct{}, 1),
 		done:       make(chan struct{}),
 		stderr:     &ringBuffer{limit: maxStderrRetain},
@@ -101,6 +102,26 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	go c.drainStderr()
 	go c.wait()
 	return c, nil
+}
+
+type stdioPipeReader struct {
+	pipe     io.Reader
+	stopping <-chan struct{}
+}
+
+func newStdioReader(pipe io.Reader, stopping <-chan struct{}) *bufio.Reader {
+	return bufio.NewReaderSize(stdioPipeReader{pipe: pipe, stopping: stopping}, stdioReadBufferSize)
+}
+
+func (r stdioPipeReader) Read(p []byte) (int, error) {
+	// ReadSlice can refill more than once after a short read. Check here
+	// so shutdown does not issue a new pipe read from inside that refill loop.
+	select {
+	case <-r.stopping:
+		return 0, sdk.ErrConnectionClosed
+	default:
+		return r.pipe.Read(p)
+	}
 }
 
 type stdioConnection struct {

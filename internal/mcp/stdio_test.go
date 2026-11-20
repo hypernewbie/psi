@@ -194,24 +194,32 @@ type stdioReaderFunc func([]byte) (int, error)
 
 func (f stdioReaderFunc) Read(p []byte) (int, error) { return f(p) }
 
-func TestStdioStopsReadingBetweenFrameChunks(t *testing.T) {
-	connection := &stdioConnection{stopping: make(chan struct{})}
-	connection.stdout = bufio.NewReader(stdioReaderFunc(func(p []byte) (int, error) {
-		select {
-		case <-connection.stopping:
-			t.Fatal("read another chunk after shutdown started")
-		default:
-		}
-		// Close while this read is in flight. The peer returns a full chunk
-		// without a newline, but might not return any further data.
-		close(connection.stopping)
-		for i := range p {
-			p[i] = 'x'
-		}
-		return len(p), nil
-	}))
-	if _, err := connection.readFrame(); !errors.Is(err, sdk.ErrConnectionClosed) {
-		t.Fatalf("read incomplete frame during shutdown: %v; want closed connection", err)
+func TestStdioStopsReadingPartialFrame(t *testing.T) {
+	for _, mode := range []string{"full", "short"} {
+		t.Run(mode, func(t *testing.T) {
+			connection := &stdioConnection{stopping: make(chan struct{})}
+			reader := stdioReaderFunc(func(p []byte) (int, error) {
+				select {
+				case <-connection.stopping:
+					t.Fatal("read again after shutdown started")
+				default:
+				}
+				// Shutdown starts during a read that returns no newline. The
+				// surviving peer may never send more bytes or close its pipe.
+				close(connection.stopping)
+				if mode == "short" {
+					p = p[:1] // ReadSlice will try to refill within the same call.
+				}
+				for i := range p {
+					p[i] = 'x'
+				}
+				return len(p), nil
+			})
+			connection.stdout = newStdioReader(reader, connection.stopping)
+			if _, err := connection.readFrame(); !errors.Is(err, sdk.ErrConnectionClosed) {
+				t.Fatalf("read incomplete frame during shutdown: %v; want closed connection", err)
+			}
+		})
 	}
 }
 
