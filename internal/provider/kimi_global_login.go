@@ -61,9 +61,12 @@ var (
 	errKimiGlobalLockLost  = errors.New("auth.json lock changed during sign-in; refusing overwrite")
 )
 
-// errKimiGlobalBody distinguishes an oversized or unreadable response from a
-// transport failure. Both stay static; the caller only chooses its wording.
-var errKimiGlobalBody = errors.New("kimi global response body")
+// Body failures stay static. A read error is a transient transport failure; an
+// oversized body is a terminal invalid response.
+var (
+	errKimiGlobalBodyRead     = errors.New("kimi global response body read")
+	errKimiGlobalBodyTooLarge = errors.New("kimi global response body too large")
+)
 
 // PsiUserAgent returns psi's HTTP identity for provider requests: psi/<version>
 // for a stamped build and psi for an unstamped internal caller. A version with
@@ -186,7 +189,7 @@ func (l *KimiGlobalLogin) start(ctx context.Context) (kimiGlobalStart, error) {
 		if ctx.Err() != nil {
 			return kimiGlobalStart{}, ctx.Err()
 		}
-		if errors.Is(err, errKimiGlobalBody) {
+		if errors.Is(err, errKimiGlobalBodyRead) || errors.Is(err, errKimiGlobalBodyTooLarge) {
 			return kimiGlobalStart{}, errKimiGlobalInvalid
 		}
 		return kimiGlobalStart{}, errKimiGlobalNetwork
@@ -302,9 +305,11 @@ func (l *KimiGlobalLogin) poll(ctx context.Context, start kimiGlobalStart, start
 		}
 		if err != nil {
 			secretmem.Wipe(data[:cap(data)])
-			if errors.Is(err, errKimiGlobalBody) {
+			if errors.Is(err, errKimiGlobalBodyTooLarge) {
 				return kimiGlobalToken{}, errKimiGlobalInvalid
 			}
+			// A body read error is a transport failure and uses the same
+			// bounded retry budget as a timeout or connection error.
 			transient++
 			if transient > kimiGlobalTransientRetries {
 				return kimiGlobalToken{}, errKimiGlobalTransient
@@ -412,7 +417,8 @@ type kimiGlobalToken struct {
 
 // decodeKimiGlobalToken validates the stored credential fields: header-safe
 // access and refresh tokens and a positive integral lifetime that converts to
-// a future Unix millisecond expiry.
+// a future Unix millisecond expiry. The returned token fields are forced string
+// copies at the JSON boundary; Go strings cannot be wiped by the caller.
 func decodeKimiGlobalToken(data []byte, now time.Time) (kimiGlobalToken, error) {
 	var payload struct {
 		Access    string `json:"access_token"`
@@ -485,9 +491,13 @@ func doKimiGlobalForm(ctx context.Context, client *http.Client, endpoint string,
 	}
 	defer resp.Body.Close()
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, kimiGlobalBodyLimit+1))
-	if readErr != nil || len(data) > kimiGlobalBodyLimit {
+	if readErr != nil {
 		secretmem.Wipe(data[:cap(data)])
-		return 0, nil, resp.Header, errKimiGlobalBody
+		return 0, nil, resp.Header, errKimiGlobalBodyRead
+	}
+	if len(data) > kimiGlobalBodyLimit {
+		secretmem.Wipe(data[:cap(data)])
+		return 0, nil, resp.Header, errKimiGlobalBodyTooLarge
 	}
 	return resp.StatusCode, data, resp.Header, nil
 }

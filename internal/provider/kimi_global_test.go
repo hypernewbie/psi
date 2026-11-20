@@ -82,22 +82,52 @@ func kimiJSON(status int, body string) *http.Response {
 	return openAITokenResponse(status, body)
 }
 
+// kimiFailingBody returns a partial response and then a transport read error.
+type kimiFailingBody struct {
+	wrote bool
+}
+
+func (b *kimiFailingBody) Read(p []byte) (int, error) {
+	if !b.wrote {
+		b.wrote = true
+		return copy(p, `{"access_token":"partial`), nil
+	}
+	return 0, errors.New("connection reset")
+}
+
+func (b *kimiFailingBody) Close() error { return nil }
+
 func TestKimiGlobalDeviceFailure(t *testing.T) {
-	t.Run("invalid verification grant never reaches the panel", func(t *testing.T) {
-		authPath := filepath.Join(t.TempDir(), "auth.json")
-		bad := strings.Replace(kimiDeviceStartBody("1", "60"), kimiGlobalVerifyURL, "https://example.com/authorize", 1)
-		var readyCalled bool
-		err, _, polls := runKimiDevice(t, authPath, bad, func(int) *http.Response {
-			t.Fatal("polled after an invalid grant")
-			return nil
-		}, context.Background(), nil, func(string, string) { readyCalled = true })
-		if !errors.Is(err, errKimiGlobalInvalid) || readyCalled || polls.Load() != 0 {
-			t.Fatalf("error=%v ready=%v polls=%d", err, readyCalled, polls.Load())
-		}
-		if _, statErr := os.Stat(authPath); !os.IsNotExist(statErr) {
-			t.Fatalf("auth file exists after invalid start: %v", statErr)
-		}
-	})
+	validStart := kimiDeviceStartBody("1", "60")
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "wrong verification URI", body: strings.Replace(validStart, kimiGlobalVerifyURL, "https://example.com/authorize", 1)},
+		{name: "user code with a newline", body: strings.Replace(validStart, "KIMI-CODE", `BAD\nCODE`, 1)},
+		{name: "missing device code", body: strings.Replace(validStart, `"device_code":"kimi-device-secret",`, "", 1)},
+		{name: "missing user code", body: strings.Replace(validStart, `"user_code":"KIMI-CODE",`, "", 1)},
+		{name: "negative interval", body: kimiDeviceStartBody("-1", "60")},
+		{name: "fractional interval", body: kimiDeviceStartBody("1.5", "60")},
+		{name: "zero lifetime", body: kimiDeviceStartBody("1", "0")},
+		{name: "negative lifetime", body: kimiDeviceStartBody("1", "-5")},
+		{name: "fractional lifetime", body: kimiDeviceStartBody("1", "60.5")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authPath := filepath.Join(t.TempDir(), "auth.json")
+			var readyCalled bool
+			err, _, polls := runKimiDevice(t, authPath, tc.body, func(int) *http.Response {
+				t.Fatal("polled after an invalid grant")
+				return nil
+			}, context.Background(), nil, func(string, string) { readyCalled = true })
+			if !errors.Is(err, errKimiGlobalInvalid) || readyCalled || polls.Load() != 0 {
+				t.Fatalf("error=%v ready=%v polls=%d", err, readyCalled, polls.Load())
+			}
+			if _, statErr := os.Stat(authPath); !os.IsNotExist(statErr) {
+				t.Fatalf("auth file exists after invalid start: %v", statErr)
+			}
+		})
+	}
 
 	t.Run("transient poll recovers without polling early", func(t *testing.T) {
 		authPath := filepath.Join(t.TempDir(), "auth.json")
@@ -130,6 +160,21 @@ func TestKimiGlobalDeviceFailure(t *testing.T) {
 		}
 		if got := int64(entry["expires"].(float64)); got != clock.Now().UnixMilli()+3600_000 {
 			t.Fatalf("expires = %d", got)
+		}
+	})
+
+	t.Run("truncated poll body is retried", func(t *testing.T) {
+		authPath := filepath.Join(t.TempDir(), "auth.json")
+		first := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: &kimiFailingBody{}}
+		responses := []*http.Response{first, kimiJSON(http.StatusOK, kimiDeviceSuccessBody)}
+		err, _, polls := runKimiDevice(t, authPath, kimiDeviceStartBody("1", "60"), func(n int) *http.Response {
+			return responses[n-1]
+		}, context.Background(), nil, nil)
+		if err != nil || polls.Load() != 2 {
+			t.Fatalf("error=%v polls=%d", err, polls.Load())
+		}
+		if entry := readKimiGlobalEntry(t, authPath); entry["access"] != "kimi-access" {
+			t.Fatalf("stored entry = %v", entry)
 		}
 	})
 
@@ -506,4 +551,70 @@ func TestKimiGlobalCompletionsAuthBoundary(t *testing.T) {
 			t.Fatalf("rejected bearer error = %v", err)
 		}
 	})
+}
+
+func TestPsiUserAgentIsHeaderSafe(t *testing.T) {
+	for _, tc := range []struct {
+		version, want string
+	}{
+		{"", "psi"},
+		{"   ", "psi"},
+		{"0.4.0", "psi/0.4.0"},
+		{"0.4.0 beta", "psi"},
+		{"0.4.0\nX-Injected: yes", "psi"},
+		{"0.4.0/arm64", "psi/0.4.0/arm64"},
+	} {
+		if got := PsiUserAgent(tc.version); got != tc.want {
+			t.Errorf("PsiUserAgent(%q) = %q, want %q", tc.version, got, tc.want)
+		}
+	}
+}
+
+func TestKimiGlobalRetryAfterBounds(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 0},
+		{"2", 2 * time.Second},
+		{"-1", 0},
+		{"NaN", 0},
+		{"bogus", 0},
+		{"86401", kimiGlobalMaxLifetime},
+		{"1e999", kimiGlobalMaxLifetime},
+		{"-1e999", 0},
+	} {
+		if got := kimiGlobalRetryAfter(tc.value); got != tc.want {
+			t.Errorf("kimiGlobalRetryAfter(%q) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestKimiGlobalDurationBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		value    any
+		fallback time.Duration
+		positive bool
+		want     time.Duration
+		ok       bool
+	}{
+		{name: "absent lifetime", fallback: kimiGlobalDefaultLifetime, positive: true, want: kimiGlobalDefaultLifetime, ok: true},
+		{name: "zero interval", value: json.Number("0"), fallback: kimiGlobalDefaultInterval, want: 0, ok: true},
+		{name: "one second", value: json.Number("1"), fallback: time.Second, want: time.Second, ok: true},
+		{name: "integral float", value: json.Number("1.0"), fallback: time.Second, want: time.Second, ok: true},
+		{name: "fractional", value: json.Number("1.5"), fallback: time.Second, ok: false},
+		{name: "negative", value: json.Number("-1"), fallback: time.Second, ok: false},
+		{name: "string", value: "5", fallback: time.Second, ok: false},
+		{name: "infinite", value: json.Number("1e999"), fallback: time.Second, ok: false},
+		{name: "zero lifetime", value: json.Number("0"), fallback: kimiGlobalDefaultLifetime, positive: true, ok: false},
+		{name: "capped lifetime", value: json.Number("999999"), fallback: kimiGlobalDefaultLifetime, positive: true, want: kimiGlobalMaxLifetime, ok: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := kimiGlobalDuration(tc.value, tc.fallback, tc.positive)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("duration = %v,%v; want %v,%v", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
 }

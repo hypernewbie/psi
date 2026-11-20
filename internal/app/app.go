@@ -729,7 +729,7 @@ type runtime struct {
 	codexBrowser   func(context.Context, string) error
 	codexRename    func(string, string) error
 	codexWait      func(context.Context, time.Duration) error
-	codexLogin     *oauthLoginSession // non-nil while the Codex panel owns the editor
+	codexLogin     *oauthLoginSession // non-nil while a login panel owns the editor
 	// kimiTransport, kimiBrowser, kimiRename, and kimiWait are the same test
 	// seams for the Global Kimi Code device sign-in and its inference client.
 	kimiTransport http.RoundTripper

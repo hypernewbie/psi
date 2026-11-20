@@ -54,7 +54,9 @@ func (a *KimiGlobalAuth) Check() error {
 
 // Get resolves the stored bearer for one Completions request through the
 // bounded shared auth read. It never refreshes, never uses an API key, and
-// never retrieves a credential after the entry is removed or expired.
+// never retrieves a credential after the entry is removed or expired. The
+// returned bearer is a string copy at this boundary; the caller must not log
+// it.
 func (a *KimiGlobalAuth) Get(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

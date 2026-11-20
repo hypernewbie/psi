@@ -165,7 +165,7 @@ func (r *runtime) loginCommand(arg string, console *terminal.Console) error {
 	case "openai-codex":
 		return r.openCodexLoginMethodSelector(console)
 	case providerregistry.KimiGlobalProviderID:
-		return fmt.Errorf("Kimi Code (Global) sign-in starts from the interactive /login prompt")
+		return fmt.Errorf("Kimi Code (Global) sign-in is only available from the interactive /login command")
 	}
 	spec, ok := providerregistry.Lookup(providerID)
 	if !ok {

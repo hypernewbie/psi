@@ -321,3 +321,59 @@ func TestLogoutListsExpiredKimiGlobalLogin(t *testing.T) {
 		t.Fatalf("active Global selection did not go offline: authErr=%v provider=%v state=%s", r.authErr, r.prov, r.state)
 	}
 }
+
+// The Global trial refuses header, key, and endpoint overrides before resolving
+// any header value. These are configuration boundaries, not request retries.
+func TestKimiGlobalConfigureRefusesOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider config.ProviderMeta
+		want     string
+	}{
+		{
+			name:     "authHeader",
+			provider: config.ProviderMeta{AuthHeader: true},
+			want:     "headers or authHeader",
+		},
+		{
+			name:     "provider headers",
+			provider: config.ProviderMeta{Headers: map[string]string{"X-Test": "$NOT_RESOLVED"}},
+			want:     "headers or authHeader",
+		},
+		{
+			name:     "models.json key",
+			provider: config.ProviderMeta{APIKey: "configured-key"},
+			want:     "not a models.json API key",
+		},
+		{
+			name:     "provider endpoint",
+			provider: config.ProviderMeta{BaseURL: "https://example.com/v1"},
+			want:     "official Kimi endpoint",
+		},
+		{
+			name: "model endpoint override",
+			provider: config.ProviderMeta{ModelOverrides: map[string]json.RawMessage{
+				"kimi-for-coding": json.RawMessage(`{"baseUrl":"https://example.com/v1"}`),
+			}},
+			want: "official Kimi endpoint",
+		},
+		{
+			name: "model header override",
+			provider: config.ProviderMeta{ModelOverrides: map[string]json.RawMessage{
+				"kimi-for-coding": json.RawMessage(`{"headers":{"X-Test":"v"}}`),
+			}},
+			want: "headers or authHeader",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := testRuntime(t)
+			r.models = &config.ModelsFile{Providers: map[string]config.ProviderMeta{
+				providerregistry.KimiGlobalProviderID: tc.provider,
+			}}
+			err := r.configure(config.StartupOverrides{Provider: providerregistry.KimiGlobalProviderID, Thinking: "off", ThinkingExplicit: true})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("configure error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
