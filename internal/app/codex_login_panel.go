@@ -8,6 +8,8 @@ import (
 // codexLoginPanel is REPL-owned. Its contents are only rendered in the editor
 // region, never appended to the document or forwarded to the bridge.
 type codexLoginPanel struct {
+	// heading overrides the panel title. Empty keeps the Codex title.
+	heading            string
 	link, code         string
 	temporaryPort      bool
 	manualOpen         bool
@@ -39,9 +41,13 @@ func (p *codexLoginPanel) rows(width, budget int, noColor bool, palette *theme.T
 	if p.code != "" {
 		instructionRows = len(deviceCodeRows) + len(linkRows)
 	}
-	heading := wrap("Login to OpenAI Codex")
-	if !p.temporaryPort && !p.manualOpen && len(heading)+instructionRows <= budget {
-		appendRows(heading, terminal.TokenAccent, true)
+	heading := "Login to OpenAI Codex"
+	if p.heading != "" {
+		heading = p.heading
+	}
+	headingRows := wrap(heading)
+	if !p.temporaryPort && !p.manualOpen && len(headingRows)+instructionRows <= budget {
+		appendRows(headingRows, terminal.TokenAccent, true)
 	}
 	switch {
 	case p.status != "":

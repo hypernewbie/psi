@@ -125,8 +125,9 @@ func SaveAPIKey(ctx context.Context, authPath, providerID string, key []byte) er
 // LogoutCredential removes one stored API-key or OAuth credential without
 // touching other provider entries or creating a missing auth.json. The
 // selected kind must still match the entry on disk; a refresh may have
-// replaced it while the picker was open. OAuth removal attempts one bounded
-// revocation request and reports that outcome separately from local removal.
+// replaced it while the picker was open. OpenAI and Codex OAuth removal can
+// attempt one bounded revocation request and report the outcome separately.
+// Global Kimi OAuth removal is local only.
 func LogoutCredential(ctx context.Context, authPath string, selected StoredCredential, client *http.Client) (LogoutResult, error) {
 	return logoutCredential(ctx, authPath, selected, client, authFileHooks{})
 }
@@ -216,17 +217,21 @@ func logoutCredential(ctx context.Context, authPath string, selected StoredCrede
 
 	valid := checkLeases
 	if kind == CredentialOAuth {
-		request, usable := selectRevokeRequest(selected.ProviderID, entry)
-		if !usable {
-			result.Revocation = RevocationNoUsableToken
-		} else {
-			if err := target.recheck(); err != nil {
-				return result, err
+		// Only OpenAI credentials can be sent to the OpenAI revocation endpoint.
+		switch selected.ProviderID {
+		case "openai", "openai-codex":
+			request, usable := selectRevokeRequest(selected.ProviderID, entry)
+			if !usable {
+				result.Revocation = RevocationNoUsableToken
+			} else {
+				if err := target.recheck(); err != nil {
+					return result, err
+				}
+				if err := checkLeases(); err != nil {
+					return result, err
+				}
+				result.Revocation = revokeOAuthToken(ctx, request, client)
 			}
-			if err := checkLeases(); err != nil {
-				return result, err
-			}
-			result.Revocation = revokeOAuthToken(ctx, request, client)
 		}
 		// The writer calls this before staging and again before replacement.
 		// A non-cooperating writer can change the file without replacing it.
@@ -341,7 +346,7 @@ func credentialKindAllowed(auth providerregistry.AuthKind, kind CredentialKind) 
 		return kind == CredentialAPIKey
 	case providerregistry.AuthAPIKeyOrOAuth:
 		return kind == CredentialAPIKey || kind == CredentialOAuth
-	case providerregistry.AuthCodexOAuth:
+	case providerregistry.AuthCodexOAuth, providerregistry.AuthKimiGlobalOAuth:
 		return kind == CredentialOAuth
 	default:
 		return false

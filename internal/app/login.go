@@ -30,8 +30,12 @@ func loginProviderIDs() []string {
 		if !ok {
 			continue
 		}
-		if id != "openai" && id != "openai-codex" && (spec.Auth != providerregistry.AuthAPIKey || id == "anthropic") {
-			continue
+		switch id {
+		case "openai", "openai-codex", providerregistry.KimiGlobalProviderID:
+		default:
+			if spec.Auth != providerregistry.AuthAPIKey || id == "anthropic" {
+				continue
+			}
 		}
 		ids = append(ids, id)
 	}
@@ -52,6 +56,8 @@ func loginSelector(r *runtime) *Selector {
 			method = "ChatGPT browser sign-in"
 		case "openai-codex":
 			method = "browser or device code sign-in"
+		case providerregistry.KimiGlobalProviderID:
+			method = "Kimi Code (OAuth)"
 		}
 		parts := []string{spec.Name, method}
 		if r.models != nil {
@@ -99,6 +105,9 @@ func logoutSelector(credentials []provider.StoredCredential, activeID string) *S
 		detail := "API key"
 		if credential.Kind == provider.CredentialOAuth {
 			detail = "OAuth credential"
+			if credential.ProviderID == providerregistry.KimiGlobalProviderID {
+				detail += " · local removal only"
+			}
 		}
 		items = append(items, session.SessionInfo{ID: credential.ProviderID, FirstMessage: spec.Name + " · " + detail})
 		kinds[credential.ProviderID] = credential.Kind
@@ -155,6 +164,8 @@ func (r *runtime) loginCommand(arg string, console *terminal.Console) error {
 		return fmt.Errorf("Anthropic login is not available; set ANTHROPIC_API_KEY or add an api_key entry to %s.", authPath)
 	case "openai-codex":
 		return r.openCodexLoginMethodSelector(console)
+	case providerregistry.KimiGlobalProviderID:
+		return fmt.Errorf("Kimi Code (Global) sign-in starts from the interactive /login prompt")
 	}
 	spec, ok := providerregistry.Lookup(providerID)
 	if !ok {
@@ -331,6 +342,7 @@ func (r *runtime) finishLogout(selected provider.StoredCredential, console *term
 		r.draw(console)
 		return
 	}
+	kimiGlobal := selected.ProviderID == providerregistry.KimiGlobalProviderID
 	if selected.Kind == provider.CredentialOAuth {
 		console.Status("Removing stored OAuth credential…")
 	}
@@ -340,7 +352,7 @@ func (r *runtime) finishLogout(selected provider.StoredCredential, console *term
 	}
 	if err != nil {
 		status := fmt.Sprintf("Failed to remove stored %s for %s: %v", logoutKindName(selected.Kind), spec.Name, err)
-		if selected.Kind == provider.CredentialOAuth {
+		if selected.Kind == provider.CredentialOAuth && !kimiGlobal {
 			status += "\n" + logoutRevocationText(result.Revocation)
 		}
 		printLogoutNotice(out, terminal.NoticeError, status)
@@ -379,7 +391,9 @@ func (r *runtime) finishLogout(selected provider.StoredCredential, console *term
 		r.draw(console)
 		return
 	}
-	if selected.Kind == provider.CredentialOAuth {
+	if kimiGlobal {
+		printLogoutNotice(out, terminal.NoticeInfo, "Removed stored Kimi Code (Global) login.\nLocal only; server-side authorization is unchanged.")
+	} else if selected.Kind == provider.CredentialOAuth {
 		printLogoutNotice(out, terminal.NoticeInfo, fmt.Sprintf("Removed stored OAuth credential for %s.\n%s", spec.Name, logoutRevocationText(result.Revocation)))
 	} else {
 		printLogoutNotice(out, terminal.NoticeInfo, fmt.Sprintf("Removed stored API key for %s.\nEnvironment variables and models.json config are unchanged.", spec.Name))

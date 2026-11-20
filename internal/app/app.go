@@ -457,7 +457,7 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
-Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in in a dedicated panel, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code; in device code mode, Enter opens the verification page. Esc cancels Codex sign-in, and Ctrl+D cancels and quits. /logout removes the selected stored API key or OAuth credential and attempts OAuth revocation. See docs/security.md for credential handling.
+Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in, Kimi Code (Global) uses device code sign-in, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code. In the device panel, Enter opens the verification page, Esc cancels, and Ctrl+D cancels and quits. /logout removes the selected stored credential. It attempts revocation only for OpenAI and Codex OAuth; Kimi logout is local only. See docs/security.md for credential handling.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
@@ -730,6 +730,12 @@ type runtime struct {
 	codexRename    func(string, string) error
 	codexWait      func(context.Context, time.Duration) error
 	codexLogin     *oauthLoginSession // non-nil while the Codex panel owns the editor
+	// kimiTransport, kimiBrowser, kimiRename, and kimiWait are the same test
+	// seams for the Global Kimi Code device sign-in and its inference client.
+	kimiTransport http.RoundTripper
+	kimiBrowser   func(context.Context, string) error
+	kimiRename    func(string, string) error
+	kimiWait      func(context.Context, time.Duration) error
 	// live holds the mutable request configuration a running loop reads at
 	// each turn boundary. It is a pointer because the runtime is copied by
 	// value.
@@ -745,6 +751,10 @@ type runtime struct {
 	// behavior.
 	codexQuotaSuccessDelay func(float64) time.Duration
 	codexQuotaRendered     func(string)
+	// testRunSettled, when non-nil, runs on the REPL goroutine after a run
+	// settles to idle. Tests use it to sequence the next command instead of
+	// polling runtime state. Nil keeps production behavior.
+	testRunSettled func()
 	// quota is REPL-owned quota state. It is nil outside an active REPL.
 	quota                    *codexQuotaOwner
 	generation               int64
@@ -1061,6 +1071,23 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		return err
 	}
 	headers := map[string]string{}
+	if ov.Provider == providerregistry.KimiGlobalProviderID {
+		// Refuse every header override before resolving a single value. The
+		// trial uses only the stored OAuth bearer and the fixed endpoint.
+		if meta.AuthHeader || len(meta.Headers) > 0 {
+			return fmt.Errorf("Kimi Code (Global) does not allow extra headers or authHeader overrides")
+		}
+		if configured, ok := r.models.Providers[ov.Provider]; ok &&
+			(configured.AuthHeader || len(configured.Headers) > 0) {
+			return fmt.Errorf("Kimi Code (Global) does not allow extra headers or authHeader overrides")
+		}
+		if strings.TrimSpace(meta.APIKey) != "" {
+			return fmt.Errorf("Kimi Code (Global) uses /login %s, not a models.json API key", providerregistry.KimiGlobalProviderID)
+		}
+		if strings.TrimRight(strings.TrimSpace(meta.BaseURL), "/") != provider.KimiGlobalBaseURL {
+			return fmt.Errorf("Kimi Code (Global) requires the official Kimi endpoint; this model overrides it")
+		}
+	}
 	for name, value := range meta.Headers {
 		resolved, err := config.ResolveCredential(value)
 		if err != nil {
@@ -1123,6 +1150,20 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		anthropic.SessionID = r.store.Header().ID
 		client = anthropic
 	case "openai-completions":
+		if ov.Provider == providerregistry.KimiGlobalProviderID {
+			// Global Kimi resolves its bearer per attempt. The client carries
+			// no static key and never uses the API-key resolver.
+			completions := provider.NewCompletionsClient(meta.BaseURL, "", r.settings.MaxRetries, idle)
+			if r.kimiTransport != nil {
+				completions.HTTP.Transport = r.kimiTransport
+			}
+			completions.UserAgent = r.version
+			kimi := &provider.KimiGlobalAuth{Path: authPath}
+			authErr = kimi.Check()
+			completions.ResolveKimiGlobalAuth = kimi.Get
+			client = completions
+			break
+		}
 		key, err := resolveAPIKey()
 		authErr = err
 		applyAuthHeader(key, err)
@@ -2039,7 +2080,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	showLoginStatus := func(text string) {
 		if login.panel != nil {
-			*login.panel = codexLoginPanel{status: text}
+			heading := login.panel.heading
+			*login.panel = codexLoginPanel{heading: heading, status: text}
 		} else {
 			console.Status(text)
 		}
@@ -2809,6 +2851,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return runCodexDeviceLogin(ctx, req, updates)
 		})
 	}
+	startKimiGlobalLogin := func() error {
+		req := oauthLoginRequest{
+			agentDir: r.agentDir, transport: r.kimiTransport, browser: r.kimiBrowser,
+			rename: r.kimiRename, wait: r.kimiWait, userAgent: r.version,
+		}
+		return startOAuthLogin("Kimi Code (Global)", false, &codexLoginPanel{heading: "Kimi Code (Global)"}, r.activateKimiGlobalLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+			return runKimiGlobalLogin(ctx, req, updates)
+		})
+	}
 	// submitNativeSkill is the one expansion path for idle and busy /skill:
 	// submissions. Busy Enter steers, busy Alt+Enter queues a follow-up, and
 	// any refusal restores the captured draft without starting or queueing.
@@ -3477,6 +3528,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 					scheduleEndTurn()
 				}
 			}
+			if r.testRunSettled != nil && !busy && r.state == StateIdle {
+				r.testRunSettled()
+			}
 			_, doneFramesAfter, _, _ := console.FrameStats()
 			r.eventFrames += doneFramesAfter - doneFramesBefore
 		case input, ok := <-inputSource:
@@ -3890,6 +3944,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 								}
 								continue
 							}
+							if selected.ID == providerregistry.KimiGlobalProviderID {
+								closeSelector(false)
+								if err := startKimiGlobalLogin(); err != nil {
+									notice(terminal.NoticeError, err.Error())
+									r.draw(console)
+								}
+								continue
+							}
 							if selected.ID == "openai-codex" {
 								closeSelector(false)
 								if err := r.openCodexLoginMethodSelector(console); err != nil {
@@ -4185,6 +4247,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 						err = startOpenAILogin()
 					case strings.EqualFold(strings.TrimSpace(cmd.Arg), "openai-codex"):
 						err = r.openCodexLoginMethodSelector(console)
+					case strings.EqualFold(strings.TrimSpace(cmd.Arg), providerregistry.KimiGlobalProviderID):
+						err = startKimiGlobalLogin()
 					default:
 						err = r.loginCommand(cmd.Arg, console)
 					}

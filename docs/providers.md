@@ -20,6 +20,7 @@ model layer. `models.json` can add providers of its own; see
 | `xiaomi-token-plan-sgp` | Xiaomi Token Plan SGP | `openai-completions` | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` |
 | `moonshotai` | Moonshot AI | `openai-completions` | `MOONSHOT_API_KEY` |
 | `kimi-coding` | Kimi For Coding | `openai-completions` | `KIMI_API_KEY` |
+| `kimi-coding-global` | Kimi For Coding (Global) | `openai-completions` | Kimi Code (OAuth) trial |
 | `qwen-token-plan` | Qwen Token Plan | `openai-completions` | `QWEN_TOKEN_PLAN_API_KEY` |
 | `openrouter` | OpenRouter | `openai-completions` | `OPENROUTER_API_KEY` |
 | `xai` | xAI | `openai-responses` | `XAI_API_KEY` |
@@ -127,6 +128,16 @@ credential lock. Once an exchange starts, it has its own 15-second deadline.
 psi waits for the exchange and saves a valid rotation before returning
 cancellation.
 
+`kimi-coding-global` is a Kimi Code OAuth trial for the Global endpoint. Its
+only model is `kimi-for-coding`. `/login kimi-coding-global` starts a device
+grant and stores the Pi OAuth fields `{type, access, refresh, expires}`. psi
+sends the bearer only to `https://api.kimi.ai/coding/v1/chat/completions`.
+It stores the refresh token for format compatibility but does not use it.
+When the access token expires, sign in again. The provider does not accept
+API keys, extra headers, `authHeader`, or endpoint overrides. Stock Pi does
+not recognize this provider ID. The China provider `kimi-coding` still uses
+its API key.
+
 ChatGPT sign-in needs no prerequisite credential. It opens the authorization
 page in your browser and serves the callback on `127.0.0.1:1455`; psi and the
 browser must run on the same machine. If the browser does not open, use the
@@ -169,8 +180,9 @@ model. Anthropic API-key login is not available in psi; use the matching
 environment variable or `models.json`. OpenAI Codex uses `/login openai-codex`.
 
 Use `/logout` to select and remove a stored built-in credential. The picker
-lists API keys for built-in API-key providers, direct OpenAI ChatGPT OAuth,
-and OpenAI Codex OAuth. For OAuth, psi sends one bounded request to
+lists API keys for built-in API-key providers and OAuth entries for OpenAI
+ChatGPT, OpenAI Codex, and Kimi Code (Global). Kimi logout is local only.
+For OpenAI and Codex OAuth, psi sends one bounded request to
 `https://auth.openai.com/oauth/revoke` and reports the remote outcome
 separately. Local deletion continues if that request is rejected, redirected,
 times out, or cannot be sent. A 2xx response only accepts the request; it does

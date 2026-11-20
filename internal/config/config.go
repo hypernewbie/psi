@@ -1078,7 +1078,7 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 			id = "deepseek-v4-pro"
 		case "google":
 			id = "gemini-3.1-pro-preview"
-		case "kimi-coding":
+		case "kimi-coding", "kimi-coding-global":
 			id = "kimi-for-coding"
 		case "minimax":
 			id = "MiniMax-M2.7"

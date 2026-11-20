@@ -116,6 +116,12 @@ visit it on another device. psi does not copy the code to the clipboard.
 Availability depends on the account. Press `Esc` to cancel sign-in or
 `Ctrl+D` to cancel and quit psi.
 
+Select Kimi For Coding (Global) or enter `/login kimi-coding-global` to start
+its Kimi Code (OAuth) device trial. The panel shows the user code and
+`https://www.kimi.ai/code/authorize_device`. Press `Enter` to open that page.
+The trial has no API-key method or automatic refresh. When the access token
+expires, sign in again. Stock Pi does not recognize this provider ID.
+
 For other supported providers, the prompt masks the API key; do not put keys
 in command arguments. API-key login supports `deepseek`, `google`, `groq`,
 `kimi-coding`, `minimax`, `mistral`, `moonshotai`, `opencode-go`, `openrouter`,
@@ -140,8 +146,9 @@ model. If model selection or defaults persistence fails after the key is saved,
 psi reports the failure and keeps the saved key.
 
 Use `/logout` to select and remove a stored built-in credential from
-`auth.json`. The picker lists stored API keys, direct OpenAI ChatGPT OAuth, and
-OpenAI Codex OAuth. For OAuth, logout sends one best-effort POST to
+`auth.json`. The picker lists stored API keys and OAuth entries for OpenAI
+ChatGPT, OpenAI Codex, and Kimi Code (Global). Kimi logout is local only.
+For OpenAI and Codex OAuth, logout sends one best-effort POST to
 `https://auth.openai.com/oauth/revoke` with a ten-second limit and no redirects.
 A rejected, timed-out, or failed request does not block local deletion. The
 notice reports the two outcomes separately: a concurrent file change can stop

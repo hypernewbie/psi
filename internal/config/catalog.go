@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"sort"
 	"sync"
+
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 //go:embed data/catalog.json
@@ -26,6 +28,19 @@ func catalogOnce() map[string][]ModelMeta {
 			for i := range all[provider] {
 				all[provider][i].InputImage = containsString(all[provider][i].Input, "image")
 			}
+		}
+		// The Global Kimi Code trial reuses only the bundled China
+		// kimi-for-coding row as a runtime-only model. A copy keeps shared
+		// metadata immutable, and the Global endpoint comes from the provider
+		// registry.
+		for _, row := range all["kimi-coding"] {
+			if row.ID != "kimi-for-coding" {
+				continue
+			}
+			global := row
+			global.BaseURL = providerregistry.DefaultEndpoint(providerregistry.KimiGlobalProviderID, "openai-completions")
+			all[providerregistry.KimiGlobalProviderID] = []ModelMeta{global}
+			break
 		}
 		catalog = all
 	})

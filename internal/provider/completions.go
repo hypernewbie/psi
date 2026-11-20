@@ -5,17 +5,41 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // CompletionsClient uses the OpenAI Chat Completions wire protocol. It shares
 // the bounded transport, retry policy, and cancellation reader, but has its own
 // request path and stream settlement rules.
-type CompletionsClient struct{ *Client }
+type CompletionsClient struct {
+	*Client
+	// ResolveKimiGlobalAuth, when set, supplies a request-local bearer for the
+	// built-in Global Kimi Code trial. Nil keeps the static API-key behavior
+	// for every other provider. The hook never falls back to a key.
+	ResolveKimiGlobalAuth func(context.Context) (string, error)
+	// UserAgent is the build version used for Kimi Global requests. Empty
+	// means an unstamped caller and sends "psi".
+	UserAgent string
+}
+
+// KimiGlobalBaseURL is the only endpoint allowed for the Global Kimi Code
+// trial. It matches the provider registry entry and is never configurable.
+const KimiGlobalBaseURL = "https://api.kimi.ai/coding/v1"
+
+const kimiGlobalChatCompletionsURL = KimiGlobalBaseURL + "/chat/completions"
+
+var (
+	errKimiGlobalEndpoint = errors.New("Kimi Code (Global) requires the official Kimi API endpoint; this model overrides it")
+	errKimiGlobalHeaders  = errors.New("Kimi Code (Global) does not allow extra headers or authHeader overrides")
+	errKimiGlobalBearer   = errors.New("Kimi Code (Global) login was rejected: run /login kimi-coding-global again")
+)
 
 func NewCompletionsClient(baseURL, apiKey string, maxRetry int, idle time.Duration) *CompletionsClient {
 	base := NewClient("", apiKey, maxRetry, idle)
@@ -24,10 +48,19 @@ func NewCompletionsClient(baseURL, apiKey string, maxRetry int, idle time.Durati
 }
 
 func (c *CompletionsClient) Send(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
+	kimiGlobal := c.ResolveKimiGlobalAuth != nil
+	if kimiGlobal {
+		if req.Model.ProviderID() != providerregistry.KimiGlobalProviderID || req.Model.Custom {
+			return nil, fmt.Errorf("Kimi Code (Global) sign-in is only available for the built-in %s provider", providerregistry.KimiGlobalProviderID)
+		}
+		if len(c.Headers) > 0 {
+			return nil, errKimiGlobalHeaders
+		}
+	}
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("model endpoint is required for openai-completions")
 	}
-	if strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) && !req.Model.AllowMissingAPIKey {
+	if !kimiGlobal && strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) && !req.Model.AllowMissingAPIKey {
 		return nil, fmt.Errorf("No API key for provider: %s", req.Model.ProviderID())
 	}
 	body, err := BuildCompletionsRequest(req)
@@ -44,26 +77,62 @@ func (c *CompletionsClient) Send(ctx context.Context, req Request, onDelta func(
 }
 
 func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req Request, onDelta func(Delta)) (*Response, error) {
+	kimiGlobal := c.ResolveKimiGlobalAuth != nil
 	endpoint := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
+	if kimiGlobal {
+		// The bearer is attached only after the effective POST URL is
+		// verified. A model or provider override can never receive it.
+		if endpoint != kimiGlobalChatCompletionsURL {
+			return nil, errKimiGlobalEndpoint
+		}
+		if len(c.Headers) > 0 {
+			return nil, errKimiGlobalHeaders
+		}
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("invalid OpenAI Completions endpoint")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	if c.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if kimiGlobal {
+		token, err := c.ResolveKimiGlobalAuth(ctx)
+		if err != nil {
+			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				return nil, err
+			}
+			// Auth failures are static and non-retryable. No key or header
+			// path can bypass the resolver's error.
+			return nil, &ProviderError{Kind: ErrAuth, Message: err.Error()}
+		}
+		if strings.TrimSpace(token) == "" {
+			return nil, &ProviderError{Kind: ErrAuth, Message: errKimiGlobalBearer.Error()}
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+		httpReq.Header.Set("User-Agent", PsiUserAgent(c.UserAgent))
+	} else {
+		if c.APIKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+		}
+		if req.Model.ProviderID() == "opencode-go" && c.SessionID != "" && !hasHeader(c.Headers, "x-opencode-session") {
+			httpReq.Header.Set("x-opencode-session", c.SessionID)
+		}
+		if req.Model.ProviderID() == "openrouter" && c.SessionID != "" && !hasHeader(c.Headers, "x-session-id") {
+			httpReq.Header.Set("x-session-id", c.SessionID)
+		}
+		for name, value := range c.Headers {
+			httpReq.Header.Set(name, value)
+		}
 	}
-	if req.Model.ProviderID() == "opencode-go" && c.SessionID != "" && !hasHeader(c.Headers, "x-opencode-session") {
-		httpReq.Header.Set("x-opencode-session", c.SessionID)
+	requestClient := c.HTTP
+	if kimiGlobal {
+		// Refuse redirects on a local copy so the bearer cannot follow a
+		// Location to another origin.
+		single := *c.HTTP
+		single.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		requestClient = &single
 	}
-	if req.Model.ProviderID() == "openrouter" && c.SessionID != "" && !hasHeader(c.Headers, "x-session-id") {
-		httpReq.Header.Set("x-session-id", c.SessionID)
-	}
-	for name, value := range c.Headers {
-		httpReq.Header.Set(name, value)
-	}
-	resp, err := c.HTTP.Do(httpReq)
+	resp, err := requestClient.Do(httpReq)
 	if err != nil {
 		return nil, &ProviderError{Kind: ErrTransport, Message: "HTTP request failed"}
 	}
@@ -72,10 +141,30 @@ func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req
 		reader := newStreamReader(ctx, resp.Body, c.IdleTimeout)
 		defer reader.close()
 		resp.Body = structReadCloser{Reader: reader, Closer: resp.Body}
-		return nil, classifyHTTPError(resp)
+		classified := classifyHTTPError(resp)
+		if kimiGlobal {
+			// Keep the structured status, kind, and retry delay, but never
+			// expose provider detail, a reason, or a bearer echoed in the body.
+			classified.Detail, classified.Reason = "", ""
+			classified.Message = staticHTTPStatusMessage(resp.StatusCode)
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+				classified.Kind = ErrAuth
+				classified.Message = errKimiGlobalBearer.Error()
+			}
+		}
+		return nil, classified
 	}
 	result, err := parseCompletionsSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
+		if kimiGlobal {
+			// Keep partial output but never append provider- or
+			// transport-controlled text that could echo the bearer.
+			wrapped := errors.New("Kimi Code (Global) stream interrupted (not retried)")
+			if result != nil {
+				return result, &StreamInterrupt{Partial: result, Err: wrapped}
+			}
+			return nil, wrapped
+		}
 		message := c.redact(err.Error())
 		wrapped := fmt.Errorf("OpenAI Completions stream interrupted (not retried): %s", message)
 		if result != nil {
@@ -84,6 +173,18 @@ func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req
 		return nil, wrapped
 	}
 	return result, nil
+}
+
+// staticHTTPStatusMessage is the status text used when provider detail must not
+// escape. It keeps the existing 529 special case used by other clients.
+func staticHTTPStatusMessage(status int) string {
+	if message := http.StatusText(status); message != "" {
+		return message
+	}
+	if status == 529 {
+		return "Overloaded"
+	}
+	return fmt.Sprintf("HTTP %d", status)
 }
 
 func hasNonemptyAuthHeader(headers map[string]string) bool {

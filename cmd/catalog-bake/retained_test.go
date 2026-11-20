@@ -82,8 +82,18 @@ func TestRetainedCatalogBake(t *testing.T) {
 		rowIDs = append(rowIDs, id)
 	}
 	sort.Strings(rowIDs)
-	if strings.Join(rowIDs, ",") != strings.Join(registryIDs, ",") {
-		t.Fatalf("providers = %v, want %v", rowIDs, registryIDs)
+	// The public bake has no Global Kimi trial provider: psi derives that
+	// runtime-only row from the bundled China metadata. Every other registry
+	// ID must match the bake exactly.
+	bakedIDs := make([]string, 0, len(registryIDs))
+	for _, id := range registryIDs {
+		if id == providerregistry.KimiGlobalProviderID {
+			continue
+		}
+		bakedIDs = append(bakedIDs, id)
+	}
+	if strings.Join(rowIDs, ",") != strings.Join(bakedIDs, ",") {
+		t.Fatalf("providers = %v, want %v", rowIDs, bakedIDs)
 	}
 
 	requestChecks := 0

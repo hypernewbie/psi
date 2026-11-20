@@ -31,47 +31,7 @@ func runCodexDeviceLogin(ctx context.Context, req oauthLoginRequest, updates cha
 		Rename: req.rename,
 		Wait:   req.wait,
 	}
-	launchCtx, cancelLaunch := context.WithCancel(ctx)
-	var launcherDone chan struct{}
-	err := login.Run(ctx, func(userCode, verificationURL string) {
-		open := make(chan struct{}, 1)
-		launcherDone = make(chan struct{})
-		go func(done chan struct{}) {
-			defer close(done)
-			select {
-			case <-launchCtx.Done():
-				return
-			case <-open:
-			}
-			if launchCtx.Err() != nil {
-				return
-			}
-			if err := launchOAuthLoginBrowser(launchCtx, req.browser, verificationURL); err != nil {
-				select {
-				case updates <- oauthLoginUpdate{manualOpen: true}:
-				case <-launchCtx.Done():
-				}
-			}
-		}(launcherDone)
-		update := oauthLoginUpdate{
-			deviceCode: userCode, deviceURL: verificationURL,
-			openDevice: func() {
-				select {
-				case open <- struct{}{}:
-				default:
-				}
-			},
-		}
-		select {
-		case updates <- update:
-		case <-ctx.Done():
-		}
-	})
-	cancelLaunch()
-	if launcherDone != nil {
-		<-launcherDone
-	}
-	return oauthLoginResult{err: err}
+	return runDeviceOAuthLogin(ctx, login, req.browser, updates)
 }
 
 // activateCodexLogin installs a usable model after a saved OpenAI Codex

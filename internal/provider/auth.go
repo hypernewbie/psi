@@ -266,6 +266,12 @@ func CredentialsBatch(env map[string]string, authPath string, requests []Credent
 					continue
 				}
 				out[i] = openAICredentialStateAt(env, entries, authPath, request.Key, time.Now())
+			case providerregistry.AuthKimiGlobalOAuth:
+				if readErr != nil {
+					out[i] = CredentialState{Err: readErr}
+					continue
+				}
+				out[i] = kimiGlobalCredentialState(entries, time.Now())
 			case providerregistry.AuthAPIKey:
 				if readErr != nil {
 					out[i] = CredentialState{Err: readErr}

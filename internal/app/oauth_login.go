@@ -67,6 +67,9 @@ type oauthLoginRequest struct {
 	codexBind func(string) (net.Listener, error)
 	// wait is the device-code polling timer seam. Nil uses a real timer.
 	wait func(context.Context, time.Duration) error
+	// userAgent is the psi build version for Global Kimi requests. Empty
+	// means an unstamped caller.
+	userAgent string
 }
 
 // oauthLoginUpdate is one worker-to-REPL notification. link presents the
@@ -150,6 +153,58 @@ func runBrowserOAuthLogin(ctx context.Context, login browserOAuthLogin, browser 
 		err = login.Run(ctx, func(authURL string) {
 			ready(authURL, false, nil)
 		})
+	}
+	return oauthLoginResult{err: err}
+}
+
+// deviceOAuthLogin is the shared device-code contract. Codex and Global
+// Kimi keep separate grants but use the same panel and launcher ownership.
+type deviceOAuthLogin interface {
+	Run(context.Context, func(userCode, verificationURL string)) error
+}
+
+// runDeviceOAuthLogin presents the device code, opens the verification page
+// only on an explicit Enter, and returns the provider's terminal result.
+func runDeviceOAuthLogin(ctx context.Context, login deviceOAuthLogin, browser func(context.Context, string) error, updates chan<- oauthLoginUpdate) oauthLoginResult {
+	launchCtx, cancelLaunch := context.WithCancel(ctx)
+	var launcherDone chan struct{}
+	err := login.Run(ctx, func(userCode, verificationURL string) {
+		open := make(chan struct{}, 1)
+		launcherDone = make(chan struct{})
+		go func(done chan struct{}) {
+			defer close(done)
+			select {
+			case <-launchCtx.Done():
+				return
+			case <-open:
+			}
+			if launchCtx.Err() != nil {
+				return
+			}
+			if err := launchOAuthLoginBrowser(launchCtx, browser, verificationURL); err != nil {
+				select {
+				case updates <- oauthLoginUpdate{manualOpen: true}:
+				case <-launchCtx.Done():
+				}
+			}
+		}(launcherDone)
+		update := oauthLoginUpdate{
+			deviceCode: userCode, deviceURL: verificationURL,
+			openDevice: func() {
+				select {
+				case open <- struct{}{}:
+				default:
+				}
+			},
+		}
+		select {
+		case updates <- update:
+		case <-ctx.Done():
+		}
+	})
+	cancelLaunch()
+	if launcherDone != nil {
+		<-launcherDone
 	}
 	return oauthLoginResult{err: err}
 }

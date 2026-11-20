@@ -14,6 +14,9 @@ const (
 	AuthAPIKey        AuthKind = "api-key"
 	AuthCodexOAuth    AuthKind = "codex-oauth"
 	AuthAPIKeyOrOAuth AuthKind = "api-key-or-oauth"
+	// AuthKimiGlobalOAuth is the Kimi Code (Global) device sign-in trial. It
+	// has no API-key fallback; stock Pi does not recognize this provider ID.
+	AuthKimiGlobalOAuth AuthKind = "kimi-global-oauth"
 )
 
 type Spec struct {
@@ -24,6 +27,10 @@ type Spec struct {
 	DefaultAPI  string
 	Endpoints   map[string]string
 }
+
+// KimiGlobalProviderID is the trial provider ID for Global Kimi Code device
+// sign-in. Stock Pi does not define this provider ID.
+const KimiGlobalProviderID = "kimi-coding-global"
 
 var registry = map[string]Spec{
 	"anthropic": {
@@ -95,6 +102,11 @@ var registry = map[string]Spec{
 		ID: "kimi-coding", Name: "Kimi For Coding", Auth: AuthAPIKey,
 		Environment: "KIMI_API_KEY", DefaultAPI: "openai-completions",
 		Endpoints: map[string]string{"openai-completions": "https://api.kimi.com/coding/v1"},
+	},
+	KimiGlobalProviderID: {
+		ID: KimiGlobalProviderID, Name: "Kimi For Coding (Global)", Auth: AuthKimiGlobalOAuth,
+		DefaultAPI: "openai-completions",
+		Endpoints:  map[string]string{"openai-completions": "https://api.kimi.ai/coding/v1"},
 	},
 	"qwen-token-plan": {
 		ID: "qwen-token-plan", Name: "Qwen Token Plan", Auth: AuthAPIKey,
