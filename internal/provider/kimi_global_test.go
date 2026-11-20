@@ -178,6 +178,44 @@ func TestKimiGlobalDeviceFailure(t *testing.T) {
 		}
 	})
 
+	t.Run("absent interval and lifetime use the RFC defaults", func(t *testing.T) {
+		authPath := filepath.Join(t.TempDir(), "auth.json")
+		absent := `{"device_code":"kimi-device-secret","user_code":"KIMI-CODE","verification_uri":"https://www.kimi.ai/code/authorize_device","interval":null,"expires_in":null}`
+		err, clock, polls := runKimiDevice(t, authPath, absent, func(n int) *http.Response {
+			if n == 1 {
+				return kimiJSON(http.StatusBadRequest, `{"error":"authorization_pending"}`)
+			}
+			return kimiJSON(http.StatusOK, kimiDeviceSuccessBody)
+		}, context.Background(), nil, nil)
+		if err != nil || polls.Load() != 2 {
+			t.Fatalf("error=%v polls=%d", err, polls.Load())
+		}
+		waits := clock.recordedWaits()
+		want := []time.Duration{kimiGlobalDefaultInterval, kimiGlobalDefaultInterval}
+		if fmt.Sprint(waits) != fmt.Sprint(want) {
+			t.Fatalf("waits = %v, want %v", waits, want)
+		}
+	})
+
+	t.Run("slow_down without a server interval adds five seconds", func(t *testing.T) {
+		authPath := filepath.Join(t.TempDir(), "auth.json")
+		responses := []*http.Response{
+			kimiJSON(http.StatusBadRequest, `{"error":"slow_down"}`),
+			kimiJSON(http.StatusOK, kimiDeviceSuccessBody),
+		}
+		err, clock, polls := runKimiDevice(t, authPath, kimiDeviceStartBody("3", "120"), func(n int) *http.Response {
+			return responses[n-1]
+		}, context.Background(), nil, nil)
+		if err != nil || polls.Load() != 2 {
+			t.Fatalf("error=%v polls=%d", err, polls.Load())
+		}
+		waits := clock.recordedWaits()
+		want := []time.Duration{3 * time.Second, 8 * time.Second}
+		if fmt.Sprint(waits) != fmt.Sprint(want) {
+			t.Fatalf("waits = %v, want %v", waits, want)
+		}
+	})
+
 	t.Run("slow_down increases the next interval", func(t *testing.T) {
 		authPath := filepath.Join(t.TempDir(), "auth.json")
 		responses := []*http.Response{
