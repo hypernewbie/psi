@@ -25,6 +25,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
+          # Keep checksum-based keys; setup-go v7 defaults to go.mod.
+          cache-dependency-path: go.sum
       - name: tagged-acceptance
         # PLAN2/PLAN4/PLAN5 resource profiles: idle frames, 10k metadata
         # first page, and the 512 MiB compacted-session activation.

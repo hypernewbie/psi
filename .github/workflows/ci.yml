@@ -17,6 +17,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
+          # Keep checksum-based keys; setup-go v7 defaults to go.mod.
+          cache-dependency-path: go.sum
       - name: git-bash-on-path
         if: runner.os == 'Windows'
         # bash, sleep, and seq live in Git\usr\bin (see the bash.EXE
