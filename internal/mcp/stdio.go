@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	maxStdinFrame   = 16 << 20
-	maxStderrRetain = 64 << 10
+	maxStdinFrame       = 16 << 20
+	maxStderrRetain     = 64 << 10
+	stdioReadBufferSize = 64 << 10
 )
 
 type stdioTransport struct {
@@ -78,10 +79,10 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	c := &stdioConnection{
 		cmd:        cmd,
 		stdin:      stdin,
-		stdout:     bufio.NewReaderSize(stdout, 64<<10),
+		stdout:     bufio.NewReaderSize(stdout, stdioReadBufferSize),
 		stdoutPipe: stdout,
 		stderrPipe: stderr,
-		frames:     make(chan []byte),
+		messages:   make(chan jsonrpc.Message),
 		stopping:   make(chan struct{}),
 		writeCh:    make(chan struct{}, 1),
 		done:       make(chan struct{}),
@@ -118,11 +119,9 @@ type stdioConnection struct {
 	stdoutPipe *os.File
 	stderrPipe *os.File
 
-	// frames carries complete stdout frames from readLoop to Read. readLoop
-	// stores the terminal read error in readErr before closing frames, so a
-	// receive on the closed channel observes the stored error.
-	frames  chan []byte
-	readErr error
+	// readLoop publishes readErr before closing messages.
+	messages chan jsonrpc.Message
+	readErr  error
 	// Close and abort close stopping to release blocked Reads and Writes
 	// without waiting for the pipe peer.
 	stopping chan struct{}
@@ -145,34 +144,23 @@ func (c *stdioConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var line []byte
+	var msg jsonrpc.Message
 	var ok bool
 	select {
-	case line, ok = <-c.frames:
+	case msg, ok = <-c.messages:
 	case <-ctx.Done():
 		c.abort()
 		return nil, ctx.Err()
 	case <-c.stopping:
 		// Preserve a terminal frame error already published by readLoop.
 		select {
-		case line, ok = <-c.frames:
+		case msg, ok = <-c.messages:
 		default:
 			return nil, sdk.ErrConnectionClosed
 		}
 	}
 	if !ok {
 		return nil, c.readErr
-	}
-	return c.decodeFrame(line)
-}
-
-// decodeFrame parses one delivered frame. A malformed frame fails the
-// connection.
-func (c *stdioConnection) decodeFrame(line []byte) (jsonrpc.Message, error) {
-	msg, err := jsonrpc.DecodeMessage(line)
-	if err != nil {
-		c.abort()
-		return nil, fmt.Errorf("malformed stdio frame: %w", err)
 	}
 	return msg, nil
 }
@@ -182,23 +170,33 @@ func (c *stdioConnection) decodeFrame(line []byte) (jsonrpc.Message, error) {
 // stdout can delay its exit, but never Close, which does not wait for this
 // goroutine.
 func (c *stdioConnection) readLoop() {
+	abort := false
 	defer func() {
 		_ = c.stdoutPipe.Close()
-		close(c.frames)
-		// Publish the oversized-frame error before abort wakes Read.
-		var limit *limitError
-		if errors.As(c.readErr, &limit) {
+		close(c.messages)
+		// Publish the frame error before abort wakes Read.
+		if abort {
 			c.abort()
 		}
 	}()
 	for {
-		line, err := c.readFrame()
+		frame, err := c.readFrame()
 		if err != nil {
 			c.readErr = err
+			var limit *limitError
+			abort = errors.As(err, &limit)
+			return
+		}
+		// Decode before the next read reuses the buffer. The decoded message
+		// owns its data, so only it crosses the channel.
+		msg, err := jsonrpc.DecodeMessage(frame)
+		if err != nil {
+			c.readErr = fmt.Errorf("malformed stdio frame: %w", err)
+			abort = true
 			return
 		}
 		select {
-		case c.frames <- line:
+		case c.messages <- msg:
 		case <-c.stopping:
 			c.readErr = sdk.ErrConnectionClosed
 			return
@@ -206,40 +204,42 @@ func (c *stdioConnection) readLoop() {
 	}
 }
 
+// readFrame returns bytes that may borrow stdout's buffer until the next read.
 func (c *stdioConnection) readFrame() ([]byte, error) {
+	var overflow bytes.Buffer
 	for {
 		select {
 		case <-c.stopping:
 			return nil, sdk.ErrConnectionClosed
 		default:
 		}
-		var buf bytes.Buffer
-		for {
-			chunk, err := c.stdout.ReadSlice('\n')
-			if buf.Len()+len(chunk) > maxStdinFrame {
-				return nil, errLimit("stdio frame")
+		frame, err := c.stdout.ReadSlice('\n')
+		size := overflow.Len() + len(frame)
+		if size > maxStdinFrame {
+			return nil, errLimit("stdio frame")
+		}
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			overflow.Write(frame)
+			continue
+		case errors.Is(err, io.EOF):
+			if size > 0 {
+				return nil, errors.New("incomplete stdio frame at end of stream")
 			}
-			buf.Write(chunk)
-			if err == nil {
-				break
-			}
-			if errors.Is(err, bufio.ErrBufferFull) {
-				continue
-			}
-			if errors.Is(err, io.EOF) {
-				if buf.Len() > 0 {
-					return nil, errors.New("incomplete stdio frame at end of stream")
-				}
-				return nil, io.EOF
-			}
+			return nil, io.EOF
+		case err != nil:
 			return nil, err
 		}
-		frame := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
-		frame = bytes.TrimSuffix(frame, []byte("\r"))
-		if len(bytes.TrimSpace(frame)) == 0 {
-			continue
+		if overflow.Len() != 0 {
+			overflow.Write(frame)
+			frame = overflow.Bytes()
 		}
-		return frame, nil
+		frame = bytes.TrimSuffix(frame, []byte("\n"))
+		frame = bytes.TrimSuffix(frame, []byte("\r"))
+		if len(bytes.TrimSpace(frame)) > 0 {
+			return frame, nil
+		}
+		overflow = bytes.Buffer{}
 	}
 }
 

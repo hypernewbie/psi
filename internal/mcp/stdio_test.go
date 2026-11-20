@@ -72,8 +72,11 @@ func TestMCPStdioTailHelper(t *testing.T) {
 		return
 	}
 	output := stdioFinalFirst + "\n" + stdioFinalLast + "\n"
-	if os.Getenv("PSI_MCP_TAIL_MODE") == "partial" {
+	switch os.Getenv("PSI_MCP_TAIL_MODE") {
+	case "partial":
 		output += stdioPartialTail
+	case "malformed":
+		output += "not-json\n"
 	}
 	if _, err := io.WriteString(os.Stdout, output); err != nil {
 		os.Exit(2)
@@ -82,7 +85,7 @@ func TestMCPStdioTailHelper(t *testing.T) {
 }
 
 func TestStdioDrainsFramesAfterProcessExit(t *testing.T) {
-	for _, mode := range []string{"complete", "partial"} {
+	for _, mode := range []string{"complete", "partial", "malformed"} {
 		t.Run(mode, func(t *testing.T) {
 			transport := newStdioTransport(Server{
 				Command: os.Args[0],
@@ -120,12 +123,19 @@ func TestStdioDrainsFramesAfterProcessExit(t *testing.T) {
 				}
 			}
 			_, err = connection.Read(ctx)
-			if mode == "complete" {
+			switch mode {
+			case "complete":
 				if !errors.Is(err, io.EOF) {
 					t.Fatalf("after final replies: %v; want EOF", err)
 				}
-			} else if err == nil || !strings.Contains(err.Error(), "incomplete stdio frame") {
-				t.Fatalf("after partial tail: %v; want incomplete frame error", err)
+			case "partial":
+				if err == nil || !strings.Contains(err.Error(), "incomplete stdio frame") {
+					t.Fatalf("after partial tail: %v; want incomplete frame error", err)
+				}
+			case "malformed":
+				if err == nil || !strings.Contains(err.Error(), "malformed stdio frame") {
+					t.Fatalf("after malformed tail: %v; want malformed frame error", err)
+				}
 			}
 		})
 	}
@@ -142,7 +152,7 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 	connection := &stdioConnection{
 		stdout:     bufio.NewReader(stdout),
 		stdoutPipe: stdout,
-		frames:     make(chan []byte),
+		messages:   make(chan jsonrpc.Message),
 		stopping:   make(chan struct{}),
 		done:       done,
 	}
@@ -173,18 +183,43 @@ func TestStdioCloseUnblocksReadWithOpenPeer(t *testing.T) {
 	_ = stdoutPeer.Close()
 	drained := make(chan struct{})
 	go func() {
-		for range connection.frames {
+		for range connection.messages {
 		}
 		close(drained)
 	}()
 	awaitStdioEvent(t, drained, "reader exit after the peer closed stdout")
 }
 
+type stdioReaderFunc func([]byte) (int, error)
+
+func (f stdioReaderFunc) Read(p []byte) (int, error) { return f(p) }
+
+func TestStdioStopsReadingBetweenFrameChunks(t *testing.T) {
+	connection := &stdioConnection{stopping: make(chan struct{})}
+	connection.stdout = bufio.NewReader(stdioReaderFunc(func(p []byte) (int, error) {
+		select {
+		case <-connection.stopping:
+			t.Fatal("read another chunk after shutdown started")
+		default:
+		}
+		// Close while this read is in flight. The peer returns a full chunk
+		// without a newline, but might not return any further data.
+		close(connection.stopping)
+		for i := range p {
+			p[i] = 'x'
+		}
+		return len(p), nil
+	}))
+	if _, err := connection.readFrame(); !errors.Is(err, sdk.ErrConnectionClosed) {
+		t.Fatalf("read incomplete frame during shutdown: %v; want closed connection", err)
+	}
+}
+
 func TestStdioReadCancellationStopsConnection(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		connection := &stdioConnection{frames: make(chan []byte), stopping: make(chan struct{})}
+		connection := &stdioConnection{messages: make(chan jsonrpc.Message), stopping: make(chan struct{})}
 		result := make(chan error, 1)
 		go func() {
 			_, err := connection.Read(ctx)
@@ -298,9 +333,9 @@ func TestStdioReportsOversizedFrameDuringAbort(t *testing.T) {
 			close(closing)
 			<-release
 		}},
-		stdout:     bufio.NewReaderSize(stdout, 64<<10),
+		stdout:     bufio.NewReaderSize(stdout, stdioReadBufferSize),
 		stdoutPipe: stdout,
-		frames:     make(chan []byte),
+		messages:   make(chan jsonrpc.Message),
 		stopping:   make(chan struct{}),
 	}
 	go connection.readLoop()
@@ -319,38 +354,37 @@ func TestMCPStdioRoundTripHelper(t *testing.T) {
 	if os.Getenv("PSI_MCP_ROUNDTRIP_HELPER") != "1" || flag.Lookup("test.run").Value.String() != "^TestMCPStdioRoundTripHelper$" {
 		return
 	}
-	line, err := bufio.NewReader(os.Stdin).ReadBytes('\n')
-	if err != nil {
-		os.Exit(2)
+	stdin := bufio.NewReader(os.Stdin)
+	for {
+		line, err := stdin.ReadBytes('\n')
+		if err == io.EOF && len(line) == 0 {
+			os.Exit(0)
+		}
+		if err != nil {
+			os.Exit(2)
+		}
+		line = bytes.TrimSuffix(line, []byte("\n"))
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		msg, err := jsonrpc.DecodeMessage(line)
+		if err != nil {
+			os.Exit(2)
+		}
+		req, ok := msg.(*jsonrpc.Request)
+		if !ok {
+			os.Exit(2)
+		}
+		data, err := jsonrpc.EncodeMessage(&jsonrpc.Response{ID: req.ID, Result: req.Params})
+		if err != nil {
+			os.Exit(2)
+		}
+		if _, err := os.Stdout.Write(append(data, '\n')); err != nil {
+			os.Exit(2)
+		}
 	}
-	line = bytes.TrimSuffix(line, []byte("\n"))
-	line = bytes.TrimSuffix(line, []byte("\r"))
-	msg, err := jsonrpc.DecodeMessage(line)
-	if err != nil {
-		os.Exit(2)
-	}
-	req, ok := msg.(*jsonrpc.Request)
-	if !ok {
-		os.Exit(2)
-	}
-	data, err := jsonrpc.EncodeMessage(&jsonrpc.Response{ID: req.ID, Result: req.Params})
-	if err != nil {
-		os.Exit(2)
-	}
-	data = append(data, '\n')
-	if _, err := os.Stdout.Write(data); err != nil {
-		os.Exit(2)
-	}
-	os.Exit(0)
 }
 
-func TestStdioRoundTrip(t *testing.T) {
-	id, err := jsonrpc.MakeID("round-trip-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	params := json.RawMessage(`{"ping":"hello"}`)
-	want := &jsonrpc.Request{ID: id, Method: "echo", Params: params}
+func connectStdioEcho(t testing.TB) sdk.Connection {
+	t.Helper()
 	transport := newStdioTransport(Server{
 		Command: os.Args[0],
 		Args:    []string{"-test.run=^TestMCPStdioRoundTripHelper$"},
@@ -363,26 +397,62 @@ func TestStdioRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
+	return connection
+}
+
+func TestStdioRoundTrip(t *testing.T) {
+	id, err := jsonrpc.MakeID("round-trip-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := connectStdioEcho(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err := connection.Write(ctx, want); err != nil {
-		t.Fatalf("stdio round trip write: %v", err)
+	echo := func(params json.RawMessage) *jsonrpc.Response {
+		t.Helper()
+		if err := connection.Write(ctx, &jsonrpc.Request{ID: id, Method: "echo", Params: params}); err != nil {
+			t.Fatalf("stdio round trip write: %v", err)
+		}
+		msg, err := connection.Read(ctx)
+		if err != nil {
+			t.Fatalf("stdio round trip read: %v", err)
+		}
+		got, ok := msg.(*jsonrpc.Response)
+		if !ok {
+			t.Fatalf("round trip reply = %T; want *jsonrpc.Response", msg)
+		}
+		if got.Error != nil || got.ID != id || !bytes.Equal(got.Result, params) {
+			t.Fatalf("invalid round trip reply: id=%v, error=%v, result length=%d (want %d)", got.ID, got.Error, len(got.Result), len(params))
+		}
+		return got
 	}
-	msg, err := connection.Read(ctx)
+	small := json.RawMessage(`{"ping":"hello"}`)
+	first := echo(small)
+	// A multi-chunk reply refills the read buffer. The small reply must
+	// still own its decoded payload after the buffer has been reused.
+	echo(json.RawMessage(`{"ping":"` + strings.Repeat("x", stdioReadBufferSize) + `"}`))
+	if !bytes.Equal(first.Result, small) {
+		t.Fatalf("first reply changed after the next read: %q", first.Result)
+	}
+}
+
+func BenchmarkStdioRoundTrip(b *testing.B) {
+	connection := connectStdioEcho(b)
+	ctx, cancel := context.WithTimeout(b.Context(), 30*time.Second)
+	defer cancel()
+	id, err := jsonrpc.MakeID("round-trip-1")
 	if err != nil {
-		t.Fatalf("stdio round trip read: %v", err)
+		b.Fatal(err)
 	}
-	got, ok := msg.(*jsonrpc.Response)
-	if !ok {
-		t.Fatalf("round trip reply = %T; want *jsonrpc.Response", msg)
-	}
-	if got.Error != nil {
-		t.Fatalf("round trip reply error = %v", got.Error)
-	}
-	if !reflect.DeepEqual(got.ID, want.ID) {
-		t.Fatalf("round trip id = %#v; want %#v", got.ID, want.ID)
-	}
-	if string(got.Result) != string(params) {
-		t.Fatalf("round trip result = %s; want %s", got.Result, params)
+	params := json.RawMessage(`{"ping":"` + strings.Repeat("x", 1024) + `"}`)
+	req := &jsonrpc.Request{ID: id, Method: "echo", Params: params}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := connection.Write(ctx, req); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := connection.Read(ctx); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
