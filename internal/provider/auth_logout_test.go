@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hypernewbie/psi/internal/providerregistry"
 )
 
 // failOnReadBody proves that logout closes a revocation response without
@@ -211,6 +213,24 @@ func TestLogoutCredentialRevocation(t *testing.T) {
 			t.Fatalf("result = %+v, error = %v, calls = %d", result, err, calls)
 		}
 	})
+}
+
+func TestKimiGlobalLogoutIsLocalOnly(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	writeAuthDoc(t, authPath, `{"kimi-coding-global":{"type":"oauth","access":"synthetic-access","refresh":"synthetic-refresh","expires":1},"kimi-coding":{"type":"api_key","key":"keep"}}`)
+	client := &http.Client{Transport: tokenTransportFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("Kimi logout must not send a network request")
+		return nil, errors.New("unexpected logout request")
+	})}
+	selected := StoredCredential{ProviderID: providerregistry.KimiGlobalProviderID, Kind: CredentialOAuth}
+	result, err := LogoutCredential(context.Background(), authPath, selected, client)
+	if err != nil || result != (LogoutResult{Removed: true, Revocation: RevocationNotAttempted}) {
+		t.Fatalf("Kimi logout = %+v, %v; want local deletion only", result, err)
+	}
+	entries, err := StoredCredentials(authPath)
+	if err != nil || len(entries) != 1 || entries[0] != (StoredCredential{ProviderID: "kimi-coding", Kind: CredentialAPIKey}) {
+		t.Fatalf("remaining credentials = %+v, %v; want only the China key", entries, err)
+	}
 }
 
 func TestLogoutCredentialCommitGuards(t *testing.T) {
