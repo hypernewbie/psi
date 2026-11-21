@@ -83,6 +83,7 @@ type bridgeHandler struct {
 	start         func(text, display, focus, invocation, source string, compact bool)
 	startInput    func(input agent.UserInput, focus string, compact bool) (bool, string)
 	activeLoop    *agent.Loop
+	runStarting   bool // the active worker has not yet established its bridge run ID
 	runCancelling bool // late run events can still change the displayed State
 
 	// searchDone receives finished pages. searches counts live workers on the
@@ -263,19 +264,29 @@ func (h *bridgeHandler) readHistory(req pibridge.Request) {
 // reports a terminal outcome, so Phi never treats a lost receipt as success.
 func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 	id, ok := canonicalDecimal(req.RequestID())
-	switch {
-	case !ok:
+	if !ok {
 		req.ReplyCompact(pibridge.CompactRefused, "stale")
 		return
-	case id <= h.compactHigh:
+	}
+	v2 := req.CompactV2()
+	// The stream checks its envelope before enqueueing, but the REPL may
+	// have replaced the runtime before it drains that request.
+	if v2 && req.Generation() != uint64(h.r.generation) {
+		req.ReplyCompact(pibridge.CompactRefused, "stale")
+		return
+	}
+	if id <= h.compactHigh {
 		req.ReplyCompact(pibridge.CompactRefused, "duplicate")
 		return
-	case h.compact != nil:
+	}
+	if h.compact != nil || h.r.compactPending {
 		req.ReplyCompact(pibridge.CompactRefused, "pending")
 		return
 	}
 	h.compactHigh = id
 	expect := req.CompactExpectation()
+	instructions := req.CompactInstructions()
+	runID, hasRunID := req.CompactRunID()
 	switch {
 	case req.Expired():
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
@@ -285,6 +296,17 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 		return
 	case h.r.state == StateStorageBlocked || h.r.store.WriteError() != nil:
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
+		return
+	case v2 && !hasRunID:
+		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
+		return
+	case !v2 && (instructions != "" || hasRunID):
+		// New fields are valid only after pi.compact.v2 negotiation.
+		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
+		return
+	case v2 && (h.runStarting || h.r.bridge == nil || runID != h.r.bridge.RunID()):
+		// Until RunStart is applied, the bridge still holds the previous ID.
+		req.ReplyCompact(pibridge.CompactRefused, "stale")
 		return
 	case h.prep != nil:
 		// A preparation can still install a configuration; a compaction
@@ -297,7 +319,7 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 	case expect.Model.Provider != h.r.ov.Provider, expect.Model.Model != h.r.ov.Model:
 		req.ReplyCompact(pibridge.CompactRefused, "stale")
 		return
-	case runBusy || h.r.state != StateIdle:
+	case !v2 && (runBusy || h.r.state != StateIdle):
 		req.ReplyCompact(pibridge.CompactRefused, "busy")
 		return
 	case h.r.compactActive:
@@ -306,14 +328,14 @@ func (h *bridgeHandler) startCompact(req pibridge.Request, runBusy bool) {
 	case h.reload != nil:
 		req.ReplyCompact(pibridge.CompactRefused, "pending")
 		return
-	case h.queuedInputs() > 0:
+	case !v2 && h.queuedInputs() > 0:
 		req.ReplyCompact(pibridge.CompactRefused, "queued")
 		return
 	case h.compactRun == nil:
 		req.ReplyCompact(pibridge.CompactRefused, "unavailable")
 		return
 	}
-	if err := h.compactRun(""); err != nil {
+	if err := h.compactRun(instructions); err != nil {
 		req.ReplyCompact(compactFailure(err))
 		return
 	}

@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -88,17 +89,41 @@ type rpcRunner struct {
 	r    *runtime
 	loop *agent.Loop
 
-	mu         sync.Mutex
-	out        *json.Encoder
-	cancel     context.CancelFunc
-	running    bool
-	compacting bool
-	emitted    int
-	streamOpen bool
-	toolIndex  int
-	// compactionReason carries the last CompactionStart state to the explicit
-	// compact command, which publishes compaction_end with the real outcome.
-	compactionReason string
+	mu            sync.Mutex
+	out           *json.Encoder
+	run           *rpcRunWorker
+	reservation   *rpcCompactReservation
+	running       bool
+	compactActive bool
+	emitted       int
+	streamOpen    bool
+	toolIndex     int
+	// shutdown closes when stdin ends or a termination signal arrives.
+	// Admissions refuse once it closes; tests that drive handle directly
+	// leave it nil, which never reads as shut down.
+	shutdown chan struct{}
+}
+
+// rpcRunWorker tracks one prompt submission. done closes after durable
+// settlement and the terminal run frame, never before.
+type rpcRunWorker struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+}
+
+// rpcCompactReservation owns the runner from compact admission until its
+// terminal response. The worker waits for the outgoing run, then compacts
+// unless the reservation is cancelled while it waits.
+type rpcCompactReservation struct {
+	id     *string
+	cfg    agent.Config
+	focus  string
+	ctx    context.Context
+	done   chan struct{}
+	cancel context.CancelFunc
+	// Set by the worker's event sink, before any queued turn runs.
+	summaryFinished bool
+	committed       bool
 }
 
 func (s *rpcRunner) emit(v any) {
@@ -215,23 +240,27 @@ func (s *rpcRunner) sink(ev event.Event) {
 	case event.SummarizationRetryFinished:
 		s.emit(map[string]any{"type": "summarization_retry_finished"})
 	case event.CompactionStart:
-		s.sweepDurable()
-		reason := rpcCompactionReason(ev.State)
 		s.mu.Lock()
-		s.compactionReason = reason
+		s.compactActive = true
 		s.mu.Unlock()
-		s.emit(map[string]any{"type": "compaction_start", "reason": reason})
+		s.sweepDurable()
+		s.emit(map[string]any{"type": "compaction_start", "reason": rpcCompactionReason(ev.State)})
 	case event.CompactionEnd:
+		s.mu.Lock()
+		s.compactActive = false
+		res := s.reservation
+		s.mu.Unlock()
+		manual := ev.State == event.CompactionManual
+		if manual && res != nil {
+			res.summaryFinished = true
+			res.committed = ev.Err == nil
+		}
 		if ev.Err == nil {
 			if proj, err := s.r.store.Projection(); err == nil {
 				s.emitted = len(proj.Flat)
 			}
 		}
-		// Explicit compact publishes its outcome when Compact returns.
-		if s.isCompacting() {
-			return
-		}
-		result := map[string]any{"type": "compaction_end", "reason": rpcCompactionReason(ev.State), "aborted": false}
+		result := map[string]any{"type": "compaction_end", "reason": rpcCompactionReason(ev.State), "aborted": manual && errors.Is(ev.Err, context.Canceled)}
 		if ev.Err != nil {
 			result["errorMessage"] = ev.Err.Error()
 		} else {
@@ -311,12 +340,7 @@ func (s *rpcRunner) handle(cmd rpcCommand) *rpcResponse {
 	case "prompt":
 		return s.prompt(cmd)
 	case "abort":
-		s.mu.Lock()
-		cancel := s.cancel
-		s.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
+		s.cancelActive()
 		out := rpcOK(cmd.ID, "abort", nil)
 		return &out
 	case "get_state":
@@ -395,21 +419,36 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 	s.emitted = len(proj.Flat)
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := s.runConfig()
+	worker := &rpcRunWorker{done: make(chan struct{}), cancel: cancel}
 	s.mu.Lock()
-	s.running, s.cancel = true, cancel
+	select {
+	case <-s.shutdown:
+		s.mu.Unlock()
+		cancel()
+		out := rpcErr(cmd.ID, "prompt", "Server is shutting down.")
+		return &out
+	default:
+	}
+	s.run, s.running = worker, true
 	s.mu.Unlock()
 	s.userMessage(text)
 	go func() {
 		err := s.loop.Submit(ctx, text, cfg)
 		s.sweepDurable()
-		s.mu.Lock()
-		s.streamOpen, s.toolIndex = false, 0
-		s.running, s.cancel = false, nil
+		// The terminal frame goes out before ownership clears: a prompt
+		// admitted in between lands in the settling window above and is
+		// refused retryably instead of queueing into a spent run.
 		if err != nil && ctx.Err() == nil {
-			_ = s.out.Encode(map[string]any{"type": "extension_error", "error": err.Error()})
+			s.emit(map[string]any{"type": "extension_error", "error": err.Error()})
 		}
-		_ = s.out.Encode(map[string]any{"type": "agent_settled", "aborted": ctx.Err() != nil})
+		s.emit(map[string]any{"type": "agent_settled", "aborted": ctx.Err() != nil})
+		s.mu.Lock()
+		if s.run == worker {
+			s.running = false
+		}
+		s.streamOpen, s.toolIndex = false, 0
 		s.mu.Unlock()
+		close(worker.done)
 		cancel()
 	}()
 	out := rpcOK(cmd.ID, "prompt", map[string]any{"disposition": "started"})
@@ -419,13 +458,13 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 func (s *rpcRunner) isCompacting() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.compacting
+	return s.reservation != nil
 }
 
 // getState answers with the live runtime shape pi's wire format defines.
 func (s *rpcRunner) getState(cmd rpcCommand) *rpcResponse {
 	s.mu.Lock()
-	running, compacting := s.running, s.compacting
+	running, compacting := s.running, s.reservation != nil
 	s.mu.Unlock()
 	r := s.r
 	pending := s.pendingCount()
@@ -556,44 +595,91 @@ func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
 	return &out
 }
 
-// compact runs one native compaction synchronously: callers waiting on the
-// command response hold until it finishes.
+// compact admits one explicit compaction and answers it from a worker, so
+// the reader stays responsive while the compact owns the runner. The
+// terminal response is the ownership release; no second compact is admitted
+// before it. A compact admitted mid-run cancels that run first and the
+// worker waits for it; the interrupted prompt is not replayed.
 func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
-	if s.loop.Running() || s.isRunning() {
-		out := rpcErr(cmd.ID, "compact", "Cannot compact while a run is active")
-		return &out
+	// Capture the response ID and the starting configuration before the
+	// worker launches; the command value does not outlive admission.
+	var id *string
+	if cmd.ID != nil {
+		held := *cmd.ID
+		id = &held
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	res := &rpcCompactReservation{id: id, cfg: s.runConfig(), focus: cmd.CustomInstructions, ctx: ctx, done: make(chan struct{}), cancel: cancel}
 	s.mu.Lock()
-	s.compacting = true
-	s.compactionReason = ""
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.compacting = false
+	select {
+	case <-s.shutdown:
 		s.mu.Unlock()
-	}()
-	compactErr := s.loop.Compact(context.Background(), s.runConfig(), cmd.CustomInstructions)
-	s.mu.Lock()
-	reason := s.compactionReason
-	s.mu.Unlock()
-	if compactErr != nil {
-		if reason != "" {
-			s.emit(map[string]any{
-				"type": "compaction_end", "reason": reason,
-				"aborted": false, "errorMessage": compactErr.Error(),
-			})
-			s.emit(map[string]any{"type": "agent_settled", "aborted": false})
-		}
-		out := rpcErr(cmd.ID, "compact", compactErr.Error())
+		cancel()
+		out := rpcErr(cmd.ID, "compact", "Server is shutting down.")
+		return &out
+	default:
+	}
+	if s.reservation != nil || s.compactActive {
+		s.mu.Unlock()
+		cancel()
+		out := rpcErr(cmd.ID, "compact", "Cannot compact while compaction is in progress.")
 		return &out
 	}
-	s.emit(map[string]any{
-		"type": "compaction_end", "reason": reason,
-		"aborted": false, "result": map[string]any{},
-	})
-	s.emit(map[string]any{"type": "agent_settled", "aborted": false})
-	out := rpcOK(cmd.ID, "compact", map[string]any{})
-	return &out
+	oldRun := s.run
+	if s.running && oldRun == nil {
+		// The settling window has no worker to wait for. Refuse instead of
+		// starting a summary beside work that still owns the loop.
+		s.mu.Unlock()
+		cancel()
+		out := rpcErr(cmd.ID, "compact", "Agent is starting or settling; retry the compact.")
+		return &out
+	}
+	s.reservation = res
+	s.mu.Unlock()
+	if oldRun != nil {
+		oldRun.cancel()
+	}
+	go s.compactWorker(res, oldRun)
+	return nil
+}
+
+func (s *rpcRunner) compactWorker(res *rpcCompactReservation, oldRun *rpcRunWorker) {
+	defer s.finishCompact(res)
+	if oldRun != nil {
+		<-oldRun.done
+	}
+	if res.ctx.Err() != nil {
+		// An aborted reservation never starts a summary or emits its events.
+		s.emit(rpcErr(res.id, "compact", "compaction aborted"))
+		return
+	}
+	compactErr := s.loop.Compact(res.ctx, res.cfg, res.focus)
+	if res.summaryFinished {
+		aborted := errors.Is(compactErr, context.Canceled)
+		if res.committed {
+			// A queued turn is separate from the checkpoint. Its failure
+			// must not turn a committed compact into a retryable failure.
+			s.sweepDurable()
+			if compactErr != nil && !aborted {
+				s.emit(map[string]any{"type": "extension_error", "error": compactErr.Error()})
+			}
+		}
+		s.emit(map[string]any{"type": "agent_settled", "aborted": aborted})
+	}
+	if compactErr != nil && !res.committed {
+		s.emit(rpcErr(res.id, "compact", compactErr.Error()))
+		return
+	}
+	s.emit(rpcOK(res.id, "compact", map[string]any{}))
+}
+
+// finishCompact releases ownership only after the terminal response was written.
+func (s *rpcRunner) finishCompact(res *rpcCompactReservation) {
+	res.cancel()
+	s.mu.Lock()
+	s.reservation = nil
+	close(res.done)
+	s.mu.Unlock()
 }
 
 // sessionStats answers with stored token accounting and a live context

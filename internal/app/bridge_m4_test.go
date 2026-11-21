@@ -65,7 +65,7 @@ func compactFixture(t *testing.T) (*runtime, *bridgePhi, *bridgeHandler, *int) {
 	r := testRuntime(t)
 	r.generation = 1
 	r.state = StateIdle
-	f, h := startBridgeRuntime(t, r)
+	f, h := startBridgeRuntimeV1(t, r)
 	dispatched := new(int)
 	h.compactRun = func(string) error {
 		*dispatched++
@@ -251,5 +251,156 @@ func TestBridgeCompactSynchronousFailureIsTerminal(t *testing.T) {
 	}
 	if h.compact != nil || r.compactPending {
 		t.Fatal("a refused dispatch must not leave the process latch pending")
+	}
+}
+
+func compactRequestV2(id, session, leaf, provider, model string, runID uint64, instructions string) *pibridgepb.PhiToPi {
+	req := compactRequest(id, session, leaf, provider, model).GetCompactRequest()
+	req.ExpectedRunId = &runID
+	req.CustomInstructions = instructions
+	return &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_CompactRequest{CompactRequest: req}}
+}
+
+func compactRequestV2NoRun(id, session, leaf, provider, model string, instructions string) *pibridgepb.PhiToPi {
+	req := compactRequest(id, session, leaf, provider, model).GetCompactRequest()
+	req.CustomInstructions = instructions
+	return &pibridgepb.PhiToPi{Payload: &pibridgepb.PhiToPi_CompactRequest{CompactRequest: req}}
+}
+
+func compactFixtureV2(t *testing.T) (*runtime, *bridgePhi, *bridgeHandler, *int) {
+	t.Helper()
+	r := testRuntime(t)
+	r.generation = 1
+	r.state = StateIdle
+	f, h := startBridgeRuntime(t, r)
+	dispatched := new(int)
+	h.compactRun = func(string) error {
+		*dispatched++
+		return nil
+	}
+	return r, f, h, dispatched
+}
+
+func TestBridgeCompactV2AdmitsActiveRunAndQueuedInput(t *testing.T) {
+	r, f, h, dispatched := compactFixtureV2(t)
+	r.bridge.RunStarted()
+	r.state = StateWaiting
+	r.queuedInputs = func() int { return 1 }
+	session, leaf := r.store.Header().ID, r.store.LeafID()
+	frame := compactRequestV2("1", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "FOCUS_TEXT")
+	f.inject <- frame
+	h.handle(nextRequest(t, r.bridge), true)
+	if h.compact == nil || !r.compactPending {
+		t.Fatalf("v2 active compact was not admitted: %+v", h.compact)
+	}
+	if *dispatched != 1 {
+		t.Fatalf("dispatched = %d, want 1", *dispatched)
+	}
+	h.resolveCompactRun(nil)
+	if got := nextCompactResult(t, f, new(int)); got.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED {
+		t.Fatalf("result = %+v", got)
+	}
+}
+
+func TestBridgeCompactV2RefusesStaleRunAndIdentity(t *testing.T) {
+	r, f, h, dispatched := compactFixtureV2(t)
+	r.bridge.RunStarted()
+	r.state = StateWaiting
+	session, leaf := r.store.Header().ID, r.store.LeafID()
+	cursor := 0
+
+	// Wrong run id is stale and never reaches compactRun.
+	f.inject <- compactRequestV2("1", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID()+1, "")
+	h.handle(nextRequest(t, r.bridge), true)
+	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "stale" {
+		t.Fatalf("wrong run = %+v, want stale", got)
+	}
+	// Wrong session, leaf, and model are stale under the correct run fence.
+	for i, frame := range []*pibridgepb.PhiToPi{
+		compactRequestV2("2", "other", leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), ""),
+		compactRequestV2("3", session, "other", r.ov.Provider, r.ov.Model, r.bridge.RunID(), ""),
+		compactRequestV2("4", session, leaf, "other", r.ov.Model, r.bridge.RunID(), ""),
+	} {
+		f.inject <- frame
+		h.handle(nextRequest(t, r.bridge), true)
+		if got := nextCompactResult(t, f, &cursor); got.GetReason() != "stale" {
+			t.Fatalf("identity %d = %+v, want stale", i, got)
+		}
+	}
+	// A successor can own the worker slot before its RunStart updates the
+	// bridge counter. An unchanged leaf is possible for bump, or before
+	// the successor's first append. The old fence must still refuse.
+	r.bridge.RunSettled(pibridge.OutcomeCompleted)
+	h.runStarting = true
+	f.inject <- compactRequestV2("5", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "")
+	h.handle(nextRequest(t, r.bridge), true)
+	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "stale" {
+		t.Fatalf("request from previous run = %+v, want stale", got)
+	}
+	// A request delivered by the old stream can remain in the host queue
+	// after the REPL replaces the runtime. The same session can be reopened
+	// at the same leaf, with the same model and no intervening run.
+	h.runStarting = false
+	r.state = StateIdle
+	f.inject <- compactRequestV2("6", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "")
+	queued := nextRequest(t, r.bridge)
+	r.generation++
+	h.handle(queued, false)
+	if *dispatched != 0 {
+		t.Fatalf("stale request reached compact admission: %d dispatches", *dispatched)
+	}
+	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "stale" {
+		t.Fatalf("previous generation = %+v, want stale", got)
+	}
+}
+
+func TestBridgeCompactV2ClientRejectsMissingRunFence(t *testing.T) {
+	r, f, h, dispatched := compactFixtureV2(t)
+	session, leaf := r.store.Header().ID, r.store.LeafID()
+	cursor := 0
+	f.inject <- compactRequestV2NoRun("1", session, leaf, r.ov.Provider, r.ov.Model, "FOCUS_TEXT")
+	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "unavailable" {
+		t.Fatalf("missing run fence = %+v, want unavailable", got)
+	}
+	if h.compact != nil || r.compactPending || *dispatched != 0 {
+		t.Fatal("missing run fence reached the host")
+	}
+}
+
+func TestBridgeCompactReceiptBinding(t *testing.T) {
+	r, f, h, _ := compactFixtureV2(t)
+	session, leaf := r.store.Header().ID, r.store.LeafID()
+	cursor := 0
+	f.inject <- compactRequestV2("10", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "")
+	h.handle(nextRequest(t, r.bridge), false)
+	if h.compact == nil || !r.compactPending {
+		t.Fatal("compact was not admitted")
+	}
+	// A second request during the held reservation is refused pending and
+	// does not disturb the receipt.
+	f.inject <- compactRequestV2("11", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "")
+	h.handle(nextRequest(t, r.bridge), false)
+	if got := nextCompactResult(t, f, &cursor); got.GetReason() != "pending" {
+		t.Fatalf("second request = %+v, want pending", got)
+	}
+	if h.compact == nil || !r.compactPending {
+		t.Fatal("second request released the held receipt")
+	}
+	// A model error is one terminal failure and the owner can be reused.
+	h.resolveCompactRun(errors.New("model failed"))
+	if got := nextCompactResult(t, f, &cursor); got.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_FAILED || got.GetReason() != "error" {
+		t.Fatalf("failure = %+v", got)
+	}
+	if h.compact != nil || r.compactPending {
+		t.Fatal("failure left the receipt bound")
+	}
+	f.inject <- compactRequestV2("12", session, leaf, r.ov.Provider, r.ov.Model, r.bridge.RunID(), "")
+	h.handle(nextRequest(t, r.bridge), false)
+	if h.compact == nil || !r.compactPending {
+		t.Fatal("owner was not reusable after failure")
+	}
+	h.resolveCompactRun(nil)
+	if got := nextCompactResult(t, f, &cursor); got.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED {
+		t.Fatalf("reused owner = %+v", got)
 	}
 }

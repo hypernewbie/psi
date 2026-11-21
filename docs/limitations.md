@@ -132,15 +132,17 @@ During a run, the editor stays active and `Enter` queues a steering message, as 
 `Alt+Enter` queues follow-up messages until the run ends. `steeringMode` and `followUpMode`
 select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 `/settings` picker does not list these values, so edit `settings.json` instead.
-`/ac`, `/autocompact`, `/loop-stop`, and `/skill:<name>` have busy-run handling.
+`/ac`, `/autocompact`, `/compact`, `/loop-stop`, and `/skill:<name>` have busy-run handling.
 `/model`, `/thinking`, and `/settings` work during a run. Request settings apply to the next request.
 `/session`, `/hotkeys`, and `/name` run immediately without cancelling the run.
 `/quit` releases the terminal first, then the run settles behind it and the process exits.
 Unknown slash text queues as ordinary prompt text. Recognized commands without
 busy-run handling and a bare `/` return to the draft.
 Phi can also change the model or thinking level during a run. Bridge reload
-and compaction still require an idle pane. RPC model and thinking changes
-still require an idle session.
+still requires an idle pane. A `pi.compact.v2` bridge peer can compact an active
+run or queued input; a v1 peer keeps the idle-only rule. RPC model and thinking
+changes still require an idle session; RPC `compact` can interrupt an active
+run.
 An unknown, unreadable, or oversized `/skill:` invocation is refused rather than sent as prompt text.
 
 Context-limit recovery permits at most one compaction and retry before visible partial output.

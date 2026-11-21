@@ -29,6 +29,11 @@ message PiToPhi {
   string pane_id = 1;
   string process_id = 2;
   uint64 runtime_generation = 3;
+  // Optional W3C trace-context header for this frame's operation. Peers that
+  // predate this field ignore it; a missing or malformed value must never
+  // change behavior, only the trace's parentage. Declared optional so absence
+  // stays representable on both sides instead of decoding as an empty string.
+  optional string traceparent = 4;
   reserved 14, 15, 16;
   reserved "summary_result", "command_error", "cancel_acknowledged";
   oneof payload {
@@ -48,6 +53,8 @@ message PiToPhi {
     SyncboardRequest syncboard_request = 26;
     AttachmentPromptAck attachment_prompt_ack = 27;
     TranscriptSearchResponse transcript_search_response = 28;
+    SyncboardPushAck syncboard_push_ack = 29;
+    TerminalRefreshAck terminal_refresh_ack = 30;
   }
 }
 
@@ -56,6 +63,9 @@ message PhiToPi {
   string pane_id = 1;
   string process_id = 2;
   uint64 runtime_generation = 3;
+  // Optional W3C trace-context header, mirroring the PiToPhi field so a
+  // request/response pair can share one trace.
+  optional string traceparent = 4;
   reserved 11, 12;
   reserved "summarize", "cancel";
   oneof payload {
@@ -74,6 +84,8 @@ message PhiToPi {
     AttachmentPromptRequest attachment_prompt_request = 24;
     StateRequest state_request = 25;
     TranscriptSearchRequest transcript_search_request = 26;
+    SyncboardNotification syncboard_notification = 27;
+    TerminalRefreshRequest terminal_refresh_request = 28;
   }
 }
 
@@ -192,6 +204,28 @@ message StateSnapshot {
 // then answers with a StateSnapshot echoing request_id. Never dispatches input.
 message StateRequest {
   string request_id = 1;
+}
+
+// Terminal repaint request. The runtime redraws its live TUI in place and
+// echoes request_id. It never submits a prompt or touches the editor draft.
+enum TerminalRefreshOutcome {
+  TERMINAL_REFRESH_OUTCOME_UNSPECIFIED = 0;
+  TERMINAL_REFRESH_OUTCOME_DISPATCHED = 1;
+  TERMINAL_REFRESH_OUTCOME_NOT_SENT = 2;
+  TERMINAL_REFRESH_OUTCOME_UNKNOWN = 3;
+}
+
+message TerminalRefreshRequest {
+  string request_id = 1;
+}
+
+// TerminalRefreshAck reports entry only: DISPATCHED means the repaint ran,
+// never that its bytes reached a viewer. reason uses a bounded safe
+// vocabulary and is empty for DISPATCHED.
+message TerminalRefreshAck {
+  string request_id = 1;
+  TerminalRefreshOutcome outcome = 2;
+  string reason = 3;
 }
 
 // Optional context telemetry. Scalar presence is explicit: an absent
@@ -364,6 +398,15 @@ message CompactRequest {
   // admission only; native success changes the leaf, so completion
   // never requires the old leaf.
   ModelSnapshot expected_model = 4;
+  // Optional manual summary instructions. Empty means no instructions.
+  // Nonempty instructions require pi.compact.v2 and expected_run_id:
+  // a v1 peer must never receive them. At most 4096 UTF-8 bytes.
+  string custom_instructions = 5;
+  // Expected logical run id from the same state snapshot. Present only
+  // on pi.compact.v2, where an active conversation or queued input is
+  // allowed; zero is valid before the first run. Absence on v2 is
+  // unavailable, never a legacy bare-compact fallback.
+  optional uint64 expected_run_id = 6;
 }
 
 // Terminal compaction outcome. UNSPECIFIED means genuinely unknown:
@@ -586,6 +629,28 @@ message SyncboardResponse {
   uint32 http_status = 3;
   bytes body_json = 4;
   string reason = 5;
+}
+
+// SyncboardNotification delivers one addressed message for injection into
+// the receiving runtime. It is the only unsolicited Phi → Pi payload; every
+// other Phi → Pi message answers a Pi request. seq is per publisher, so
+// acknowledgements key on message_id instead. Phi retains an unacknowledged
+// entry and resends it after a reconnect.
+message SyncboardNotification {
+  uint64 seq = 1;
+  string sender = 2;
+  string recipient = 3;
+  bytes value = 4;
+  int64 updated_at_unix_ms = 5;
+  string message_id = 6;
+}
+
+// SyncboardPushAck confirms one SyncboardNotification. A missing ack keeps
+// the entry pending; a duplicate message_id is acked without a second
+// injection.
+message SyncboardPushAck {
+  uint64 seq = 1;
+  string message_id = 2;
 }
 
 // ---------------------------------------------------------------------------

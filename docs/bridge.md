@@ -28,8 +28,8 @@ provisioning error: the bridge runs with one capability fewer.
 
 ## Capabilities
 
-Twelve capabilities are advertised when the handoff root opens safely;
-eleven otherwise.
+Thirteen capabilities are advertised when the handoff root opens safely;
+twelve otherwise.
 
 - `pi.lifecycle.v1`: run start and settle edges plus a bounded 64-record
   journal that reconnects replay.
@@ -53,6 +53,8 @@ eleven otherwise.
   branch, paginated by anchor and index.
 - `pi.compact.v1`: readiness reporting and one admitted native compaction
   per request id.
+- `pi.compact.v2`: manual compaction with optional summary instructions and
+  an active-run or queued-input admission fence.
 - `pi.reload.v1`: reload instructions, skills, and theme/display resources
   through the native reload path, with session and context checks.
 - `pi.syncboard.v1`: coordinator requests through the negotiated bridge
@@ -74,6 +76,32 @@ Phi keeps its own fallbacks for the capabilities a pane does not advertise.
 `pi.reload.v1` and `pi.syncboard.v1` are existing capabilities that predate
 attachments; they are listed here for completeness, not as attachment
 features.
+
+## Native compaction
+
+`pi.compact.v1` keeps the original admission rule: Phi sends a compact only
+when the published snapshot is idle, has no queued input, has no active
+compaction, and has no unresolved bridge work. `pi.compact.v2` is negotiated
+separately. On v2, psi also accepts a compact during an active conversation or
+with queued input, fenced by the logical run id captured from the same state
+snapshot. Missing run readiness, a different run id, stale session/leaf/model
+identity, active compaction, preparation, or another unresolved mutation is
+refused before any cancellation. A v1 peer keeps the idle path and is never
+sent instructions.
+
+`custom_instructions` is optional, at most 4096 UTF-8 bytes, and empty means
+no instructions. Nonempty instructions require v2 and are rejected before
+dispatch on v1. On acceptance, psi reserves one manual compaction, cancels the
+active run once, waits for durable settlement, and starts one summary from the
+settled context. It does not replay the interrupted prompt. Accepted but
+undelivered steering or follow-up input returns to the editor. A second
+`/compact` or bridge request is refused without disturbing the first. The
+operation ends with one terminal `completed`, `failed`, or `cancelled`; a lost
+receipt is unknown and is never resent.
+
+The Phi browser button is unchanged: it still holds its press until the pane
+reports idle and sends no instructions. The v2 path is for callers of the
+existing endpoint.
 
 ## Attachments
 
@@ -174,6 +202,6 @@ the variables to opt out of the native bridge.
 ## Contract
 
 The wire contract, bounds, and status mappings live in Phi at
-`bonus/pi-phi/PROTOCOL.md`, pinned at revision `a207d6b4`. The bindings under
+`bonus/pi-phi/PROTOCOL.md`, pinned at revision `617fe132b6749b23e832b94cf06953f6d6667c5c`. The bindings under
 `internal/pibridge/pb` are generated from `internal/pibridge/proto/bridge.proto`
 and must be regenerated from that same Phi revision.

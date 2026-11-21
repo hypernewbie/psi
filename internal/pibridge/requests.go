@@ -15,6 +15,10 @@ import (
 const (
 	optionalReplySlots = 14
 	optionalReplyBytes = 240 * 1024
+
+	// maxCompactInstructionBytes matches the Phi route body budget. A
+	// longer instruction is refused before the host loop sees it.
+	maxCompactInstructionBytes = 4096
 )
 
 // Request kinds the host may receive. Each maps to one negotiated
@@ -115,10 +119,13 @@ type Request struct {
 	startIndex int
 	initial    bool
 
-	compactSession string
-	compactLeaf    string
-	compactModel   ModelRef
-	hasModel       bool
+	compactSession      string
+	compactLeaf         string
+	compactModel        ModelRef
+	hasModel            bool
+	compactInstructions string
+	compactRunID        *uint64
+	compactV2           bool
 
 	reloadSession    string
 	reloadLeaf       string
@@ -355,6 +362,20 @@ func (r Request) CompactExpectation() CompactExpect {
 	return CompactExpect{Session: r.compactSession, Leaf: r.compactLeaf, Model: r.compactModel, HasModel: r.hasModel}
 }
 
+// CompactInstructions returns the optional manual summary instructions.
+func (r Request) CompactInstructions() string { return r.compactInstructions }
+
+// CompactRunID returns the expected logical run id when the caller sent one.
+func (r Request) CompactRunID() (uint64, bool) {
+	if r.compactRunID == nil {
+		return 0, false
+	}
+	return *r.compactRunID, true
+}
+
+// CompactV2 reports whether the stream negotiated pi.compact.v2.
+func (r Request) CompactV2() bool { return r.compactV2 }
+
 // CompactOutcome mirrors the wire enum. Zero means genuinely unknown: never
 // guess success, failure, or cancellation from absent evidence.
 type CompactOutcome int
@@ -586,6 +607,7 @@ func (c *Client) dispatch(msg *pibridgepb.PhiToPi, ctx context.Context, out *out
 		compact := payload.CompactRequest
 		req.kind, req.requestID = RequestCompact, compact.GetRequestId()
 		req.compactSession, req.compactLeaf = compact.GetExpectedSessionId(), compact.GetExpectedLeafId()
+		req.compactInstructions, req.compactRunID = compact.GetCustomInstructions(), compact.ExpectedRunId
 		if model := compact.GetExpectedModel(); model != nil {
 			req.compactModel, req.hasModel = ModelRef{Provider: model.GetProvider(), Model: model.GetModel()}, true
 		}

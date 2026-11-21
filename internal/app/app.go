@@ -809,6 +809,9 @@ type runtime struct {
 	eventFrames int
 	// skillExpanded is the in-memory Ctrl+O state. A restart starts collapsed.
 	skillExpanded bool
+	// modelSyncHook is a test seam for gating the settlement boundary after
+	// the final queue read. Nil in production.
+	modelSyncHook func()
 }
 
 // activeTool is one running tool call tracked by call ID.
@@ -930,6 +933,15 @@ const (
 	inputCompact
 	inputBump
 )
+
+// manualCompactReservation is one admitted manual compaction. The focus is
+// captured at admission; started distinguishes the outgoing run that is being
+// cancelled from the compaction worker that actually summarizes.
+type manualCompactReservation struct {
+	focus     string
+	started   bool
+	cancelled bool
+}
 
 // checkBump reports whether an interactive bump may start. Sticky storage and
 // auth errors take precedence over a generic non-idle refusal. When
@@ -1480,6 +1492,9 @@ func (r *runtime) modelSelectionSync() func() error {
 	}
 	live, store := r.live, r.store
 	return func() error {
+		if r.modelSyncHook != nil {
+			r.modelSyncHook()
+		}
 		live.mu.Lock()
 		defer live.mu.Unlock()
 		state, err := store.ModelState()
@@ -1901,6 +1916,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}()
 	busy, exiting, compacting, released := false, false, false, false
 	var cancel context.CancelFunc
+	var manualCompact *manualCompactReservation
 	var activeLoop *agent.Loop
 	// login owns one interactive OAuth sign-in. The done and updates
 	// channels are nil while no attempt owns the REPL, which disables
@@ -1984,7 +2000,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		lastSpinner = time.Now()
 		console.Status(activityFrame())
 	}
-	cancelActive := func() {
+	cancelRun := func() {
 		if !busy || cancel == nil {
 			return
 		}
@@ -1992,6 +2008,21 @@ func (r *runtime) repl(console *terminal.Console) error {
 		bridge.runCancelling = true
 		console.SetThinking(false)
 		cancel()
+	}
+	cancelActive := func() {
+		if manualCompact != nil && !manualCompact.started {
+			// The outgoing run has already been cancelled. Keep its owner
+			// until settlement so undelivered input is still recovered.
+			manualCompact.cancelled = true
+			return
+		}
+		cancelRun()
+	}
+	finishManualCompact := func(err error) {
+		bridge.resolveCompactRun(err)
+		manualCompact = nil
+		r.compactPending = false
+		r.syncBridge()
 	}
 	showLoginStatus := func(text string) {
 		if login.panel != nil {
@@ -2371,6 +2402,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.RunStart:
 			runOutcome, visibleRunText = "", false
 			bumpAwaitingStart = false
+			bridge.runStarting = false
 			r.clearInFlight()
 			r.bridgeRunStarted()
 		case event.SteeringDelivered, event.FollowUpDelivered:
@@ -2661,6 +2693,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			events <- e
 		})
 		activeLoop = loop
+		bridge.runStarting = !compact
 		// RunStart proves the initial append completed. Until then the input is
 		// retained so a run that dies early can be recovered without re-asking
 		// Phi or flattening verified content into the editor. Only a new
@@ -2800,15 +2833,72 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		start(expanded, text, "", invocation, "skill", false)
 	}
-	startCompact := func(focus string) error {
+	startManualCompactWorker := func() error {
+		res := manualCompact
+		if res == nil {
+			return errors.New("no compaction reservation")
+		}
+		if res.started {
+			return errors.New("compaction is already running")
+		}
+		if exiting {
+			return errors.New("cannot compact while exiting")
+		}
 		if writeErr := r.store.WriteError(); writeErr != nil {
 			return writeErr
 		}
-		resumeAfterCompaction = false
-		start("", "", focus, "", "", true)
+		if r.selector != nil || r.settingsPicker != nil {
+			return errors.New("close the open picker before compacting")
+		}
+		admitted, reason := startInputMode(agent.UserInput{}, res.focus, inputCompact, false)
+		if !admitted {
+			return fmt.Errorf("compaction could not start (%s)", reason)
+		}
+		res.started = true
 		return nil
 	}
-	bridge.compactRun = startCompact
+	// startManualCompact admits the one manual compaction shared by /compact,
+	// Bridge, and RPC's native equivalent. It reserves before cancelling; a
+	// second request is refused without disturbing the first.
+	startManualCompact := func(focus string) error {
+		if r.store == nil {
+			return errors.New("no session")
+		}
+		if manualCompact != nil || compacting || r.compactActive || r.compactPending || r.ac.Snapshot().Compacting ||
+			(busy && pendingACCompactFocus != nil) {
+			return errors.New("compaction is already running")
+		}
+		if exiting {
+			return errors.New("cannot compact while exiting")
+		}
+		if login != nil {
+			return errors.New("finish or cancel the " + login.label + " sign-in before compacting")
+		}
+		if r.reloadPending {
+			return errors.New("wait for the pending reload before compacting")
+		}
+		if writeErr := r.store.WriteError(); writeErr != nil {
+			return writeErr
+		}
+		if r.selector != nil || r.settingsPicker != nil {
+			return errors.New("close the open picker before compacting")
+		}
+		resumeAfterCompaction = false
+		manualCompact = &manualCompactReservation{focus: focus}
+		r.compactPending = true
+		r.syncBridge()
+		if !busy {
+			if err := startManualCompactWorker(); err != nil {
+				finishManualCompact(err)
+				return err
+			}
+			return nil
+		}
+		notice(terminal.NoticeInfo, "Cancelling the run for compaction.")
+		cancelRun()
+		return nil
+	}
+	bridge.compactRun = startManualCompact
 	bridge.reloadRun = func() error {
 		_, err := r.handleReloadCommand("", io.Discard)
 		if err != nil {
@@ -3171,9 +3261,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 			bumpAwaitingStart = false
 			cancel()
 			busy = false
+			bridge.runStarting = false
 			bridge.runCancelling = false
-			bridge.resolveCompactRun(err)
 			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
+			outgoingManual := manualCompact != nil && !manualCompact.started
+			manualCompleted := manualCompact != nil && manualCompact.started && compactionCommitted
+			if manualCompact != nil && manualCompact.started {
+				// A failure in input delivered after the checkpoint cannot undo
+				// the compaction. The normal run error path still reports it.
+				compactErr := err
+				if manualCompleted {
+					compactErr = nil
+				}
+				finishManualCompact(compactErr)
+			}
 			// Queued input can arrive after the run's last queue poll but before
 			// its settled event reaches this loop. Continue it after a clean run;
 			// on cancellation or failure, restore it to the editor instead.
@@ -3185,7 +3286,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if activeLoop != nil {
 				pendingSteering := activeLoop.PendingSteering()
 				pendingFollowUp := activeLoop.PendingFollowUp()
-				if err == nil && !exiting && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
+				if err == nil && !exiting && !outgoingManual && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
 					lateQueueLoop = activeLoop
 				} else {
 					undelivered = append(r.takeSteering(activeLoop), activeLoop.ClearFollowUp()...)
@@ -3264,7 +3365,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 				default:
 					notice(terminal.NoticeError, err.Error())
 				}
-			} else if compacting || compactionCommitted {
+			}
+			if manualCompleted || (err == nil && !bumpBeforeStart && (compacting || compactionCommitted)) {
 				// Pi renders the committed compaction entry as a collapsed
 				// summary box with the token count; the summary stays hidden.
 				tokens := 0.0
@@ -3287,6 +3389,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			compacting = false
 			if exiting {
+				if manualCompact != nil {
+					// Quit wins over a reservation that has not started. Report the
+					// pre-start failure exactly once and never dispatch.
+					finishManualCompact(context.Canceled)
+				}
 				_, doneFramesAfter, _, _ := console.FrameStats()
 				r.eventFrames += doneFramesAfter - doneFramesBefore
 				return outputErr
@@ -3310,32 +3417,52 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.refreshPresentation(console)
 				r.draw(console)
 			}
-			// Finish the current run's accepted input before a startup prompt
-			// replaces the loop that owns it.
-			if lateQueueLoop != nil && settledState == StateIdle {
-				ctx, stop := context.WithCancel(context.Background())
-				cancel = stop
-				busy = true
-				compacting = false
-				r.state = StateWaiting
-				setActivity("Working")
-				activeLoop = lateQueueLoop
-				compactionCountAtStart = r.ac.Snapshot().CompactionCount
-				lateLoop, cfg := lateQueueLoop, activeConfig
-				go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
-				r.draw(console)
-			} else if settledState == StateIdle && len(initialMessages) > 0 {
-				message := initialMessages[0]
-				initialMessages = initialMessages[1:]
-				start(message, message, "", "", "", false)
+			manualStarted := false
+			if manualCompact != nil {
+				if manualCompact.cancelled {
+					notice(terminal.NoticeInfo, "Compaction cancelled.")
+					finishManualCompact(context.Canceled)
+				} else if startErr := startManualCompactWorker(); startErr != nil {
+					notice(terminal.NoticeError, "Compaction could not start. "+startErr.Error())
+					if writeErr := r.store.WriteError(); writeErr != nil {
+						r.state = StateStorageBlocked
+						notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
+					}
+					finishManualCompact(startErr)
+				} else {
+					manualStarted = true
+					r.draw(console)
+				}
 			}
-			if !busy && pendingACCompactFocus != nil && settledState == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 {
-				focus := *pendingACCompactFocus
-				pendingACCompactFocus = nil
-				checkAndStartCompact(focus, true, true)
-			}
-			if err == nil && lateQueueLoop == nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting && r.ac.Snapshot().CompactionCount == compactionCountAtStart {
-				scheduleEndTurn()
+			if !manualStarted {
+				// Finish the current run's accepted input before a startup prompt
+				// replaces the loop that owns it.
+				if lateQueueLoop != nil && settledState == StateIdle {
+					ctx, stop := context.WithCancel(context.Background())
+					cancel = stop
+					busy = true
+					compacting = false
+					r.state = StateWaiting
+					setActivity("Working")
+					activeLoop = lateQueueLoop
+					bridge.runStarting = true
+					compactionCountAtStart = r.ac.Snapshot().CompactionCount
+					lateLoop, cfg := lateQueueLoop, activeConfig
+					go func() { done <- lateLoop.ContinuePending(ctx, cfg) }()
+					r.draw(console)
+				} else if settledState == StateIdle && len(initialMessages) > 0 {
+					message := initialMessages[0]
+					initialMessages = initialMessages[1:]
+					start(message, message, "", "", "", false)
+				}
+				if !busy && pendingACCompactFocus != nil && settledState == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 {
+					focus := *pendingACCompactFocus
+					pendingACCompactFocus = nil
+					checkAndStartCompact(focus, true, true)
+				}
+				if err == nil && lateQueueLoop == nil && r.state == StateIdle && len(initialMessages) == 0 && len(undelivered) == 0 && !exiting && r.ac.Snapshot().CompactionCount == compactionCountAtStart {
+					scheduleEndTurn()
+				}
 			}
 			_, doneFramesAfter, _, _ := console.FrameStats()
 			r.eventFrames += doneFramesAfter - doneFramesBefore
@@ -3940,7 +4067,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "ac" || cmd.Name == "autocompact") {
 						parts := strings.Fields(cmd.Arg)
 						if len(parts) > 0 && strings.EqualFold(parts[0], "compact") {
-							if compacting {
+							if compacting || manualCompact != nil {
 								notice(terminal.NoticeInfo, "Compaction is already running.")
 							} else if pendingACCompactFocus != nil {
 								notice(terminal.NoticeInfo, "An /ac compact request is already queued.")
@@ -3964,6 +4091,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 						} else {
 							stopLoopCommand()
 						}
+						continue
+					}
+					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "compact" {
+						if err := startManualCompact(cmd.Arg); err != nil {
+							notice(terminal.NoticeError, err.Error())
+							console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+							console.RefreshCompletion()
+						}
+						r.draw(console)
 						continue
 					}
 					// Live configuration: explicit model and thinking changes apply
@@ -4099,14 +4235,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 					continue
 				}
 				if cmd.Name == "compact" {
-					if writeErr := r.store.WriteError(); writeErr != nil {
-						notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
-						r.draw(console)
-						continue
+					if err := startManualCompact(cmd.Arg); err != nil {
+						notice(terminal.NoticeError, err.Error())
+						console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+						console.RefreshCompletion()
 					}
-					// Pi starts the compaction and reports the outcome through
-					// the run: the preparation happens once, inside the run.
-					start("", "", cmd.Arg, "", "", true)
+					r.draw(console)
 					continue
 				}
 				if cmd.Name == "model" {

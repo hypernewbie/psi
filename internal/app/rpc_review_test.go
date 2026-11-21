@@ -68,6 +68,9 @@ func TestRPCModelSwitchRebuildsLoop(t *testing.T) {
 func TestRPCAutomaticCompactionPublishesCompletion(t *testing.T) {
 	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
 	s.sink(event.Event{Type: event.CompactionStart, State: event.CompactionThreshold})
+	if resp := s.handle(rpcCommand{Type: "compact"}); resp == nil || resp.Success {
+		t.Fatalf("manual compact displaced the active automatic summary: %+v", resp)
+	}
 	s.sink(event.Event{Type: event.CompactionEnd, State: event.CompactionThreshold, Err: errors.New("failed")})
 	if !hasEvent(log.objects(t), "compaction_end", map[string]any{"reason": "threshold", "errorMessage": "failed"}) {
 		t.Fatalf("missing automatic compaction outcome: %v", log.objects(t))
@@ -92,11 +95,23 @@ func TestRPCSummarizationRetryUsesPiEvents(t *testing.T) {
 
 func TestRPCEmptyCompactionDoesNotResetTranscript(t *testing.T) {
 	s, _, log := newRPCTestRunner(t, &provider.Fake{}, nil)
-	resp := s.handle(rpcCommand{Type: "compact"})
-	if resp.Success {
-		t.Fatal("empty compaction succeeded")
+	if resp := s.handle(rpcCommand{Type: "compact"}); resp != nil {
+		t.Fatalf("compact admission must be asynchronous, got %+v", resp)
 	}
-	if hasEvent(log.objects(t), "compaction_end", nil) {
+	log.waitFor(t, "empty compact response", func(obj map[string]any) bool {
+		return obj["type"] == "response" && obj["command"] == "compact"
+	})
+	objects := log.objects(t)
+	var got map[string]any
+	for _, obj := range objects {
+		if obj["type"] == "response" && obj["command"] == "compact" {
+			got = obj
+		}
+	}
+	if got == nil || got["success"] != false {
+		t.Fatalf("empty compaction response = %v, want failure", got)
+	}
+	if hasEvent(objects, "compaction_end", nil) {
 		t.Fatal("unstarted compaction emitted destructive reset event")
 	}
 }
