@@ -192,7 +192,8 @@ func TestKimiGlobalTrialREPL(t *testing.T) {
 	if _, err := inputWrite.Write([]byte("/logout\r")); err != nil {
 		t.Fatal(err)
 	}
-	waitAppOutput(t, out, "Stored logins")
+	// The shared picker must contain both the China key and the Global login.
+	waitAppOutput(t, out, "Stored credentials · 2 matches")
 	if _, err := inputWrite.Write([]byte("\r")); err != nil {
 		t.Fatal(err)
 	}
