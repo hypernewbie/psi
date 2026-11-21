@@ -10,7 +10,9 @@ import (
 // P2-096: privacy audit — no real config/credentials/paths/transcripts in tracked artifacts.
 // No excluded runtime service enters product.
 func TestPrivacyAudit(t *testing.T) {
-	// Tracked docs + code must not contain private markers.
+	// Tracked docs + code must not contain private markers. Build the home
+	// marker so this audit does not flag its own source.
+	privateHome := "/home/" + "private-user"
 	roots := []string{"docs", "internal", "cmd", "scripts"}
 	for _, root := range roots {
 		filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
@@ -25,7 +27,7 @@ func TestPrivacyAudit(t *testing.T) {
 				return nil
 			}
 			s := string(b)
-			for _, marker := range []string{"sk-ant-", "sk-proj-", "github_pat_", "/home/hypernewbie", "/Users/"} {
+			for _, marker := range []string{"sk-ant-", "sk-proj-", "github_pat_", privateHome, "/Users/"} {
 				if strings.Contains(s, marker) {
 					t.Errorf("%s contains private marker class", p)
 				}

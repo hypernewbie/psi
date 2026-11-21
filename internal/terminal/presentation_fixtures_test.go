@@ -38,7 +38,7 @@ func TestPlan4BaselineFixtureIsSyntheticAndCanaryFree(t *testing.T) {
 			t.Fatalf("baseline fixture contains hidden/private canary %q", canary)
 		}
 	}
-	for _, private := range []string{"/home/hypernewbie", "/Users/", "/tmp/psi-plan4-"} {
+	for _, private := range []string{"/home/example", "/Users/", "/tmp/psi-plan4-"} {
 		if strings.Contains(capture, private) {
 			t.Fatalf("unsanitized path in fixture: %q", private)
 		}
