@@ -1,0 +1,304 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+)
+
+// providerSet is one conversation's model clients. A conversation owns its
+// clients so request session IDs and idle state never cross conversations.
+type providerSet struct {
+	main      provider.Provider
+	model     provider.ModelMeta
+	compactor provider.Provider
+	compact   provider.ModelMeta
+}
+
+func (p *providerSet) close() {
+	if p.main != nil {
+		p.main.CloseIdle()
+	}
+	if p.compactor != nil {
+		p.compactor.CloseIdle()
+	}
+}
+
+// applyModelSettings adds the model metadata declared by the external settings
+// to Psi's catalogue. Psi still selects and validates the model.
+func applyModelSettings(settings *fileSettings, models *config.ModelsFile, lookupEnv func(string) (string, bool)) error {
+	if settings.Models == nil {
+		return nil
+	}
+	if models.Providers == nil {
+		models.Providers = map[string]config.ProviderMeta{}
+	}
+	for providerID, declaration := range settings.Models.Providers {
+		if declaration == nil {
+			continue
+		}
+		if declaration.Auth != "" && declaration.Auth != "api-key" && declaration.Auth != "none" {
+			return fmt.Errorf("models.providers.%s.auth %q is not supported", providerID, declaration.Auth)
+		}
+		provider := models.Providers[providerID]
+		if declaration.BaseURL != "" {
+			provider.BaseURL = declaration.BaseURL
+		}
+		if declaration.API != "" {
+			provider.API = declaration.API
+		}
+		if len(declaration.Compat) > 0 {
+			provider.Compat = declaration.Compat
+		}
+		if declaration.AuthHeader {
+			provider.AuthHeader = true
+		}
+		if declaration.APIKey != nil {
+			key, err := declaration.APIKey.load(lookupEnv)
+			if err != nil {
+				return fmt.Errorf("models.providers.%s.apiKey: %w", providerID, err)
+			}
+			provider.APIKey = key
+			provider.APIKeyPresent = true
+		}
+		if len(declaration.Headers) > 0 {
+			headers := make(map[string]string, len(declaration.Headers))
+			for name, value := range declaration.Headers {
+				resolved, err := value.load(lookupEnv)
+				if err != nil {
+					return fmt.Errorf("models.providers.%s.headers.%s: %w", providerID, name, err)
+				}
+				if resolved != "" {
+					headers[name] = resolved
+				}
+			}
+			provider.Headers = headers
+		}
+		for _, definition := range declaration.Models {
+			if definition == nil || definition.ID == "" {
+				return fmt.Errorf("models.providers.%s.models needs an id", providerID)
+			}
+			meta := config.ModelMeta{
+				ID: definition.ID, Name: definition.Name, API: definition.API, BaseURL: definition.BaseURL, Custom: true,
+				ContextWindow: definition.ContextWindow, MaxTokens: definition.MaxTokens,
+				Reasoning: definition.Reasoning, Input: append([]string(nil), definition.Input...),
+				ThinkingLevelMap: definition.ThinkingLevelMap, Compat: definition.Compat,
+			}
+			if meta.ContextWindow == 0 {
+				meta.ContextWindow = definition.ContextTokens
+			}
+			if len(definition.Headers) > 0 {
+				headers := make(map[string]string, len(definition.Headers))
+				for name, value := range definition.Headers {
+					resolved, err := value.load(lookupEnv)
+					if err != nil {
+						return fmt.Errorf("models.providers.%s.models.%s.headers.%s: %w", providerID, definition.ID, name, err)
+					}
+					if resolved != "" {
+						headers[name] = resolved
+					}
+				}
+				meta.Headers = headers
+			}
+			replaced := false
+			for i := range provider.Models {
+				if provider.Models[i].ID == meta.ID {
+					provider.Models[i] = meta
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				provider.Models = append(provider.Models, meta)
+			}
+		}
+		models.Providers[providerID] = provider
+	}
+	return nil
+}
+
+// resolveModel selects catalogue metadata through Psi. The external settings
+// file supplies only the provider/model reference; catalogue data stays Psi's.
+func resolveModel(models *config.ModelsFile, ref string) (provider.ModelMeta, config.ModelMeta, string, error) {
+	providerID, modelID, err := splitModelRef(ref)
+	if err != nil {
+		return provider.ModelMeta{}, config.ModelMeta{}, "", err
+	}
+	meta, err := models.SelectModel(providerID, modelID)
+	if err != nil {
+		return provider.ModelMeta{}, config.ModelMeta{}, "", err
+	}
+	return providerModel(providerID, meta), meta, providerID, nil
+}
+
+// providerModel mirrors the existing Psi conversion from catalogue metadata.
+func providerModel(providerID string, meta config.ModelMeta) provider.ModelMeta {
+	forceAdaptive, _, _ := meta.Compat.Bool("forceAdaptiveThinking")
+	midConvoEffort, _, _ := meta.Compat.Bool("supportsMidConvoEffort")
+	allowEmptySignature, _, _ := meta.Compat.Bool("allowEmptySignature")
+	return provider.ModelMeta{
+		ID: meta.ID, API: meta.API, Provider: providerID, BaseURL: meta.BaseURL,
+		MaxTokens: meta.MaxTokens, ContextWindow: meta.ContextWindow, Reasoning: meta.Reasoning,
+		InputImage: meta.InputImage, ThinkingLevelMap: meta.ThinkingLevelMap,
+		AdaptiveThinking: forceAdaptive, MidConvoEffort: midConvoEffort,
+		AllowEmptySignature: allowEmptySignature, Compat: meta.Compat, Custom: meta.Custom,
+	}
+}
+
+// apiKeyPolicy mirrors Psi's key-presence rule for custom and overridden
+// endpoints. A key that is required by the endpoint is never silently omitted.
+func apiKeyPolicy(providerID string, meta config.ModelMeta, configured config.ProviderMeta) (provider.APIKeyInput, bool) {
+	strict := false
+	switch {
+	case meta.Custom:
+		switch meta.API {
+		case "openai-completions", "openai-responses", "anthropic-messages":
+			strict = true
+		}
+	case meta.BaseURLOverride && providerID == "openai" && meta.API == "openai-responses",
+		meta.BaseURLOverride && providerID == "anthropic" && meta.API == "anthropic-messages":
+		strict = provider.IsNonDefaultEndpoint(providerID, meta.API, meta.BaseURL)
+	}
+	input := provider.APIKeyInput{
+		Value:   configured.APIKey,
+		Present: configured.APIKey != "" || (strict && configured.APIKeyPresent),
+		Strict:  strict,
+	}
+	return input, strict && !meta.AuthHeader && !configured.AuthHeader
+}
+
+func missingAPIKey(err error) bool {
+	var missing *provider.MissingAPIKeyError
+	return errors.As(err, &missing)
+}
+
+// buildProvider creates one model client from Psi catalogue metadata and the
+// existing credentials. API-key modes are supported; OAuth-only account modes
+// stay a later addition.
+func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta provider.ModelMeta, catalogue config.ModelMeta, maxRetries int, sessionID string) (provider.Provider, error) {
+	headers := map[string]string{}
+	for name, value := range catalogue.Headers {
+		resolved, err := config.ResolveCredential(value)
+		if err != nil {
+			return nil, fmt.Errorf("provider header %s: %w", name, err)
+		}
+		headers[name] = resolved
+	}
+	authPath := filepath.Join(agentDir, "auth.json")
+	configured := models.Providers[providerID]
+	keyInput, allowMissing := apiKeyPolicy(providerID, catalogue, configured)
+	resolveAPIKey := func() (string, error) {
+		key, _, err := provider.SelectProviderAPIKeyInput(envMap(), authPath, providerID, keyInput)
+		if allowMissing && missingAPIKey(err) {
+			return "", nil
+		}
+		return key, err
+	}
+	key, authErr := resolveAPIKey()
+	if authErr != nil && !(allowMissing && missingAPIKey(authErr)) {
+		// The credential resolver can include the auth file path in its error.
+		// Keep the startup diagnostic to the provider and failure class.
+		return nil, fmt.Errorf("provider %q: credentials are unavailable", providerID)
+	}
+	applyAuthHeader := func(headers map[string]string) error {
+		if !catalogue.AuthHeader {
+			return nil
+		}
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("provider %q requests authHeader but has no resolved API key", providerID)
+		}
+		headers["Authorization"] = "Bearer " + key
+		return nil
+	}
+	idle := 5 * time.Minute
+	var client provider.Provider
+	switch meta.API {
+	case "anthropic-messages":
+		if err := applyAuthHeader(headers); err != nil {
+			return nil, err
+		}
+		c := provider.NewClient(meta.BaseURL, key, maxRetries, idle)
+		c.Headers, c.SessionID = headers, sessionID
+		client = c
+	case "openai-completions":
+		if err := applyAuthHeader(headers); err != nil {
+			return nil, err
+		}
+		c := provider.NewCompletionsClient(meta.BaseURL, key, maxRetries, idle)
+		c.Headers, c.SessionID = headers, sessionID
+		client = c
+	case "openai-responses":
+		if providerID == "openai" && !meta.Custom {
+			return nil, fmt.Errorf("provider %q needs an API key in models.json; subscription sign-in is not supported", providerID)
+		}
+		if err := applyAuthHeader(headers); err != nil {
+			return nil, err
+		}
+		c := provider.NewResponsesClient(meta.BaseURL, key, maxRetries, idle)
+		c.Headers, c.SessionID = headers, sessionID
+		client = c
+	case "google-generative-ai":
+		if err := applyAuthHeader(headers); err != nil {
+			return nil, err
+		}
+		c := provider.NewGoogleClient(meta.BaseURL, key, maxRetries, idle)
+		c.Headers, c.SessionID = headers, sessionID
+		client = c
+	case "mistral-conversations":
+		if err := applyAuthHeader(headers); err != nil {
+			return nil, err
+		}
+		c := provider.NewMistralClient(meta.BaseURL, key, maxRetries, idle)
+		c.Headers, c.SessionID = headers, sessionID
+		client = c
+	case "openai-codex-responses":
+		return nil, fmt.Errorf("provider %q uses OAuth sign-in; API-key mode only in this release", providerID)
+	default:
+		return nil, fmt.Errorf("unsupported provider API %q", meta.API)
+	}
+	return client, nil
+}
+
+func envMap() map[string]string {
+	out := map[string]string{}
+	for _, item := range os.Environ() {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+// newProviderSet resolves and builds the primary and optional compaction model.
+func newProviderSet(models *config.ModelsFile, agentDir, modelRef, compactionRef, sessionID string, maxRetries int) (*providerSet, error) {
+	mainModel, mainCatalogue, providerID, err := resolveModel(models, modelRef)
+	if err != nil {
+		return nil, err
+	}
+	mainClient, err := buildProvider(models, agentDir, providerID, mainModel, mainCatalogue, maxRetries, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	set := &providerSet{main: mainClient, model: mainModel}
+	if compactionRef != "" {
+		compactionModel, compactionCatalogue, compactorID, err := resolveModel(models, compactionRef)
+		if err != nil {
+			set.close()
+			return nil, fmt.Errorf("compaction model: %w", err)
+		}
+		compactor, err := buildProvider(models, agentDir, compactorID, compactionModel, compactionCatalogue, maxRetries, sessionID)
+		if err != nil {
+			set.close()
+			return nil, fmt.Errorf("compaction model: %w", err)
+		}
+		set.compactor, set.compact = compactor, compactionModel
+	}
+	return set, nil
+}
