@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 const rpcCompactPartial = "ORIGINAL_PARTIAL"

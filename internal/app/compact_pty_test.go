@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/session"
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 func compactWaitBody(t *testing.T, bodies <-chan map[string]any) map[string]any {

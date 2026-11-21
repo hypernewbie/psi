@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/provider"
 )
 
 type compactWaitProvider struct {

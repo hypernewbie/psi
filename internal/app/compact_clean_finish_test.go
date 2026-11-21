@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"psi/internal/agent"
-	"psi/internal/config"
-	"psi/internal/provider"
-	"psi/internal/session"
-	"psi/internal/terminal"
-	"psi/internal/tools"
+	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/config"
+	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
+	"github.com/hypernewbie/psi/internal/tools"
 )
 
 type compactCleanFinishProvider struct {
