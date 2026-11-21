@@ -134,7 +134,7 @@ func TestActualAppLanguageMVP(t *testing.T) {
 	}
 	for _, want := range []string{
 		"你是 psi，一个极简的 Go 编程智能体。使用已声明的工具检查和修改工作区。",
-		"<tools>\n- read: 读取文件内容\n- bash: 执行 shell 命令\n</tools>",
+		"<tools>\n- read: 读取文件内容\n- bash: 执行 shell 命令\n- read_session: 从较早的原始会话历史中读取一小段摘录\n</tools>",
 		"默认使用简体中文回复，除非用户明确要求使用其他语言。代码、命令、路径和标识符保持原样。",
 		"<docs>\nPsi 文档：",
 		"运行 `psi --docs` 列出主题。",

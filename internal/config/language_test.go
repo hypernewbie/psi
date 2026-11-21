@@ -136,7 +136,8 @@ func TestBuildPromptSectionsChinese(t *testing.T) {
 			"<tools>\n- read: 读取文件内容\n- bash: 执行 shell 命令\n- edit: 使用精确文本替换进行文件编辑，支持在一次调用中修改多个不相交的位置\n- write: 创建或覆盖文件\n</tools>",
 			chineseBashRule,
 			"使用 read 查看文件，不要使用 cat 或 sed。",
-			"默认使用简体中文回复，除非用户明确要求使用其他语言。代码、命令、路径和标识符保持原样。",
+			chineseReplyRule,
+			chineseCredentialRule,
 			"<docs>\n" + chineseDocsIntro + "\n- 运行 `psi --docs` 列出主题。\n- 运行 `psi --docs <topic>` 输出指定主题。\n- 主题：",
 			"<addendum>\nextra rules\n</addendum>",
 			"<project_context>\n" + chineseProjectContextIntro + "\n\n" + `<project_instructions path="/workspace/AGENTS.md">` + "\nproject context\n</project_instructions>",
@@ -160,7 +161,7 @@ func TestBuildPromptSectionsChinese(t *testing.T) {
 		if strings.Contains(rendered, "bash") || strings.Contains(rendered, "edit") || strings.Contains(rendered, "write") {
 			t.Fatalf("disabled tool text leaked:\n%s", rendered)
 		}
-		if !strings.Contains(rendered, chineseFixedRules[2]) {
+		if !strings.Contains(rendered, chineseReplyRule) {
 			t.Fatalf("reply rule missing with filtered tools:\n%s", rendered)
 		}
 	})
@@ -184,7 +185,7 @@ func TestBuildPromptSectionsChinese(t *testing.T) {
 		if !strings.HasPrefix(rendered, "CUSTOM_BASE\n\n") {
 			t.Fatalf("custom base is not the preamble:\n%s", rendered)
 		}
-		for _, absent := range []string{"<tools>", "<rules>", "<docs>", chinesePreamble, chineseFixedRules[2]} {
+		for _, absent := range []string{"<tools>", "<rules>", "<docs>", chinesePreamble, chineseReplyRule} {
 			if strings.Contains(rendered, absent) {
 				t.Fatalf("custom base kept %q:\n%s", absent, rendered)
 			}
@@ -195,4 +196,68 @@ func TestBuildPromptSectionsChinese(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("web tools", func(t *testing.T) {
+		tools := []string{"web_search", "fetch_content", "get_search_content", "read_session"}
+		rendered := RenderSections(BuildPromptSections("/workspace", nil, nil, tools, "", false, nil, LanguageChinese))
+		for _, want := range []string{
+			"web_search: " + chineseToolSnippets["web_search"],
+			"fetch_content: " + chineseToolSnippets["fetch_content"],
+			"get_search_content: " + chineseToolSnippets["get_search_content"],
+			"read_session: " + chineseToolSnippets["read_session"],
+			chineseToolGuidelines["web_search"][2],
+			chineseToolGuidelines["fetch_content"][3],
+			chineseToolGuidelines["get_search_content"][0],
+			chineseToolGuidelines["read_session"][0],
+		} {
+			if !strings.Contains(rendered, want) {
+				t.Errorf("Chinese web prompt missing %q:\n%s", want, rendered)
+			}
+		}
+		for _, absent := range []string{
+			toolSnippets["web_search"],
+			toolSnippets["fetch_content"],
+			toolSnippets["get_search_content"],
+			toolSnippets["read_session"],
+		} {
+			if strings.Contains(rendered, absent) {
+				t.Errorf("Chinese web prompt kept English text %q:\n%s", absent, rendered)
+			}
+		}
+	})
+}
+
+// TestChinesePromptCoversEveryToolAndRule keeps zh from silently falling back
+// to English when a new tool or fixed rule lands in the English prompt.
+func TestChinesePromptCoversEveryToolAndRule(t *testing.T) {
+	for name := range toolSnippets {
+		if chineseToolSnippets[name] == "" {
+			t.Errorf("tool %q has no Chinese snippet", name)
+		}
+	}
+	for name, rules := range toolGuidelines {
+		translated, ok := chineseToolGuidelines[name]
+		if !ok {
+			t.Errorf("tool %q has no Chinese guidelines", name)
+			continue
+		}
+		if len(translated) != len(rules) {
+			t.Errorf("tool %q has %d Chinese guidelines, want %d", name, len(translated), len(rules))
+		}
+	}
+	// The reply rule is Psi-only, so Chinese has one rule more than English.
+	if len(chineseFixedRules) != len(fixedRules)+1 {
+		t.Errorf("Chinese fixed rules = %d, want %d", len(chineseFixedRules), len(fixedRules)+1)
+	}
+	for name, rule := range map[string]string{"credential": chineseCredentialRule, "reply": chineseReplyRule} {
+		found := false
+		for _, candidate := range chineseFixedRules {
+			if candidate == rule {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("Chinese fixed rules do not contain the %s rule", name)
+		}
+	}
 }
