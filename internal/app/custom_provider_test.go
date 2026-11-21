@@ -274,7 +274,7 @@ func optionalKeyRPCRunner(t *testing.T, r *runtime) (*rpcRunner, *rpcLog) {
 	s.loop = r.newLoop(s.sink)
 	t.Cleanup(func() {
 		s.cancelActive()
-		s.waitIdle(10 * time.Second)
+		s.waitWorkers()
 	})
 	return s, log
 }
