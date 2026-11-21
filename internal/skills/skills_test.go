@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -248,5 +249,49 @@ func TestOversizedSkillFile(t *testing.T) {
 	}
 	if !foundDiag {
 		t.Errorf("expected oversized diagnostic, got: %+v", diags)
+	}
+}
+
+func TestDiscoverPathsLoadsOnlyExplicitDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	global := filepath.Join(home, ".agents", "skills", "global")
+	if err := os.MkdirAll(global, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(global, "SKILL.md"), []byte("---\nname: global\ndescription: hidden\n---\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	explicit := filepath.Join(t.TempDir(), "skills", "local")
+	if err := os.MkdirAll(explicit, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(explicit, "SKILL.md"), []byte("---\nname: local\ndescription: visible\n---\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	found, diags := DiscoverPaths([]string{explicit})
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %+v", diags)
+	}
+	if len(found) != 1 || found[0].Name != "local" {
+		t.Fatalf("skills = %+v", found)
+	}
+}
+
+func TestDiscoverPathsBoundsTheSkillCount(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 257; i++ {
+		dir := filepath.Join(root, fmt.Sprintf("skill-%03d", i))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		body := fmt.Sprintf("---\nname: skill-%03d\ndescription: bounded\n---\nbody\n", i)
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found, diags := DiscoverPaths([]string{root})
+	if len(found) != 256 || len(diags) == 0 {
+		t.Fatalf("found = %d, diagnostics = %+v", len(found), diags)
 	}
 }

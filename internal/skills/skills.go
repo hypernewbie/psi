@@ -127,6 +127,52 @@ func Discover(cwd, agentDir string, configured []string, projectConsent bool) ([
 	return all, diags
 }
 
+// DiscoverPaths loads only the explicitly named files and directories. It is
+// for callers that must not traverse user or project skill roots.
+func DiscoverPaths(paths []string) ([]Skill, []Diagnostic) {
+	var all []Skill
+	var diags []Diagnostic
+	seen := map[string]bool{}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			diags = append(diags, Diagnostic{Path: path, Message: "skill path does not exist"})
+			continue
+		}
+		var found []Skill
+		var foundDiags []Diagnostic
+		if info.IsDir() {
+			found, foundDiags = loadDir(path)
+		} else {
+			skill, fileDiags := loadFile(path)
+			foundDiags = fileDiags
+			if skill != nil {
+				found = []Skill{*skill}
+			}
+		}
+		diags = append(diags, foundDiags...)
+		for _, skill := range found {
+			if len(all) >= 256 {
+				diags = append(diags, Diagnostic{Path: path, Message: "skill limit exceeded (256)"})
+				return all, diags
+			}
+			key := canonical(skill.FilePath)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			all = append(all, skill)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Name == all[j].Name {
+			return all[i].FilePath < all[j].FilePath
+		}
+		return all[i].Name < all[j].Name
+	})
+	return all, diags
+}
+
 func canonical(p string) string {
 	if e, err := filepath.EvalSymlinks(p); err == nil {
 		return e
