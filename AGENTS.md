@@ -64,3 +64,15 @@ For each tool or capability that you add, change, rename, or remove, complete th
 
 Before you report completion, check that the documentation and prompt guidance match the implementation.
 If documentation or prompt changes are unnecessary, explain why in the change summary.
+
+## Claw architecture
+
+- Keep all Claw-specific Go code, including tests, under `cmd/claw/`. Do not place Claw-specific Go files in Psi directories or Psi Go files in the Claw tree.
+- Psi packages must not import Claw packages. Treat Claw as a separate codebase: keep adapters in `cmd/claw/` and do not reorganize or extract Psi code for reuse. A small additive export is allowed only when an essential feature cannot use the existing API.
+- Keep Claw in the same Go module as Psi. Code under `cmd/claw/` may import Psi's `internal` packages, such as `github.com/hypernewbie/psi/internal/agent`. Place Claw-private packages under `cmd/claw/internal/`, where Go restricts imports to the `cmd/claw/` tree.
+
+## Repository privacy
+
+- Never include or refer to private installation details, configuration values, personal data, or identifiers from a real environment anywhere in the repository. This applies to code, comments, documentation, prompts, tests, fixtures, examples, generated files, and commit messages.
+- Never include real local hostnames, IP addresses, network identifiers, private usernames or paths, or other identifying infrastructure details. Use fictional data and placeholders instead.
+- Do not name a predecessor or attribute Claw's design, behavior, or formats to one. Describe Claw's capabilities on their own terms.
