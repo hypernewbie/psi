@@ -452,7 +452,7 @@ Pi-compatible options:
   --mode text|rpc            Select interactive text or headless JSONL RPC mode
   --tui-mode regular         Select the inline terminal mode
   --offline                  No-op; psi does not refresh Pi's model cache
-  --list-models [search]     List cached, bundled, and models.json models without network access
+  --list-models [search]     List cached, bundled, and models.json models without network access (no credential filter)
   --docs [topic]             Print psi documentation (no topic prints the list)
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
@@ -471,6 +471,7 @@ read_session remains available independently of tool-selection flags. loop_next/
 Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. OpenAI Codex uses /login openai-codex and never falls back to an API key.
+A custom provider using openai-completions, openai-responses, or anthropic-messages may omit the API key; built-in openai and anthropic may omit it only on an explicit non-default baseUrl override. An omitted key sends no generated auth header. authHeader: true still requires a key; explicit headers still apply.
 The built-in openai-codex provider periodically reads its primary ChatGPT quota, backs off after failures, and shows the remaining percentage in unused footer space when available.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version, config.DefaultToolsCSV())
@@ -1082,6 +1083,14 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	}
 	authPath := filepath.Join(r.agentDir, "auth.json")
 	idle := time.Duration(max(r.settings.HTTPIdleTimeoutMs, 0)) * time.Millisecond
+	keyInput, allowMissing := apiKeyPolicy(ov.Provider, meta, r.models.Providers[ov.Provider])
+	resolveAPIKey := func() (string, error) {
+		key, _, err := provider.SelectProviderAPIKeyInput(envMap(), authPath, ov.Provider, keyInput)
+		if allowMissing && missingAPIKey(err) {
+			return "", nil
+		}
+		return key, err
+	}
 	var client provider.Provider
 	var authErr error
 	// authHeader adds the resolved key as a bearer header, the way Pi composes
@@ -1106,7 +1115,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		authErr = codex.Auth.Check()
 		client = codex
 	case "anthropic-messages":
-		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		key, err := resolveAPIKey()
 		authErr = err
 		applyAuthHeader(key, err)
 		anthropic := provider.NewClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
@@ -1114,7 +1123,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		anthropic.SessionID = r.store.Header().ID
 		client = anthropic
 	case "openai-completions":
-		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		key, err := resolveAPIKey()
 		authErr = err
 		applyAuthHeader(key, err)
 		completions := provider.NewCompletionsClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
@@ -1122,7 +1131,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		completions.SessionID = r.store.Header().ID
 		client = completions
 	case "google-generative-ai":
-		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		key, err := resolveAPIKey()
 		authErr = err
 		applyAuthHeader(key, err)
 		google := provider.NewGoogleClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
@@ -1145,8 +1154,11 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 			responses.HTTP = &unredirected
 			responses.Headers = headers
 			responses.SessionID = r.store.Header().ID
-			openAI := &provider.OpenAIAuth{Path: authPath, HTTP: responses.HTTP, Env: envMap(), ConfiguredKey: meta.APIKey}
+			openAI := &provider.OpenAIAuth{Path: authPath, HTTP: responses.HTTP, Env: envMap(), ConfiguredKey: keyInput}
 			authErr = openAI.CheckForEndpoint(responses.BaseURL)
+			if allowMissing && missingAPIKey(authErr) {
+				authErr = nil
+			}
 			// The endpoint is pinned at configuration: an earlier Check
 			// is never authority to send after the entry changes.
 			base := responses.BaseURL
@@ -1156,7 +1168,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 			client = responses
 			break
 		}
-		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		key, err := resolveAPIKey()
 		authErr = err
 		applyAuthHeader(key, err)
 		responses := provider.NewResponsesClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
@@ -1164,7 +1176,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		responses.SessionID = r.store.Header().ID
 		client = responses
 	case "mistral-conversations":
-		key, _, err := provider.SelectProviderAPIKey(envMap(), authPath, ov.Provider, meta.APIKey)
+		key, err := resolveAPIKey()
 		authErr = err
 		applyAuthHeader(key, err)
 		mistral := provider.NewMistralClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
@@ -1174,6 +1186,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	default:
 		return fmt.Errorf("unsupported provider API %q", meta.API)
 	}
+	cfg.Model.AllowMissingAPIKey = allowMissing
 	if r.prov != nil {
 		r.prov.CloseIdle()
 	}

@@ -8,6 +8,13 @@ For the private Phi bridge variables, see [Bridge](bridge.md).
 Each provider has exactly one variable. A stored `auth.json` entry or a
 `models.json` credential takes precedence; the variable is the fallback.
 
+A custom provider that uses `openai-completions`, `openai-responses`, or
+`anthropic-messages` can omit the key. Built-in `openai` and `anthropic` can
+omit it only when `models.json` sets a provider or model `baseUrl` to a
+non-default endpoint. A blank variable on such an override is an error, not
+permission to omit the key. See
+[Providers](providers.md#optional-keys).
+
 | Variable | Provider |
 |---|---|
 | `ANTHROPIC_API_KEY` | `anthropic` |
@@ -40,7 +47,7 @@ variable.
 
 A provider that `models.json` declares has no environment variable. Its key
 comes from `auth.json` or from its `apiKey` entry in `models.json`, in that
-order.
+order. It can omit the key when it uses one of the three protocols noted above.
 
 ## Directories
 

@@ -45,6 +45,42 @@ Malformed JSON, invalid UTF-8, and documents larger than 4 MiB stop credential
 selection and `/logout` listing. psi does not fall back to another credential
 source after these errors.
 
+### Optional keys
+
+A custom provider may omit its API key when it uses `openai-completions`,
+`openai-responses`, or `anthropic-messages`. The request then has no generated
+`Authorization` or `x-api-key` header. Headers that you configure stay in
+effect. `authHeader: true` still requires a key.
+
+```json
+{
+  "providers": {
+    "local-openai": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "models": [{ "id": "qwen2.5-coder:7b" }]
+    }
+  }
+}
+```
+
+The built-in `openai` and `anthropic` providers can omit the key only when
+`models.json` sets a provider or model `baseUrl` to an explicit non-default
+endpoint. A catalog or cached endpoint, or a URL that normalizes to the official
+endpoint, still requires a key. The normal credential order does not change:
+`auth.json`, then the configured `models.json` key, then the exact environment
+variable. A key that is present is still sent.
+
+On an eligible built-in override, an explicit empty `apiKey`, a blank
+environment variable, an unsupported stored entry, or a malformed auth
+document stops selection with an error. It does not fall back to a keyless
+request. Google Generative AI, Mistral Conversations, and Codex still require
+their credentials. OpenAI ChatGPT OAuth still works only with the official
+endpoint.
+
+Pi's documented local-endpoint setup uses a dummy key. A keyless request on an
+eligible endpoint is an intentional psi divergence.
+
 Pi and psi write compatible `auth.json` entries. For API-key providers the shape is:
 
 ```json
@@ -142,9 +178,9 @@ not prove that already-issued access tokens stopped working. Removal does not
 affect environment variables or credentials from `models.json`; an API key is
 removed locally and is not revoked at the provider. Removing the active
 provider credential reloads that provider from the remaining credential
-sources; if none exists, psi goes offline until you configure a credential
-again. If Pi uses the same `auth.json`, its next successful read sees the
-deletion.
+sources. If none exists, an eligible keyless override can stay online;
+otherwise, psi goes offline until you configure a credential. If Pi uses the
+same `auth.json`, its next successful read sees the deletion.
 
 ## Choose a model
 
@@ -296,7 +332,9 @@ Provider keys psi reads: `name`, `baseUrl`, `api`, `apiKey`, `authHeader`,
   The Codex protocol is not available: it needs the ChatGPT OAuth session.
 - A configured provider has no environment variable of its own. Its key comes
   from `auth.json` or from its `apiKey`, in that order. An unsupported stored
-  credential stops the selection instead of falling back.
+  credential stops the selection instead of falling back. For the three
+  in-scope protocols, the key can be omitted on an eligible endpoint; see
+  [Optional keys](#optional-keys).
 
 `authHeader: true` sends the resolved key as an `Authorization: Bearer` header
 in addition to the protocol's own key header. It needs a resolvable key.

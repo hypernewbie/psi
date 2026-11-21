@@ -67,26 +67,32 @@ func (c *ResponsesClient) Send(ctx context.Context, req Request, onDelta func(De
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode OpenAI Responses request")
 	}
-	if c.ResolveAuth == nil && strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) {
+	if c.ResolveAuth == nil && strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) && !req.Model.AllowMissingAPIKey {
 		return nil, fmt.Errorf("No API key for provider: %s", req.Model.ProviderID())
 	}
 	return sendWithRetryObserved(ctx, c.MaxRetry, c.RetryObserver, func() (*Response, error) {
 		token := c.APIKey
 		if c.ResolveAuth != nil {
 			resolved, err := c.ResolveAuth(ctx)
-			if err != nil {
+			switch {
+			case err != nil:
 				if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 					return nil, err
 				}
-				// Auth failures are safe and non-retryable. The resolver
-				// already returns static credential-free errors; a header
-				// never bypasses them.
-				return nil, &ProviderError{Kind: ErrAuth, Message: err.Error()}
-			}
-			token = resolved
-			if strings.TrimSpace(token) == "" && !hasNonemptyAuthHeader(c.Headers) {
+				var missing *MissingAPIKeyError
+				if !(req.Model.AllowMissingAPIKey && errors.As(err, &missing)) {
+					// Auth failures are safe and non-retryable. The resolver
+					// already returns static credential-free errors; a header
+					// never bypasses them.
+					return nil, &ProviderError{Kind: ErrAuth, Message: err.Error()}
+				}
+				// Eligible endpoint with genuine absence sends no bearer.
+				resolved = ""
+			case strings.TrimSpace(resolved) == "" && !hasNonemptyAuthHeader(c.Headers):
+				// An empty nil result is not new permission to omit auth.
 				return nil, fmt.Errorf("No API key for provider: %s", req.Model.ProviderID())
 			}
+			token = resolved
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err

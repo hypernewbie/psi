@@ -62,6 +62,9 @@ func openAILoginTestModels(t *testing.T) *config.ModelsFile {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if models.Providers == nil {
+		models.Providers = map[string]config.ProviderMeta{}
+	}
 	return models
 }
 
@@ -974,7 +977,7 @@ func TestOpenAISubmitRefusesOAuthOverrideWithoutPOST(t *testing.T) {
 	clearProviderAPIKeys(t)
 	r := testRuntime(t)
 	overridePath := filepath.Join(t.TempDir(), "models.json")
-	if err := os.WriteFile(overridePath, []byte(`{"providers":{"openai":{"baseUrl":"https://override.example/v1"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(overridePath, []byte(`{"providers":{"openai":{"baseUrl":"https://override.example/v1","apiKey":"synthetic-lower-priority"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	models, err := config.LoadModels(overridePath)

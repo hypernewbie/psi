@@ -316,6 +316,36 @@ func TestLogoutActiveProviderWithoutFallbackGoesOffline(t *testing.T) {
 	}
 }
 
+func TestLogoutKeepsEligibleAnthropicOverrideOnlineWithoutKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if headerFieldPresent(req.Header, "x-api-key") {
+			t.Error("request after logout still carried an x-api-key header")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, anthropicSyntheticStream("stream after logout"))
+	}))
+	t.Cleanup(server.Close)
+	r := testRuntime(t)
+	unsetTestEnv(t, "ANTHROPIC_API_KEY")
+	r.models = openAILoginTestModels(t)
+	r.models.Providers["anthropic"] = config.ProviderMeta{BaseURL: server.URL}
+	writeAppFile(t, filepath.Join(r.agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-stored"}}`)
+	if err := r.configure(config.StartupOverrides{Provider: "anthropic", Model: "claude-sonnet-4-5", Thinking: "off", ThinkingExplicit: true}); err != nil || r.authErr != nil {
+		t.Fatalf("configure before logout: %v, auth: %v", err, r.authErr)
+	}
+	r.publishLive()
+	r.state = StateIdle
+	console := authCommandConsole(t)
+	r.lifecycle = &terminalLifecycle{console: console}
+	r.finishLogout(provider.StoredCredential{ProviderID: "anthropic", Kind: provider.CredentialAPIKey}, console, io.Discard)
+	if r.state != StateIdle || r.authErr != nil {
+		t.Fatalf("keyless override after logout: state=%s, auth=%v", r.state, r.authErr)
+	}
+	if text := optionalKeyPromptText(t, r, "Reply with OK only."); !strings.Contains(text, "stream after logout") {
+		t.Fatalf("streamed text = %q", text)
+	}
+}
+
 func TestLogoutWithNoStoredKeysLeavesAuthFileAbsent(t *testing.T) {
 	r := testRuntime(t)
 	r.state = StateIdle

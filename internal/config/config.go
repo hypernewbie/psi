@@ -930,18 +930,21 @@ func RedactCredential(s string) string {
 type ModelCompat = modelmeta.Compat
 
 type ModelMeta struct {
-	Compat                modelmeta.Compat   `json:"compat"`
-	ID                    string             `json:"id"`
-	Name                  string             `json:"name,omitempty"`
-	API                   string             `json:"api"`
-	BaseURL               string             `json:"baseUrl"`
-	ContextWindow         int                `json:"contextWindow"`
-	MaxTokens             int                `json:"maxTokens"`
-	Reasoning             bool               `json:"reasoning"`
-	Input                 []string           `json:"input"`
-	Headers               map[string]string  `json:"headers"`
-	InputImage            bool               `json:"-"`
-	APIKey                string             `json:"-"`
+	Compat        modelmeta.Compat  `json:"compat"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name,omitempty"`
+	API           string            `json:"api"`
+	BaseURL       string            `json:"baseUrl"`
+	ContextWindow int               `json:"contextWindow"`
+	MaxTokens     int               `json:"maxTokens"`
+	Reasoning     bool              `json:"reasoning"`
+	Input         []string          `json:"input"`
+	Headers       map[string]string `json:"headers"`
+	InputImage    bool              `json:"-"`
+	APIKey        string            `json:"-"`
+	// BaseURLOverride records that a nonempty user baseUrl supplied the
+	// effective endpoint. Catalog and cache defaults leave it false.
+	BaseURLOverride       bool               `json:"-"`
 	UnavailableReason     string             `json:"-"`
 	CacheEndpointRejected bool               `json:"-"`
 	ThinkingLevelMap      map[string]*string `json:"thinkingLevelMap"`
@@ -966,6 +969,45 @@ type ProviderMeta struct {
 	Compat         modelmeta.Compat           `json:"compat"`
 	Models         []ModelMeta                `json:"models"`
 	ModelOverrides map[string]json.RawMessage `json:"modelOverrides"`
+	// APIKeyPresent records whether models.json contained apiKey, including
+	// null and the empty string. Decoding otherwise collapses both values into
+	// APIKey, so an explicitly blank key would look like an omitted one.
+	APIKeyPresent bool `json:"-"`
+}
+
+// apiKeyField decodes the models.json apiKey field and keeps its presence.
+// A present blank value is an invalid credential, not an omitted one.
+type apiKeyField struct {
+	Value   string
+	Present bool
+}
+
+func (f *apiKeyField) UnmarshalJSON(data []byte) error {
+	f.Present = true
+	if strings.TrimSpace(string(data)) == "null" {
+		f.Value = ""
+		return nil
+	}
+	if err := json.Unmarshal(data, &f.Value); err != nil {
+		return fmt.Errorf("apiKey must be a string or null")
+	}
+	return nil
+}
+
+func (p *ProviderMeta) UnmarshalJSON(data []byte) error {
+	type plain ProviderMeta
+	var decoded struct {
+		plain
+		APIKey apiKeyField `json:"apiKey"`
+	}
+	decoded.plain = plain(*p)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = ProviderMeta(decoded.plain)
+	p.APIKey = decoded.APIKey.Value
+	p.APIKeyPresent = decoded.APIKey.Present
+	return nil
 }
 
 // ProviderIDs returns every provider this configuration can use: the built-in
@@ -1167,6 +1209,7 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 	if m.BaseURL == "" {
 		m.BaseURL = spec.Endpoints[m.API]
 	}
+	m.BaseURLOverride = p.BaseURL != "" || configuredModelBase != "" || explicitModelOverrideBase
 	if providerID == "opencode-go" && p.BaseURL == "" && configuredModelBase == "" && !explicitModelOverrideBase {
 		if !providerregistry.TrustedCachedEndpoint(providerID, m.API, m.BaseURL) {
 			return ModelMeta{}, fmt.Errorf("model %q unavailable: public OpenCode endpoint is not in the reviewed API path allowlist", id)
@@ -1256,6 +1299,7 @@ func (mf *ModelsFile) selectConfiguredModel(providerID, id string, provider Prov
 	model.APIKey = provider.APIKey
 	model.AuthHeader = provider.AuthHeader
 	model.Custom = true
+	model.BaseURLOverride = true
 	headers := make(map[string]string)
 	for k, v := range provider.Headers {
 		headers[k] = v

@@ -42,17 +42,21 @@ type ModelMeta struct {
 	AllowEmptySignature bool
 	// Custom marks a provider declared in models.json. Such a provider uses
 	// the generic protocol adapters and the API it declares.
-	Custom           bool
-	Compat           modelmeta.Compat
-	ID               string
-	API              string
-	Provider         string
-	BaseURL          string
-	ContextWindow    int
-	MaxTokens        int
-	Reasoning        bool
-	InputImage       bool
-	ThinkingLevelMap map[string]*string
+	Custom bool
+	// AllowMissingAPIKey permits a request without a resolved key. Runtime
+	// configuration sets it only for an eligible endpoint; it is never JSON
+	// input and never bypasses an invalid credential.
+	AllowMissingAPIKey bool
+	Compat             modelmeta.Compat
+	ID                 string
+	API                string
+	Provider           string
+	BaseURL            string
+	ContextWindow      int
+	MaxTokens          int
+	Reasoning          bool
+	InputImage         bool
+	ThinkingLevelMap   map[string]*string
 }
 
 // Request is the normalized provider request (Pi context + active tools).

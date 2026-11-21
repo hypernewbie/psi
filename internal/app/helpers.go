@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -37,29 +38,85 @@ type usableModel struct {
 	credential string
 }
 
-// usableModels lists the models the session can use. A provider needs a
-// usable credential, and each model must pass activation and request
-// construction. The credentials come from one auth.json read, so a busy login
-// file cannot stall the list once per provider.
+// usableModels lists the models the session can use. Each model must pass
+// activation and request construction, and its credential policy decides
+// whether a resolved key is required. The credentials come from one auth.json
+// read, so a busy login file cannot stall the list once per provider. Models in
+// one provider can use different policies, so each distinct provider/policy
+// pair resolves once.
 func (r *runtime) usableModels() []usableModel {
-	states := r.credentialStates()
-	var models []usableModel
+	type keyMode struct {
+		provider string
+		strict   bool
+	}
+	type candidate struct {
+		provider     string
+		option       config.ModelOption
+		mode         keyMode
+		allowMissing bool
+	}
+	var requests []provider.CredentialRequest
+	requestIndex := map[keyMode]int{}
+	var candidates []candidate
 	for _, family := range r.providerIDs() {
-		state := states[family]
-		if !state.usable {
-			continue
-		}
+		configured := r.models.Providers[family]
 		for _, option := range r.models.ModelOptions(family) {
 			if !option.Available {
 				continue
 			}
-			if _, err := provider.BuildRequest(provider.Request{Model: providerModel(family, option.Model), Thinking: "off"}); err != nil {
-				continue
+			input, allowMissing := apiKeyPolicy(family, option.Model, configured)
+			mode := keyMode{provider: family, strict: input.Strict}
+			if _, seen := requestIndex[mode]; !seen {
+				requestIndex[mode] = len(requests)
+				requests = append(requests, provider.CredentialRequest{ProviderID: family, Key: input})
 			}
-			models = append(models, usableModel{provider: family, option: option, credential: state.detail})
+			candidates = append(candidates, candidate{provider: family, option: option, mode: mode, allowMissing: allowMissing})
 		}
 	}
+	states := provider.CredentialsBatch(envMap(), filepath.Join(r.agentDir, "auth.json"), requests)
+	var models []usableModel
+	for _, candidate := range candidates {
+		state := states[requestIndex[candidate.mode]]
+		detail, usable := credentialDetail(candidate.provider, candidate.option.Model, state, candidate.allowMissing)
+		if !usable {
+			continue
+		}
+		if _, err := provider.BuildRequest(provider.Request{Model: providerModel(candidate.provider, candidate.option.Model), Thinking: "off"}); err != nil {
+			continue
+		}
+		models = append(models, usableModel{provider: candidate.provider, option: candidate.option, credential: detail})
+	}
 	return models
+}
+
+// apiKeyPolicy returns the models.json key input for one model and whether
+// genuine credential absence can run it. Custom providers may omit a key for
+// the three generic APIs that can legitimately need none. A built-in openai or
+// anthropic model may omit a key only when a user baseUrl selects a valid,
+// non-default route. authHeader always requires a key.
+func apiKeyPolicy(providerID string, meta config.ModelMeta, configured config.ProviderMeta) (provider.APIKeyInput, bool) {
+	strict := false
+	switch {
+	case meta.Custom:
+		switch meta.API {
+		case "openai-completions", "openai-responses", "anthropic-messages":
+			strict = true
+		}
+	case meta.BaseURLOverride && providerID == "openai" && meta.API == "openai-responses",
+		meta.BaseURLOverride && providerID == "anthropic" && meta.API == "anthropic-messages":
+		strict = provider.IsNonDefaultEndpoint(providerID, meta.API, meta.BaseURL)
+	}
+	input := provider.APIKeyInput{
+		Value:   configured.APIKey,
+		Present: configured.APIKey != "" || (strict && configured.APIKeyPresent),
+		Strict:  strict,
+	}
+	return input, strict && !meta.AuthHeader && !configured.AuthHeader
+}
+
+func missingAPIKey(err error) bool {
+	var missing *provider.MissingAPIKeyError
+	return errors.As(err, &missing)
 }
 
 // providerIDs returns the effective provider set: the built-in providers plus
@@ -83,55 +140,44 @@ func (r *runtime) refreshModelsForPicker(notice func(terminal.NoticeKind, string
 	}
 }
 
-// credentialState is one provider's credential as the UI describes it.
-type credentialState struct {
-	detail string
-	usable bool
+// credentialDetail describes one provider's credential state for the model
+// picker. allowMissing is true only for a model whose policy accepts genuine
+// absence; an invalid credential still describes its error. A ChatGPT OAuth
+// login is usable only on the exact official OpenAI route, the same check the
+// request time resolver applies.
+func credentialDetail(family string, meta config.ModelMeta, state provider.CredentialState, allowMissing bool) (string, bool) {
+	spec, builtin := providerregistry.Lookup(family)
+	if !builtin {
+		return apiKeyCredentialDetail(state, allowMissing)
+	}
+	switch spec.Auth {
+	case providerregistry.AuthCodexOAuth:
+		if state.Usable {
+			return "OAuth login present (access checked on request)", true
+		}
+		return "OAuth login unavailable (run Pi /login)", false
+	case providerregistry.AuthAPIKeyOrOAuth:
+		if state.OAuth && !provider.IsOfficialOpenAIEndpoint(meta.BaseURL) {
+			return "OAuth login requires the official OpenAI endpoint", false
+		}
+		return apiKeyCredentialDetail(state, allowMissing)
+	default:
+		return apiKeyCredentialDetail(state, allowMissing)
+	}
 }
 
-// credentialStates resolves every provider's credential from one auth.json
-// snapshot.
-func (r *runtime) credentialStates() map[string]credentialState {
-	configured := make(map[string]string, len(r.models.Providers))
-	for family, meta := range r.models.Providers {
-		configured[family] = meta.APIKey
+func apiKeyCredentialDetail(state provider.CredentialState, allowMissing bool) (string, bool) {
+	if state.Usable {
+		return "credential available (" + state.Source + ")", true
 	}
-	states := provider.Credentials(envMap(), filepath.Join(r.agentDir, "auth.json"), configured, r.providerIDs())
-	out := make(map[string]credentialState, len(states))
-	for family, state := range states {
-		spec, builtin := providerregistry.Lookup(family)
-		if !builtin {
-			if state.Usable {
-				out[family] = credentialState{detail: "credential available (" + state.Source + ")", usable: true}
-				continue
-			}
-			reason := "credential unavailable"
-			if state.Err != nil {
-				reason += ": " + state.Err.Error()
-			}
-			out[family] = credentialState{detail: reason}
-			continue
-		}
-		switch spec.Auth {
-		case providerregistry.AuthCodexOAuth:
-			if state.Usable {
-				out[family] = credentialState{detail: "OAuth login present (access checked on request)", usable: true}
-				continue
-			}
-			out[family] = credentialState{detail: "OAuth login unavailable (run Pi /login)"}
-		default:
-			if state.Usable {
-				out[family] = credentialState{detail: "credential available (" + state.Source + ")", usable: true}
-				continue
-			}
-			reason := "credential unavailable"
-			if state.Err != nil {
-				reason += ": " + state.Err.Error()
-			}
-			out[family] = credentialState{detail: reason}
-		}
+	if allowMissing && missingAPIKey(state.Err) {
+		return "no API key configured", true
 	}
-	return out
+	reason := "credential unavailable"
+	if state.Err != nil {
+		reason += ": " + state.Err.Error()
+	}
+	return reason, false
 }
 
 func thinkingSelector(r *runtime) *Selector {

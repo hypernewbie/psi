@@ -38,7 +38,8 @@ stdin and writing JSONL events on stdout: `prompt`, `abort`, `get_state`,
 `get_available_models`, `set_model`, `get_available_thinking_levels`,
 `set_thinking_level`, `compact`, `get_session_stats`, and
 `extension_ui_response`. `get_available_models` lists only providers with a
-usable credential, the same rule as `/model`. `get_available_thinking_levels`
+usable credential, the same rule as `/model`; an eligible keyless endpoint
+counts as usable. `get_available_thinking_levels`
 lists the live model's advertised levels; `set_thinking_level` accepts any
 level the model can apply and clamps it when the model does not advertise it.
 `compact` admits one manual operation; `customInstructions` is optional and at
@@ -76,10 +77,15 @@ psi --list-models sonnet
   selection; a later model change resolves the per-model and global defaults
   again.
 - `--list-models [search]` prints the bundled, cached, and configured models,
-  optionally filtered by fuzzy search, and exits. It never touches the network.
+  optionally filtered by fuzzy search, and exits. It never touches the network
+  and does not filter by credential.
 
 Provider credentials come from `auth.json`, `models.json`, or the provider's
-environment variable. See [Providers](providers.md).
+environment variable. A custom provider using `openai-completions`,
+`openai-responses`, or `anthropic-messages` can omit the key. Built-in `openai`
+and `anthropic` can omit it only on an explicit non-default `baseUrl` override.
+An omitted key sends no generated auth header. See
+[Providers](providers.md#optional-keys).
 
 ## Interactive login
 
@@ -147,8 +153,9 @@ read.
 `/logout` does not remove environment variables or `models.json` credentials.
 An API-key logout cannot revoke the provider-side key. If the credential
 belongs to the active provider, psi reloads that provider from the remaining
-credential sources. If none is available, psi goes offline until you configure
-a credential again. `/logout` does not accept an argument.
+credential sources. If none is available, an eligible keyless override can
+stay online; otherwise, psi goes offline until you configure a credential.
+`/logout` does not accept an argument.
 
 ## Sessions
 

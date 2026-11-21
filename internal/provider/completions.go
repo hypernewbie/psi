@@ -27,7 +27,7 @@ func (c *CompletionsClient) Send(ctx context.Context, req Request, onDelta func(
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("model endpoint is required for openai-completions")
 	}
-	if strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) {
+	if strings.TrimSpace(c.APIKey) == "" && !hasNonemptyAuthHeader(c.Headers) && !req.Model.AllowMissingAPIKey {
 		return nil, fmt.Errorf("No API key for provider: %s", req.Model.ProviderID())
 	}
 	body, err := BuildCompletionsRequest(req)
@@ -51,7 +51,9 @@ func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 	if req.Model.ProviderID() == "opencode-go" && c.SessionID != "" && !hasHeader(c.Headers, "x-opencode-session") {
 		httpReq.Header.Set("x-opencode-session", c.SessionID)
 	}

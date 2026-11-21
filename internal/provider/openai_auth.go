@@ -46,7 +46,7 @@ type OpenAIAuth struct {
 	Path          string
 	HTTP          *http.Client
 	Env           map[string]string
-	ConfiguredKey string
+	ConfiguredKey APIKeyInput
 	Chmod         func(string, os.FileMode) error
 	Rename        func(string, string) error
 	// now selects the clock for expiry boundaries. Nil means time.Now.
@@ -106,16 +106,12 @@ func (a *OpenAIAuth) CheckForEndpoint(base string) error {
 	return nil
 }
 
-// openAICredentialState resolves the openai credential from one shared auth
+// openAICredentialStateAt resolves the openai credential from one shared auth
 // snapshot. It never makes network requests.
-func openAICredentialState(env map[string]string, entries map[string]json.RawMessage, authPath, configuredKey string) CredentialState {
-	return openAICredentialStateAt(env, entries, authPath, configuredKey, time.Now())
-}
-
-func openAICredentialStateAt(env map[string]string, entries map[string]json.RawMessage, authPath, configuredKey string, now time.Time) CredentialState {
+func openAICredentialStateAt(env map[string]string, entries map[string]json.RawMessage, authPath string, input APIKeyInput, now time.Time) CredentialState {
 	raw, present := entries["openai"]
 	if !present {
-		_, source, err := apiKeyFromEntries(env, entries, authPath, "openai", configuredKey)
+		_, source, err := apiKeyFromEntriesInput(env, entries, authPath, "openai", input)
 		if err != nil {
 			return CredentialState{Err: err}
 		}
@@ -129,7 +125,7 @@ func openAICredentialStateAt(env map[string]string, entries map[string]json.RawM
 	}
 	switch probe.Type {
 	case "", "api_key":
-		_, source, err := apiKeyFromEntries(env, entries, authPath, "openai", configuredKey)
+		_, source, err := apiKeyFromEntriesInput(env, entries, authPath, "openai", input)
 		if err != nil {
 			return CredentialState{Err: err}
 		}
@@ -249,7 +245,7 @@ func (a *OpenAIAuth) GetForEndpoint(ctx context.Context, base string) (string, e
 	unlock, valid, err := acquireAuthLock(ctx, a.Path+".lock", 0, 0, openAIAuthLockWait)
 	if err != nil {
 		if authPathAbsent(a.Path, err) {
-			key, _, resolveErr := apiKeyFromEntries(a.Env, nil, a.Path, "openai", a.ConfiguredKey)
+			key, _, resolveErr := apiKeyFromEntriesInput(a.Env, nil, a.Path, "openai", a.ConfiguredKey)
 			return key, resolveErr
 		}
 		return "", err
@@ -259,7 +255,7 @@ func (a *OpenAIAuth) GetForEndpoint(ctx context.Context, base string) (string, e
 	all, err := readOpenAIAuthDoc(a.Path)
 	if err != nil {
 		if authPathAbsent(a.Path, err) {
-			key, _, resolveErr := apiKeyFromEntries(a.Env, nil, a.Path, "openai", a.ConfiguredKey)
+			key, _, resolveErr := apiKeyFromEntriesInput(a.Env, nil, a.Path, "openai", a.ConfiguredKey)
 			return key, resolveErr
 		}
 		return "", err
@@ -267,7 +263,7 @@ func (a *OpenAIAuth) GetForEndpoint(ctx context.Context, base string) (string, e
 	defer ReleaseAuthEntries(all)
 	raw, present := all["openai"]
 	if !present {
-		key, _, resolveErr := apiKeyFromEntries(a.Env, all, a.Path, "openai", a.ConfiguredKey)
+		key, _, resolveErr := apiKeyFromEntriesInput(a.Env, all, a.Path, "openai", a.ConfiguredKey)
 		return key, resolveErr
 	}
 	var probe struct {
@@ -277,7 +273,7 @@ func (a *OpenAIAuth) GetForEndpoint(ctx context.Context, base string) (string, e
 		return "", fmt.Errorf("auth.json openai credential must be an API-key or OAuth object")
 	}
 	if probe.Type == "" || probe.Type == "api_key" {
-		key, _, resolveErr := apiKeyFromEntries(a.Env, all, a.Path, "openai", a.ConfiguredKey)
+		key, _, resolveErr := apiKeyFromEntriesInput(a.Env, all, a.Path, "openai", a.ConfiguredKey)
 		return key, resolveErr
 	}
 	if probe.Type != "oauth" {

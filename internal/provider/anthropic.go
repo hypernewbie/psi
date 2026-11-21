@@ -32,8 +32,7 @@ func NewClient(baseURL, apiKey string, maxRetry int, idle time.Duration) *Client
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
-	baseURL = strings.TrimSuffix(baseURL, "/")
-	baseURL = strings.TrimSuffix(baseURL, "/v1")
+	baseURL = normalizeAnthropicBase(baseURL)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	transport.ResponseHeaderTimeout = 30 * time.Second
@@ -152,7 +151,9 @@ func (c *Client) doOnce(ctx context.Context, raw []byte, onDelta func(Delta), re
 		return nil, fmt.Errorf("invalid provider endpoint")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.APIKey)
+	if c.APIKey != "" {
+		httpReq.Header.Set("x-api-key", c.APIKey)
+	}
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	if betas := anthropicBetaFeatures(req.Model, req, c.Headers); len(betas) > 0 {
 		httpReq.Header.Set("anthropic-beta", strings.Join(betas, ","))
