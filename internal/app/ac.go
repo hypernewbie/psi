@@ -10,6 +10,7 @@ import (
 
 	"github.com/hypernewbie/psi/internal/ac"
 	"github.com/hypernewbie/psi/internal/agent"
+	"github.com/hypernewbie/psi/internal/session"
 	"github.com/hypernewbie/psi/internal/terminal"
 )
 
@@ -134,7 +135,7 @@ func (r *runtime) acHelpText() string {
 		"",
 		"Usage: /ac [help] or /ac <command> [arguments]",
 		"/autocompact is an alias for /ac.",
-		"/ac compact [focus]       compact now; resume interrupted work",
+		"/ac compact [focus]       cancel active work, compact, and resume if unfinished",
 		"/ac status                show thresholds, growth forecast, and last compaction",
 		"/ac threshold <default|1-100|off> set the predictive target",
 		"/ac end-turn <default|off|token-count|percent%> set final-run threshold",
@@ -163,15 +164,14 @@ func (r *runtime) acStatusText() string {
 	// active protection. pi-ac latches StoppedAfterError to avoid paying for the
 	// same failed summary every turn; native threshold and manual requests stay
 	// available while proactive attempts pause.
-	effective := "disabled"
-	if state.StoppedAfterError {
+	effective := "enabled"
+	switch {
+	case !state.Enabled:
+		effective = "disabled"
+	case !r.settings.Compaction.Enabled:
+		effective = "unavailable (native automatic compaction is off)"
+	case state.StoppedAfterError:
 		effective = "paused after an error; use /ac enable to retry"
-	} else if state.Enabled {
-		if r.settings.Compaction.Enabled {
-			effective = "enabled"
-		} else {
-			effective = "unavailable (native automatic compaction is off)"
-		}
 	}
 	piEnabled := "disabled"
 	if r.settings.Compaction.Enabled {
@@ -211,6 +211,26 @@ func (r *runtime) acStatusText() string {
 		lines = append(lines, fmt.Sprintf("last compaction: %s · ~%s before", state.LastCompaction.Source, formatACTokens(state.LastCompaction.TokensBefore)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// A compaction retained in the projection may contain an old assistant reply.
+// Only a clean reply appended after the latest checkpoint can qualify the new
+// context for another end-of-turn check, even when the provider omitted usage.
+func hasAssistantAfterCompaction(path []*session.Entry) bool {
+	foundAssistant := false
+	for i := len(path) - 1; i >= 0; i-- {
+		entry := path[i]
+		if entry.Kind == "compaction" {
+			return foundAssistant
+		}
+		if !foundAssistant && entry.Message != nil && entry.Message.Message.Assistant != nil {
+			if session.IsFailureAssistant(entry.Message.Message) {
+				return false
+			}
+			foundAssistant = true
+		}
+	}
+	return false
 }
 
 func formatACThreshold(threshold *ac.EndOfTurnThreshold, window int, useDefault bool) string {

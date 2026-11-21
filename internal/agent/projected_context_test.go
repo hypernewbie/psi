@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -61,7 +62,7 @@ func TestProjectedContextTokensAnchorsOnUsage(t *testing.T) {
 	}
 }
 
-func usageDrivenSetup(t *testing.T, usage int) (*session.Store, *Loop, Config, *[]event.Event, *[]string) {
+func usageDrivenSetup(t *testing.T, usage int) (*session.Store, *Loop, Config, *[]event.Event, *[]string, *[]provider.Request) {
 	t.Helper()
 	store, _, _, loop, _ := testSetup(t)
 	if _, err := store.AppendMessage(userMsg("old task")); err != nil {
@@ -75,7 +76,9 @@ func usageDrivenSetup(t *testing.T, usage int) (*session.Store, *Loop, Config, *
 	var events []event.Event
 	loop.sink = func(e event.Event) { events = append(events, e) }
 	var sequence []string
+	var requests []provider.Request
 	fake := reviewProvider(func(_ context.Context, req provider.Request, _ func(provider.Delta)) (*provider.Response, error) {
+		requests = append(requests, req)
 		if strings.Contains(req.System, "context summarization assistant") {
 			sequence = append(sequence, "summary")
 			return &provider.Response{Text: "checkpoint", StopReason: "stop"}, nil
@@ -97,8 +100,7 @@ func usageDrivenSetup(t *testing.T, usage int) (*session.Store, *Loop, Config, *
 		Thinking: "off", Tools: toolDefs(),
 		AutoCompact: true, ReserveTokens: 16_384, KeepRecentTokens: 20, ACPolicy: policy,
 	}
-	_ = usage
-	return store, loop, cfg, &events, &sequence
+	return store, loop, cfg, &events, &sequence, &requests
 }
 
 // TestUsageDrivenAdaptiveCompaction covers the 60K tool-turn probe: usage sits
@@ -106,7 +108,7 @@ func usageDrivenSetup(t *testing.T, usage int) (*session.Store, *Loop, Config, *
 // the run must summarize for adaptive reasons before the next request. A split
 // turn can need two summary calls; one checkpoint stays the invariant.
 func TestUsageDrivenAdaptiveCompaction(t *testing.T) {
-	store, loop, cfg, events, sequence := usageDrivenSetup(t, 60_000)
+	store, loop, cfg, events, sequence, requests := usageDrivenSetup(t, 60_000)
 	if err := loop.Submit(t.Context(), "continue the task", cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -139,13 +141,14 @@ func TestUsageDrivenAdaptiveCompaction(t *testing.T) {
 	if !foundAdaptive {
 		t.Fatalf("no adaptive compaction start: %+v", *events)
 	}
+	assertCompactedToolRequest(t, (*requests)[len(*requests)-1])
 }
 
 // TestUsageDrivenNativeThresholdCompaction covers the 95K tool-turn probe: usage
 // crosses the native reserve threshold, so pi-ac leaves it to psi's native
 // path and the run must summarize for threshold reasons.
 func TestUsageDrivenNativeThresholdCompaction(t *testing.T) {
-	store, loop, cfg, events, sequence := usageDrivenSetup(t, 95_000)
+	store, loop, cfg, events, sequence, requests := usageDrivenSetup(t, 95_000)
 	if err := loop.Submit(t.Context(), "continue the task", cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +177,21 @@ func TestUsageDrivenNativeThresholdCompaction(t *testing.T) {
 	}
 	if !foundThreshold {
 		t.Fatalf("no threshold compaction start: %+v", *events)
+	}
+	assertCompactedToolRequest(t, (*requests)[len(*requests)-1])
+}
+
+func assertCompactedToolRequest(t *testing.T, req provider.Request) {
+	t.Helper()
+	encoded, err := json.Marshal(req.Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, expected := range []string{"checkpoint", "probe", "toolCall", "toolResult"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("post-compaction request missing %q: %s", expected, text)
+		}
 	}
 }
 

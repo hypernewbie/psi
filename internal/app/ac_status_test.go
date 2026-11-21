@@ -47,6 +47,18 @@ func TestACStatusLeadsWithEffectiveState(t *testing.T) {
 	if !strings.Contains(got, "Pi auto-compaction: enabled") {
 		t.Fatalf("native protection must stay visible while paused: %q", got)
 	}
+	// Explicit disable and the native gate take precedence over the pause in
+	// the headline; the separate detail still explains the latched error.
+	r.ac.SetEnabled(false)
+	if got := r.acStatusText(); !strings.HasPrefix(got, "pi-ac: automatic compaction disabled") || !strings.Contains(got, "stopped after an error") {
+		t.Fatalf("disabled after failure = %q", got)
+	}
+	r.settings.Compaction.Enabled = false
+	r.ac.SetEnabled(true)
+	if got := r.acStatusText(); !strings.HasPrefix(got, "pi-ac: automatic compaction unavailable") {
+		t.Fatalf("native compaction off = %q", got)
+	}
+	r.settings.Compaction.Enabled = true
 	// /ac enable clears the latch, matching pi-ac.
 	r.ac.SetEnabled(true)
 	if got := r.acStatusText(); !strings.HasPrefix(got, "pi-ac: automatic compaction enabled") {

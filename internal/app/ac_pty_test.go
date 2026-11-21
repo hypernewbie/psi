@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/hypernewbie/psi/internal/session"
 )
@@ -74,18 +73,17 @@ func TestActualAppACEndOfTurnCompaction(t *testing.T) {
 		if requestNumber > 1 {
 			text = "EOT_SUMMARY"
 		}
-		// Pi anchors on provider-reported usage: report a realistic total so the
-		// end-turn threshold sees the large history. Tiny synthetic usage would
-		// hide the history behind a 5-token anchor and never trigger.
+		// The provider measurement, not the much smaller text estimate,
+		// crosses the 50K end-of-turn target.
 		if requestNumber == 1 {
-			writeAnthropicTestResponseWithUsage(w, fmt.Sprintf("eot-%d", requestNumber), text, 30000, 10)
+			writeAnthropicTestResponseWithUsage(w, fmt.Sprintf("eot-%d", requestNumber), text, 60000, 10)
 		} else {
 			writeAnthropicTestResponse(w, fmt.Sprintf("eot-%d", requestNumber), text)
 		}
 	}))
 	defer server.Close()
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":true,"reserveTokens":0,"keepRecentTokens":100},"outputPad":0}`)
-	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":1024,"contextWindow":40000}]}}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":1024,"contextWindow":100000}]}}}`)
 	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-ac-key"}}`)
 	store, err := session.New(session.OpenOptions{Cwd: work, SessionDir: filepath.Join(home, "sessions"), AgentDir: agentDir, Persist: true})
 	if err != nil {
@@ -99,67 +97,66 @@ func TestActualAppACEndOfTurnCompaction(t *testing.T) {
 	}
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
 	q.prompt()
-	q.write("/ac end-turn 10\r")
-	q.wait("End-of-turn compaction threshold set to 10 tokens")
+	q.write("/ac end-turn 50000\r")
+	q.wait("End-of-turn compaction threshold set to 50,000 tokens")
 	q.write("/ac end-turn-delay 0\r")
 	q.wait("delay set to 0 minutes")
 	q.write("ASK_EOT_COMPACT\r")
 	q.wait("EOT_ANSWER")
-	// End-of-turn is automatic, not a manual command: it reports through the
-	// auto-compaction activity and end-of-turn attribution like pi-ac.
-	q.wait("Auto-compacting")
 	q.wait("Compacted from")
+	q.write("/ac status\r")
+	q.wait("last compaction: end-of-turn")
+	q.write("/quit\r")
+	q.finish()
 	mu.Lock()
+	defer mu.Unlock()
 	if len(requestBodies) != 2 {
 		t.Fatalf("provider requests = %d, want user turn and end-of-turn summary", len(requestBodies))
 	}
 	if !strings.Contains(requestBodies[0], "ASK_EOT_COMPACT") || !strings.Contains(requestBodies[1], "older request") || !strings.Contains(requestBodies[1], "context summarization assistant") {
 		t.Fatalf("wrong provider request sequence: %q", requestBodies)
 	}
-	mu.Unlock()
-	q.write("/quit\r")
-	q.finish()
 }
 
 func TestActualAppQueuedACCompactResumesWithSteering(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
+	bodies := make(chan map[string]any, 4)
+	stop := make(chan struct{})
+	releaseSummary := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseSummary) })
 	var mu sync.Mutex
-	var bodies []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
 		mu.Lock()
-		bodies = append(bodies, string(body))
-		requestNumber := len(bodies)
+		requests++
+		n := requests
 		mu.Unlock()
+		bodies <- body
 		w.Header().Set("Content-Type", "text/event-stream")
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
+		switch n {
+		case 1:
+			// This request cannot finish normally: /ac must cancel it.
+			compactHoldPartial(w, req, "ORIGINAL_PARTIAL", stop)
+		case 2:
+			select {
+			case <-releaseSummary:
+				fmt.Fprint(w, compactTextTurn("AC_COMPACTION_SUMMARY"))
+			case <-stop:
+			case <-req.Context().Done():
+			}
+		default:
+			fmt.Fprint(w, compactTextTurn("AFTER_AC_COMPACT"))
 		}
-		text := "FIRST_ACTIVE_PART"
-		if requestNumber == 2 {
-			text = "AC_COMPACTION_SUMMARY"
-		} else if requestNumber >= 3 {
-			text = "AFTER_AC_COMPACT"
-		}
-		write := func(name string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
-		}
-		write("message_start", map[string]any{"message": map[string]any{"id": fmt.Sprintf("ac-active-%d", requestNumber), "model": "m", "usage": map[string]any{"input_tokens": 2}}})
-		write("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
-		write("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		if requestNumber == 1 || requestNumber == 2 {
-			time.Sleep(500 * time.Millisecond)
-		}
-		write("content_block_stop", map[string]any{"index": 0})
-		write("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 2}})
-		write("message_stop", map[string]any{})
 	}))
 	defer server.Close()
+	defer close(stop)
+	defer release()
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false,"keepRecentTokens":100},"outputPad":0}`)
 	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"`+server.URL+`/v1","models":[{"id":"m","maxTokens":2048,"contextWindow":40000}]}}}`)
 	writeAppFile(t, filepath.Join(agentDir, "auth.json"), `{"anthropic":{"type":"api_key","key":"synthetic-ac-key"}}`)
@@ -175,28 +172,42 @@ func TestActualAppQueuedACCompactResumesWithSteering(t *testing.T) {
 	}
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
 	q.prompt()
-	q.write("ACTIVE_TASK_ASK\r")
-	q.wait("FIRST_ACTIVE_PART")
+	q.write("second work\r")
+	compactWaitBody(t, bodies)
+	q.wait("ORIGINAL_PARTIAL")
 	q.write("/ac compact keep the current task\r")
-	q.wait("Compaction queued until the active run settles")
-	q.wait("Compacting context")
+	q.wait("Cancelling the run for compaction.")
+	summary := compactWaitBody(t, bodies)
+	if text := compactRequestText(t, summary); !strings.Contains(text, "keep the current task") || strings.Contains(text, "STEER_AC_COMPACT") {
+		t.Fatalf("summary has wrong focus or queued input: %s", text)
+	}
+	prompts, aborted, checkpoints := compactTranscript(t, store.File())
+	if prompts != 1 || aborted != 1 || checkpoints != 0 {
+		t.Fatalf("at summary start: prompts/aborted/checkpoints = %d/%d/%d", prompts, aborted, checkpoints)
+	}
 	q.write("STEER_AC_COMPACT\r")
 	q.wait("Steering: STEER_AC_COMPACT")
-	q.wait("AFTER_AC_COMPACT")
-	mu.Lock()
-	if len(bodies) != 3 {
-		t.Fatalf("provider requests = %d, want active answer, summary, and resume", len(bodies))
-	}
-	last := bodies[2]
-	mu.Unlock()
+	release()
+	resume := compactWaitBody(t, bodies)
+	text := compactRequestText(t, resume)
 	for _, expected := range []string{"STEER_AC_COMPACT", "Continue the current task from the compacted context"} {
-		if !strings.Contains(last, expected) {
-			t.Fatalf("resume request missing %q: %s", expected, last)
+		if strings.Count(text, expected) != 1 {
+			t.Fatalf("resume must contain %q exactly once: %s", expected, text)
 		}
 	}
+	q.wait("AFTER_AC_COMPACT")
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
+	prompts, aborted, checkpoints = compactTranscript(t, store.File())
+	if prompts != 1 || aborted != 1 || checkpoints != 1 {
+		t.Fatalf("final prompts/aborted/checkpoints = %d/%d/%d", prompts, aborted, checkpoints)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 3 {
+		t.Fatalf("provider requests = %d, want interrupted run, summary, and resume", requests)
+	}
 }
 
 func writeAnthropicTestResponseWithUsage(w http.ResponseWriter, id, text string, inputTokens, outputTokens int) {
@@ -213,14 +224,5 @@ func writeAnthropicTestResponseWithUsage(w http.ResponseWriter, id, text string,
 }
 
 func writeAnthropicTestResponse(w http.ResponseWriter, id, text string) {
-	write := func(name string, data any) {
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
-	}
-	write("message_start", map[string]any{"message": map[string]any{"id": id, "model": "m", "usage": map[string]any{"input_tokens": 2}}})
-	write("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
-	write("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
-	write("content_block_stop", map[string]any{"index": 0})
-	write("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 3}})
-	write("message_stop", map[string]any{})
+	writeAnthropicTestResponseWithUsage(w, id, text, 2, 3)
 }

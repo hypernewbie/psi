@@ -30,11 +30,10 @@ after ten minutes. `/ac status` leads with the effective state (enabled,
 disabled, unavailable when native automatic compaction is off, or paused
 after a summary failure) and keeps native protection visible separately.
 `/ac threshold`, `/ac end-turn`, and `/ac end-turn-delay` change policy for
-the session. `/ac compact` entered during a run waits for the run to settle,
-compacts, then resumes the task. Idle `/ac compact` compacts and, when the
-durable tip is unfinished, continues once on the active model; a completed
-tip stays idle after its checkpoint. The idle timer's automatic summary runs
-as end-of-turn, not manual command.
+the session. A summary failure pauses proactive AC until `/ac enable`; native
+threshold and overflow protection and manual compaction remain available.
+Cancelling a summary does not cause this pause. The idle timer's automatic
+summary is attributed to end-of-turn, not a manual command.
 
 ## Manual compaction
 
@@ -61,9 +60,20 @@ owns the operation. Manual compact does not interrupt an active summary. A
 successful operation saves one checkpoint. Cancelling a turn that delivers
 queued input after that checkpoint does not undo the compaction.
 
-The same operation is used by the Phi bridge (`pi.compact.v2`) and by RPC
-`compact`. Bridge `pi.compact.v1` peers keep idle-only admission. Phi's browser
-button is unchanged: it still waits for idle and sends no instructions.
+`/ac compact [focus]` shares the same reservation, cancellation, and input
+recovery rules, but after a successful checkpoint it sends one continuation on
+the active model if the settled task is unfinished. This also works when an
+interrupted session is reopened idle. If the outgoing response finished cleanly
+or the idle tip is complete, it does not restart the task. A failed or cancelled
+summary never sends a continuation. If there is no eligible cut, no checkpoint
+or continuation is created; use `/bump` to continue an unfinished task. If
+cancellation or an unavailable active model prevents continuation after the
+checkpoint, the checkpoint stays saved and the interruption is reported.
+
+The summary-only operation is also used by the Phi bridge (`pi.compact.v2`)
+and RPC `compact`; neither adds an AC continuation. Bridge `pi.compact.v1`
+peers keep idle-only admission. Phi's browser button is unchanged: it still
+waits for idle and sends no instructions.
 
 ## Settings
 

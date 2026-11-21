@@ -110,8 +110,8 @@ func (l *Loop) Compact(ctx context.Context, cfg Config, focus string) error {
 	return l.compactAndContinueWithReason(ctx, cfg, focus, "", event.CompactionManual)
 }
 
-// CompactAndResume is the /ac compact behavior when it interrupts active work:
-// compact the settled session, then submit one continuation message.
+// CompactAndResume compacts an unfinished session, then submits one
+// continuation message on the active model.
 func (l *Loop) CompactAndResume(ctx context.Context, cfg Config, focus string) error {
 	return l.compactAndContinueWithReason(ctx, cfg, focus, "Continue the current task from the compacted context. Do not repeat completed work.", event.CompactionManual)
 }
@@ -161,11 +161,24 @@ func (l *Loop) compactAndContinueWithReason(ctx context.Context, cfg Config, foc
 	if err := l.compactWithReason(ctx, cfg, focus, reason); err != nil {
 		return err
 	}
+	// A checkpoint may have committed just as cancellation arrived. Keep it,
+	// but do not consume queued input or inject a new continuation afterward.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if resumePrompt != "" && cfg.LiveSettings != nil {
+		if err := cfg.LiveSettings().AuthErr; err != nil {
+			return fmt.Errorf("compaction saved, but continuation is unavailable: %w", err)
+		}
+	}
 	queued, err := l.deliverQueuedSteering()
 	if err != nil {
 		return err
 	}
 	if resumePrompt != "" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, err := l.store.AppendMessage(userMsg(resumePrompt)); err != nil {
 			return fmt.Errorf("storage failure, stopping: %w", err)
 		}
@@ -223,6 +236,17 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	}
 	l.sink(event.Event{Type: event.CompactionStart, State: reason})
 	defer func() { l.sink(event.Event{Type: event.CompactionEnd, State: reason, Err: runErr}) }()
+	record := func(err error) {
+		if cfg.ACPolicy == nil {
+			return
+		}
+		if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			// Cancellation is not a failed summary and must not pause AC.
+			cfg.ACPolicy.SetCompacting(false)
+			return
+		}
+		cfg.ACPolicy.RecordCompaction(err == nil, compactionSourceName(reason), prepared.TokensBefore)
+	}
 
 	summaryProvider, summaryModel := l.prov, cfg.Model
 	cleanup := func() {}
@@ -230,9 +254,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	if cfg.CompactionProvider != nil {
 		resolvedProvider, resolvedModel, closeProvider, resolveErr := cfg.CompactionProvider()
 		if resolveErr != nil {
-			if cfg.ACPolicy != nil {
-				cfg.ACPolicy.RecordCompaction(false, compactionSourceName(reason), prepared.TokensBefore)
-			}
+			record(resolveErr)
 			return resolveErr
 		}
 		if resolvedProvider != nil {
@@ -250,9 +272,7 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	defer cleanup()
 	cfg.SummaryRetryReason = reason
 	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel, overrideUsed)
-	if cfg.ACPolicy != nil {
-		cfg.ACPolicy.RecordCompaction(err == nil, compactionSourceName(reason), prepared.TokensBefore)
-	}
+	record(err)
 	return err
 }
 

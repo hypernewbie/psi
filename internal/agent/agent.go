@@ -646,7 +646,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		l.sink(event.Event{Type: event.RunEnd, Outcome: outcome, Err: runErr})
 	}()
 	recovery := &Recovery{}
-	thresholdCompactedThisRun := false
+	var thresholdAttempted bool
+	var usageAfterThresholdAttempt string
+	var overLimitAfterThresholdAttempt bool
 	for {
 		// A new response starts unfinished. A later authoritative append
 		// restores durable; a failure before that append stays interrupted.
@@ -684,7 +686,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		}
 		estimated := l.projectedContextTokens(proj, cfg)
 		if ShouldCompact(estimated, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact) {
-			thresholdCompactedThisRun = true
+			thresholdAttempted = true
 			if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil && !IsCompactionNoWork(err) {
 				if ctx.Err() != nil || !IsSummaryFailure(err) {
 					return fmt.Errorf("automatic compaction: %w", err)
@@ -717,6 +719,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			if err != nil {
 				return err
 			}
+			usage, usageID, hasUsage := l.store.LastContextUsage()
+			usageAfterThresholdAttempt = usageID
+			overLimitAfterThresholdAttempt = ShouldCompact(ProjectedContextTokens(proj, cfg, usage, usageID, hasUsage), cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact)
 		}
 		req, err := l.buildRequest(session.ConvertToLLM(proj.Flat), proj, cfg)
 		if err != nil {
@@ -927,21 +932,22 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				if err := l.maybeAdaptiveCompact(ctx, cfg, false, false); err != nil {
 					return err
 				}
-				// Pi's post-run threshold compaction: a clean final reply that
-				// already exceeds the native reserve still needs one compaction
-				// without another reply. The pre-request check cannot catch it
-				// because the run ends here. Only clean durable stops qualify;
-				// aborts, errors, and failed storage never compact here. A
-				// threshold compaction earlier in this run already handled the
-				// same over-budget history, so a second attempt would compact
-				// twice for one answer.
-				if ctx.Err() == nil && !thresholdCompactedThisRun {
-					if fresh, err := l.store.Projection(); err == nil {
-						if ShouldCompact(l.projectedContextTokens(fresh, cfg), cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact) {
-							if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil && !IsCompactionNoWork(err) {
-								if ctx.Err() != nil || !IsSummaryFailure(err) {
-									return fmt.Errorf("automatic compaction: %w", err)
-								}
+				// A clean final reply can itself cross the native threshold. Do
+				// not retry the same over-budget context after an earlier attempt,
+				// but check new usage or text growth crossing the threshold.
+				if ctx.Err() == nil {
+					fresh, err := l.store.Projection()
+					if err != nil {
+						return err
+					}
+					usage, usageID, hasUsage := l.store.LastContextUsage()
+					overLimit := ShouldCompact(ProjectedContextTokens(fresh, cfg, usage, usageID, hasUsage), cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact)
+					newMeasurement := hasUsage && usageID != usageAfterThresholdAttempt
+					newlyOverLimit := !overLimitAfterThresholdAttempt && overLimit
+					if overLimit && (!thresholdAttempted || newMeasurement || newlyOverLimit) {
+						if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil && !IsCompactionNoWork(err) {
+							if ctx.Err() != nil || !IsSummaryFailure(err) {
+								return fmt.Errorf("automatic compaction: %w", err)
 							}
 						}
 					}

@@ -112,11 +112,13 @@ func compactFinishOutputWait(t *testing.T, out *synchronizedBuffer, marker strin
 // its undelivered steering must return to the editor instead of continuing the
 // old loop or being sent into the summary.
 func TestActualAppCompactCleanFinishKeepsQueuedInput(t *testing.T) {
-	t.Run("compacted", func(t *testing.T) { testActualAppCompactCleanFinish(t, false) })
-	t.Run("cancelled while waiting", func(t *testing.T) { testActualAppCompactCleanFinish(t, true) })
+	for _, command := range []string{"/compact", "/ac compact"} {
+		t.Run(command+" compacted", func(t *testing.T) { testActualAppCompactCleanFinish(t, command, false) })
+		t.Run(command+" cancelled while waiting", func(t *testing.T) { testActualAppCompactCleanFinish(t, command, true) })
+	}
 }
 
-func testActualAppCompactCleanFinish(t *testing.T, abort bool) {
+func testActualAppCompactCleanFinish(t *testing.T, command string, abort bool) {
 	t.Helper()
 	work := t.TempDir()
 	p := &compactCleanFinishProvider{
@@ -179,7 +181,7 @@ func testActualAppCompactCleanFinish(t *testing.T, abort bool) {
 
 	armed.Store(true)
 
-	if _, err := inputWrite.WriteString("/compact FOCUS_MARKER\r"); err != nil {
+	if _, err := inputWrite.WriteString(command + " FOCUS_MARKER\r"); err != nil {
 		t.Fatal(err)
 	}
 	compactFinishOutputWait(t, out, "Cancelling the run for compaction.")
