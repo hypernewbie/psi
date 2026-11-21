@@ -120,13 +120,13 @@ func TestBareLoginOpensProviderPicker(t *testing.T) {
 	for _, item := range r.selector.Items {
 		got = append(got, item.ID)
 	}
-	want := []string{"deepseek", "google", "groq", "kimi-coding", "minimax", "mistral", "moonshotai", "openai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
+	want := []string{"deepseek", "google", "groq", "kimi-coding", "kimi-coding-global", "minimax", "mistral", "moonshotai", "openai", "openai-codex", "opencode-go", "openrouter", "qwen-token-plan", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("login providers=%v want %v", got, want)
 	}
 	defaults := map[string]string{
 		"deepseek": "deepseek-v4-pro", "google": "gemini-3.1-pro-preview", "kimi-coding": "kimi-for-coding",
-		"minimax": "MiniMax-M2.7", "opencode-go": "kimi-k3", "zai": "glm-5.3",
+		"kimi-coding-global": "kimi-for-coding", "minimax": "MiniMax-M2.7", "opencode-go": "kimi-k3", "zai": "glm-5.3",
 	}
 	for id, modelID := range defaults {
 		item := r.selector.Items[0]
