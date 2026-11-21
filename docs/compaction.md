@@ -9,9 +9,13 @@ the retained tail.
 
 Two mechanisms exist.
 
-**Threshold compaction** runs before a model request. psi estimates the context
-(system prompt + active branch + tool definitions) and compacts when the
-estimate exceeds `contextWindow - reserveTokens`. It is controlled by
+**Threshold compaction** runs before a model request and once more after a
+clean final reply that already exceeds the reserve. psi anchors on the newest
+provider-reported usage for the active projection plus trailing messages,
+matching Pi's `estimateProjectedContextTokens`, and falls back to a text
+estimate only when no usable usage exists. Usage from before a later
+compaction or context edit is untrusted. Compaction triggers when the
+projected value exceeds `contextWindow - reserveTokens`. It is controlled by
 `compaction.enabled`, which defaults to on.
 
 If a provider reports a context-limit error and the run has not streamed any
@@ -19,12 +23,18 @@ text yet, psi compacts once and retries. A second limit error ends the run. A
 failed automatic threshold or adaptive summary is reported, and the session
 continues without changing context.
 
-**Adaptive compaction** (`/ac`) watches growth. By default it targets the lower
-of 50% of the context window or 230,000 tokens, and checks completed runs at
-max(200,000 tokens, 40% of the window) after ten minutes. `/ac status` prints the
-current policy; `/ac threshold`, `/ac end-turn`, and `/ac end-turn-delay` change
-it for the session. `/ac compact` entered during a run waits for the run to
-settle, compacts, then resumes the task.
+**Adaptive compaction** (`/ac`) watches growth with the same projected value.
+By default it targets the lower of 50% of the context window or 230,000
+tokens, and checks completed runs at max(200,000 tokens, 40% of the window)
+after ten minutes. `/ac status` leads with the effective state (enabled,
+disabled, unavailable when native automatic compaction is off, or paused
+after a summary failure) and keeps native protection visible separately.
+`/ac threshold`, `/ac end-turn`, and `/ac end-turn-delay` change policy for
+the session. `/ac compact` entered during a run waits for the run to settle,
+compacts, then resumes the task. Idle `/ac compact` compacts and, when the
+durable tip is unfinished, continues once on the active model; a completed
+tip stays idle after its checkpoint. The idle timer's automatic summary runs
+as end-of-turn, not manual command.
 
 ## Manual compaction
 

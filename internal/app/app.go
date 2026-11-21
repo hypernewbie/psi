@@ -2538,6 +2538,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}()
 	var compactionCountAtStart uint64
 	var resumeAfterCompaction bool
+	var endTurnCompactionForNextRun bool
 	var activeConfig agent.Config
 	startInputMode := func(input agent.UserInput, focus string, mode inputMode, silent bool) (bool, string) {
 		if login != nil {
@@ -2549,8 +2550,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		compact := mode == inputCompact
 		bump := mode == inputBump
 		resumeThisCompaction := compact && resumeAfterCompaction
+		endTurnThisCompaction := compact && endTurnCompactionForNextRun
 		if compact {
 			resumeAfterCompaction = false
+			endTurnCompactionForNextRun = false
 		}
 		cancelACEndTurn()
 		if err := r.store.WriteError(); err != nil {
@@ -2721,7 +2724,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 		go func() {
 			switch {
 			case compact:
-				if resumeThisCompaction {
+				if endTurnThisCompaction {
+					done <- loop.CompactEndTurn(ctx, cfg, focus)
+				} else if resumeThisCompaction {
 					done <- loop.CompactAndResume(ctx, cfg, focus)
 				} else {
 					done <- loop.Compact(ctx, cfg, focus)
@@ -2897,6 +2902,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return errors.New("close the open picker before compacting")
 		}
 		resumeAfterCompaction = false
+		endTurnCompactionForNextRun = false
 		manualCompact = &manualCompactReservation{focus: focus}
 		r.compactPending = true
 		r.syncBridge()
@@ -2927,8 +2933,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		if explicit {
 			// Pi starts the compaction and reports the outcome through the
-			// run: the preparation happens once, inside the run.
+			// run: the preparation happens once, inside the run. Explicit
+			// commands stay manual; the idle timer uses the end-of-turn reason.
 			resumeAfterCompaction = resume
+			endTurnCompactionForNextRun = false
 			start("", "", focus, "", "", true)
 			return
 		}
@@ -2943,6 +2951,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return
 		}
 		resumeAfterCompaction = resume
+		// The idle end-of-turn timer is automatic, not a manual command.
+		endTurnCompactionForNextRun = true
 		start("", "", focus, "", "", true)
 	}
 	endTurnReady := func() bool {
@@ -2971,7 +2981,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 		acEndTurnTimeout = acEndTurnTimer.C
 	}
 	acCommand := func(args string) {
-		r.handleACCommand(args, out, func(focus string) { checkAndStartCompact(focus, true, false) }, cancelACEndTurn,
+		// Idle /ac compact resumes only when the durable tip is unfinished.
+		// session.CanBump reports an aborted or error tail without inventing
+		// a second eligibility rule; a completed exchange stays idle after
+		// its checkpoint, matching /bump guidance for usable sessions.
+		r.handleACCommand(args, out, func(focus string) {
+			resume := false
+			if proj, err := r.store.Projection(); err == nil {
+				resume = session.CanBump(proj.Flat)
+			}
+			checkAndStartCompact(focus, true, resume)
+		}, cancelACEndTurn,
 			func() bool { return acEndTurnTimeout != nil }, scheduleEndTurn)
 	}
 	stopLoopCommand := func() {

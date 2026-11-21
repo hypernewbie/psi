@@ -74,7 +74,14 @@ func TestActualAppACEndOfTurnCompaction(t *testing.T) {
 		if requestNumber > 1 {
 			text = "EOT_SUMMARY"
 		}
-		writeAnthropicTestResponse(w, fmt.Sprintf("eot-%d", requestNumber), text)
+		// Pi anchors on provider-reported usage: report a realistic total so the
+		// end-turn threshold sees the large history. Tiny synthetic usage would
+		// hide the history behind a 5-token anchor and never trigger.
+		if requestNumber == 1 {
+			writeAnthropicTestResponseWithUsage(w, fmt.Sprintf("eot-%d", requestNumber), text, 30000, 10)
+		} else {
+			writeAnthropicTestResponse(w, fmt.Sprintf("eot-%d", requestNumber), text)
+		}
 	}))
 	defer server.Close()
 	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":true,"reserveTokens":0,"keepRecentTokens":100},"outputPad":0}`)
@@ -98,7 +105,9 @@ func TestActualAppACEndOfTurnCompaction(t *testing.T) {
 	q.wait("delay set to 0 minutes")
 	q.write("ASK_EOT_COMPACT\r")
 	q.wait("EOT_ANSWER")
-	q.wait("Compacting context...")
+	// End-of-turn is automatic, not a manual command: it reports through the
+	// auto-compaction activity and end-of-turn attribution like pi-ac.
+	q.wait("Auto-compacting")
 	q.wait("Compacted from")
 	mu.Lock()
 	if len(requestBodies) != 2 {
@@ -188,6 +197,19 @@ func TestActualAppQueuedACCompactResumesWithSteering(t *testing.T) {
 	q.prompt()
 	q.write("/quit\r")
 	q.finish()
+}
+
+func writeAnthropicTestResponseWithUsage(w http.ResponseWriter, id, text string, inputTokens, outputTokens int) {
+	write := func(name string, data any) {
+		b, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
+	}
+	write("message_start", map[string]any{"message": map[string]any{"id": id, "model": "m", "usage": map[string]any{"input_tokens": inputTokens}}})
+	write("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+	write("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
+	write("content_block_stop", map[string]any{"index": 0})
+	write("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": outputTokens}})
+	write("message_stop", map[string]any{})
 }
 
 func writeAnthropicTestResponse(w http.ResponseWriter, id, text string) {

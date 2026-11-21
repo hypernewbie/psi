@@ -134,7 +134,7 @@ func (r *runtime) acHelpText() string {
 		"",
 		"Usage: /ac [help] or /ac <command> [arguments]",
 		"/autocompact is an alias for /ac.",
-		"/ac compact [focus]       compact now; while busy, queue compaction and resume afterward",
+		"/ac compact [focus]       compact now; resume interrupted work",
 		"/ac status                show thresholds, growth forecast, and last compaction",
 		"/ac threshold <default|1-100|off> set the predictive target",
 		"/ac end-turn <default|off|token-count|percent%> set final-run threshold",
@@ -159,16 +159,26 @@ func (r *runtime) acStatusText() string {
 		tokens = agent.ProjectedContextTokens(proj, r.cfg, usage, usageID, hasUsage)
 		contextText = commaAC(tokens) + " / " + commaAC(window)
 	}
-	acEnabled := "disabled"
-	if state.Enabled {
-		acEnabled = "enabled"
+	// Lead with the effective state so a paused controller is not mistaken for
+	// active protection. pi-ac latches StoppedAfterError to avoid paying for the
+	// same failed summary every turn; native threshold and manual requests stay
+	// available while proactive attempts pause.
+	effective := "disabled"
+	if state.StoppedAfterError {
+		effective = "paused after an error; use /ac enable to retry"
+	} else if state.Enabled {
+		if r.settings.Compaction.Enabled {
+			effective = "enabled"
+		} else {
+			effective = "unavailable (native automatic compaction is off)"
+		}
 	}
 	piEnabled := "disabled"
 	if r.settings.Compaction.Enabled {
 		piEnabled = "enabled"
 	}
 	lines := []string{
-		"pi-ac: automatic compaction " + acEnabled,
+		"pi-ac: automatic compaction " + effective,
 		"context: " + contextText,
 		"end-of-turn compaction: " + formatACThreshold(state.EndOfTurnThreshold, window, state.EndOfTurnUsesDefault),
 		"end-of-turn delay: " + formatACDelay(state.EndOfTurnDelay),

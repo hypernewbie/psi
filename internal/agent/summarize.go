@@ -107,13 +107,24 @@ Do NOT continue the conversation. Do NOT respond to any questions in the convers
 // Compact generates a real summary before appending any context-changing entry.
 // Provider errors, empty summaries, and cancellation leave the context intact.
 func (l *Loop) Compact(ctx context.Context, cfg Config, focus string) error {
-	return l.compactAndContinue(ctx, cfg, focus, "")
+	return l.compactAndContinueWithReason(ctx, cfg, focus, "", event.CompactionManual)
 }
 
 // CompactAndResume is the /ac compact behavior when it interrupts active work:
 // compact the settled session, then submit one continuation message.
 func (l *Loop) CompactAndResume(ctx context.Context, cfg Config, focus string) error {
-	return l.compactAndContinue(ctx, cfg, focus, "Continue the current task from the compacted context. Do not repeat completed work.")
+	return l.compactAndContinueWithReason(ctx, cfg, focus, "Continue the current task from the compacted context. Do not repeat completed work.", event.CompactionManual)
+}
+
+// CompactEndTurn runs the idle end-of-turn timer's automatic summary under
+// Pi's end-of-turn reason, not manual command, so notices and last-compaction
+// attribution stay accurate. Like pi-ac, it never resumes with a new prompt.
+func (l *Loop) CompactEndTurn(ctx context.Context, cfg Config, focus string) error {
+	return l.compactAndContinueWithReason(ctx, cfg, focus, "", event.CompactionEndTurn)
+}
+
+func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resumePrompt string) error {
+	return l.compactAndContinueWithReason(ctx, cfg, focus, resumePrompt, event.CompactionManual)
 }
 
 // ContinuePending drains a message that arrived after a run's final queue poll
@@ -140,12 +151,14 @@ func (l *Loop) ContinuePending(ctx context.Context, cfg Config) error {
 	return l.run(ctx, cfg, true)
 }
 
-func (l *Loop) compactAndContinue(ctx context.Context, cfg Config, focus, resumePrompt string) error {
+// compactAndContinueWithReason runs one compaction with Pi's reason attribution
+// (manual command versus end-of-turn timer) before optional continuation.
+func (l *Loop) compactAndContinueWithReason(ctx context.Context, cfg Config, focus, resumePrompt, reason string) error {
 	if err := l.begin(); err != nil {
 		return err
 	}
 	defer l.end()
-	if err := l.compactWithReason(ctx, cfg, focus, event.CompactionManual); err != nil {
+	if err := l.compactWithReason(ctx, cfg, focus, reason); err != nil {
 		return err
 	}
 	queued, err := l.deliverQueuedSteering()
