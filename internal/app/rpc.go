@@ -25,6 +25,7 @@ import (
 	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/event"
 	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/session"
 	"github.com/hypernewbie/psi/internal/skills"
 	"github.com/hypernewbie/psi/internal/tools"
 )
@@ -682,6 +683,13 @@ func (s *rpcRunner) finishCompact(res *rpcCompactReservation) {
 	s.mu.Unlock()
 }
 
+// projectedSessionTokens anchors on provider-reported usage for the active
+// projection, matching Pi's estimateProjectedContextTokens.
+func projectedSessionTokens(r *runtime, proj *session.Projection) int {
+	usage, usageID, hasUsage := r.store.LastContextUsage()
+	return agent.ProjectedContextTokens(proj, r.cfg, usage, usageID, hasUsage)
+}
+
 // sessionStats answers with stored token accounting and a live context
 // estimate for headless observability.
 func (s *rpcRunner) sessionStats(cmd rpcCommand) *rpcResponse {
@@ -702,7 +710,7 @@ func (s *rpcRunner) sessionStats(cmd rpcCommand) *rpcResponse {
 			"cacheRead": acc.Usage.CacheRead, "cacheWrite": acc.Usage.CacheWrite,
 		},
 		"contextUsage": map[string]any{
-			"tokens":        agent.EstimatedContext(proj, r.cfg),
+			"tokens":        projectedSessionTokens(r, proj),
 			"contextWindow": r.cfg.Model.ContextWindow,
 		},
 	}

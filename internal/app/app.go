@@ -2953,7 +2953,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if err != nil {
 			return false
 		}
-		tokens := agent.EstimatedContext(proj, r.cfg)
+		usage, usageID, hasUsage := r.store.LastContextUsage()
+		tokens := agent.ProjectedContextTokens(proj, r.cfg, usage, usageID, hasUsage)
 		return r.ac.ShouldCompactAtEndOfTurn(tokens, r.cfg.Model.ContextWindow, r.settings.Compaction.Enabled, true, false)
 	}
 	scheduleEndTurn := func() {
@@ -4437,7 +4438,8 @@ func (r *runtime) handleSessionCommand(arg string, out io.Writer) (bool, error) 
 	if name := r.store.SessionName(); name != "" {
 		nameLine = "name " + name + "\n"
 	}
-	print(fmt.Sprintf("session %s\n%sfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, nameLine, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.EstimatedContext(proj, r.cfg), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
+	usage, usageID, hasUsage := r.store.LastContextUsage()
+	print(fmt.Sprintf("session %s\n%sfile %s\ncwd %s\nprovider %s api %s\nrequested model %s\nlast returned model %s\nthinking %s\ncontext messages %d, estimated context tokens %d\nstored usage: input %g, output %g, cache read %g, cache write %g, total %g (%d attempts)\nprice unknown (no cost calculation)\ncontinuation: %s", r.store.Header().ID, nameLine, r.store.File(), r.store.Cwd(), r.ov.Provider, r.cfg.Model.API, r.ov.Model, returned, provider.ThinkingDescription(r.cfg.Model, r.ov.Thinking), len(proj.Flat), agent.ProjectedContextTokens(proj, r.cfg, usage, usageID, hasUsage), accounting.Usage.Input, accounting.Usage.Output, accounting.Usage.CacheRead, accounting.Usage.CacheWrite, accounting.Usage.TotalTokens, accounting.Attempts, continuable(proj)))
 	themeSource := "built-in"
 	if r.theme != nil && r.theme.SourcePath != "" {
 		themeSource = r.theme.SourcePath

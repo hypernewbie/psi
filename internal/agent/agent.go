@@ -646,6 +646,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		l.sink(event.Event{Type: event.RunEnd, Outcome: outcome, Err: runErr})
 	}()
 	recovery := &Recovery{}
+	thresholdCompactedThisRun := false
 	for {
 		// A new response starts unfinished. A later authoritative append
 		// restores durable; a failure before that append stays interrupted.
@@ -681,8 +682,9 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		if err != nil {
 			return err
 		}
-		estimated := EstimatedContext(proj, cfg)
+		estimated := l.projectedContextTokens(proj, cfg)
 		if ShouldCompact(estimated, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact) {
+			thresholdCompactedThisRun = true
 			if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil && !IsCompactionNoWork(err) {
 				if ctx.Err() != nil || !IsSummaryFailure(err) {
 					return fmt.Errorf("automatic compaction: %w", err)
@@ -925,6 +927,25 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				if err := l.maybeAdaptiveCompact(ctx, cfg, false, false); err != nil {
 					return err
 				}
+				// Pi's post-run threshold compaction: a clean final reply that
+				// already exceeds the native reserve still needs one compaction
+				// without another reply. The pre-request check cannot catch it
+				// because the run ends here. Only clean durable stops qualify;
+				// aborts, errors, and failed storage never compact here. A
+				// threshold compaction earlier in this run already handled the
+				// same over-budget history, so a second attempt would compact
+				// twice for one answer.
+				if ctx.Err() == nil && !thresholdCompactedThisRun {
+					if fresh, err := l.store.Projection(); err == nil {
+						if ShouldCompact(l.projectedContextTokens(fresh, cfg), cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact) {
+							if err := l.compactWithReason(ctx, cfg, "", event.CompactionThreshold); err != nil && !IsCompactionNoWork(err) {
+								if ctx.Err() != nil || !IsSummaryFailure(err) {
+									return fmt.Errorf("automatic compaction: %w", err)
+								}
+							}
+						}
+					}
+				}
 				return nil
 			}
 			// Record growth, but let the queued user message receive the next
@@ -944,6 +965,14 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 	}
 }
 
+// projectedContextTokens anchors on the newest provider-reported usage for the
+// active projection, matching Pi's estimateProjectedContextTokens. Text-only
+// estimates miss large tool results that usage already accounts for.
+func (l *Loop) projectedContextTokens(proj *session.Projection, cfg Config) int {
+	usage, usageID, hasUsage := l.store.LastContextUsage()
+	return ProjectedContextTokens(proj, cfg, usage, usageID, hasUsage)
+}
+
 func (l *Loop) maybeAdaptiveCompact(ctx context.Context, cfg Config, canContinue, hasPendingMessages bool) error {
 	if cfg.ACPolicy == nil {
 		return nil
@@ -953,7 +982,7 @@ func (l *Loop) maybeAdaptiveCompact(ctx context.Context, cfg Config, canContinue
 	if err != nil {
 		return err
 	}
-	tokens := EstimatedContext(proj, cfg)
+	tokens := l.projectedContextTokens(proj, cfg)
 	if !cfg.ACPolicy.ObserveTurn(tokens, cfg.Model.ContextWindow, cfg.ReserveTokens, cfg.AutoCompact, canContinue, hasPendingMessages) {
 		return nil
 	}

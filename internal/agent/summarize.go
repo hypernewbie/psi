@@ -195,7 +195,7 @@ func (l *Loop) CheckCompaction(cfg Config) (CompactionPreparation, error) {
 	if prepared.Disposition != CompactionEligible {
 		return prepared, &CompactionNoWorkError{Disposition: prepared.Disposition}
 	}
-	prepared.TokensBefore = EstimatedContext(proj, cfg)
+	prepared.TokensBefore = l.projectedContextTokens(proj, cfg)
 	return prepared, nil
 }
 

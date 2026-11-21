@@ -155,7 +155,8 @@ func (r *runtime) acStatusText() string {
 	contextText := "unknown / unknown"
 	window, tokens := r.cfg.Model.ContextWindow, 0
 	if err == nil {
-		tokens = agent.EstimatedContext(proj, r.cfg)
+		usage, usageID, hasUsage := r.store.LastContextUsage()
+		tokens = agent.ProjectedContextTokens(proj, r.cfg, usage, usageID, hasUsage)
 		contextText = commaAC(tokens) + " / " + commaAC(window)
 	}
 	acEnabled := "disabled"

@@ -45,12 +45,15 @@ func EstimatedContext(proj *session.Projection, cfg Config) int {
 	return n
 }
 
-// FooterContext mirrors Pi's estimateContextTokens: the newest provider-reported
-// usage plus an estimate of the messages appended after that response. Without
-// usage it falls back to EstimatedContext. usageEntryID names the assistant
-// entry that reported usageTokens; an id missing from the projection keeps the
-// provider value alone.
-func FooterContext(proj *session.Projection, cfg Config, usageTokens int, usageEntryID string, hasUsage bool) int {
+// ProjectedContextTokens mirrors Pi's estimateProjectedContextTokens: the newest
+// provider-reported usage for the active projection plus an estimate of the
+// model-visible messages after it. Store.LastContextUsage already refuses usage
+// from before a later compaction or context edit, matching Pi's invalidation.
+// Without usable usage it falls back to EstimatedContext. When the projection is
+// present but does not contain the usage entry, the usage is stale and the
+// fallback applies. A nil projection keeps the provider value alone for the
+// metadata-only footer path that must not decode the session to draw.
+func ProjectedContextTokens(proj *session.Projection, cfg Config, usageTokens int, usageEntryID string, hasUsage bool) int {
 	if !hasUsage {
 		return EstimatedContext(proj, cfg)
 	}
@@ -70,9 +73,16 @@ func FooterContext(proj *session.Projection, cfg Config, usageTokens int, usageE
 				usageTokens += messageTokens(m)
 			}
 		}
-		break
+		return usageTokens
 	}
-	return usageTokens
+	return EstimatedContext(proj, cfg)
+}
+
+// FooterContext keeps the previous name for the terminal footer and bridge
+// telemetry, which share Pi's projected accounting. It delegates to
+// ProjectedContextTokens so display and compaction use one estimate.
+func FooterContext(proj *session.Projection, cfg Config, usageTokens int, usageEntryID string, hasUsage bool) int {
+	return ProjectedContextTokens(proj, cfg, usageTokens, usageEntryID, hasUsage)
 }
 
 func messageTokens(m session.AgentMessage) int {

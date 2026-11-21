@@ -389,9 +389,10 @@ func (s *Store) ModelState() (ModelState, error) {
 }
 
 // LastContextTokens returns the newest valid assistant usage after the latest
-// compaction. It reads indexed metadata only; false means no trustworthy usage.
-// A latest-wins null context edit removes its target from the projected context,
-// so dropped assistant usage must not leak into the footer estimate.
+// compaction or context edit. It reads indexed metadata only; false means no
+// trustworthy usage. Pi's estimateProjectedContextTokens refuses usage captured
+// before a later edit or compaction because the projection after that boundary
+// no longer includes the measured context.
 func (s *Store) LastContextTokens() (int, bool) {
 	tokens, _, ok := s.LastContextUsage()
 	return tokens, ok
@@ -406,23 +407,15 @@ func (s *Store) LastContextUsage() (int, string, bool) {
 	if err != nil {
 		return 0, "", false
 	}
-	dropped := map[string]bool{}
-	latestCompaction := -1
+	latestInvalidating := -1
 	for i, e := range path {
-		if e.Kind == "context_edit" && e.ContextEdit != nil {
-			replacement := e.ContextEdit.Replacement
-			dropped[e.ContextEdit.TargetID] = len(replacement) == 0 || string(replacement) == "null"
-		}
-		if e.Kind == "compaction" {
-			latestCompaction = i
+		if e.Kind == "compaction" || e.Kind == "context_edit" {
+			latestInvalidating = i
 		}
 	}
-	for i := len(path) - 1; i > latestCompaction; i-- {
+	for i := len(path) - 1; i > latestInvalidating; i-- {
 		e := path[i]
 		if e.Kind != "message" || e.Message == nil || e.Message.Message.Assistant == nil {
-			continue
-		}
-		if dropped[e.ID()] {
 			continue
 		}
 		a := e.Message.Message.Assistant

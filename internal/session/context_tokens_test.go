@@ -110,7 +110,10 @@ func TestLastContextTokens(t *testing.T) {
 		}
 	})
 
-	t.Run("dropped by context edit", func(t *testing.T) {
+	t.Run("usage before context edit is untrusted", func(t *testing.T) {
+		// Pi's estimateProjectedContextTokens refuses usage captured before a
+		// later edit or compaction. A null edit still moves the boundary, so
+		// earlier usage must not anchor the next estimate.
 		store, err := New(OpenOptions{Cwd: "/tmp/ws", Persist: false})
 		if err != nil {
 			t.Fatal(err)
@@ -120,8 +123,12 @@ func TestLastContextTokens(t *testing.T) {
 		if _, err := store.AppendContextEdit(dropped, nil); err != nil {
 			t.Fatal(err)
 		}
+		if tokens, ok := store.LastContextTokens(); ok {
+			t.Fatalf("pre-edit usage trusted: %d", tokens)
+		}
+		appendUsageMessage(t, store, Usage{TotalTokens: 77}, "stop")
 		tokens, ok := store.LastContextTokens()
-		if !ok || tokens != 50 {
+		if !ok || tokens != 77 {
 			t.Fatalf("tokens=%d ok=%v", tokens, ok)
 		}
 	})
