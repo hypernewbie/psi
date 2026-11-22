@@ -44,6 +44,7 @@ func resolveModel(models *config.ModelsFile, ref string) (provider.ModelMeta, co
 }
 
 // providerModel mirrors the existing Psi conversion from catalogue metadata.
+// src: internal/app/app.go:1033 (providerModel). Keep this in sync!
 func providerModel(providerID string, meta config.ModelMeta) provider.ModelMeta {
 	forceAdaptive, _, _ := meta.Compat.Bool("forceAdaptiveThinking")
 	midConvoEffort, _, _ := meta.Compat.Bool("supportsMidConvoEffort")
@@ -59,6 +60,7 @@ func providerModel(providerID string, meta config.ModelMeta) provider.ModelMeta 
 
 // apiKeyPolicy mirrors Psi's key-presence rule for custom and overridden
 // endpoints. A key that is required by the endpoint is never silently omitted.
+// src: internal/app/helpers.go:97 (apiKeyPolicy). Keep this in sync!
 func apiKeyPolicy(providerID string, meta config.ModelMeta, configured config.ProviderMeta) (provider.APIKeyInput, bool) {
 	strict := false
 	switch {
@@ -79,6 +81,7 @@ func apiKeyPolicy(providerID string, meta config.ModelMeta, configured config.Pr
 	return input, strict && !meta.AuthHeader && !configured.AuthHeader
 }
 
+// src: internal/app/helpers.go:117 (missingAPIKey). Keep this in sync!
 func missingAPIKey(err error) bool {
 	var missing *provider.MissingAPIKeyError
 	return errors.As(err, &missing)
@@ -86,7 +89,9 @@ func missingAPIKey(err error) bool {
 
 // buildProvider creates one model client from Psi catalogue metadata and the
 // existing credentials. API-key modes are supported; OAuth-only account modes
-// stay a later addition.
+// stay a later addition. This is a subset of Psi's client-construction block in
+// internal/app/app.go:1085 (configure): the API-key cases only, no OAuth or
+// subscription clients. Keep this in sync with that block when it changes!
 func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta provider.ModelMeta, catalogue config.ModelMeta, maxRetries int, sessionID string) (provider.Provider, error) {
 	headers := map[string]string{}
 	for name, value := range catalogue.Headers {
@@ -171,6 +176,7 @@ func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta 
 	return client, nil
 }
 
+// src: internal/app/app.go:1246 (envMap). Keep this in sync!
 func envMap() map[string]string {
 	out := map[string]string{}
 	for _, item := range os.Environ() {
