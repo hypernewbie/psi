@@ -145,7 +145,7 @@ func TestOpenAIHelpDescribesLoginFlow(t *testing.T) {
 	if !strings.Contains(help, "/login openai") {
 		t.Fatalf("help text lacks the OpenAI sign-in command: %q", help)
 	}
-	for _, want := range []string{"openai-codex", "primary ChatGPT quota"} {
+	for _, want := range []string{"openai-codex", "primary ChatGPT quota", "zai", "opencode-go", "rolling (R)", "weekly (W)", "monthly (M)"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help text lacks %q: %q", want, help)
 		}

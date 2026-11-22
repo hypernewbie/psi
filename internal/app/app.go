@@ -472,7 +472,7 @@ Footer context caption: contextUsageDisplay is "percent" (default) or "tokens".
 Change it in /settings, or edit settings.json and run /reload. It is a settings key, not a CLI flag.
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. OpenAI Codex uses /login openai-codex and never falls back to an API key.
 A custom provider using openai-completions, openai-responses, or anthropic-messages may omit the API key; built-in openai and anthropic may omit it only on an explicit non-default baseUrl override. An omitted key sends no generated auth header. authHeader: true still requires a key; explicit headers still apply.
-The built-in openai-codex provider periodically reads its primary ChatGPT quota, backs off after failures, and shows the remaining percentage in unused footer space when available.
+Eligible built-in openai-codex, zai and opencode-go models show remaining quota in unused footer space. Codex shows primary ChatGPT quota; Go shows rolling (R), weekly (W), and monthly (M) percentages. Reads are best effort and back off after failures.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }
@@ -734,19 +734,20 @@ type runtime struct {
 	// each turn boundary. It is a pointer because the runtime is copied by
 	// value.
 	live *liveConfig
-	// codexQuotaAuthOverride marks a configured Authorization header or
+	// quotaAuthOverride marks a configured Authorization header or
 	// authHeader. It hides quota UI without changing inference behavior.
-	codexQuotaAuthOverride bool
-	// codexQuotaCheck is a test seam for the background usage read. Nil uses
-	// the read-only Codex credential and private HTTP path.
-	codexQuotaCheck codexQuotaCheck
+	quotaAuthOverride bool
+	// quotaCheck is the Codex test seam. Nil uses the read-only Codex
+	// credential and private HTTP path.
+	quotaCheck     quotaCheck
+	planQuotaCheck func(context.Context, string, string, time.Time) provider.QuotaUsageResult
 	// codexQuotaSuccessDelay and codexQuotaRendered are test seams for
 	// deterministic scheduling and footer observations. Nil keeps production
 	// behavior.
 	codexQuotaSuccessDelay func(float64) time.Duration
 	codexQuotaRendered     func(string)
 	// quota is REPL-owned quota state. It is nil outside an active REPL.
-	quota                    *codexQuotaOwner
+	quota                    *quotaOwner
 	generation               int64
 	state                    State
 	bridge                   *pibridge.Client
@@ -1074,13 +1075,13 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	// Quota eligibility treats any Authorization header entry, even an
 	// empty one, and a configured authHeader as an override. This is a
 	// quota-only flag; request headers keep their existing behavior.
-	codexQuotaAuthOverride := meta.AuthHeader
+	quotaAuthOverride := meta.AuthHeader
 	if configured, ok := r.models.Providers[ov.Provider]; ok && configured.AuthHeader {
-		codexQuotaAuthOverride = true
+		quotaAuthOverride = true
 	}
 	for name := range meta.Headers {
 		if strings.EqualFold(name, "Authorization") {
-			codexQuotaAuthOverride = true
+			quotaAuthOverride = true
 			break
 		}
 	}
@@ -1194,7 +1195,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr = ov, cfg, client, authErr
-	r.codexQuotaAuthOverride = codexQuotaAuthOverride
+	r.quotaAuthOverride = quotaAuthOverride
 	r.reg = tools.NewRegistry(r.store.Cwd())
 	r.reg.Bash.ShellPath = r.settings.ShellPath
 	r.reg.Bash.ShellPrefix = r.settings.ShellPrefix
@@ -1430,7 +1431,7 @@ func (r *runtime) adoptConfiguration(candidate *runtime) {
 		r.prov.CloseIdle()
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
-	r.codexQuotaAuthOverride = candidate.codexQuotaAuthOverride
+	r.quotaAuthOverride = candidate.quotaAuthOverride
 }
 
 // publishLive stores the mutable request configuration that a running loop
@@ -1942,7 +1943,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var login *oauthLoginSession
 	var loginDone <-chan oauthLoginResult
 	var loginUpdates <-chan oauthLoginUpdate
-	quota := newCodexQuotaOwner(r.codexQuotaCheck)
+	quota := newQuotaOwner(r.quotaCheck)
+	if r.planQuotaCheck != nil {
+		quota.checkPlan = r.planQuotaCheck
+	}
 	if r.codexQuotaSuccessDelay != nil {
 		quota.successDelay = r.codexQuotaSuccessDelay
 	}

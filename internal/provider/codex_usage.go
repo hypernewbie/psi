@@ -5,36 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
-
-	"github.com/hypernewbie/psi/internal/secretmem"
 )
 
 const (
-	codexQuotaEndpoint    = "https://chatgpt.com/backend-api/wham/usage"
-	codexQuotaUserAgent   = "psi-chatgpt-usage"
-	codexQuotaTimeout     = 10 * time.Second
-	codexQuotaBodyLimit   = 64 * 1024
-	codexQuotaHeaderLimit = 64 * 1024
-	codexQuotaAccountMax  = 1024
-)
-
-// CodexUsageOutcome describes how a local-only quota read finished. The
-// strings are stable test and diagnostic labels; they never contain response
-// data or credentials.
-type CodexUsageOutcome string
-
-const (
-	CodexUsageNoCredential           CodexUsageOutcome = "no usable credential"
-	CodexUsageSupported              CodexUsageOutcome = "usable primary quota window"
-	CodexUsageTemporarilyUnavailable CodexUsageOutcome = "temporarily unavailable"
-	CodexUsageUnsupported            CodexUsageOutcome = "unsupported usage response"
+	codexQuotaEndpoint   = "https://chatgpt.com/backend-api/wham/usage"
+	codexQuotaUserAgent  = "psi-chatgpt-usage"
+	codexQuotaAccountMax = 1024
 )
 
 // CodexUsageCredential is one read-only snapshot of Pi's Codex OAuth entry.
@@ -44,21 +24,6 @@ type CodexUsageCredential struct {
 	AccountID string
 	Expires   time.Time
 	EntryHash [32]byte
-}
-
-// CodexUsageResult carries a primary-window reading and bounded timing data.
-// A sample is usable only when Sample is true. No raw body or error text is
-// retained.
-type CodexUsageResult struct {
-	Outcome     CodexUsageOutcome
-	Status      int
-	UsedPercent float64
-	Sample      bool
-	StartedAt   time.Time
-	ExpiresAt   time.Time
-	RetryAt     time.Time
-	StopPolling bool
-	EntryHash   [32]byte
 }
 
 // ReadCodexUsageCredential reads the selected openai-codex OAuth entry without
@@ -81,10 +46,10 @@ func ReadCodexUsageCredential(authPath string, now time.Time) (CodexUsageCredent
 		return CodexUsageCredential{}, false
 	}
 	account, err := codexAccount(entry)
-	if err != nil || !safeCodexQuotaValue(entry.Access, codexQuotaBodyLimit) {
+	if err != nil || !safeQuotaHeaderValue(entry.Access, quotaBodyLimit) {
 		return CodexUsageCredential{}, false
 	}
-	if !safeCodexQuotaValue(account, codexQuotaAccountMax) {
+	if !safeQuotaHeaderValue(account, codexQuotaAccountMax) {
 		return CodexUsageCredential{}, false
 	}
 	return CodexUsageCredential{
@@ -101,61 +66,34 @@ func ReadCodexUsageCredential(authPath string, now time.Time) (CodexUsageCredent
 // A start at or before notBefore is skipped so a caller can keep starts apart.
 // authPath is re-read after a usable response so a credential replacement
 // during the request discards the sample.
-func FetchCodexUsage(ctx context.Context, authPath string, credential CodexUsageCredential, notBefore time.Time) CodexUsageResult {
-	return fetchCodexUsage(ctx, authPath, credential, notBefore, newCodexQuotaHTTPClient(nil))
+func FetchCodexUsage(ctx context.Context, authPath string, credential CodexUsageCredential, notBefore time.Time) QuotaUsageResult {
+	return fetchCodexUsage(ctx, authPath, credential, notBefore, newQuotaHTTPClient(nil))
 }
 
-func fetchCodexUsage(ctx context.Context, authPath string, credential CodexUsageCredential, notBefore time.Time, client *http.Client) CodexUsageResult {
-	if !safeCodexQuotaValue(credential.Access, codexQuotaBodyLimit) || !safeCodexQuotaValue(credential.AccountID, codexQuotaAccountMax) {
-		return CodexUsageResult{Outcome: CodexUsageNoCredential}
+func fetchCodexUsage(ctx context.Context, authPath string, credential CodexUsageCredential, notBefore time.Time, client *http.Client) QuotaUsageResult {
+	if !safeQuotaHeaderValue(credential.Access, quotaBodyLimit) || !safeQuotaHeaderValue(credential.AccountID, codexQuotaAccountMax) {
+		return QuotaUsageResult{Outcome: QuotaUsageNoCredential}
 	}
 	now := time.Now()
 	if credential.Expires.IsZero() || !now.Before(credential.Expires) {
-		return CodexUsageResult{Outcome: CodexUsageNoCredential}
+		return QuotaUsageResult{Outcome: QuotaUsageNoCredential}
 	}
 	if !notBefore.IsZero() && now.Before(notBefore) {
-		return CodexUsageResult{Outcome: CodexUsageUnsupported}
+		return QuotaUsageResult{Outcome: QuotaUsageUnsupported}
 	}
 
-	started := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, codexQuotaTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, codexQuotaEndpoint, nil)
-	if err != nil {
-		return CodexUsageResult{Outcome: CodexUsageUnsupported, StartedAt: started}
-	}
-	request.Header = http.Header{
+	headers := http.Header{
 		"Authorization":      {"Bearer " + credential.Access},
 		"Chatgpt-Account-Id": {credential.AccountID},
 		"Accept":             {"application/json"},
 		"User-Agent":         {codexQuotaUserAgent},
 	}
-
-	response, err := client.Do(request)
-	if err != nil {
-		return CodexUsageResult{Outcome: CodexUsageTemporarilyUnavailable, StartedAt: started}
-	}
-	received := time.Now()
-	defer response.Body.Close()
-
-	retryAt, stopPolling := codexQuotaRetry(response.StatusCode, response.Header.Values("Retry-After"), received)
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, codexQuotaBodyLimit+1))
-	if readErr != nil {
-		secretmem.Wipe(body[:cap(body)])
-		return CodexUsageResult{Outcome: CodexUsageTemporarilyUnavailable, Status: response.StatusCode, StartedAt: started, RetryAt: retryAt, StopPolling: stopPolling}
-	}
-	if len(body) > codexQuotaBodyLimit {
-		secretmem.Wipe(body[:cap(body)])
-		return CodexUsageResult{Outcome: CodexUsageUnsupported, Status: response.StatusCode, StartedAt: started, RetryAt: retryAt, StopPolling: stopPolling}
-	}
-	used, parsed := parseCodexPrimaryUsedPercent(body)
-	secretmem.Wipe(body[:cap(body)])
-
-	if response.StatusCode != http.StatusOK {
-		return CodexUsageResult{Outcome: codexQuotaStatusOutcome(response.StatusCode), Status: response.StatusCode, StartedAt: started, RetryAt: retryAt, StopPolling: stopPolling}
-	}
-	if !parsed {
-		return CodexUsageResult{Outcome: CodexUsageUnsupported, Status: response.StatusCode, StartedAt: started}
+	result := fetchQuota(ctx, codexQuotaEndpoint, headers, client, func(body []byte) ([3]float64, bool) {
+		used, ok := parseCodexPrimaryUsedPercent(body)
+		return [3]float64{used}, ok
+	})
+	if !result.Sample {
+		return result
 	}
 
 	// A replacement during the GET makes the sample unusable. This read is
@@ -165,119 +103,13 @@ func fetchCodexUsage(ctx context.Context, authPath string, credential CodexUsage
 	if authPath != "" {
 		latest, ok := ReadCodexUsageCredential(authPath, time.Now())
 		if !ok || latest.EntryHash != credential.EntryHash {
-			return CodexUsageResult{Outcome: CodexUsageNoCredential, Status: response.StatusCode, StartedAt: started}
+			return QuotaUsageResult{Outcome: QuotaUsageNoCredential, Status: result.Status, StartedAt: result.StartedAt}
 		}
 		expiresAt = latest.Expires
 	}
-	return CodexUsageResult{
-		Outcome:     CodexUsageSupported,
-		Status:      response.StatusCode,
-		UsedPercent: used,
-		Sample:      true,
-		StartedAt:   started,
-		ExpiresAt:   expiresAt,
-		EntryHash:   credential.EntryHash,
-	}
-}
-
-func newCodexQuotaHTTPClient(transport http.RoundTripper) *http.Client {
-	if transport == nil {
-		transport = newCodexQuotaTransport()
-	}
-	return &http.Client{
-		Transport: transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
-
-func newCodexQuotaTransport() *http.Transport {
-	base, _ := http.DefaultTransport.(*http.Transport)
-	if base == nil {
-		base = &http.Transport{}
-	}
-	transport := base.Clone()
-	transport.Proxy = nil
-	transport.DisableKeepAlives = true
-	transport.MaxResponseHeaderBytes = codexQuotaHeaderLimit
-	return transport
-}
-
-func safeCodexQuotaValue(value string, limit int) bool {
-	if value == "" || len(value) > limit {
-		return false
-	}
-	for i := 0; i < len(value); i++ {
-		if value[i] <= ' ' || value[i] >= 0x7f {
-			return false
-		}
-	}
-	return true
-}
-
-func codexQuotaRetry(status int, values []string, received time.Time) (time.Time, bool) {
-	if status != http.StatusTooManyRequests && status < 500 {
-		return time.Time{}, false
-	}
-	return parseCodexRetryAfter(values, received)
-}
-
-// parseCodexRetryAfter accepts one Retry-After value for the quota path only.
-// Numeric delays are relative to the response-header receipt, not the body
-// read, and a valid delay over 24 hours stops polling for the rest of the REPL.
-func parseCodexRetryAfter(values []string, received time.Time) (time.Time, bool) {
-	if len(values) != 1 {
-		return time.Time{}, false
-	}
-	value := strings.TrimSpace(values[0])
-	if value == "" {
-		return time.Time{}, false
-	}
-	if isAllDigits(value) {
-		seconds, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return time.Time{}, true
-		}
-		const day = uint64(24 * 60 * 60)
-		if seconds > day {
-			return time.Time{}, true
-		}
-		return received.Add(time.Duration(seconds) * time.Second), false
-	}
-	when, err := http.ParseTime(value)
-	if err != nil {
-		return time.Time{}, false
-	}
-	wait := when.Sub(received)
-	if wait < 0 {
-		return time.Time{}, false
-	}
-	if wait > 24*time.Hour {
-		return time.Time{}, true
-	}
-	return when, false
-}
-
-func isAllDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for i := 0; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func codexQuotaStatusOutcome(status int) CodexUsageOutcome {
-	switch {
-	case status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500:
-		return CodexUsageTemporarilyUnavailable
-	default:
-		return CodexUsageUnsupported
-	}
+	result.ExpiresAt = expiresAt
+	result.EntryHash = credential.EntryHash
+	return result
 }
 
 func parseCodexPrimaryUsedPercent(data []byte) (float64, bool) {
@@ -308,53 +140,4 @@ func parseCodexPrimaryUsedPercent(data []byte) (float64, bool) {
 		return 0, false
 	}
 	return used, true
-}
-
-// duplicateJSONObjectKeys walks one JSON value and rejects a repeated key in
-// any object. encoding/json otherwise accepts the last duplicate silently,
-// which would make a generated usage document ambiguous.
-func duplicateJSONObjectKeys(decoder *json.Decoder) (bool, error) {
-	token, err := decoder.Token()
-	if err != nil {
-		return false, err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return false, nil
-	}
-	switch delim {
-	case '{':
-		seen := make(map[string]bool)
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return false, err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return false, fmt.Errorf("object key is not a string")
-			}
-			if seen[key] {
-				return true, nil
-			}
-			seen[key] = true
-			duplicate, err := duplicateJSONObjectKeys(decoder)
-			if err != nil || duplicate {
-				return duplicate, err
-			}
-		}
-		_, err := decoder.Token()
-		return false, err
-	case '[':
-		for decoder.More() {
-			duplicate, err := duplicateJSONObjectKeys(decoder)
-			if err != nil || duplicate {
-				return duplicate, err
-			}
-		}
-		_, err := decoder.Token()
-		return false, err
-	default:
-		return false, fmt.Errorf("unexpected JSON delimiter")
-	}
 }

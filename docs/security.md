@@ -101,10 +101,15 @@ Decoded strings and copies made within the standard library are not wiped by
 psi. A 2xx response does not prove that the issuer will reject a refresh token
 or that already-issued access tokens have expired.
 
-The `openai-codex` quota indicator reads the selected OAuth entry locally and
-makes periodic best-effort usage requests to the fixed ChatGPT endpoint. It
-never refreshes or writes credentials, and it never uses direct-use OpenAI
-credentials or an API-key fallback.
+Interactive quota indicators make periodic best-effort requests to fixed
+provider endpoints: ChatGPT for `openai-codex`, Z.AI for `zai`, and OpenCode
+for `opencode-go`. Codex reads its selected OAuth entry locally, never
+refreshes or writes credentials, and never uses direct-use OpenAI credentials
+or an API-key fallback. Z.AI and OpenCode use the API key installed in the
+active built-in inference client, without reading a separate OpenCode auth
+file. These requests bypass proxies, refuse redirects, and send no conversation
+content. Header strings and copies inside the HTTP stack cannot be wiped by
+psi; no response body or credential is logged.
 
 Windows identity checks use an open handle to capture the file ID before a
 replacement can affect a later comparison. The file must allow read access.

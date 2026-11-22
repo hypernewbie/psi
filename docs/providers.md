@@ -156,6 +156,26 @@ configured `Authorization` header or `authHeader`. Direct-use `openai`
 credentials do not provide this reading; manage ChatGPT plan usage at
 `https://chatgpt.com/settings/usage`.
 
+For an active built-in `zai` model, psi reads the token-window percentage from
+`https://api.z.ai/api/monitor/usage/quota/limit` and shows `GLM <remaining>%`.
+For `opencode-go`, it reads `https://opencode.ai/zen/go/v1/usage` and shows
+`Go R<remaining>% W<remaining>% M<remaining>%`: rolling (5-hour), weekly, and
+monthly windows, respectively. All percentages are server-reported remaining
+quota, rounded down (a positive value below 1% is shown as `<1%`). No local
+usage estimate or assumed dollar allowance substitutes for the server.
+
+These two indicators use the API key already installed in the active provider
+client, resolved with the normal psi credential precedence. They do not look
+in OpenCode's auth files, refresh, or write credentials. They are available
+only for built-in models on recognized official inference endpoints, with no
+configured authorization or API-key header override. Quota GETs use fixed
+HTTPS endpoints, do not use a proxy or follow redirects, have bounded response
+sizes and timeouts, and never expose response bodies in the UI. Only the active
+provider is polled. Each provider has its own backoff and `Retry-After` stop
+state. A missing key, failed or unsupported response, expired sample, provider
+switch, or insufficient footer space hides the indicator; it does not block
+inference. The displays are interactive-only and best effort.
+
 Credential values in `models.json` accept `$VAR`, `${VAR}`, `$$`, and `$!`
 escapes. `!command` values are rejected without being executed.
 

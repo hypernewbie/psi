@@ -59,12 +59,12 @@ func codexUsageAuthPath(t *testing.T, access, accountID string, expires time.Tim
 	return path
 }
 
-func codexUsageTestResult(transport http.RoundTripper, credential CodexUsageCredential, notBefore ...time.Time) CodexUsageResult {
+func codexUsageTestResult(transport http.RoundTripper, credential CodexUsageCredential, notBefore ...time.Time) QuotaUsageResult {
 	start := time.Time{}
 	if len(notBefore) > 0 {
 		start = notBefore[0]
 	}
-	return fetchCodexUsage(context.Background(), "", credential, start, newCodexQuotaHTTPClient(transport))
+	return fetchCodexUsage(context.Background(), "", credential, start, newQuotaHTTPClient(transport))
 }
 
 func TestReadCodexUsageCredentialUsesOnlyFreshOAuthEntry(t *testing.T) {
@@ -87,7 +87,7 @@ func TestReadCodexUsageCredentialUsesOnlyFreshOAuthEntry(t *testing.T) {
 		{"blank account", "synthetic-access", "", now.Add(time.Hour), false, ""},
 		{"unsafe access", "access with space", "stored-account", now.Add(time.Hour), false, ""},
 		{"unsafe account", "synthetic-access", "account with space", now.Add(time.Hour), false, ""},
-		{"oversized access", strings.Repeat("a", codexQuotaBodyLimit+1), "stored-account", now.Add(time.Hour), false, ""},
+		{"oversized access", strings.Repeat("a", quotaBodyLimit+1), "stored-account", now.Add(time.Hour), false, ""},
 		{"oversized account", "synthetic-access", strings.Repeat("a", codexQuotaAccountMax+1), now.Add(time.Hour), false, ""},
 	}
 	for _, tc := range cases {
@@ -273,7 +273,7 @@ func TestFetchCodexUsageRejectsExpiredOrUnsafeCredentialWithoutRequest(t *testin
 			called = true
 			return nil, errors.New("unexpected request")
 		}), credential)
-		if called || result.Outcome != CodexUsageNoCredential {
+		if called || result.Outcome != QuotaUsageNoCredential {
 			t.Fatalf("credential %+v: called=%t result=%+v", credential, called, result)
 		}
 	}
@@ -346,9 +346,9 @@ func TestParseCodexRetryAfter(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, permanent := parseCodexRetryAfter(tc.values, received)
+			got, permanent := parseQuotaRetryAfter(tc.values, received)
 			if !got.Equal(tc.want) || permanent != tc.permanent {
-				t.Fatalf("parseCodexRetryAfter(%q) = %v/%t, want %v/%t", tc.values, got, permanent, tc.want, tc.permanent)
+				t.Fatalf("parseQuotaRetryAfter(%q) = %v/%t, want %v/%t", tc.values, got, permanent, tc.want, tc.permanent)
 			}
 		})
 	}
@@ -356,13 +356,13 @@ func TestParseCodexRetryAfter(t *testing.T) {
 
 func TestCodexQuotaRetryStatusGate(t *testing.T) {
 	received := time.Unix(1_800_000_000, 0)
-	if retry, stop := codexQuotaRetry(http.StatusTooManyRequests, []string{"120"}, received); !retry.Equal(received.Add(2*time.Minute)) || stop {
+	if retry, stop := quotaRetry(http.StatusTooManyRequests, []string{"120"}, received); !retry.Equal(received.Add(2*time.Minute)) || stop {
 		t.Fatalf("429 retry = %v/%t", retry, stop)
 	}
-	if retry, stop := codexQuotaRetry(http.StatusInternalServerError, []string{"86401"}, received); !retry.IsZero() || !stop {
+	if retry, stop := quotaRetry(http.StatusInternalServerError, []string{"86401"}, received); !retry.IsZero() || !stop {
 		t.Fatalf("500 stop = %v/%t", retry, stop)
 	}
-	if retry, stop := codexQuotaRetry(http.StatusUnauthorized, []string{"86401"}, received); !retry.IsZero() || stop {
+	if retry, stop := quotaRetry(http.StatusUnauthorized, []string{"86401"}, received); !retry.IsZero() || stop {
 		t.Fatalf("401 retry = %v/%t", retry, stop)
 	}
 }
@@ -375,9 +375,9 @@ func TestFetchCodexUsageReturnsRetryMetadata(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusTooManyRequests, Header: header, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 	})
 	before := time.Now()
-	result := fetchCodexUsage(context.Background(), "", credential, time.Time{}, newCodexQuotaHTTPClient(transport))
+	result := fetchCodexUsage(context.Background(), "", credential, time.Time{}, newQuotaHTTPClient(transport))
 	after := time.Now()
-	if result.Outcome != CodexUsageTemporarilyUnavailable || result.Status != http.StatusTooManyRequests {
+	if result.Outcome != QuotaUsageTemporarilyUnavailable || result.Status != http.StatusTooManyRequests {
 		t.Fatalf("retry result = %+v", result)
 	}
 	if result.RetryAt.Before(before.Add(120*time.Second)) || result.RetryAt.After(after.Add(120*time.Second)) || result.StopPolling {
@@ -389,7 +389,7 @@ func TestFetchCodexUsageReturnsRetryMetadata(t *testing.T) {
 		header.Set("Retry-After", "86401")
 		return &http.Response{StatusCode: http.StatusInternalServerError, Header: header, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 	})
-	result = fetchCodexUsage(context.Background(), "", credential, time.Time{}, newCodexQuotaHTTPClient(transport))
+	result = fetchCodexUsage(context.Background(), "", credential, time.Time{}, newQuotaHTTPClient(transport))
 	if !result.StopPolling || !result.RetryAt.IsZero() {
 		t.Fatalf("permanent retry metadata = %v stop=%t", result.RetryAt, result.StopPolling)
 	}
@@ -398,16 +398,16 @@ func TestFetchCodexUsageReturnsRetryMetadata(t *testing.T) {
 func TestFetchCodexUsageStatusAndTransportOutcomes(t *testing.T) {
 	for _, tc := range []struct {
 		status  int
-		outcome CodexUsageOutcome
+		outcome QuotaUsageOutcome
 	}{
-		{http.StatusBadRequest, CodexUsageUnsupported},
-		{http.StatusUnauthorized, CodexUsageUnsupported},
-		{http.StatusForbidden, CodexUsageUnsupported},
-		{http.StatusNotFound, CodexUsageUnsupported},
-		{http.StatusRequestTimeout, CodexUsageTemporarilyUnavailable},
-		{http.StatusTooManyRequests, CodexUsageTemporarilyUnavailable},
-		{http.StatusInternalServerError, CodexUsageTemporarilyUnavailable},
-		{http.StatusFound, CodexUsageUnsupported},
+		{http.StatusBadRequest, QuotaUsageUnsupported},
+		{http.StatusUnauthorized, QuotaUsageUnsupported},
+		{http.StatusForbidden, QuotaUsageUnsupported},
+		{http.StatusNotFound, QuotaUsageUnsupported},
+		{http.StatusRequestTimeout, QuotaUsageTemporarilyUnavailable},
+		{http.StatusTooManyRequests, QuotaUsageTemporarilyUnavailable},
+		{http.StatusInternalServerError, QuotaUsageTemporarilyUnavailable},
+		{http.StatusFound, QuotaUsageUnsupported},
 	} {
 		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
 			body := &codexUsageTestBody{Reader: strings.NewReader("ignored")}
@@ -426,13 +426,13 @@ func TestFetchCodexUsageStatusAndTransportOutcomes(t *testing.T) {
 	result := codexUsageTestResult(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("synthetic transport failure")
 	}), CodexUsageCredential{Access: "synthetic-access", AccountID: "stored-account", Expires: time.Now().Add(time.Hour)})
-	if result.Outcome != CodexUsageTemporarilyUnavailable || result.Status != 0 || result.Sample {
+	if result.Outcome != QuotaUsageTemporarilyUnavailable || result.Status != 0 || result.Sample {
 		t.Fatalf("transport error result = %+v", result)
 	}
 }
 
 func TestFetchCodexUsageBodyLimitReadErrorAndCancellation(t *testing.T) {
-	overflowBody := &codexUsageTestBody{Reader: strings.NewReader(strings.Repeat("x", codexQuotaBodyLimit+1))}
+	overflowBody := &codexUsageTestBody{Reader: strings.NewReader(strings.Repeat("x", quotaBodyLimit+1))}
 	result := codexUsageTestResult(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: overflowBody, Header: make(http.Header)}, nil
 	}), CodexUsageCredential{Access: "synthetic-access", AccountID: "stored-account", Expires: time.Now().Add(time.Hour)})
@@ -445,17 +445,17 @@ func TestFetchCodexUsageBodyLimitReadErrorAndCancellation(t *testing.T) {
 	result = codexUsageTestResult(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: errorBody, Header: make(http.Header)}, nil
 	}), CodexUsageCredential{Access: "synthetic-access", AccountID: "stored-account", Expires: time.Now().Add(time.Hour)})
-	if result.Outcome != CodexUsageTemporarilyUnavailable || result.Status != http.StatusOK || !errorBody.closed {
+	if result.Outcome != QuotaUsageTemporarilyUnavailable || result.Status != http.StatusOK || !errorBody.closed {
 		t.Fatalf("read error result = %+v closed=%t", result, errorBody.closed)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result = fetchCodexUsage(ctx, "", CodexUsageCredential{Access: "synthetic-access", AccountID: "stored-account", Expires: time.Now().Add(time.Hour)}, time.Time{}, newCodexQuotaHTTPClient(codexUsageTransportFunc(func(req *http.Request) (*http.Response, error) {
+	result = fetchCodexUsage(ctx, "", CodexUsageCredential{Access: "synthetic-access", AccountID: "stored-account", Expires: time.Now().Add(time.Hour)}, time.Time{}, newQuotaHTTPClient(codexUsageTransportFunc(func(req *http.Request) (*http.Response, error) {
 		<-req.Context().Done()
 		return nil, req.Context().Err()
 	})))
-	if result.Sample || result.Outcome != CodexUsageTemporarilyUnavailable {
+	if result.Sample || result.Outcome != QuotaUsageTemporarilyUnavailable {
 		t.Fatalf("cancel result = %+v", result)
 	}
 }
@@ -465,7 +465,7 @@ type codexUsageErrorReader struct{ err error }
 func (r codexUsageErrorReader) Read([]byte) (int, error) { return 0, r.err }
 
 func TestFetchCodexUsageRedirectAndTransportPolicy(t *testing.T) {
-	client := newCodexQuotaHTTPClient(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
+	client := newQuotaHTTPClient(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("unused")
 	}))
 	request, err := http.NewRequest(http.MethodGet, codexQuotaEndpoint, nil)
@@ -478,8 +478,8 @@ func TestFetchCodexUsageRedirectAndTransportPolicy(t *testing.T) {
 	if client.Jar != nil {
 		t.Fatal("usage client kept a cookie jar")
 	}
-	transport := newCodexQuotaTransport()
-	if transport.Proxy != nil || !transport.DisableKeepAlives || transport.MaxResponseHeaderBytes != codexQuotaHeaderLimit {
+	transport := newQuotaTransport()
+	if transport.Proxy != nil || !transport.DisableKeepAlives || transport.MaxResponseHeaderBytes != quotaHeaderLimit {
 		t.Fatalf("transport = proxy set %t keepalive %t headers %d", transport.Proxy != nil, transport.DisableKeepAlives, transport.MaxResponseHeaderBytes)
 	}
 	if transport.TLSClientConfig != nil && transport.TLSClientConfig.InsecureSkipVerify {
@@ -507,8 +507,8 @@ func TestFetchCodexUsageDiscardsSampleAfterCredentialReplacement(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 	})
-	result := fetchCodexUsage(context.Background(), path, credential, time.Time{}, newCodexQuotaHTTPClient(transport))
-	if result.Sample || result.Outcome != CodexUsageNoCredential {
+	result := fetchCodexUsage(context.Background(), path, credential, time.Time{}, newQuotaHTTPClient(transport))
+	if result.Sample || result.Outcome != QuotaUsageNoCredential {
 		t.Fatalf("replacement result = %+v", result)
 	}
 	if !body.closed {
@@ -529,7 +529,7 @@ func TestFetchCodexUsageDoesNotWriteAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := &codexUsageTestBody{Reader: strings.NewReader(`{"rate_limit":{"primary_window":{"used_percent":42}}}`)}
-	result := fetchCodexUsage(context.Background(), path, credential, time.Time{}, newCodexQuotaHTTPClient(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
+	result := fetchCodexUsage(context.Background(), path, credential, time.Time{}, newQuotaHTTPClient(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 	})))
 	if !result.Sample {
@@ -553,7 +553,7 @@ func TestFetchCodexUsageReadsNoCredentialWithoutRequest(t *testing.T) {
 		called = true
 		return nil, errors.New("unexpected request")
 	}), CodexUsageCredential{})
-	if called || result.Outcome != CodexUsageNoCredential {
+	if called || result.Outcome != QuotaUsageNoCredential {
 		t.Fatalf("called=%t result=%+v", called, result)
 	}
 }

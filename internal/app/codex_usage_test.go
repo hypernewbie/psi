@@ -51,29 +51,29 @@ func (c *codexQuotaClock) now() time.Time {
 	return c.at
 }
 
-func newScheduledCodexQuotaOwner(check codexQuotaCheck, at time.Time) (*codexQuotaOwner, *codexQuotaClock) {
+func newScheduledCodexQuotaOwner(check quotaCheck, at time.Time) (*quotaOwner, *codexQuotaClock) {
 	clock := &codexQuotaClock{at: at}
-	q := newCodexQuotaOwner(check)
+	q := newQuotaOwner(check)
 	q.now = clock.now
 	q.jitter = func(time.Duration) time.Duration { return 0 }
 	return q, clock
 }
 
-func codexQuotaSampleResult(used float64, started, expires time.Time) provider.CodexUsageResult {
-	return provider.CodexUsageResult{
-		Outcome: provider.CodexUsageSupported, Status: 200, UsedPercent: used, Sample: true,
+func codexQuotaSampleResult(used float64, started, expires time.Time) provider.QuotaUsageResult {
+	return provider.QuotaUsageResult{
+		Outcome: provider.QuotaUsageSupported, Status: 200, UsedPercent: used, Sample: true,
 		StartedAt: started, ExpiresAt: expires,
 	}
 }
 
-func waitCodexQuotaResult(t *testing.T, q *codexQuotaOwner) codexQuotaResult {
+func waitCodexQuotaResult(t *testing.T, q *quotaOwner) quotaResult {
 	t.Helper()
 	select {
 	case result := <-q.done:
 		return result
 	case <-time.After(5 * time.Second):
 		t.Fatal("quota worker did not publish a result")
-		return codexQuotaResult{}
+		return quotaResult{}
 	}
 }
 
@@ -83,7 +83,7 @@ func TestCodexQuotaOwnerPublishesPrimaryReading(t *testing.T) {
 	checked := make(chan struct{}, 1)
 	var authPath string
 	var notBefore time.Time
-	q, clock := newScheduledCodexQuotaOwner(func(_ context.Context, path string, before time.Time) provider.CodexUsageResult {
+	q, clock := newScheduledCodexQuotaOwner(func(_ context.Context, path string, before time.Time) provider.QuotaUsageResult {
 		authPath, notBefore = path, before
 		checked <- struct{}{}
 		return codexQuotaSampleResult(42, start, start.Add(time.Hour))
@@ -107,8 +107,8 @@ func TestCodexQuotaOwnerPublishesPrimaryReading(t *testing.T) {
 	if text != want || token != terminal.TokenMuted {
 		t.Fatalf("presentation = %q/%q, want %q/%q", text, token, want, terminal.TokenMuted)
 	}
-	if !deadline.Equal(clock.at.Add(codexQuotaSampleTTL)) {
-		t.Fatalf("deadline = %v, want %v", deadline, clock.at.Add(codexQuotaSampleTTL))
+	if !deadline.Equal(clock.at.Add(quotaSampleTTL)) {
+		t.Fatalf("deadline = %v, want %v", deadline, clock.at.Add(quotaSampleTTL))
 	}
 	if !q.nextStart.Equal(clock.at.Add(60*time.Second)) || !q.nextPoll.Equal(q.nextStart) {
 		t.Fatalf("next start/poll = %v/%v", q.nextStart, q.nextPoll)
@@ -165,8 +165,8 @@ func TestCodexQuotaBaseDelayBoundaries(t *testing.T) {
 		{99, 5 * time.Second},
 		{100, 5 * time.Second},
 	} {
-		if got := codexQuotaBaseDelay(tc.used); got != tc.want {
-			t.Fatalf("codexQuotaBaseDelay(%v) = %v, want %v", tc.used, got, tc.want)
+		if got := quotaBaseDelay(tc.used); got != tc.want {
+			t.Fatalf("quotaBaseDelay(%v) = %v, want %v", tc.used, got, tc.want)
 		}
 	}
 }
@@ -186,7 +186,7 @@ func TestCodexQuotaOwnerSchedulesSuccessWithJitter(t *testing.T) {
 		q, clock := newScheduledCodexQuotaOwner(nil, start)
 		q.jitter = func(max time.Duration) time.Duration { return max }
 		q.observe(r)
-		q.handleResult(codexQuotaResult{generation: q.generation, usage: codexQuotaSampleResult(tc.used, clock.at, clock.at.Add(time.Hour))})
+		q.handleResult(quotaResult{generation: q.generation, usage: codexQuotaSampleResult(tc.used, clock.at, clock.at.Add(time.Hour))})
 		if got := q.nextStart.Sub(clock.at); got != tc.want {
 			t.Fatalf("used %v delay = %v, want %v", tc.used, got, tc.want)
 		}
@@ -206,18 +206,18 @@ func TestCodexQuotaOwnerBackoffGrowthCapAndReset(t *testing.T) {
 		if index > 0 {
 			clock.at = q.nextStart
 		}
-		q.handleResult(codexQuotaResult{generation: q.generation, usage: provider.CodexUsageResult{
-			Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 500, StartedAt: clock.at,
+		q.handleResult(quotaResult{generation: q.generation, usage: provider.QuotaUsageResult{
+			Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 500, StartedAt: clock.at,
 		}})
 		if got := q.nextStart.Sub(clock.at); got != want {
 			t.Fatalf("failure %d delay = %v, want %v", index+1, got, want)
 		}
 	}
-	if q.failures != codexQuotaBackoffMaxFailures {
-		t.Fatalf("failure count = %d, want capped %d", q.failures, codexQuotaBackoffMaxFailures)
+	if q.failures != quotaBackoffMaxFailures {
+		t.Fatalf("failure count = %d, want capped %d", q.failures, quotaBackoffMaxFailures)
 	}
 	clock.at = q.nextStart
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: codexQuotaSampleResult(42, clock.at, clock.at.Add(time.Hour))})
+	q.handleResult(quotaResult{generation: q.generation, usage: codexQuotaSampleResult(42, clock.at, clock.at.Add(time.Hour))})
 	if q.failures != 0 {
 		t.Fatalf("valid reading kept %d failures", q.failures)
 	}
@@ -234,8 +234,8 @@ func TestCodexQuotaOwnerRetryAfterPrecedenceAndStop(t *testing.T) {
 	q.jitter = func(max time.Duration) time.Duration { return max }
 	q.observe(r)
 	retryAt := clock.at.Add(2 * time.Hour)
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: provider.CodexUsageResult{
-		Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 429, StartedAt: clock.at, RetryAt: retryAt,
+	q.handleResult(quotaResult{generation: q.generation, usage: provider.QuotaUsageResult{
+		Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 429, StartedAt: clock.at, RetryAt: retryAt,
 	}})
 	if want := retryAt.Add(24 * time.Minute); !q.nextStart.Equal(want) {
 		t.Fatalf("server deadline next start = %v, want %v", q.nextStart, want)
@@ -245,8 +245,8 @@ func TestCodexQuotaOwnerRetryAfterPrecedenceAndStop(t *testing.T) {
 	q, clock = newScheduledCodexQuotaOwner(nil, start)
 	q.jitter = func(max time.Duration) time.Duration { return max }
 	q.observe(r)
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: provider.CodexUsageResult{
-		Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 500, StartedAt: clock.at, RetryAt: clock.at.Add(time.Minute),
+	q.handleResult(quotaResult{generation: q.generation, usage: provider.QuotaUsageResult{
+		Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 500, StartedAt: clock.at, RetryAt: clock.at.Add(time.Minute),
 	}})
 	if want := clock.at.Add(6 * time.Minute); !q.nextStart.Equal(want) {
 		t.Fatalf("backoff precedence next start = %v, want %v", q.nextStart, want)
@@ -255,8 +255,8 @@ func TestCodexQuotaOwnerRetryAfterPrecedenceAndStop(t *testing.T) {
 
 	q, clock = newScheduledCodexQuotaOwner(nil, start)
 	q.observe(r)
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: provider.CodexUsageResult{
-		Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 429, StartedAt: clock.at, StopPolling: true,
+	q.handleResult(quotaResult{generation: q.generation, usage: provider.QuotaUsageResult{
+		Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 429, StartedAt: clock.at, StopPolling: true,
 	}})
 	if !q.disabled || !q.nextPoll.IsZero() {
 		t.Fatalf("permanent stop disabled=%t nextPoll=%v", q.disabled, q.nextPoll)
@@ -279,7 +279,7 @@ func TestCodexQuotaOwnerLocalSkipAndDiscardSchedule(t *testing.T) {
 
 	q, clock := newScheduledCodexQuotaOwner(nil, start)
 	q.observe(r)
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: provider.CodexUsageResult{Outcome: provider.CodexUsageNoCredential}})
+	q.handleResult(quotaResult{generation: q.generation, usage: provider.QuotaUsageResult{Outcome: provider.QuotaUsageNoCredential}})
 	if q.failures != 0 || !q.nextStart.IsZero() {
 		t.Fatalf("local skip failures=%d nextStart=%v", q.failures, q.nextStart)
 	}
@@ -290,8 +290,8 @@ func TestCodexQuotaOwnerLocalSkipAndDiscardSchedule(t *testing.T) {
 
 	q, clock = newScheduledCodexQuotaOwner(nil, start)
 	q.observe(r)
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: provider.CodexUsageResult{
-		Outcome: provider.CodexUsageNoCredential, Status: 200, StartedAt: clock.at,
+	q.handleResult(quotaResult{generation: q.generation, usage: provider.QuotaUsageResult{
+		Outcome: provider.QuotaUsageNoCredential, Status: 200, StartedAt: clock.at,
 	}})
 	if q.failures != 0 {
 		t.Fatalf("discarded GET counted %d failures", q.failures)
@@ -310,9 +310,9 @@ func TestCodexQuotaOwnerNon200StopsActivation(t *testing.T) {
 	q, clock := newScheduledCodexQuotaOwner(nil, time.Unix(1_800_000_000, 0))
 	defer q.close()
 	q.observe(r)
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: codexQuotaSampleResult(42, clock.at, clock.at.Add(time.Hour))})
-	q.handleResult(codexQuotaResult{generation: q.generation, usage: provider.CodexUsageResult{
-		Outcome: provider.CodexUsageUnsupported, Status: 401, StartedAt: clock.at,
+	q.handleResult(quotaResult{generation: q.generation, usage: codexQuotaSampleResult(42, clock.at, clock.at.Add(time.Hour))})
+	q.handleResult(quotaResult{generation: q.generation, usage: provider.QuotaUsageResult{
+		Outcome: provider.QuotaUsageUnsupported, Status: 401, StartedAt: clock.at,
 	}})
 	if !q.stopped || !q.nextPoll.IsZero() {
 		t.Fatalf("non-200 stopped=%t nextPoll=%v", q.stopped, q.nextPoll)
@@ -340,7 +340,7 @@ func TestCodexQuotaOwnerSchedulesFromCompletion(t *testing.T) {
 	q.observe(r)
 	completed := clock.at
 	clock.at = completed.Add(10 * time.Minute) // The REPL handled the result late.
-	q.handleResult(codexQuotaResult{
+	q.handleResult(quotaResult{
 		generation:  q.generation,
 		completedAt: completed,
 		usage:       codexQuotaSampleResult(42, completed, completed.Add(time.Hour)),
@@ -358,8 +358,8 @@ func TestCodexQuotaOwnerStaleFailureExtendsNewActivation(t *testing.T) {
 	q, clock := newScheduledCodexQuotaOwner(nil, time.Unix(1_800_000_000, 0))
 	defer q.close()
 	started := make(chan struct{}, 2)
-	results := make(chan provider.CodexUsageResult, 2)
-	q.check = func(context.Context, string, time.Time) provider.CodexUsageResult {
+	results := make(chan provider.QuotaUsageResult, 2)
+	q.check = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		started <- struct{}{}
 		return <-results
 	}
@@ -368,7 +368,7 @@ func TestCodexQuotaOwnerStaleFailureExtendsNewActivation(t *testing.T) {
 	<-started
 	r.cfg.Model.Custom = true
 	q.observe(r)
-	results <- provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 429, StartedAt: clock.at}
+	results <- provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 429, StartedAt: clock.at}
 	if q.handleResult(waitCodexQuotaResult(t, q)) {
 		t.Fatal("stale 429 requested a redraw")
 	}
@@ -407,8 +407,8 @@ func TestCodexQuotaOwnerStaleSuccessKeepsFailureCount(t *testing.T) {
 	q, clock := newScheduledCodexQuotaOwner(nil, time.Unix(1_800_000_000, 0))
 	defer q.close()
 	started := make(chan struct{}, 1)
-	results := make(chan provider.CodexUsageResult, 1)
-	q.check = func(context.Context, string, time.Time) provider.CodexUsageResult {
+	results := make(chan provider.QuotaUsageResult, 1)
+	q.check = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		started <- struct{}{}
 		return <-results
 	}
@@ -441,10 +441,10 @@ func TestCodexQuotaOwnerCancellationAndOneInFlight(t *testing.T) {
 	defer q.close()
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
-	q.check = func(context.Context, string, time.Time) provider.CodexUsageResult {
+	q.check = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		started <- struct{}{}
 		<-release
-		return provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable, StartedAt: clock.at}
+		return provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable, StartedAt: clock.at}
 	}
 	q.observe(r)
 	q.pump(r)
@@ -468,8 +468,8 @@ func TestCodexQuotaOwnerCancellationAndOneInFlight(t *testing.T) {
 		t.Fatalf("failure next start = %v, want %v", q.nextStart, want)
 	}
 
-	canceled := codexQuotaResult{generation: q.generation, canceled: true, usage: provider.CodexUsageResult{
-		Outcome: provider.CodexUsageTemporarilyUnavailable, StartedAt: clock.at,
+	canceled := quotaResult{generation: q.generation, canceled: true, usage: provider.QuotaUsageResult{
+		Outcome: provider.QuotaUsageTemporarilyUnavailable, StartedAt: clock.at,
 	}}
 	q.failures = 3
 	q.nextStart = time.Time{}
@@ -484,7 +484,7 @@ func TestCodexQuotaOwnerCancellationAndOneInFlight(t *testing.T) {
 	}
 	q.nextStart = time.Time{}
 	q.failures = 3
-	if q.handleResult(codexQuotaResult{generation: q.generation, canceled: true, usage: provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable}}) {
+	if q.handleResult(quotaResult{generation: q.generation, canceled: true, usage: provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable}}) {
 		t.Fatal("cancellation without a GET requested a redraw")
 	}
 	if !q.nextStart.IsZero() || q.failures != 3 {
@@ -498,25 +498,25 @@ func TestCodexQuotaFailureAndCanceledClassification(t *testing.T) {
 	cancel()
 	for _, tc := range []struct {
 		name     string
-		usage    provider.CodexUsageResult
+		usage    provider.QuotaUsageResult
 		failure  bool
 		canceled bool
 	}{
-		{"transport", provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable, StartedAt: start}, true, true},
-		{"unusable 200", provider.CodexUsageResult{Outcome: provider.CodexUsageUnsupported, Status: 200, StartedAt: start}, true, true},
-		{"408", provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 408, StartedAt: start}, true, false},
-		{"429", provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 429, StartedAt: start}, true, false},
-		{"500", provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 500, StartedAt: start}, true, false},
-		{"401", provider.CodexUsageResult{Outcome: provider.CodexUsageUnsupported, Status: 401, StartedAt: start}, false, false},
-		{"discarded credential", provider.CodexUsageResult{Outcome: provider.CodexUsageNoCredential, Status: 200, StartedAt: start}, false, true},
-		{"local skip", provider.CodexUsageResult{Outcome: provider.CodexUsageNoCredential}, false, true},
+		{"transport", provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable, StartedAt: start}, true, true},
+		{"unusable 200", provider.QuotaUsageResult{Outcome: provider.QuotaUsageUnsupported, Status: 200, StartedAt: start}, true, true},
+		{"408", provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 408, StartedAt: start}, true, false},
+		{"429", provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 429, StartedAt: start}, true, false},
+		{"500", provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 500, StartedAt: start}, true, false},
+		{"401", provider.QuotaUsageResult{Outcome: provider.QuotaUsageUnsupported, Status: 401, StartedAt: start}, false, false},
+		{"discarded credential", provider.QuotaUsageResult{Outcome: provider.QuotaUsageNoCredential, Status: 200, StartedAt: start}, false, true},
+		{"local skip", provider.QuotaUsageResult{Outcome: provider.QuotaUsageNoCredential}, false, true},
 		{"sample", codexQuotaSampleResult(42, start, start.Add(time.Hour)), false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := codexQuotaGETFailure(tc.usage); got != tc.failure {
+			if got := quotaGETFailure(tc.usage); got != tc.failure {
 				t.Fatalf("failure = %t, want %t", got, tc.failure)
 			}
-			if got := codexQuotaCanceled(tc.usage, ctx); got != tc.canceled {
+			if got := quotaCanceled(tc.usage, ctx); got != tc.canceled {
 				t.Fatalf("canceled = %t, want %t", got, tc.canceled)
 			}
 		})
@@ -528,18 +528,18 @@ func TestCodexQuotaOwnerStalePermanentAndLocalSkip(t *testing.T) {
 	start := time.Unix(1_800_000_000, 0)
 	for _, tc := range []struct {
 		name      string
-		usage     provider.CodexUsageResult
+		usage     provider.QuotaUsageResult
 		wantStart time.Duration
 	}{
-		{"permanent status", provider.CodexUsageResult{Outcome: provider.CodexUsageUnsupported, Status: 401, StartedAt: start}, 60 * time.Second},
-		{"local skip", provider.CodexUsageResult{Outcome: provider.CodexUsageNoCredential}, 0},
+		{"permanent status", provider.QuotaUsageResult{Outcome: provider.QuotaUsageUnsupported, Status: 401, StartedAt: start}, 60 * time.Second},
+		{"local skip", provider.QuotaUsageResult{Outcome: provider.QuotaUsageNoCredential}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q, clock := newScheduledCodexQuotaOwner(nil, start)
 			defer q.close()
 			started := make(chan struct{}, 1)
-			results := make(chan provider.CodexUsageResult, 1)
-			q.check = func(context.Context, string, time.Time) provider.CodexUsageResult {
+			results := make(chan provider.QuotaUsageResult, 1)
+			q.check = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 				started <- struct{}{}
 				return <-results
 			}
@@ -577,8 +577,8 @@ func TestCodexQuotaOwnerNoCatchUp(t *testing.T) {
 	q, clock := newScheduledCodexQuotaOwner(nil, time.Unix(1_800_000_000, 0))
 	defer q.close()
 	started := make(chan struct{}, 2)
-	results := make(chan provider.CodexUsageResult, 2)
-	q.check = func(context.Context, string, time.Time) provider.CodexUsageResult {
+	results := make(chan provider.QuotaUsageResult, 2)
+	q.check = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		started <- struct{}{}
 		return <-results
 	}
@@ -612,10 +612,10 @@ func TestCodexQuotaActivationGates(t *testing.T) {
 	codex := r.prov.(*provider.CodexClient)
 	calls := 0
 	checked := make(chan struct{}, 8)
-	q, clock := newScheduledCodexQuotaOwner(func(context.Context, string, time.Time) provider.CodexUsageResult {
+	q, clock := newScheduledCodexQuotaOwner(func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		calls++
 		checked <- struct{}{}
-		return provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable, Status: 500}
+		return provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable, Status: 500}
 	}, time.Unix(1_800_000_000, 0))
 	defer q.close()
 
@@ -638,9 +638,9 @@ func TestCodexQuotaActivationGates(t *testing.T) {
 			t.Fatalf("%s: calls = %d, want %d", name, calls, wantCalls)
 		}
 	}
-	if _, eligible := codexQuotaIdentityFor(r); !eligible {
+	if _, eligible := quotaIdentityFor(r); !eligible {
 		t.Fatalf("baseline Codex client was not eligible: provider=%q api=%q custom=%t override=%t base=%q prov=%T",
-			r.ov.Provider, r.cfg.Model.API, r.cfg.Model.Custom, r.codexQuotaAuthOverride, codex.BaseURL, r.prov)
+			r.ov.Provider, r.cfg.Model.API, r.cfg.Model.Custom, r.quotaAuthOverride, codex.BaseURL, r.prov)
 	}
 	check("eligible", 1)
 
@@ -662,9 +662,9 @@ func TestCodexQuotaActivationGates(t *testing.T) {
 	codex.BaseURL = "https://api.openai.com/v1"
 	check("off origin", 1)
 	codex.BaseURL = codexQuotaBaseURL + "/"
-	r.codexQuotaAuthOverride = true
+	r.quotaAuthOverride = true
 	check("authorization override", 1)
-	r.codexQuotaAuthOverride = false
+	r.quotaAuthOverride = false
 	check("official trailing slash", 2)
 
 	codex.Auth.Path = ""
@@ -696,10 +696,10 @@ func TestConfigureCapturesCodexQuotaAuthorizationOverride(t *testing.T) {
 			if err := r.configure(config.StartupOverrides{Provider: "openai-codex", Model: "gpt-quota-test", Thinking: "off"}); err != nil {
 				t.Fatal(err)
 			}
-			if r.codexQuotaAuthOverride != tc.want {
-				t.Fatalf("override = %t, want %t", r.codexQuotaAuthOverride, tc.want)
+			if r.quotaAuthOverride != tc.want {
+				t.Fatalf("override = %t, want %t", r.quotaAuthOverride, tc.want)
 			}
-			_, eligible := codexQuotaIdentityFor(r)
+			_, eligible := quotaIdentityFor(r)
 			if tc.want == eligible {
 				t.Fatalf("eligible = %t with override = %t", eligible, tc.want)
 			}
@@ -710,7 +710,7 @@ func TestConfigureCapturesCodexQuotaAuthorizationOverride(t *testing.T) {
 func TestCodexQuotaIndicatorThroughREPL(t *testing.T) {
 	r := newCodexQuotaTestRuntime(t)
 	started := time.Now()
-	r.codexQuotaCheck = func(context.Context, string, time.Time) provider.CodexUsageResult {
+	r.quotaCheck = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		return codexQuotaSampleResult(42, started, started.Add(time.Hour))
 	}
 	_, out, _, _ := startLoginTestREPLWidth(t, r, 160)
@@ -761,15 +761,15 @@ func TestCodexQuotaFailedPollClearsBarWithoutChangingReply(t *testing.T) {
 		}
 	}
 	var calls atomic.Int32
-	r.codexQuotaCheck = func(context.Context, string, time.Time) provider.CodexUsageResult {
+	r.quotaCheck = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		switch calls.Add(1) {
 		case 1:
 			return codexQuotaSampleResult(42, fakeNow, fakeNow.Add(time.Hour))
 		case 2:
-			return provider.CodexUsageResult{Outcome: provider.CodexUsageUnsupported, Status: http.StatusUnauthorized, StartedAt: fakeNow}
+			return provider.QuotaUsageResult{Outcome: provider.QuotaUsageUnsupported, Status: http.StatusUnauthorized, StartedAt: fakeNow}
 		default:
 			t.Error("quota checker ran after a permanent failure")
-			return provider.CodexUsageResult{Outcome: provider.CodexUsageNoCredential}
+			return provider.QuotaUsageResult{Outcome: provider.QuotaUsageNoCredential}
 		}
 	}
 	_, out, inputWrite, result := startLoginTestREPLWidth(t, r, 160)
@@ -820,11 +820,11 @@ func TestCodexQuotaREPLExitDoesNotWaitForCheck(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan struct{})
-	r.codexQuotaCheck = func(context.Context, string, time.Time) provider.CodexUsageResult {
+	r.quotaCheck = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 		close(started)
 		<-release
 		close(done)
-		return provider.CodexUsageResult{Outcome: provider.CodexUsageTemporarilyUnavailable}
+		return provider.QuotaUsageResult{Outcome: provider.QuotaUsageTemporarilyUnavailable}
 	}
 	_, _, inputWrite, result := startLoginTestREPLWidth(t, r, 120)
 	<-started
@@ -843,7 +843,7 @@ func TestCodexQuotaREPLExitDoesNotWaitForCheck(t *testing.T) {
 	<-done
 }
 
-func (q *codexQuotaOwner) presentationText(r *runtime) string {
+func (q *quotaOwner) presentationText(r *runtime) string {
 	text, _, _ := q.presentation(r)
 	return text
 }

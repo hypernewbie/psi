@@ -16,11 +16,12 @@ OpenAI Codex from `/login`, or enter `/login openai` / `/login openai-codex`
 directly. Positional messages and RPC `prompt` commands never sign in; they
 keep their existing prompt-data contract.
 
-The built-in `openai-codex` provider periodically reads its used primary
-ChatGPT quota and shows the remaining percentage in unused footer space when
-available. It backs off after failed reads. The reading is best effort: it uses
-the existing local OAuth entry without signing in, refreshing credentials, or
-changing inference.
+For eligible built-in `openai-codex`, `zai`, and `opencode-go` models, the
+interactive footer periodically shows best-effort remaining quota when space
+is available. Codex shows its primary window, GLM its token window, and Go
+shows `R` (rolling), `W` (weekly), and `M` (monthly) percentages. Readings use
+the active credential, back off after failures, and do not change inference.
+See [providers](providers.md) for endpoints, eligibility, and limits.
 
 ## Invocation
 

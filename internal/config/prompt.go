@@ -182,7 +182,7 @@ func docsSection() string {
 	if len(names) == 0 {
 		return ""
 	}
-	return "<docs>\nPsi documentation, read only when the user asks about psi itself, its CLI, settings, skills, sessions, or compaction:\n" +
+	return "<docs>\nPsi documentation, read only when the user asks about psi itself, its CLI, settings, skills, sessions, compaction, or quota indicators:\n" +
 		"- Run `psi --docs` to list topics.\n" +
 		"- Run `psi --docs <topic>` to print one topic.\n" +
 		"- Topics: " + strings.Join(names, ", ") + "\n" +
