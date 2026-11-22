@@ -100,6 +100,49 @@ func TestSplitDiscordTextBoundsChunkCount(t *testing.T) {
 	}
 }
 
+func TestSplitDiscordTextMarksDroppedChunks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		text  string
+		limit int
+		lines int
+	}{
+		{"line limit", strings.Repeat("short line\n", 400), 2000, 17},
+		{"byte budget", strings.Repeat("x", 40000), 2000, 17},
+		{"small limit", strings.Repeat("x", 100), 2, 17},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chunks := splitDiscordText(tc.text, tc.limit, tc.lines)
+			if len(chunks) == 0 || len(chunks) > maxDiscordChunks {
+				t.Fatalf("chunk count = %d", len(chunks))
+			}
+			if !strings.HasSuffix(chunks[len(chunks)-1], "[truncated]") {
+				t.Fatalf("missing truncation notice in %q", chunks[len(chunks)-1])
+			}
+			for i, chunk := range chunks {
+				if len(chunk) > tc.limit && !(i == len(chunks)-1 && chunk == "[truncated]") {
+					t.Fatalf("chunk exceeds character limit: %q", chunk)
+				}
+				if strings.Count(chunk, "\n") >= tc.lines {
+					t.Fatalf("chunk exceeds line limit: %q", chunk)
+				}
+			}
+		})
+	}
+}
+
+func TestSplitDiscordTextMarksTruncationInsideFence(t *testing.T) {
+	text := "```go\n" + strings.Repeat("line\n", 400) + "```"
+	chunks := splitDiscordText(text, 2000, 5)
+	if len(chunks) != maxDiscordChunks {
+		t.Fatalf("chunk count = %d", len(chunks))
+	}
+	last := chunks[len(chunks)-1]
+	if !strings.Contains(last, "[truncated]") || strings.Count(last, "```") != 2 {
+		t.Fatalf("truncated fence = %q", last)
+	}
+}
+
 func TestBalanceFencesKeepsAClosingFenceAtTheChunkStart(t *testing.T) {
 	chunks := balanceFences([]string{"```go\ncode", "```\nafter"})
 	if len(chunks) != 2 {

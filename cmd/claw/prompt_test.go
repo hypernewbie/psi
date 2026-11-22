@@ -82,6 +82,9 @@ func TestBuildPromptSectionsOrderAndContent(t *testing.T) {
 	if strings.Contains(sections[3].Body, "final text is delivered automatically") == false {
 		t.Fatalf("messaging = %q", sections[3].Body)
 	}
+	if !strings.Contains(sections[3].Body, "capped at 16 Discord messages") {
+		t.Fatalf("missing reply limit guidance: %q", sections[3].Body)
+	}
 }
 
 func TestLoadWorkspaceFilesRejectsSymlinkEscape(t *testing.T) {

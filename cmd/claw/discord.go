@@ -476,14 +476,17 @@ func (d *discordTransport) sendMessage(ctx context.Context, channelID, replyTo, 
 	return last, nil
 }
 
-// splitDiscordText applies both the character limit and the soft line limit.
+// splitDiscordText applies the character and soft line limits, marking replies
+// cut short by the message count or text budget.
 func splitDiscordText(text string, limit, maxLines int) []string {
 	if strings.Contains(text, "```") || strings.Contains(text, "~~~") {
 		// Leave room for a closing and reopening fence around a chunk.
 		limit = max(1, limit-32)
 	}
-	if limit > 0 {
-		text = truncateWithNote(text, limit*maxDiscordChunks)
+	truncated := false
+	if limit > 0 && len(text) > limit*maxDiscordChunks {
+		text = truncateUTF8(text, limit*maxDiscordChunks)
+		truncated = true
 	}
 	var out []string
 	for _, chunk := range chunkText(text, limit) {
@@ -491,8 +494,37 @@ func splitDiscordText(text string, limit, maxLines int) []string {
 	}
 	if len(out) > maxDiscordChunks {
 		out = out[:maxDiscordChunks]
+		truncated = true
+	}
+	if truncated {
+		if len(out) == 0 {
+			out = append(out, "")
+		}
+		out[len(out)-1] = markDiscordTruncated(out[len(out)-1], limit)
 	}
 	return balanceFences(out)
+}
+
+// markDiscordTruncated leaves the notice on the same line so it does not
+// consume another line of the configured message limit. The notice itself
+// takes precedence when the configured character limit is too small for it.
+func markDiscordTruncated(text string, limit int) string {
+	note := "[truncated]"
+	if limit > 0 && limit <= len(note) {
+		return note
+	}
+	if limit <= 0 {
+		return text + " " + note
+	}
+	room := limit - len(note)
+	if room <= 0 {
+		return note
+	}
+	text = strings.TrimRight(truncateUTF8(text, room-1), " ")
+	if text == "" {
+		return note
+	}
+	return text + " " + note
 }
 
 // fence is the open code fence carried across chunks. close is the minimal

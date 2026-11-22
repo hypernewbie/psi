@@ -75,6 +75,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.BoolVar(&showVersion, "version", false, "print the version")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: claw --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--check]")
+		fmt.Fprintln(stderr, "Discord replies are capped at 16 messages; truncated replies include a notice.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
