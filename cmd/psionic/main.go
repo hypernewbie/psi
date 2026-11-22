@@ -81,6 +81,10 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store.")
 		fmt.Fprintln(stderr, "DISCORD_BOT_TOKEN is used only when channels.discord.token is absent.")
 		fmt.Fprintln(stderr, "Store uses --secret-store-db, PSIONIC_SECRET_STORE_DB, or a unique private sibling database.")
+		fmt.Fprintln(stderr, "Owner commands: /new, /reset, /stop, /status, /model, /compact.")
+		fmt.Fprintln(stderr, "Group direct messages are off unless channels.discord.dm.groupEnabled is true.")
+		fmt.Fprintln(stderr, "The exec tool is off unless tools.exec.enabled is true and it runs only in owner direct messages.")
+		fmt.Fprintln(stderr, "Attachments are downloaded to memory from Discord's CDN only, with per-kind size caps.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -271,6 +275,18 @@ func printCheck(w io.Writer, l *loaded) error {
 	if len(l.agent.Tools.Deny) > 0 {
 		fmt.Fprintf(w, "denied tools: %d configured\n", len(l.agent.Tools.Deny))
 	}
+	if discord != nil && discord.DM != nil && discord.DM.GroupEnabled != nil && *discord.DM.GroupEnabled {
+		fmt.Fprintln(w, "group direct messages: enabled (each sender still needs the direct-message policy)")
+	} else {
+		fmt.Fprintln(w, "group direct messages: disabled")
+	}
+	if l.settings.Tools != nil && l.settings.Tools.Exec != nil && l.settings.Tools.Exec.enabled() {
+		limits := resolveExecLimits(l.settings.Tools.Exec)
+		fmt.Fprintf(w, "exec tool: owner direct messages only, timeout %s, output cap %d bytes\n", limits.timeout, limits.maxOutput)
+	} else {
+		fmt.Fprintln(w, "exec tool: disabled")
+	}
+	fmt.Fprintln(w, "attachments: memory only, Discord CDN only")
 	return nil
 }
 
