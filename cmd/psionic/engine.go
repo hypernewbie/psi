@@ -743,8 +743,13 @@ func discoverWorkspaceSkills(workspace string) ([]skills.Skill, []skills.Diagnos
 	if err != nil || !info.IsDir() {
 		return nil, nil
 	}
+	// The workspace and the skill paths are compared in their resolved form.
+	// A temporary directory has a different name than its real location on
+	// macOS and on Windows, and comparing the two forms would reject every
+	// skill.
+	root := resolvePath(workspace)
 	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil || !inside(workspace, resolved) {
+	if err != nil || !inside(root, resolved) {
 		return nil, nil
 	}
 	found, diagnostics := skills.DiscoverPaths([]string{dir})
@@ -754,11 +759,11 @@ func discoverWorkspaceSkills(workspace string) ([]skills.Skill, []skills.Diagnos
 			continue
 		}
 		file, err := filepath.EvalSymlinks(skill.FilePath)
-		if err != nil || !inside(workspace, file) {
+		if err != nil || !inside(root, file) {
 			continue
 		}
 		base, err := filepath.EvalSymlinks(skill.BaseDir)
-		if err != nil || !inside(workspace, base) {
+		if err != nil || !inside(root, base) {
 			continue
 		}
 		available = append(available, skill)

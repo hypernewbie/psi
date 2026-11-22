@@ -213,6 +213,7 @@ func TestModelCommandSwitchesPerRouteModel(t *testing.T) {
 	rt.clients = factory.build
 	chat := &conversation{key: "dm:one", rt: rt}
 	chat.ctx, chat.cancel = context.WithCancel(context.Background())
+	defer chat.close()
 
 	if !chat.handleCommand(sourceTurn{message: dm}, "/model", "demo/small-model") {
 		t.Fatal("model switch was not handled")
@@ -239,6 +240,7 @@ func TestModelCommandRejectsUnknownModel(t *testing.T) {
 	rt.models = testModels(t)
 	chat := &conversation{key: "dm:one", rt: rt}
 	chat.ctx, chat.cancel = context.WithCancel(context.Background())
+	defer chat.close()
 	if !chat.handleCommand(sourceTurn{message: dm}, "/model", "demo/private-model-identifier") {
 		t.Fatal("model switch was not handled")
 	}
@@ -274,6 +276,7 @@ func TestCompactCommandReportsNoWorkOnAFreshConversation(t *testing.T) {
 	rt := testRuntime(t, workspace, state, tr, &fakeFactory{}, owner)
 	chat := &conversation{key: "dm:one", rt: rt}
 	chat.ctx, chat.cancel = context.WithCancel(context.Background())
+	defer chat.close()
 	if !chat.handleCommand(sourceTurn{message: dm, replyTo: dm.MessageID}, "/compact", "") {
 		t.Fatal("compact was not handled")
 	}

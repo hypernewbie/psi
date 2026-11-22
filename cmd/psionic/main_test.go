@@ -173,6 +173,7 @@ func TestPrepareUsesOnlyThePsionicSessionDirectory(t *testing.T) {
 	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, models, agentDir, filepath.Join(agentDir, "auth.json"), state, configDefaults(), nil, log.New(io.Discard, "", 0))
 	chat := &conversation{key: "dm:1", rt: rt}
 	chat.ctx, chat.cancel = context.WithCancel(context.Background())
+	defer chat.close()
 	defer chat.cancel()
 	if err := chat.prepare(inboundMessage{IsDM: true, ChannelID: "123456789012345678", AuthorID: "223456789012345678"}); err != nil {
 		t.Fatalf("prepare: %v", err)

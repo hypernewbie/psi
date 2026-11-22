@@ -125,13 +125,14 @@ func runExec(ctx context.Context, workspace, command string, limits execLimits) 
 	runCtx, cancel := context.WithTimeout(ctx, limits.timeout)
 	defer cancel()
 
-	cmd := startExecCommand(runCtx, workspace, command, limits)
+	cmd := prepareExecCommand(runCtx, workspace, command, limits)
 	output := &boundedOutput{cap: limits.maxOutput}
 	cmd.Stdout = output
 	cmd.Stderr = output
 	if err := cmd.Start(); err != nil {
 		return execResult{status: "command could not start", err: err, command: command}
 	}
+	killTree := newExecKiller(cmd)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	var waitErr error
@@ -139,10 +140,10 @@ func runExec(ctx context.Context, workspace, command string, limits execLimits) 
 	select {
 	case waitErr = <-done:
 	case <-runCtx.Done():
-		// The run was cancelled or ran out of time. The process group is
-		// killed so no child outlives the turn.
+		// The run was cancelled or ran out of time. The whole tree is killed
+		// so no child outlives the turn.
 		stopped = true
-		stopExecCommand(cmd)
+		killTree()
 		<-done
 	}
 	if stopped {

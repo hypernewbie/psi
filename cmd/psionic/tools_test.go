@@ -209,3 +209,21 @@ func TestSkillToolRejectsALinkedReplacement(t *testing.T) {
 		t.Fatal("linked skill replacement was read")
 	}
 }
+
+// TestSkillDiscoverySurvivesALinkedWorkspace proves the skill discovery works
+// when the workspace is reached through a link. macOS hands out temporary
+// directories whose real path differs from the name it returns, and Windows
+// resolves a short name to its long form.
+func TestSkillDiscoverySurvivesALinkedWorkspace(t *testing.T) {
+	real := writeWorkspace(t, map[string]string{
+		"skills/review/SKILL.md": "---\nname: review\ndescription: Review a change\n---\nCheck the diff.",
+	})
+	link := filepath.Join(t.TempDir(), "linked-workspace")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("links are not available here: %v", err)
+	}
+	found, diagnostics := discoverWorkspaceSkills(link)
+	if len(diagnostics) != 0 || len(found) != 1 {
+		t.Fatalf("skills = %+v, diagnostics = %+v", found, diagnostics)
+	}
+}

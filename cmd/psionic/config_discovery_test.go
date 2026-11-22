@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,20 +68,22 @@ func TestConfigPathDiscovery(t *testing.T) {
 func TestDiscordConfigReferenceSuppliesOnlyDiscordSettings(t *testing.T) {
 	dir := t.TempDir()
 	referenced := filepath.Join(dir, "referenced.json5")
-	body := `{
-  agents: { defaults: { workspace: "/referenced/workspace", model: { primary: "other/model" } } },
+	referencedWorkspace := filepath.Join(dir, "referenced-workspace")
+	serviceWorkspace := filepath.Join(dir, "service-workspace")
+	body := fmt.Sprintf(`{
+  agents: { defaults: { workspace: %q, model: { primary: "other/model" } } },
   tools: { profile: "coding" },
   models: { providers: { other: { apiKey: "not-used" } } },
   channels: { discord: { token: "referenced-token", allowFrom: ["123456789012345678"], groupPolicy: "allowlist" } },
-}`
+}`, referencedWorkspace)
 	if err := os.WriteFile(referenced, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	main := filepath.Join(dir, "config.json5")
-	mainBody := `{
+	mainBody := fmt.Sprintf(`{
   discordConfig: "referenced.json5",
-  agents: { defaults: { workspace: "/service/workspace" } },
-}`
+  agents: { defaults: { workspace: %q } },
+}`, serviceWorkspace)
 	if err := os.WriteFile(main, []byte(mainBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +105,7 @@ func TestDiscordConfigReferenceSuppliesOnlyDiscordSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.Workspace != "/service/workspace" {
+	if agent.Workspace != resolvePath(serviceWorkspace) {
 		t.Fatalf("workspace = %q", agent.Workspace)
 	}
 	if agent.Model != "" {
@@ -177,12 +180,12 @@ func TestSettingsDirectoriesResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := filepath.Join(dir, "config.json5")
-	body := `{
-  psi: { agentDir: "` + agent + `", sharedAgentDir: "` + shared + `" },
-  stateDir: "` + state + `",
-  agents: { defaults: { workspace: "` + dir + `" } },
+	body := fmt.Sprintf(`{
+  psi: { agentDir: %q, sharedAgentDir: %q },
+  stateDir: %q,
+  agents: { defaults: { workspace: %q } },
   channels: { discord: { token: "test-token" } },
-}`
+}`, agent, shared, state, dir)
 	if err := os.WriteFile(config, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

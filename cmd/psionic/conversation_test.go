@@ -138,6 +138,7 @@ func TestConversationRestartAndReset(t *testing.T) {
 	rt2 := testRuntime(t, workspace, state, tr, second, owner)
 	chat2 := &conversation{key: "dm:one", rt: rt2}
 	chat2.ctx, chat2.cancel = context.WithCancel(context.Background())
+	defer chat2.close()
 	chat2.handle(sourceTurn{message: dm, text: "again", replyTo: dm.MessageID})
 	requests := second.last().Requests()
 	if len(requests) == 0 {
@@ -356,6 +357,7 @@ func TestWorkspaceChangeStartsAFreshTranscript(t *testing.T) {
 	dm := inboundMessage{MessageID: "223456789012345678", ChannelID: "323456789012345678", AuthorID: "123456789012345678", IsDM: true}
 	first := &conversation{key: "dm:one", rt: testRuntime(t, firstWorkspace, state, &recordingTransport{}, &fakeFactory{}, "123456789012345678")}
 	first.ctx, first.cancel = context.WithCancel(context.Background())
+	defer first.close()
 	if err := first.prepare(dm); err != nil {
 		t.Fatal(err)
 	}
@@ -383,6 +385,7 @@ func TestToolScopeChangeStartsAFreshTranscript(t *testing.T) {
 	first := &conversation{key: "dm:one", rt: testRuntime(t, workspace, state, &recordingTransport{}, &fakeFactory{}, "123456789012345678")}
 	first.rt.agent.Tools = toolPolicy{Deny: []string{"message"}}
 	first.ctx, first.cancel = context.WithCancel(context.Background())
+	defer first.close()
 	if err := first.prepare(dm); err != nil {
 		t.Fatal(err)
 	}

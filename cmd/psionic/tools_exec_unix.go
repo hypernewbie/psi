@@ -10,10 +10,10 @@ import (
 	"syscall"
 )
 
-// startExecCommand runs the command through the system shell in its own
+// prepareExecCommand runs the command through the system shell in its own
 // process group. Only PATH and the configured passEnv entries cross into the
 // child environment.
-func startExecCommand(ctx context.Context, workspace, command string, limits execLimits) *exec.Cmd {
+func prepareExecCommand(ctx context.Context, workspace, command string, limits execLimits) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
 	cmd.Dir = workspace
 	cmd.Env = execChildEnv(os.Environ(), limits)
@@ -21,8 +21,14 @@ func startExecCommand(ctx context.Context, workspace, command string, limits exe
 	return cmd
 }
 
-// stopExecCommand kills the whole process group.
-func stopExecCommand(cmd *exec.Cmd) {
+// newExecKiller returns the function that kills the command and every
+// process it started.
+func newExecKiller(cmd *exec.Cmd) func() {
+	return func() { killProcessGroup(cmd) }
+}
+
+// killProcessGroup kills the command and every process it started.
+func killProcessGroup(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
 	}

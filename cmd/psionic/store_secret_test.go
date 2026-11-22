@@ -41,9 +41,7 @@ func makeSecretStoreDB(t *testing.T) string {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	applyPrivateStoreACL(t, path)
 	return path
 }
 
@@ -118,14 +116,16 @@ func TestStoreDatabaseDiscoveryUsesOnlySiblingStateDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := resolveSecretStoreDatabase("", settingsPath, func(string) (string, bool) { return "", false })
-	if err != nil || got != want {
+	// The discovered path is resolved, so a temporary directory is compared
+	// in its real form.
+	if err != nil || got != resolvePath(want) {
 		t.Fatalf("database discovery = %q, %v", got, err)
 	}
 	outside := makeSecretStoreDB(t)
 	got, err = resolveSecretStoreDatabase("", settingsPath, func(name string) (string, bool) {
 		return outside, name == "PSIONIC_SECRET_STORE_DB"
 	})
-	if err != nil || got != outside {
+	if err != nil || got != resolvePath(outside) {
 		t.Fatalf("explicit environment path was not honored: %q, %v", got, err)
 	}
 }
