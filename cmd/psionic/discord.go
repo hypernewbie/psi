@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +38,17 @@ type discordTransport struct {
 	replyToMode    string
 	suppressEmbeds bool
 	logger         *log.Logger
+	client         *http.Client
+}
+
+// httpClient lazily builds the bounded HTTP client used for attachments.
+func (d *discordTransport) httpClient() *http.Client {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.client == nil {
+		d.client = &http.Client{Timeout: attachmentFetchWait}
+	}
+	return d.client
 }
 
 func newDiscordTransport(token string, settings *fileSettings, logger *log.Logger) (*discordTransport, error) {
@@ -307,10 +321,15 @@ func (r *runtime) handleDiscord(d *discordTransport, event *discordgo.MessageCre
 		return
 	}
 	if text == "" {
-		if err := r.deliver(sourceTurn{message: msg}, "Attachments are not supported."); err != nil {
-			r.logger.Printf("attachment notice failed (%T)", err)
+		// Attachment-only message: the turn itself decides whether anything is
+		// usable (image for a vision model, bounded text); otherwise the
+		// conversation worker sends the unsupported notice.
+		if len(event.Attachments) == 0 {
+			return
 		}
-		return
+		if isCommand {
+			return
+		}
 	}
 	if isCommand && command == "/stop" {
 		chat, err := r.conversation(r.routeKey(msg))
@@ -331,6 +350,14 @@ func (r *runtime) handleDiscord(d *discordTransport, event *discordgo.MessageCre
 		return
 	}
 	turn := sourceTurn{message: msg, text: text, replyTo: event.ID}
+	for i, attachment := range event.Attachments {
+		if i >= maxAttachments {
+			break
+		}
+		turn.attachments = append(turn.attachments, inboundAttachment{
+			URL: attachment.URL, ContentType: attachment.ContentType, Size: int64(attachment.Size), Name: attachment.Filename,
+		})
+	}
 	if !chat.enqueue(turn) {
 		if err := r.deliver(turn, "Busy; try again shortly."); err != nil {
 			r.logger.Printf("busy reply failed (%T)", err)
@@ -377,6 +404,54 @@ func normalizeDiscord(s *discordgo.Session, m *discordgo.MessageCreate, botID st
 		msg.RepliesToBot = true
 	}
 	return msg
+}
+
+// fetchAttachment downloads one attachment into memory with a bounded size.
+// It never writes to disk and accepts only Discord's own CDN hosts, so a
+// message can never make the bot fetch an arbitrary address.
+func (d *discordTransport) fetchAttachment(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := checkAttachmentHost(url); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := d.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("attachment download status %d", resp.StatusCode)
+	}
+	if resp.ContentLength > 0 && resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("attachment is too large")
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+}
+
+// discordAttachmentHosts are the hosts Discord serves attachments from.
+var discordAttachmentHosts = map[string]bool{
+	"cdn.discordapp.com":   true,
+	"media.discordapp.net": true,
+}
+
+func checkAttachmentHost(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("attachment URL is invalid")
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("attachment URL must use https")
+	}
+	if !discordAttachmentHosts[parsed.Hostname()] {
+		return fmt.Errorf("attachment host is not allowed")
+	}
+	return nil
 }
 
 func (d *discordTransport) message(ctx context.Context, channelID, messageID string) (historyMessage, error) {

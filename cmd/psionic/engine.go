@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,18 +37,42 @@ type historyMessage struct {
 	Text     string
 }
 
+// inboundAttachment is one bounded attachment reference from an admitted
+// message. Bytes are fetched only when the turn actually uses them.
+type inboundAttachment struct {
+	URL         string
+	ContentType string
+	Size        int64
+	Name        string
+}
+
+// Attachment bounds: at most three attachments per turn, images up to 4 MiB,
+// text up to 256 KiB, and at most 8 MiB fetched for one turn.
+const (
+	maxAttachments      = 3
+	maxImageAttachment  = 4 << 20
+	maxTextAttachment   = 256 << 10
+	maxAttachmentTotal  = 8 << 20
+	attachmentFetchWait = 20 * time.Second
+)
+
+// sourceTurn is one admitted inbound turn.
 type sourceTurn struct {
-	message   inboundMessage
-	text      string
-	replyTo   string
-	noAck     bool
-	history   []historyMessage
-	reference *historyMessage
+	message     inboundMessage
+	text        string
+	replyTo     string
+	noAck       bool
+	history     []historyMessage
+	reference   *historyMessage
+	attachments []inboundAttachment
 }
 
 type transport interface {
 	conversationIO
 	sendMessage(ctx context.Context, channelID, replyTo, text string) (string, error)
+	// fetchAttachment downloads one attachment into memory, bounded by
+	// maxBytes. It must not write to disk.
+	fetchAttachment(ctx context.Context, url string, maxBytes int64) ([]byte, error)
 }
 
 type referenceReader interface {
@@ -530,6 +555,18 @@ func (c *conversation) handle(turn sourceTurn) {
 		return
 	}
 	msg := turn.message
+	var blocks []session.UserContentBlock
+	var imageBytes uint64
+	if len(turn.attachments) > 0 {
+		var usable bool
+		blocks, imageBytes, usable = c.attachmentBlocks(turn)
+		if !usable && turn.text == "" {
+			// Attachment-only turn with nothing usable for this model: report
+			// the short notice instead of submitting an empty turn.
+			c.rt.sendNotice(turn, "Attachments are not supported.")
+			return
+		}
+	}
 	turn.history = c.rt.turnHistory(c.ctx, turn)
 	if msg.ReferenceID != "" && msg.ReferenceID != msg.MessageID {
 		if reader, ok := c.rt.transport.(referenceReader); ok {
@@ -565,7 +602,18 @@ func (c *conversation) handle(turn sourceTurn) {
 	c.mu.Lock()
 	c.runStop = cancel
 	c.mu.Unlock()
-	err = c.loop.SubmitContent(runCtx, agent.UserInput{Content: turnContent(turn), Display: turn.text}, cfg)
+	var content any = turnContent(turn)
+	if len(blocks) > 0 {
+		text := turnContent(turn)
+		if strings.TrimSpace(text) == "" {
+			// An attachment-only turn still needs one text block; some
+			// providers reject a turn whose only text part is empty.
+			text = "(attachment only)"
+		}
+		textBlock := session.UserContentBlock{Type: "text", Text: &session.TextContent{Type: "text", Text: text}}
+		content = append([]session.UserContentBlock{textBlock}, blocks...)
+	}
+	err = c.loop.SubmitContent(runCtx, agent.UserInput{Content: content, Display: turn.text, ImageBytes: imageBytes}, cfg)
 	c.mu.Lock()
 	c.runStop = nil
 	c.last = time.Now()
@@ -756,6 +804,107 @@ func assistantTextAfter(store *session.Store, boundary int) string {
 		return strings.TrimSpace(b.String())
 	}
 	return ""
+}
+
+// attachmentBlocks fetches and converts the turn's attachments. Images are
+// included only when the current model accepts image input; text attachments
+// are inlined bounded as untrusted data. It reports false when nothing usable
+// exists, leaving the ordinary text path in place.
+func (c *conversation) attachmentBlocks(turn sourceTurn) ([]session.UserContentBlock, uint64, bool) {
+	if len(turn.attachments) == 0 {
+		return nil, 0, false
+	}
+	c.mu.Lock()
+	model := c.clients.model
+	c.mu.Unlock()
+	fetchCtx, cancel := context.WithTimeout(c.ctx, attachmentFetchWait)
+	defer cancel()
+	var blocks []session.UserContentBlock
+	var imageBytes uint64
+	fetched := int64(0)
+	usable := false
+	for i, attachment := range turn.attachments {
+		if i >= maxAttachments {
+			break
+		}
+		mediaType, kind := attachmentKind(attachment)
+		if kind == attachmentUnusable {
+			continue
+		}
+		if kind == attachmentImage && !model.InputImage {
+			continue
+		}
+		if attachment.Size > 0 && attachment.Size > attachmentCap(kind) {
+			continue
+		}
+		budget := min(attachmentCap(kind), maxAttachmentTotal-fetched)
+		if budget <= 0 {
+			break
+		}
+		data, err := c.rt.transport.fetchAttachment(fetchCtx, attachment.URL, budget)
+		if err != nil || len(data) == 0 || int64(len(data)) > budget {
+			continue
+		}
+		fetched += int64(len(data))
+		usable = true
+		switch kind {
+		case attachmentImage:
+			imageBytes += uint64(len(data))
+			blocks = append(blocks, session.UserContentBlock{Type: "image", Image: &session.ImageContent{
+				Type: "image", MimeType: mediaType, Data: base64.StdEncoding.EncodeToString(data),
+			}})
+		case attachmentText:
+			body := truncateUTF8(string(data), maxTextAttachment)
+			name := sanitizeAttachmentName(attachment.Name)
+			blocks = append(blocks, session.UserContentBlock{Type: "text", Text: &session.TextContent{Type: "text", Text: "<attachment name=\"" + name + "\">\n" + body + "\n</attachment>"}})
+		}
+	}
+	return blocks, imageBytes, usable
+}
+
+type attachmentKindT int
+
+const (
+	attachmentUnusable attachmentKindT = iota
+	attachmentImage
+	attachmentText
+)
+
+func attachmentKind(attachment inboundAttachment) (string, attachmentKindT) {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(attachment.ContentType, ";", 2)[0]))
+	switch {
+	case strings.HasPrefix(mediaType, "image/"):
+		return mediaType, attachmentImage
+	case mediaType == "text/plain" || mediaType == "text/markdown" || mediaType == "application/json" || mediaType == "text/csv":
+		return mediaType, attachmentText
+	default:
+		return mediaType, attachmentUnusable
+	}
+}
+
+func attachmentCap(kind attachmentKindT) int64 {
+	if kind == attachmentImage {
+		return maxImageAttachment
+	}
+	return maxTextAttachment
+}
+
+// sanitizeAttachmentName keeps a display label safe: bounded, no control
+// characters, and never treated as a path or instruction.
+func sanitizeAttachmentName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	if len(name) > 128 {
+		name = truncateUTF8(name, 128)
+	}
+	if strings.TrimSpace(name) == "" {
+		return "attachment"
+	}
+	return name
 }
 
 func turnContent(turn sourceTurn) string {

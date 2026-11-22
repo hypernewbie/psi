@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -30,6 +31,10 @@ func (r *recordingTransport) sendMessage(_ context.Context, _, _, text string) (
 	return "sent", nil
 }
 
+func (r *recordingTransport) fetchAttachment(_ context.Context, _ string, _ int64) ([]byte, error) {
+	return nil, fmt.Errorf("attachment fetch is unavailable")
+}
+
 func (r *recordingTransport) messages() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -40,6 +45,8 @@ type fakeFactory struct {
 	mu      sync.Mutex
 	fakes   []*provider.Fake
 	replies []string
+	// model overrides the metadata reported for the built provider set.
+	model provider.ModelMeta
 }
 
 func (f *fakeFactory) build(_ *config.ModelsFile, _, _, _ string, _ string, _ int) (*providerSet, error) {
@@ -54,7 +61,11 @@ func (f *fakeFactory) build(_ *config.ModelsFile, _, _, _ string, _ string, _ in
 		Content: []provider.Block{{Type: "text", Text: reply}}, StopReason: "stop",
 	}}}
 	f.fakes = append(f.fakes, fake)
-	return &providerSet{main: fake, model: testModelMeta()}, nil
+	model := f.model
+	if model.ID == "" {
+		model = testModelMeta()
+	}
+	return &providerSet{main: fake, model: model}, nil
 }
 
 func (f *fakeFactory) last() *provider.Fake {
