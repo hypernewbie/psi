@@ -179,3 +179,39 @@ func TestGroupDMsAreDenied(t *testing.T) {
 		t.Fatal("group DM was admitted")
 	}
 }
+
+func TestOwnerBootstrapUsesFirstExplicitAllowFromEntry(t *testing.T) {
+	settings := mustSettings(t, `{
+  channels: { discord: { dmPolicy: "allowlist", allowFrom: ["223456789012345678", "323456789012345678"] } },
+}`)
+	policy := newAccessPolicy(settings)
+	if !policy.ownerBootstrapped {
+		t.Fatal("owner was not bootstrapped from the allowlist")
+	}
+	if !policy.isOwner("223456789012345678") {
+		t.Fatal("first allowlist entry is not the owner")
+	}
+	if policy.isOwner("323456789012345678") {
+		t.Fatal("second allowlist entry wrongly became an owner")
+	}
+}
+
+func TestOwnerBootstrapSkipsWildcardsAndHonorsExplicitOwners(t *testing.T) {
+	wildcard := mustSettings(t, `{ channels: { discord: { dmPolicy: "open", allowFrom: ["*"] } } }`)
+	policy := newAccessPolicy(wildcard)
+	if policy.ownerBootstrapped || len(policy.ownerAllowFrom) != 0 {
+		t.Fatalf("wildcard allowlist bootstrapped an owner: %+v", policy.ownerAllowFrom)
+	}
+
+	explicit := mustSettings(t, `{
+  channels: { discord: { dmPolicy: "allowlist", allowFrom: ["223456789012345678"] } },
+  commands: { ownerAllowFrom: ["323456789012345678"] },
+}`)
+	policy = newAccessPolicy(explicit)
+	if policy.ownerBootstrapped {
+		t.Fatal("explicit owners were replaced by the bootstrap")
+	}
+	if !policy.isOwner("323456789012345678") || policy.isOwner("223456789012345678") {
+		t.Fatal("explicit owner set is wrong")
+	}
+}

@@ -252,15 +252,18 @@ func printCheck(w io.Writer, l *loaded) error {
 	fmt.Fprintf(w, "discord: dm=%s group=%s guilds=%d\n", policy.dmPolicy, policy.groupPolicy, len(discord.Guilds))
 	fmt.Fprintf(w, "replies: %s\n", l.visibleReplies())
 	if len(policy.ownerAllowFrom) == 0 {
-		fmt.Fprintln(w, "private memory: unavailable (commands.ownerAllowFrom is empty)")
+		fmt.Fprintln(w, "private memory: unavailable (no owner is configured)")
 	} else {
 		fmt.Fprintln(w, "private memory: owner direct messages only")
 	}
 	if policy.dmPolicy == dmPolicyPairing {
 		fmt.Fprintln(w, "direct messages: static allowlist only (pairing workflow is not supported)")
 	}
-	if len(policy.ownerAllowFrom) == 0 {
-		fmt.Fprintln(w, "owner commands: unavailable (commands.ownerAllowFrom is empty)")
+	switch {
+	case len(policy.ownerAllowFrom) == 0:
+		fmt.Fprintln(w, "owner commands: unavailable (no owner is configured)")
+	case policy.ownerBootstrapped:
+		fmt.Fprintln(w, "owner commands: first direct-message allowlist entry (no owner is configured)")
 	}
 	if l.agent.Tools.Profile != "" || len(l.agent.Tools.Allow) > 0 || len(l.agent.Tools.AlsoAllow) > 0 {
 		fmt.Fprintln(w, "tool filters: profile, allow, alsoAllow, and deny applied")

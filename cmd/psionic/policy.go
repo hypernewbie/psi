@@ -37,6 +37,10 @@ type accessPolicy struct {
 	groupPolicy    string
 	guilds         map[string]*guildSettings
 	ownerAllowFrom map[string]bool
+	// ownerBootstrapped records that the owner set came from the direct-message
+	// allowlist because no owner is configured, mirroring the incumbent's
+	// one-owner pairing bootstrap.
+	ownerBootstrapped bool
 }
 
 const (
@@ -60,6 +64,19 @@ func newAccessPolicy(s *fileSettings) *accessPolicy {
 	p.allowFrom = idSet(discord.AllowFrom)
 	if s.Commands != nil {
 		p.ownerAllowFrom = idSet(s.Commands.OwnerAllowFrom)
+	}
+	// Parity with the incumbent's pairing bootstrap: when no owner is
+	// configured, exactly one owner exists — the first explicit direct-message
+	// allowlist entry. A wildcard or empty allowlist bootstraps nobody, and an
+	// explicit owner list always wins.
+	if len(p.ownerAllowFrom) == 0 {
+		for _, entry := range discord.AllowFrom {
+			if id := normalizeUserID(entry); id != "" && id != "*" {
+				p.ownerAllowFrom = map[string]bool{id: true}
+				p.ownerBootstrapped = true
+				break
+			}
+		}
 	}
 	return p
 }
