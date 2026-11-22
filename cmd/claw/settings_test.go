@@ -155,6 +155,17 @@ func TestEnvironmentTokenShorthandUsesProviderAllowlist(t *testing.T) {
 	}
 }
 
+func TestMissingEnvironmentTokenDoesNotExposeReference(t *testing.T) {
+	body := `{ channels: { discord: { token: { source: "env", provider: "default", id: "SYNTHETIC_PRIVATE_NAME" } } } }`
+	_, err := decodeSettings([]byte(body), func(string) (string, bool) { return "", false })
+	if err == nil {
+		t.Fatal("missing token was accepted")
+	}
+	if strings.Contains(err.Error(), "SYNTHETIC_PRIVATE_NAME") {
+		t.Fatalf("error exposed reference: %v", err)
+	}
+}
+
 func TestEnvironmentTokenRejectsInvalidReferenceID(t *testing.T) {
 	lookup := func(string) (string, bool) { return "test-token", true }
 	for _, id := range []string{"lowercase", "1TOKEN", strings.Repeat("A", 129)} {

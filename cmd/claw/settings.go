@@ -274,7 +274,7 @@ func (s *secretRef) load(lookupEnv func(string) (string, bool)) (string, error) 
 	if s.env != "" {
 		value, ok := lookupEnv(s.env)
 		if !ok || value == "" {
-			return "", fmt.Errorf("environment variable %s is not set", s.env)
+			return "", fmt.Errorf("environment secret is unavailable")
 		}
 		return value, nil
 	}
