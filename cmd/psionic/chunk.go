@@ -3,18 +3,21 @@ package main
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
 )
 
 // chunkText splits outbound text at the last newline, then the last space,
-// inside the limit. A window without a usable separator falls back to the hard
-// limit, always on a grapheme boundary.
+// inside the target limit. A window without a usable separator falls back to
+// the limit. A single grapheme may exceed that target to avoid splitting it,
+// but no returned chunk exceeds Discord's 2,000-byte API maximum.
 func chunkText(text string, limit int) []string {
 	if text == "" {
 		return nil
 	}
-	if limit <= 0 || len(text) <= limit {
+	limit = clamp(limit, 1, discordMaxChars)
+	if len(text) <= limit {
 		return []string{text}
 	}
 	var chunks []string
@@ -40,7 +43,9 @@ func chunkText(text string, limit int) []string {
 }
 
 // graphemeEnd returns the byte end of the last complete grapheme cluster that
-// fits the soft break, never crossing the hard limit and always advancing.
+// fits the soft break. It keeps an oversized grapheme whole up to Discord's
+// 2,000-byte API maximum; a larger cluster is split at a UTF-8 rune boundary.
+// One rune can exceed a tiny target limit, but no chunk can exceed the API cap.
 func graphemeEnd(text string, hard, soft int) int {
 	if soft <= 0 || soft > hard {
 		soft = hard
@@ -59,7 +64,19 @@ func graphemeEnd(text string, hard, soft int) int {
 	}
 	if end == 0 {
 		cluster, _, _, _ := uniseg.FirstGraphemeClusterInString(text, -1)
-		end = len(cluster)
+		if len(cluster) <= discordMaxChars {
+			return len(cluster)
+		}
+
+		// A pathological grapheme must not exceed Discord's message-size cap.
+		// Keep each UTF-8 rune intact even if the configured target is smaller.
+		end = min(hard, discordMaxChars, len(text))
+		for end > 0 && end < len(text) && !utf8.RuneStart(text[end]) {
+			end--
+		}
+		if end == 0 {
+			_, end = utf8.DecodeRuneInString(text)
+		}
 	}
 	return end
 }

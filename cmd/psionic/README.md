@@ -99,9 +99,10 @@ invite must include the `applications.commands` scope for native commands.
 - Bots, webhooks, self-authored messages, and edited messages are ignored.
 - Replies use the configured text and line limits and are capped at 16 messages.
   Truncated replies include a notice; the notice can exceed a very small
-  configured text limit. Code fences are balanced across chunks only when the
-  configured limits leave room; otherwise the original fence text is kept
-  without adding over-limit markers. Link and role pings are suppressed.
+  configured text limit. A Unicode grapheme stays whole unless it alone exceeds
+  Discord's 2,000-byte maximum. Code fences are balanced across chunks only
+  when the configured limits leave room; otherwise the original fence text is
+  kept without adding over-limit markers. Link and role pings are suppressed.
 - History is read on demand in 100-message pages, up to the configured limit
   (capped at 250 messages).
 - `message(action="read")` reads only the current conversation, with either a
