@@ -139,15 +139,18 @@ func TestConversationStopCallsTheActiveCancel(t *testing.T) {
 }
 
 func TestCommandTextRequiresExactTrigger(t *testing.T) {
-	for _, text := range []string{"/new", " /RESET ", "/stop", "/status"} {
+	for _, text := range []string{"/new", " /RESET ", "/stop", "/status", "/compact", "/model", "/model demo/large-model"} {
 		if _, ok := commandText(text); !ok {
 			t.Fatalf("%q not recognized", text)
 		}
 	}
-	for _, text := range []string{"", "/new now", "please /reset", "/compact", "status"} {
+	for _, text := range []string{"", "/new now", "please /reset", "status", "/model a b c"} {
 		if _, ok := commandText(text); ok {
 			t.Fatalf("%q recognized as a command", text)
 		}
+	}
+	if command, arg, ok := commandWithArg("/model demo/small-model"); !ok || command != "/model" || arg != "demo/small-model" {
+		t.Fatalf("/model arg = %q %q %v", command, arg, ok)
 	}
 }
 
@@ -183,10 +186,96 @@ func TestResetRefusesAnActiveRun(t *testing.T) {
 		MessageID: "223456789012345678", ChannelID: "323456789012345678",
 		AuthorID: "123456789012345678", IsDM: true,
 	}}
-	if !chat.handleCommand(turn, "/reset") {
+	if !chat.handleCommand(turn, "/reset", "") {
 		t.Fatal("reset was not handled")
 	}
 	if got := tr.messages(); len(got) != 1 || !strings.Contains(got[0], "Busy") {
+		t.Fatalf("replies = %v", got)
+	}
+}
+
+func TestModelCommandSwitchesPerRouteModel(t *testing.T) {
+	workspace := writeWorkspace(t, map[string]string{"AGENTS.md": "rules"})
+	state, err := openState(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.close()
+	owner := "123456789012345678"
+	dm := inboundMessage{MessageID: "223456789012345678", ChannelID: "323456789012345678", AuthorID: owner, IsDM: true}
+	models := testModels(t)
+
+	factory := &modelRecordingFactory{inner: &fakeFactory{}}
+	rt := testRuntime(t, workspace, state, &recordingTransport{}, factory.inner, owner)
+	rt.models = models
+	rt.clients = factory.build
+	chat := &conversation{key: "dm:one", rt: rt}
+	chat.ctx, chat.cancel = context.WithCancel(context.Background())
+
+	if !chat.handleCommand(sourceTurn{message: dm}, "/model", "demo/small-model") {
+		t.Fatal("model switch was not handled")
+	}
+	if got := chat.modelRef(); got != "demo/small-model" {
+		t.Fatalf("effective model = %q", got)
+	}
+	chat.handle(sourceTurn{message: dm, text: "hello", replyTo: dm.MessageID})
+	if got := factory.lastModelRef(); got != "demo/small-model" {
+		t.Fatalf("turn model ref = %q", got)
+	}
+}
+
+func TestModelCommandRejectsUnknownModel(t *testing.T) {
+	workspace := writeWorkspace(t, map[string]string{"AGENTS.md": "rules"})
+	state, err := openState(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.close()
+	owner := "123456789012345678"
+	dm := inboundMessage{MessageID: "223456789012345678", ChannelID: "323456789012345678", AuthorID: owner, IsDM: true}
+	rt := testRuntime(t, workspace, state, &recordingTransport{}, &fakeFactory{}, owner)
+	rt.models = testModels(t)
+	chat := &conversation{key: "dm:one", rt: rt}
+	chat.ctx, chat.cancel = context.WithCancel(context.Background())
+	if !chat.handleCommand(sourceTurn{message: dm}, "/model", "demo/private-model-identifier") {
+		t.Fatal("model switch was not handled")
+	}
+	if chat.modelRef() != rt.agent.Model {
+		t.Fatal("unknown model changed the effective model")
+	}
+}
+
+func TestModelListShowsCurrentAndIsBounded(t *testing.T) {
+	workspace := writeWorkspace(t, map[string]string{"AGENTS.md": "rules"})
+	rt := testRuntime(t, workspace, nil, &recordingTransport{}, &fakeFactory{}, "123456789012345678")
+	rt.models = testModels(t)
+	chat := &conversation{key: "dm:one", rt: rt}
+	list := chat.modelList()
+	if !strings.Contains(list, "demo/large-model  (current)") {
+		t.Fatalf("list = %q", list)
+	}
+	if strings.Contains(list, "test-key") {
+		t.Fatalf("list leaked a credential: %q", list)
+	}
+}
+
+func TestCompactCommandReportsNoWorkOnAFreshConversation(t *testing.T) {
+	workspace := writeWorkspace(t, map[string]string{"AGENTS.md": "rules"})
+	state, err := openState(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.close()
+	owner := "123456789012345678"
+	dm := inboundMessage{MessageID: "223456789012345678", ChannelID: "323456789012345678", AuthorID: owner, IsDM: true}
+	tr := &recordingTransport{}
+	rt := testRuntime(t, workspace, state, tr, &fakeFactory{}, owner)
+	chat := &conversation{key: "dm:one", rt: rt}
+	chat.ctx, chat.cancel = context.WithCancel(context.Background())
+	if !chat.handleCommand(sourceTurn{message: dm, replyTo: dm.MessageID}, "/compact", "") {
+		t.Fatal("compact was not handled")
+	}
+	if got := tr.messages(); len(got) != 1 || !strings.Contains(got[0], "Nothing to compact") {
 		t.Fatalf("replies = %v", got)
 	}
 }

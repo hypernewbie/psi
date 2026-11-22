@@ -108,6 +108,10 @@ var nativeCommands = []*discordgo.ApplicationCommand{
 	{Name: "reset", Description: "Reset this conversation"},
 	{Name: "stop", Description: "Stop the active response"},
 	{Name: "status", Description: "Show the current model and session state"},
+	{Name: "model", Description: "Show or switch the model (provider/model)", Options: []*discordgo.ApplicationCommandOption{{
+		Name: "model", Description: "provider/model reference", Type: discordgo.ApplicationCommandOptionString, Required: false,
+	}}},
+	{Name: "compact", Description: "Compact this conversation now"},
 }
 
 // registerCommands creates only missing global commands. It never bulk
@@ -218,6 +222,26 @@ func (r *runtime) handleInteraction(d *discordTransport, event *discordgo.Intera
 			return
 		}
 		d.respond(event, "Queued.", true)
+	case "model":
+		ref := ""
+		if len(data.Options) > 0 && data.Options[0].Name == "model" {
+			ref = strings.TrimSpace(data.Options[0].StringValue())
+		}
+		text := "/model"
+		if ref != "" {
+			text = "/model " + ref
+		}
+		if !chat.enqueue(sourceTurn{message: msg, text: text}) {
+			d.respond(event, "Busy; try again shortly.", true)
+			return
+		}
+		d.respond(event, "Queued.", true)
+	case "compact":
+		if !chat.enqueue(sourceTurn{message: msg, text: "/compact"}) {
+			d.respond(event, "Busy; try again shortly.", true)
+			return
+		}
+		d.respond(event, "Queued.", true)
 	default:
 		d.respond(event, "Unknown command.", true)
 	}
@@ -268,7 +292,7 @@ func (r *runtime) handleDiscord(d *discordTransport, event *discordgo.MessageCre
 	if text == "" && len(event.Attachments) == 0 {
 		return
 	}
-	command, isCommand := commandText(text)
+	command, _, isCommand := commandWithArg(text)
 	if isCommand && !r.policy.isOwner(msg.AuthorID) {
 		return
 	}

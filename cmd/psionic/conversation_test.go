@@ -134,7 +134,7 @@ func TestConversationRestartAndReset(t *testing.T) {
 		t.Fatalf("sent = %v", got)
 	}
 
-	if !chat2.handleCommand(sourceTurn{message: dm}, "/reset") {
+	if !chat2.handleCommand(sourceTurn{message: dm}, "/reset", "") {
 		t.Fatal("reset was not handled")
 	}
 	third := &fakeFactory{replies: []string{"third"}}
@@ -420,4 +420,27 @@ func TestUnauthorizedCommandNeverReachesTheModel(t *testing.T) {
 		t.Fatalf("fakes = %d, sent = %v", len(factory.fakes), tr.messages())
 	}
 	chat.close()
+}
+
+// modelRecordingFactory remembers the model reference of each build.
+type modelRecordingFactory struct {
+	inner *fakeFactory
+	mu    sync.Mutex
+	refs  []string
+}
+
+func (f *modelRecordingFactory) build(models *config.ModelsFile, agentDir, modelRef, compactionRef, sessionID string, maxRetries int) (*providerSet, error) {
+	f.mu.Lock()
+	f.refs = append(f.refs, modelRef)
+	f.mu.Unlock()
+	return f.inner.build(models, agentDir, modelRef, compactionRef, sessionID, maxRetries)
+}
+
+func (f *modelRecordingFactory) lastModelRef() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.refs) == 0 {
+		return ""
+	}
+	return f.refs[len(f.refs)-1]
 }

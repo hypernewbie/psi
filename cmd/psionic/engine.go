@@ -246,17 +246,27 @@ type conversation struct {
 	turns  chan sourceTurn
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	store   *session.Store
-	clients *providerSet
-	loop    *agent.Loop
-	started time.Time
-	last    time.Time
-	private bool
-	scope   string
-	running bool
-	runStop context.CancelFunc
-	closed  bool
+	mu            sync.Mutex
+	store         *session.Store
+	clients       *providerSet
+	loop          *agent.Loop
+	modelOverride string
+	started       time.Time
+	last          time.Time
+	private       bool
+	scope         string
+	running       bool
+	runStop       context.CancelFunc
+	closed        bool
+}
+
+// modelRef returns the effective model reference for this conversation: the
+// per-route /model override when set, otherwise the process default.
+func (c *conversation) modelRef() string {
+	if c.modelOverride != "" {
+		return c.modelOverride
+	}
+	return c.rt.agent.Model
 }
 
 func (c *conversation) enqueue(turn sourceTurn) bool {
@@ -352,6 +362,9 @@ func (c *conversation) prepare(msg inboundMessage) error {
 	if err != nil {
 		return err
 	}
+	// The /model choice is a route preference: it survives session resets and
+	// scope changes, which discard conversation content but not this setting.
+	modelChoice := state.Model
 	started, last := now, now
 	if found && state.SessionID != "" && (state.Private != private || state.Workspace != c.rt.agent.Workspace || state.Scope != scope) {
 		if err := c.rt.state.deleteRoute(c.key); err != nil {
@@ -413,7 +426,8 @@ func (c *conversation) prepare(msg inboundMessage) error {
 	if build == nil {
 		build = newProviderSet
 	}
-	clients, err := build(c.rt.models, c.rt.agentDir, c.rt.agent.Model, c.rt.agent.Compaction, store.Header().ID, c.rt.defaults.MaxRetries)
+	c.modelOverride = modelChoice
+	clients, err := build(c.rt.models, c.rt.agentDir, c.modelRef(), c.rt.agent.Compaction, store.Header().ID, c.rt.defaults.MaxRetries)
 	if err != nil {
 		store.Unlock()
 		return err
@@ -422,7 +436,7 @@ func (c *conversation) prepare(msg inboundMessage) error {
 	c.loop = agent.New(store, tools.NewRegistry(c.rt.agent.Workspace), clients.main, nil)
 	if err := c.rt.state.saveRoute(c.key, routeState{
 		SessionID: store.Header().ID, StartedAt: c.started.UnixMilli(), LastInteraction: c.last.UnixMilli(),
-		Private: private, Workspace: c.rt.agent.Workspace, Scope: scope,
+		Private: private, Workspace: c.rt.agent.Workspace, Scope: scope, Model: modelChoice,
 	}); err != nil {
 		c.retireLocked()
 		return err
@@ -452,6 +466,34 @@ func (r *runtime) resetOverride(channelID string) *resetSettings {
 	return r.settings.Session.ByChannel["discord"]
 }
 
+// buildTurnConfig composes one turn's prompt sections, tools, and agent
+// config from the route's scoping rules. The returned active turn carries the
+// staged message state for message_tool replies.
+func (c *conversation) buildTurnConfig(msg inboundMessage) (agent.Config, *activeTurn, error) {
+	includeMemory := c.rt.isOwnerDM(msg)
+	files, err := loadWorkspaceFiles(c.rt.agent.Workspace, includeMemory)
+	if err != nil {
+		return agent.Config{}, nil, err
+	}
+	replyMode := c.rt.replyMode(msg)
+	effectiveTools := c.rt.routeTools(msg)
+	active := &activeTurn{channelID: msg.ChannelID}
+	availableSkills := c.rt.skills
+	if !effectiveTools.allows("skill") {
+		availableSkills = nil
+	}
+	toolsForTurn, err := buildTools(c.rt.agent.Workspace, includeMemory, replyMode == "message_tool", effectiveTools, availableSkills, active, c.rt.transport)
+	if err != nil {
+		return agent.Config{}, nil, err
+	}
+	names := make([]string, 0, len(toolsForTurn.definitions))
+	for _, def := range toolsForTurn.definitions {
+		names = append(names, def.Name)
+	}
+	sections := buildPromptSections(c.rt.agent, files, names, availableSkills, replyMode)
+	return c.rt.agentConfig(c.clients, toolsForTurn, sections), active, nil
+}
+
 func resetType(msg inboundMessage) string {
 	if msg.IsDM {
 		return "direct"
@@ -463,10 +505,10 @@ func resetType(msg inboundMessage) string {
 }
 
 func (c *conversation) handle(turn sourceTurn) {
-	if text, ok := commandText(turn.text); ok {
+	if command, arg, ok := commandWithArg(turn.text); ok {
 		// A recognized command is either handled or rejected. It is never
 		// forwarded to the model as ordinary text.
-		c.handleCommand(turn, text)
+		c.handleCommand(turn, command, arg)
 		return
 	}
 	c.mu.Lock()
@@ -491,32 +533,12 @@ func (c *conversation) handle(turn sourceTurn) {
 			}
 		}
 	}
-	includeMemory := c.rt.isOwnerDM(msg)
-	files, err := loadWorkspaceFiles(c.rt.agent.Workspace, includeMemory)
+	cfg, active, err := c.buildTurnConfig(msg)
 	if err != nil {
 		c.rt.logger.Printf("conversation %s: unavailable (%T)", shortKey(c.key), err)
 		c.rt.sendNotice(turn, "The workspace files are temporarily unavailable.")
 		return
 	}
-	replyMode := c.rt.replyMode(msg)
-	effectiveTools := c.rt.routeTools(msg)
-	active := &activeTurn{channelID: msg.ChannelID}
-	availableSkills := c.rt.skills
-	if !effectiveTools.allows("skill") {
-		availableSkills = nil
-	}
-	toolsForTurn, err := buildTools(c.rt.agent.Workspace, includeMemory, replyMode == "message_tool", effectiveTools, availableSkills, active, c.rt.transport)
-	if err != nil {
-		c.rt.logger.Printf("conversation %s: unavailable (%T)", shortKey(c.key), err)
-		c.rt.sendNotice(turn, "The tool configuration is temporarily unavailable.")
-		return
-	}
-	var names []string
-	for _, def := range toolsForTurn.definitions {
-		names = append(names, def.Name)
-	}
-	sections := buildPromptSections(c.rt.agent, files, names, availableSkills, replyMode)
-	cfg := c.rt.agentConfig(c.clients, toolsForTurn, sections)
 
 	projection, err := c.store.Projection()
 	if err != nil {
@@ -554,7 +576,7 @@ func (c *conversation) handle(turn sourceTurn) {
 		return
 	}
 	c.persistActivity()
-	if replyMode == "message_tool" {
+	if c.rt.replyMode(msg) == "message_tool" {
 		if active.stagedOK && strings.TrimSpace(active.staged) != "" {
 			if err := c.rt.deliver(turn, active.staged); err != nil {
 				c.rt.logger.Printf("conversation %s: delivery failed (%T)", shortKey(c.key), err)
@@ -586,7 +608,7 @@ func (c *conversation) persistActivity() {
 	c.mu.Lock()
 	state := routeState{
 		StartedAt: c.started.UnixMilli(), LastInteraction: c.last.UnixMilli(),
-		Private: c.private, Workspace: c.rt.agent.Workspace, Scope: c.scope,
+		Private: c.private, Workspace: c.rt.agent.Workspace, Scope: c.scope, Model: c.modelOverride,
 	}
 	if c.store != nil {
 		state.SessionID = c.store.Header().ID

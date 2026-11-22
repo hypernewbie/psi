@@ -25,6 +25,8 @@ type routeState struct {
 	Private         bool   `json:"private,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
 	Scope           string `json:"scope,omitempty"`
+	// Model is the per-route /model override; empty means the process default.
+	Model string `json:"model,omitempty"`
 }
 
 // stateStore keeps only small routing and deduplication records. Conversation
