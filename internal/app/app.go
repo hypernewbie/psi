@@ -2088,7 +2088,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	showLoginStatus := func(text string) {
 		if login.panel != nil {
-			*login.panel = codexLoginPanel{status: text}
+			*login.panel = codexLoginPanel{status: text, chinese: login.panel.chinese}
 		} else {
 			console.Status(text)
 		}
@@ -2848,10 +2848,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return err
 		}
 		if r.loops != nil && r.loops.Snapshot().Active {
-			return fmt.Errorf("stop the active loop before signing in")
+			return r.localizedError("login.stop-loop")
 		}
 		if r.queuedInputs != nil && r.queuedInputs() > 0 {
-			return fmt.Errorf("finish the queued input before signing in")
+			return r.localizedError("login.finish-queued")
 		}
 		cancelACEndTurn()
 		ctx, stop := context.WithCancel(context.Background())
@@ -2876,13 +2876,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	startCodexBrowserLogin := func() error {
 		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, codexBind: r.codexBind, browser: r.codexBrowser, rename: r.codexRename}
-		return startOAuthLogin("OpenAI Codex", true, &codexLoginPanel{}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+		return startOAuthLogin("OpenAI Codex", true, &codexLoginPanel{chinese: r.chineseUI()}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runCodexLogin(ctx, req, updates)
 		})
 	}
 	startCodexDeviceLogin := func() error {
 		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, browser: r.codexBrowser, rename: r.codexRename, wait: r.codexWait}
-		return startOAuthLogin("OpenAI Codex", false, &codexLoginPanel{}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+		return startOAuthLogin("OpenAI Codex", false, &codexLoginPanel{chinese: r.chineseUI()}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runCodexDeviceLogin(ctx, req, updates)
 		})
 	}
@@ -2973,7 +2973,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return errors.New("cannot compact while exiting")
 		}
 		if login != nil {
-			return errors.New("finish or cancel the " + login.label + " sign-in before compacting")
+			return r.localizedError("login.before-compacting", login.label)
 		}
 		if r.reloadPending {
 			return errors.New("wait for the pending reload before compacting")
@@ -3694,7 +3694,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				if cancelled {
 					cancelLogin()
-					showLoginStatus("Cancelling " + login.label + " sign-in…")
+					showLoginStatus(r.localized("login.codex-cancelling", login.label))
 					r.draw(console)
 					continue
 				}
@@ -3704,16 +3704,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 					submit := login.submit
 					var submitErr error
 					if submit == nil {
-						submitErr = errors.New("OpenAI Codex sign-in input is unavailable; cancel and start again")
+						submitErr = r.localizedError("login.codex-input-unavailable")
 					} else {
 						submitErr = submit(secret)
 					}
 					secretmem.Wipe(secret[:cap(secret)])
 					switch {
 					case submitErr == nil:
-						showLoginStatus("OpenAI Codex sign-in accepted; finishing…")
+						showLoginStatus(r.localized("login.codex-accepted"))
 					case errors.Is(submitErr, provider.ErrCodexLoginClaimed):
-						showLoginStatus("OpenAI Codex sign-in is already completing.")
+						showLoginStatus(r.localized("login.codex-completing"))
 					default:
 						// Invalid input does not cancel the listener. Reopen the
 						// masked field so another paste can still finish.
@@ -3776,7 +3776,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					case key == "\x1b" || key == "\x03":
 						if !login.cancelled {
 							cancelLogin()
-							showLoginStatus("Cancelling " + login.label + " sign-in…")
+							showLoginStatus(r.localized("login.codex-cancelling", login.label))
 							r.draw(console)
 						}
 					case key == "\x04":
@@ -3995,7 +3995,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							case "device":
 								err = startCodexDeviceLogin()
 							default:
-								err = fmt.Errorf("unsupported OpenAI Codex sign-in method: %s", method)
+								err = r.localizedError("login.unsupported-codex-method", method)
 							}
 							if err != nil {
 								notice(terminal.NoticeError, err.Error())

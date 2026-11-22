@@ -38,6 +38,9 @@ type Selector struct {
 	// ModelThinkingLevel marks the level picker in that flow.
 	ModelThinkingLevel bool
 	AuthMode           AuthMode
+	// Chinese localizes the auth-mode picker chrome. Other picker modes use
+	// their existing English text until they are migrated.
+	Chinese bool
 	// CredentialKinds is logout-only metadata keyed by provider ID. It keeps
 	// the displayed credential kind separate from the row label and session data.
 	CredentialKinds map[string]provider.CredentialKind
@@ -187,11 +190,22 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 	} else if s.Thinking {
 		label, noMatch = "Thinking levels", "  No matching commands"
 	} else if s.AuthMode == AuthLogin {
-		label, noMatch = "Providers", "  No matching providers"
+		if s.Chinese {
+			label, noMatch = loginText(true, "login.providers-label"), "  "+loginText(true, "login.no-providers")
+		} else {
+			label, noMatch = "Providers", "  No matching providers"
+		}
 	} else if s.AuthMode == AuthLogout {
-		label, noMatch = "Stored credentials", "  No matching credentials"
+		if s.Chinese {
+			label, noMatch = loginText(true, "login.credentials-label"), "  "+loginText(true, "login.no-credentials")
+		} else {
+			label, noMatch = "Stored credentials", "  No matching credentials"
+		}
 	} else if s.AuthMode == AuthCodexMethods {
 		label = "Select OpenAI Codex login method:"
+		if s.Chinese {
+			label = loginText(true, "login.codex-method-label")
+		}
 	}
 	var rows []string
 	appendRow := func(text string, token terminal.ThemeToken) {
@@ -203,13 +217,21 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		if s.AuthMode == AuthCodexMethods {
 			rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: label, Token: terminal.TokenAccent, Bold: true}}}, width, noColor, selectedTheme))
 		} else {
-			appendRow(fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), terminal.TokenMuted)
+			if s.AuthMode != AuthNone && s.Chinese {
+				appendRow(fmt.Sprintf(loginText(true, "login.picker-matches"), label, len(s.Filtered)), terminal.TokenMuted)
+			} else {
+				appendRow(fmt.Sprintf("%s · %d matches", label, len(s.Filtered)), terminal.TokenMuted)
+			}
 		}
 	}
 	if len(s.Filtered) == 0 {
 		appendRow(noMatch, terminal.TokenMuted)
 		if rowBudget-len(rows) > 0 {
-			appendRow("Type to search · Esc/Ctrl+C cancel", terminal.TokenMuted)
+			searchHint := "Type to search · Esc/Ctrl+C cancel"
+			if s.AuthMode != AuthNone && s.Chinese {
+				searchHint = loginText(true, "login.type-to-search")
+			}
+			appendRow(searchHint, terminal.TokenMuted)
 		}
 		return rows
 	}
@@ -309,7 +331,13 @@ func (s *Selector) RenderPickerRows(width, rowBudget int, noColor bool, palette 
 		if s.Thinking && !s.ModelThinkingLevel {
 			hint = thinkingPickerHelpText(width)
 		} else if s.AuthMode == AuthCodexMethods {
-			hint = terminal.FitHint(width, "↑↓ navigate · Enter select · Esc cancel", "↑↓ · Enter · Esc", "Enter Esc")
+			if s.Chinese {
+				hint = terminal.FitHint(width, loginText(true, "login.codex-method-hint"), "↑↓ · Enter · Esc", "Enter Esc")
+			} else {
+				hint = terminal.FitHint(width, "↑↓ navigate · Enter select · Esc cancel", "↑↓ · Enter · Esc", "Enter Esc")
+			}
+		} else if s.AuthMode != AuthNone && s.Chinese {
+			hint = terminal.FitHint(width, loginText(true, "login.picker-hint"), loginText(true, "login.picker-hint-short"), "Enter Esc")
 		}
 		appendRow(hint, terminal.TokenMuted)
 	}

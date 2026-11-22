@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/hypernewbie/psi/internal/i18n"
 	"github.com/hypernewbie/psi/internal/terminal"
 	"github.com/hypernewbie/psi/internal/theme"
 )
@@ -13,6 +14,13 @@ type codexLoginPanel struct {
 	manualOpen         bool
 	openDevice         func()
 	status, inputError string
+	// chinese selects the panel text language. It is fixed when the panel is
+	// created so a language change cannot mix two languages in one attempt.
+	chinese bool
+}
+
+func (p *codexLoginPanel) text(key i18n.Key, args ...any) string {
+	return loginText(p.chinese, key, args...)
 }
 
 func (p *codexLoginPanel) rows(width, budget int, noColor bool, palette *theme.Theme) []string {
@@ -33,13 +41,13 @@ func (p *codexLoginPanel) rows(width, budget int, noColor bool, palette *theme.T
 		appendRows(wrap(text), token, bold)
 	}
 	linkRows := wrap(p.link)
-	deviceCodeRows := wrap("Enter code: " + p.code)
+	deviceCodeRows := wrap(p.text("panel.enter-code", p.code))
 	// Preserve room for instructions before adding the heading.
 	instructionRows := 1
 	if p.code != "" {
 		instructionRows = len(deviceCodeRows) + len(linkRows)
 	}
-	heading := wrap("Login to OpenAI Codex")
+	heading := wrap(p.text("panel.heading"))
 	if !p.temporaryPort && !p.manualOpen && len(heading)+instructionRows <= budget {
 		appendRows(heading, terminal.TokenAccent, true)
 	}
@@ -51,41 +59,41 @@ func (p *codexLoginPanel) rows(width, budget int, noColor bool, palette *theme.T
 		if len(linkRows) <= budget-len(rows) {
 			appendRows(linkRows, terminal.TokenAccent, false)
 			if p.manualOpen {
-				add("The browser did not open. Open the link above manually.", terminal.TokenWarning, false)
+				add(p.text("panel.browser-manual-above"), terminal.TokenWarning, false)
 			}
 		} else {
-			add("Enlarge the terminal for the verification link.", terminal.TokenWarning, false)
+			add(p.text("panel.enlarge-verification"), terminal.TokenWarning, false)
 		}
-		add("Waiting for authentication…", terminal.TokenMuted, false)
+		add(p.text("panel.waiting"), terminal.TokenMuted, false)
 		if p.openDevice != nil {
-			add("Enter open browser · Esc cancel · Ctrl+D quit", terminal.TokenMuted, false)
+			add(p.text("panel.keys-open"), terminal.TokenMuted, false)
 		} else {
-			add("Esc cancel · Ctrl+D quit", terminal.TokenMuted, false)
+			add(p.text("panel.keys"), terminal.TokenMuted, false)
 		}
 	case p.link != "":
 		if p.temporaryPort {
-			add("Temporary port. If OpenAI rejects it, close the tab, cancel, and choose device code.", terminal.TokenWarning, false)
+			add(p.text("panel.temporary-port"), terminal.TokenWarning, false)
 		}
 		add(p.inputError, terminal.TokenError, false)
 		if p.manualOpen {
 			// A partial authorization URL cannot be opened. Give the link
 			// priority over optional instructions when auto-launch failed.
-			instruction := wrap("The browser did not open. Open the link below manually.")
+			instruction := wrap(p.text("panel.browser-manual-below"))
 			if len(instruction)+len(linkRows) <= budget-len(rows) {
 				appendRows(instruction, terminal.TokenWarning, false)
 				appendRows(linkRows, terminal.TokenAccent, false)
 			} else {
-				add("Enlarge the terminal for the sign-in link.", terminal.TokenWarning, false)
+				add(p.text("panel.enlarge-signin"), terminal.TokenWarning, false)
 			}
 		} else {
-			add("Complete OpenAI Codex sign-in in your browser.", terminal.TokenText, false)
+			add(p.text("panel.complete"), terminal.TokenText, false)
 			if len(linkRows)+1 <= budget-len(rows) {
 				appendRows(linkRows, terminal.TokenAccent, false)
 			}
 		}
-		add("Or paste redirect URL or code below · Enter submit · Esc cancel", terminal.TokenMuted, false)
+		add(p.text("panel.paste-hint"), terminal.TokenMuted, false)
 	default:
-		add("Starting sign-in… · Esc cancel · Ctrl+D quit", terminal.TokenMuted, false)
+		add(p.text("panel.starting"), terminal.TokenMuted, false)
 	}
 	return rows
 }

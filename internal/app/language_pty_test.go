@@ -607,3 +607,35 @@ func TestChineseCommandErrorNotice(t *testing.T) {
 	q.write("/quit\r")
 	q.finish()
 }
+
+// TestChineseLoginPicker proves the sign-in picker uses Chinese provider
+// methods and chrome. Run it against a real binary with -psi-test-binary.
+func TestChineseLoginPicker(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:9")
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--language", "zh")
+	waitLanguageEditorReady(t, q)
+	q.write("/login\r")
+	waitLanguageScreenMatch(t, q, regexp.MustCompile(`提\s*供\s*方`))
+	waitLanguageScreenMatch(t, q, regexp.MustCompile(`ChatGPT\s*浏\s*览\s*器\s*登\s*录`))
+	q.write("\x03")
+	waitLanguageScreenGone(t, q, regexp.MustCompile(`提\s*供\s*方`))
+	q.write("/quit\r")
+	q.finish()
+}
+
+// TestChineseLogoutEmptyStatus proves an empty credential store is reported
+// in Chinese instead of English.
+func TestChineseLogoutEmptyStatus(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "models.json"), `{"providers":{"anthropic":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"m","maxTokens":4096,"contextWindow":100000}]}}}`)
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--language", "zh")
+	waitLanguageEditorReady(t, q)
+	q.write("/logout\r")
+	waitLanguageScreenMatch(t, q, regexp.MustCompile(`没\s*有\s*可\s*移\s*除\s*的\s*已\s*存\s*凭\s*据`))
+	q.write("/quit\r")
+	q.finish()
+}

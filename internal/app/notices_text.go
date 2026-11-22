@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/i18n"
 )
 
@@ -227,10 +226,14 @@ var noticesCatalog = i18n.Catalog{
 }
 
 // localized returns the notice or error text in the language that governs the
-// prompt. Arguments follow fmt.Sprintf rules when present.
+// prompt. Arguments follow fmt.Sprintf rules when present. Keys are looked up
+// in the notice catalog first, then the login catalog.
 func (r *runtime) localized(key i18n.Key, args ...any) string {
-	language := effectivePromptLanguage(r.options, r.settings)
-	text := noticesCatalog.Text(language == config.LanguageChinese, key)
+	chinese := r.chineseUI()
+	text := noticesCatalog.Text(chinese, key)
+	if text == string(key) {
+		text = loginCatalog.Text(chinese, key)
+	}
 	if len(args) == 0 {
 		return text
 	}

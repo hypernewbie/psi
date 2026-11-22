@@ -49,9 +49,9 @@ func loginSelector(r *runtime) *Selector {
 		method := spec.Environment
 		switch id {
 		case "openai":
-			method = "ChatGPT browser sign-in"
+			method = r.localized("login.method.chatgpt")
 		case "openai-codex":
-			method = "browser or device code sign-in"
+			method = r.localized("login.method.codex")
 		}
 		parts := []string{spec.Name, method}
 		if r.models != nil {
@@ -63,18 +63,20 @@ func loginSelector(r *runtime) *Selector {
 	}
 	selector := NewSelector(items, r.ov.Provider)
 	selector.AuthMode = AuthLogin
+	selector.Chinese = r.chineseUI()
 	return selector
 }
 
 // codexLoginMethodSelector offers browser sign-in first. Choosing a row starts
 // that method immediately; Escape has no network or credential effect.
-func codexLoginMethodSelector() *Selector {
+func (r *runtime) codexLoginMethodSelector() *Selector {
 	items := []session.SessionInfo{
-		{ID: "browser", Name: "Browser login (default)"},
-		{ID: "device", Name: "Device code login (headless)"},
+		{ID: "browser", Name: r.localized("login.method.browser")},
+		{ID: "device", Name: r.localized("login.method.device")},
 	}
 	selector := NewSelector(items, "")
 	selector.AuthMode = AuthCodexMethods
+	selector.Chinese = r.chineseUI()
 	return selector
 }
 
@@ -84,11 +86,11 @@ func (r *runtime) openCodexLoginMethodSelector(console *terminal.Console) error 
 	if err := r.authCommandAvailable(console, "login"); err != nil {
 		return err
 	}
-	r.openAuthSelector(codexLoginMethodSelector(), console)
+	r.openAuthSelector(r.codexLoginMethodSelector(), console)
 	return nil
 }
 
-func logoutSelector(credentials []provider.StoredCredential, activeID string) *Selector {
+func (r *runtime) logoutSelector(credentials []provider.StoredCredential, activeID string) *Selector {
 	items := make([]session.SessionInfo, 0, len(credentials))
 	kinds := make(map[string]provider.CredentialKind, len(credentials))
 	for _, credential := range credentials {
@@ -96,32 +98,33 @@ func logoutSelector(credentials []provider.StoredCredential, activeID string) *S
 		if !ok {
 			continue
 		}
-		detail := "API key"
+		detail := r.localized("login.kind.api-key")
 		if credential.Kind == provider.CredentialOAuth {
-			detail = "OAuth credential"
+			detail = r.localized("login.kind.oauth")
 		}
 		items = append(items, session.SessionInfo{ID: credential.ProviderID, FirstMessage: spec.Name + " · " + detail})
 		kinds[credential.ProviderID] = credential.Kind
 	}
 	selector := NewSelector(items, activeID)
 	selector.AuthMode = AuthLogout
+	selector.Chinese = r.chineseUI()
 	selector.CredentialKinds = kinds
 	return selector
 }
 
 func (r *runtime) authCommandAvailable(console *terminal.Console, name string) error {
 	if r.lifecycle == nil || r.lifecycle.console == nil || console == nil {
-		return fmt.Errorf("%s requires an interactive terminal", name)
+		return r.localizedError("login.requires-terminal", name)
 	}
 	if r.store == nil {
-		return fmt.Errorf("%s requires an active session", name)
+		return r.localizedError("login.requires-session", name)
 	}
 	if err := r.store.WriteError(); err != nil {
-		return fmt.Errorf("storage is blocked: %w", err)
+		return fmt.Errorf("%s%w", r.localized("login.storage-blocked"), err)
 	}
 	if !r.state.CanSubmit() || r.selector != nil || r.settingsPicker != nil || r.login != nil ||
 		(r.bridgeWork != nil && r.bridgeWork()) || r.compactActive || r.compactPending || r.reloadPending {
-		return fmt.Errorf("%s is unavailable while a run or picker is active", name)
+		return r.localizedError("login.unavailable-busy", name)
 	}
 	return nil
 }
@@ -146,22 +149,22 @@ func (r *runtime) loginCommand(arg string, console *terminal.Console) error {
 		return nil
 	}
 	if len(parts) != 1 {
-		return fmt.Errorf("use /login [provider]")
+		return r.localizedError("login.use-login")
 	}
 	providerID := strings.ToLower(parts[0])
 	authPath := filepath.Join(r.agentDir, "auth.json")
 	switch providerID {
 	case "anthropic":
-		return fmt.Errorf("Anthropic login is not available; set ANTHROPIC_API_KEY or add an api_key entry to %s.", authPath)
+		return r.localizedError("login.anthropic-unavailable", authPath)
 	case "openai-codex":
 		return r.openCodexLoginMethodSelector(console)
 	}
 	spec, ok := providerregistry.Lookup(providerID)
 	if !ok {
-		return fmt.Errorf("unknown provider %q; supported: %s", providerID, strings.Join(loginProviderIDs(), ", "))
+		return r.localizedError("login.unknown-provider", providerID, strings.Join(loginProviderIDs(), ", "))
 	}
 	if spec.Auth != providerregistry.AuthAPIKey {
-		return fmt.Errorf("unknown provider %q; supported: %s", providerID, strings.Join(loginProviderIDs(), ", "))
+		return r.localizedError("login.unknown-provider", providerID, strings.Join(loginProviderIDs(), ", "))
 	}
 	r.startLogin(providerID, spec.Name, console)
 	return nil
@@ -174,7 +177,7 @@ func (r *runtime) startLogin(providerID, providerName string, console *terminal.
 	console.ClearPickerRows()
 	console.Editor.Clear()
 	console.BeginSecret()
-	console.Status("API key for " + providerName + " · Enter save · Esc cancel")
+	console.Status(r.localized("login.api-key-status", providerName))
 	r.login = &loginPrompt{providerID: providerID, providerName: providerName, wasOffline: r.authErr != nil}
 	r.state = StateSelecting
 	r.draw(console)
@@ -218,7 +221,7 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 	r.login = nil
 	authPath := filepath.Join(r.agentDir, "auth.json")
 	if err := saveLoginKey(context.Background(), authPath, prompt.providerID, key); err != nil {
-		printStatusText(out, fmt.Sprintf("Failed to save API key for %s: %v", prompt.providerName, err))
+		printStatusText(out, r.localized("login.failed-save-key", prompt.providerName, err))
 		r.restoreAuthState()
 		r.draw(console)
 		return
@@ -228,7 +231,7 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 	if prompt.wasOffline {
 		meta, err := r.models.SelectModel(prompt.providerID, "")
 		if err != nil {
-			status = fmt.Sprintf("Saved API key for %s, but no default model is configured. Use /model.", prompt.providerName)
+			status = r.localized("login.saved-no-default", prompt.providerName)
 		} else {
 			next := r.ov
 			next.Provider, next.Model = prompt.providerID, meta.ID
@@ -246,7 +249,7 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 				if candidate.prov != nil {
 					candidate.prov.CloseIdle()
 				}
-				status = fmt.Sprintf("Saved API key for %s, but could not select the default model: %v", prompt.providerName, selectionErr)
+				status = r.localized("login.saved-select-failed", prompt.providerName, selectionErr)
 			} else {
 				if r.ac != nil {
 					r.ac.ResetGrowth()
@@ -258,9 +261,9 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 					{Path: []string{"defaultProvider"}, Value: providerValue},
 					{Path: []string{"defaultModel"}, Value: modelValue},
 				}); err != nil {
-					status = fmt.Sprintf("Saved API key for %s and selected %s, but could not save defaults: %v", prompt.providerName, candidate.ov.Model, err)
+					status = r.localized("login.saved-defaults-failed", prompt.providerName, candidate.ov.Model, err)
 				} else {
-					status = fmt.Sprintf("Saved API key for %s. Selected %s. Credentials saved to %s.", prompt.providerName, candidate.ov.Model, authPath)
+					status = r.localized("login.saved-selected", prompt.providerName, candidate.ov.Model, authPath)
 				}
 			}
 		}
@@ -280,14 +283,14 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 			}
 			r.prov = nil
 			r.authErr = refreshErr
-			status = fmt.Sprintf("Saved API key for %s, but could not refresh the active provider: %v", prompt.providerName, refreshErr)
+			status = r.localized("login.saved-refresh-failed", prompt.providerName, refreshErr)
 		} else {
 			r.adoptConfiguration(&candidate)
-			status = fmt.Sprintf("Saved API key for %s. Credentials saved to %s.", prompt.providerName, authPath)
+			status = r.localized("login.saved", prompt.providerName, authPath)
 		}
 		r.publishLive()
 	} else {
-		status = fmt.Sprintf("Saved API key for %s. Credentials saved to %s.", prompt.providerName, authPath)
+		status = r.localized("login.saved", prompt.providerName, authPath)
 	}
 
 	if status != "" {
@@ -302,7 +305,7 @@ func (r *runtime) logoutCommand(arg string, console *terminal.Console, out io.Wr
 		return err
 	}
 	if strings.TrimSpace(arg) != "" {
-		return fmt.Errorf("use /logout")
+		return r.localizedError("logout.use-logout")
 	}
 	authPath := filepath.Join(r.agentDir, "auth.json")
 	credentials, err := provider.StoredCredentials(authPath)
@@ -310,11 +313,11 @@ func (r *runtime) logoutCommand(arg string, console *terminal.Console, out io.Wr
 		return err
 	}
 	if len(credentials) == 0 {
-		printStatusText(out, "No stored credentials to remove. /logout only removes entries from auth.json; environment variables and models.json config are unchanged.")
+		printStatusText(out, r.localized("logout.none"))
 		r.draw(console)
 		return nil
 	}
-	r.openAuthSelector(logoutSelector(credentials, r.ov.Provider), console)
+	r.openAuthSelector(r.logoutSelector(credentials, r.ov.Provider), console)
 	return nil
 }
 
@@ -327,21 +330,21 @@ func (r *runtime) finishLogout(selected provider.StoredCredential, console *term
 
 	spec, ok := providerregistry.Lookup(selected.ProviderID)
 	if !ok {
-		printStatusText(out, fmt.Sprintf("Failed to remove stored credential for %s: unsupported provider", selected.ProviderID))
+		printStatusText(out, r.localized("logout.unsupported-provider", selected.ProviderID))
 		r.draw(console)
 		return
 	}
 	if selected.Kind == provider.CredentialOAuth {
-		console.Status("Removing stored OAuth credential…")
+		console.Status(r.localized("logout.removing"))
 	}
 	result, err := provider.LogoutCredential(context.Background(), filepath.Join(r.agentDir, "auth.json"), selected, r.logoutHTTPClient(selected))
 	if selected.Kind == provider.CredentialOAuth {
 		console.Status("")
 	}
 	if err != nil {
-		status := fmt.Sprintf("Failed to remove stored %s for %s: %v", logoutKindName(selected.Kind), spec.Name, err)
+		status := r.localized("logout.failed", r.logoutKindName(selected.Kind), spec.Name, err)
 		if selected.Kind == provider.CredentialOAuth {
-			status += "\n" + logoutRevocationText(result.Revocation)
+			status += "\n" + r.logoutRevocationText(result.Revocation)
 		}
 		printLogoutNotice(out, terminal.NoticeError, status)
 		r.restoreAuthState()
@@ -371,18 +374,18 @@ func (r *runtime) finishLogout(selected provider.StoredCredential, console *term
 	}
 	if !result.Removed {
 		if selected.Kind == provider.CredentialOAuth {
-			printStatusText(out, fmt.Sprintf("No stored OAuth credential for %s was found.", spec.Name))
+			printStatusText(out, r.localized("logout.no-oauth", spec.Name))
 		} else {
-			printStatusText(out, fmt.Sprintf("No stored API key for %s was found.", spec.Name))
+			printStatusText(out, r.localized("logout.no-key", spec.Name))
 		}
 		r.restoreAuthState()
 		r.draw(console)
 		return
 	}
 	if selected.Kind == provider.CredentialOAuth {
-		printLogoutNotice(out, terminal.NoticeInfo, fmt.Sprintf("Removed stored OAuth credential for %s.\n%s", spec.Name, logoutRevocationText(result.Revocation)))
+		printLogoutNotice(out, terminal.NoticeInfo, r.localized("logout.removed-oauth", spec.Name, r.logoutRevocationText(result.Revocation)))
 	} else {
-		printLogoutNotice(out, terminal.NoticeInfo, fmt.Sprintf("Removed stored API key for %s.\nEnvironment variables and models.json config are unchanged.", spec.Name))
+		printLogoutNotice(out, terminal.NoticeInfo, r.localized("logout.removed-key", spec.Name))
 	}
 	r.restoreAuthState()
 	r.draw(console)
@@ -413,24 +416,24 @@ func (r *runtime) logoutHTTPClient(selected provider.StoredCredential) *http.Cli
 	}
 }
 
-func logoutKindName(kind provider.CredentialKind) string {
+func (r *runtime) logoutKindName(kind provider.CredentialKind) string {
 	if kind == provider.CredentialOAuth {
-		return "OAuth credential"
+		return r.localized("logout.kind-oauth")
 	}
-	return "API key"
+	return r.localized("logout.kind-key")
 }
 
-func logoutRevocationText(outcome provider.RevocationOutcome) string {
+func (r *runtime) logoutRevocationText(outcome provider.RevocationOutcome) string {
 	switch outcome {
 	case provider.RevocationAcceptedRefresh:
-		return "OpenAI accepted the refresh-token revocation request."
+		return r.localized("logout.revoked-refresh")
 	case provider.RevocationAcceptedAccess:
-		return "OpenAI accepted the access-token revocation request."
+		return r.localized("logout.revoked-access")
 	case provider.RevocationNoUsableToken:
-		return "No usable token; no revocation request was sent."
+		return r.localized("logout.no-token")
 	case provider.RevocationNotAttempted:
-		return "Revocation not attempted."
+		return r.localized("logout.not-attempted")
 	default:
-		return "Revocation unconfirmed."
+		return r.localized("logout.unconfirmed")
 	}
 }
