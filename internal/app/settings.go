@@ -26,6 +26,7 @@ type settingsEntry struct {
 }
 
 func (r *runtime) settingsEntries() []settingsEntry {
+	uiLanguage := effectivePromptLanguage(r.options, r.settings)
 	autoCompact := 0
 	if r.settings.Compaction.Enabled {
 		autoCompact = 1
@@ -99,18 +100,18 @@ func (r *runtime) settingsEntries() []settingsEntry {
 			languageSelected = i
 		}
 	}
-	languageDescription := "Built-in prompt language."
+	languageDescription := settingsDescription(uiLanguage, "language")
 	if r.options.Language != "" {
-		languageDescription += " --language remains active for this session."
+		languageDescription += " " + settingsText(uiLanguage, "settings.language.cli-override")
 	}
 
 	return []settingsEntry{
 		{
 			item: terminal.SettingsItem{
 				ID:          "auto-compact",
-				Label:       "Auto-compact",
-				Description: "Compact automatically when the context fills.",
-				Values:      []terminal.SettingsValue{{Label: "off", Value: false}, {Label: "on", Value: true}},
+				Label:       settingsLabel(uiLanguage, "auto-compact"),
+				Description: settingsDescription(uiLanguage, "auto-compact"),
+				Values:      []terminal.SettingsValue{{Label: settingsBoolText(uiLanguage, false), Value: false}, {Label: settingsBoolText(uiLanguage, true), Value: true}},
 				Selected:    autoCompact,
 			},
 			apply: func(r *runtime, _ *terminal.Console, value terminal.SettingsValue) error {
@@ -131,8 +132,8 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "editor-padding",
-				Label:       "Editor padding",
-				Description: "Horizontal padding around the editor.",
+				Label:       settingsLabel(uiLanguage, "editor-padding"),
+				Description: settingsDescription(uiLanguage, "editor-padding"),
 				Values: []terminal.SettingsValue{
 					{Label: "0", Value: 0},
 					{Label: "1", Value: 1},
@@ -154,8 +155,8 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "output-padding",
-				Label:       "Output padding",
-				Description: "Blank rows between transcript blocks.",
+				Label:       settingsLabel(uiLanguage, "output-padding"),
+				Description: settingsDescription(uiLanguage, "output-padding"),
 				Values: []terminal.SettingsValue{
 					{Label: "0", Value: 0},
 					{Label: "1", Value: 1},
@@ -175,11 +176,11 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "hide-thinking",
-				Label:       "Hide thinking",
-				Description: "Hide thinking blocks in assistant responses.",
+				Label:       settingsLabel(uiLanguage, "hide-thinking"),
+				Description: settingsDescription(uiLanguage, "hide-thinking"),
 				Values: []terminal.SettingsValue{
-					{Label: "off", Value: false},
-					{Label: "on", Value: true},
+					{Label: settingsBoolText(uiLanguage, false), Value: false},
+					{Label: settingsBoolText(uiLanguage, true), Value: true},
 				},
 				Selected: hideThinkingSelected,
 			},
@@ -196,11 +197,11 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "soft-wrap",
-				Label:       "Soft wrap",
-				Description: "Let the terminal wrap committed output for clean copy.",
+				Label:       settingsLabel(uiLanguage, "soft-wrap"),
+				Description: settingsDescription(uiLanguage, "soft-wrap"),
 				Values: []terminal.SettingsValue{
-					{Label: "off", Value: false},
-					{Label: "on", Value: true},
+					{Label: settingsBoolText(uiLanguage, false), Value: false},
+					{Label: settingsBoolText(uiLanguage, true), Value: true},
 				},
 				Selected: softWrapSelected,
 			},
@@ -217,8 +218,8 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "autocomplete-max",
-				Label:       "Autocomplete max items",
-				Description: "Rows shown in the completion list.",
+				Label:       settingsLabel(uiLanguage, "autocomplete-max"),
+				Description: settingsDescription(uiLanguage, "autocomplete-max"),
 				Values:      autocomplete,
 				Selected:    autocompleteSelected,
 			},
@@ -235,8 +236,8 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "code-indent",
-				Label:       "Code block indent",
-				Description: "Leading spaces inside fenced code blocks.",
+				Label:       settingsLabel(uiLanguage, "code-indent"),
+				Description: settingsDescription(uiLanguage, "code-indent"),
 				Values:      indentValues,
 				Selected:    indentSelected,
 			},
@@ -253,9 +254,9 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "quiet-startup",
-				Label:       "Quiet startup",
-				Description: "Hide the startup header on the next session.",
-				Values:      []terminal.SettingsValue{{Label: "off", Value: false}, {Label: "on", Value: true}},
+				Label:       settingsLabel(uiLanguage, "quiet-startup"),
+				Description: settingsDescription(uiLanguage, "quiet-startup"),
+				Values:      []terminal.SettingsValue{{Label: settingsBoolText(uiLanguage, false), Value: false}, {Label: settingsBoolText(uiLanguage, true), Value: true}},
 				Selected:    quiet,
 			},
 			persist: []string{"quietStartup"},
@@ -271,8 +272,8 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "theme",
-				Label:       "Theme",
-				Description: "Active palette, built-in or discovered.",
+				Label:       settingsLabel(uiLanguage, "theme"),
+				Description: settingsDescription(uiLanguage, "theme"),
 				Values:      themeValues,
 				Selected:    themeSelected,
 			},
@@ -288,8 +289,8 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "color-mode",
-				Label:       "Color mode",
-				Description: "Terminal color depth; false means 256 colors.",
+				Label:       settingsLabel(uiLanguage, "color-mode"),
+				Description: settingsDescription(uiLanguage, "color-mode"),
 				Values:      colorValues,
 				Selected:    colorSelected,
 			},
@@ -312,11 +313,11 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "context-usage",
-				Label:       "Context usage",
-				Description: "Footer context caption: percent or compact tokens.",
+				Label:       settingsLabel(uiLanguage, "context-usage"),
+				Description: settingsDescription(uiLanguage, "context-usage"),
 				Values: []terminal.SettingsValue{
-					{Label: "percent", Value: "percent"},
-					{Label: "tokens", Value: "tokens"},
+					{Label: settingsText(uiLanguage, "settings.value.percent"), Value: "percent"},
+					{Label: settingsText(uiLanguage, "settings.value.tokens"), Value: "tokens"},
 				},
 				Selected: contextUsageSelected,
 			},
@@ -333,7 +334,7 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "language",
-				Label:       "Language",
+				Label:       settingsLabel(uiLanguage, "language"),
 				Description: languageDescription,
 				Values:      languageValues,
 				Selected:    languageSelected,
@@ -365,9 +366,9 @@ func (r *runtime) settingsEntries() []settingsEntry {
 		{
 			item: terminal.SettingsItem{
 				ID:          "model-thinking",
-				Label:       "Default thinking level per model",
-				Description: "Override the default thinking level for specific models",
-				Values:      []terminal.SettingsValue{{Label: modelThinkingSummary(r), Value: modelThinkingSummary(r)}},
+				Label:       settingsLabel(uiLanguage, "model-thinking"),
+				Description: settingsDescription(uiLanguage, "model-thinking"),
+				Values:      []terminal.SettingsValue{{Label: modelThinkingSummary(uiLanguage, r), Value: modelThinkingSummary(uiLanguage, r)}},
 			},
 			apply: func(*runtime, *terminal.Console, terminal.SettingsValue) error {
 				return nil
@@ -376,12 +377,12 @@ func (r *runtime) settingsEntries() []settingsEntry {
 	}
 }
 
-func modelThinkingSummary(r *runtime) string {
+func modelThinkingSummary(language string, r *runtime) string {
 	count := len(r.settings.ModelThinkingLevels)
 	if count == 0 {
-		return "none"
+		return settingsText(language, "settings.value.none")
 	}
-	return strconv.Itoa(count) + " configured"
+	return fmt.Sprintf(settingsText(language, "settings.value.configured"), count)
 }
 
 // globalThinkingDefault is the effective global default shown to the picker.
@@ -416,7 +417,12 @@ func (r *runtime) newSettingsPicker() *terminal.SettingsPicker {
 	for i, entry := range entries {
 		items[i] = entry.item
 	}
-	return &terminal.SettingsPicker{Items: items}
+	uiLanguage := effectivePromptLanguage(r.options, r.settings)
+	return &terminal.SettingsPicker{
+		Items:     items,
+		Hint:      settingsText(uiLanguage, "settings.picker.hint"),
+		ShortHint: settingsText(uiLanguage, "settings.picker.short-hint"),
+	}
 }
 
 // applySetting changes one setting in memory and returns the persistence path.

@@ -64,6 +64,28 @@ func waitLanguageScreenAbsent(t *testing.T, q *reviewPTY, text string) {
 	}
 }
 
+func waitLanguageScreenGone(t *testing.T, q *reviewPTY, pattern *regexp.Regexp) {
+	t.Helper()
+	timer := time.NewTimer(8 * time.Second)
+	defer timer.Stop()
+	for {
+		if !pattern.MatchString(q.screen.Text()) {
+			return
+		}
+		select {
+		case chunk, ok := <-q.chunks:
+			if !ok {
+				t.Fatalf("process exited waiting for %q to disappear: %q", pattern, q.screen.Text())
+			}
+			q.pending += string(chunk)
+			q.raw.Write(chunk)
+			q.screen.Feed(chunk)
+		case <-timer.C:
+			t.Fatalf("timeout waiting for %q to disappear: %q", pattern, q.screen.Text())
+		}
+	}
+}
+
 func waitLanguageEditorReady(t *testing.T, q *reviewPTY) {
 	t.Helper()
 	timer := time.NewTimer(8 * time.Second)
@@ -356,17 +378,18 @@ func TestActualAppLanguageControls(t *testing.T) {
 func openLanguageRow(t *testing.T, q *reviewPTY) {
 	t.Helper()
 	q.write("/settings\r")
-	q.waitScreen("→ Auto-compact")
+	waitLanguageScreenMatch(t, q, regexp.MustCompile(`→ (Auto-compact|自\s*动\s*压\s*缩)`))
 	for i := 0; i < 11; i++ {
 		q.write("\x1b[B")
 	}
-	waitLanguageScreenMatch(t, q, regexp.MustCompile(`→ Language`))
+	waitLanguageScreenMatch(t, q, regexp.MustCompile(`→ (Language|语\s*言)`))
 }
 
 func closeLanguageRow(t *testing.T, q *reviewPTY) {
 	t.Helper()
 	q.write("\x03")
-	waitLanguageScreenAbsent(t, q, "Enter/Space change")
+	// The hint follows the settings language, so wait for either wording to go.
+	waitLanguageScreenGone(t, q, regexp.MustCompile(`Enter/(Space change|空\s*格)`))
 	waitLanguageEditorReady(t, q)
 }
 
@@ -394,7 +417,7 @@ func TestActualAppLanguageSettings(t *testing.T) {
 		waitLanguageEditorReady(t, first)
 		openLanguageRow(t, first)
 		first.write("\r")
-		waitLanguageScreenMatch(t, first, regexp.MustCompile(`→ Language\s+简\s*体\s*中\s*文`))
+		waitLanguageScreenMatch(t, first, regexp.MustCompile(`→ (Language|语\s*言)\s+简\s*体\s*中\s*文`))
 		closeLanguageRow(t, first)
 		if got := readStoredLanguage(t, agentDir); got != config.LanguageChinese {
 			t.Fatalf("stored language = %q, want zh", got)
@@ -409,7 +432,7 @@ func TestActualAppLanguageSettings(t *testing.T) {
 		second := startReviewPTY(t, home, work, agentDir, "--deny-project")
 		waitLanguageEditorReady(t, second)
 		openLanguageRow(t, second)
-		waitLanguageScreenMatch(t, second, regexp.MustCompile(`→ Language\s+简\s*体\s*中\s*文`))
+		waitLanguageScreenMatch(t, second, regexp.MustCompile(`→ (Language|语\s*言)\s+简\s*体\s*中\s*文`))
 		closeLanguageRow(t, second)
 		second.write("/quit\r")
 		second.finish()
@@ -417,6 +440,25 @@ func TestActualAppLanguageSettings(t *testing.T) {
 		if got := requests.count(); got != 1 {
 			t.Fatalf("provider requests = %d, want 1", got)
 		}
+	})
+
+	t.Run("menu follows the stored language", func(t *testing.T) {
+		home, work := t.TempDir(), t.TempDir()
+		agentDir := filepath.Join(home, "agent")
+		reviewSettings(t, agentDir, "http://127.0.0.1:9")
+		writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","language":"zh","compaction":{"enabled":false}}`)
+		q := startReviewPTY(t, home, work, agentDir, "--deny-project")
+		waitLanguageEditorReady(t, q)
+		q.write("/settings\r")
+		waitLanguageScreenMatch(t, q, regexp.MustCompile(`→ 自\s*动\s*压\s*缩`))
+		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Enter/空\s*格`))
+		if strings.Contains(q.screen.Text(), "Enter/Space change") {
+			t.Fatalf("English settings hint kept in Chinese mode:\n%s", q.screen.Text())
+		}
+		q.write("\x03")
+		waitLanguageEditorReady(t, q)
+		q.write("/quit\r")
+		q.finish()
 	})
 
 	t.Run("cli override notice", func(t *testing.T) {
@@ -534,7 +576,7 @@ func TestActualAppLanguageStreamFailure(t *testing.T) {
 	assertPromptLanguage(t, requests.system(t, 0), config.LanguageChinese)
 
 	openLanguageRow(t, q)
-	waitLanguageScreenMatch(t, q, regexp.MustCompile(`→ Language\s+简\s*体\s*中\s*文`))
+	waitLanguageScreenMatch(t, q, regexp.MustCompile(`→ (Language|语\s*言)\s+简\s*体\s*中\s*文`))
 	q.write("\r")
 	waitLanguageScreenMatch(t, q, regexp.MustCompile(`→ Language\s+English`))
 	closeLanguageRow(t, q)

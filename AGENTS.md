@@ -90,5 +90,5 @@ Supported languages are English (`en`) and Simplified Chinese (`zh`). Do not add
 - Keep identifiers stable. Tool names, command names, paths, XML tag names, topic IDs, JSON keys, and code identifiers are not translated.
 - Do not translate user-owned content such as repository `AGENTS.md` files, `SYSTEM.md`, custom skills, or imported documentation unless the user explicitly asks.
 - Update language-specific fixtures and regression tests for both languages whenever behavior or text differs.
-- If a surface is not localized yet, document the gap and do not claim full i18n support. Current prompt-only localization covers built-in prompt text and the skills wrapper; terminal labels, notices, errors, embedded documentation bodies, and other UI strings still need migration.
+- If a surface is not localized yet, document the gap and do not claim full i18n support. Current localization covers built-in prompt text, the skills wrapper, and the `/settings` labels, descriptions, prose value labels, and key hint; terminal chrome, notices, errors, embedded documentation bodies, and other UI strings still need migration.
 - When adding a language later, update the supported-language list, the `language` setting validation, CLI help, documentation, prompt fixtures, and tests together.

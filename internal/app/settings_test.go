@@ -122,6 +122,91 @@ func TestSettingsPickerRows(t *testing.T) {
 	}
 }
 
+func settingsItemsByID(entries []settingsEntry) map[string]terminal.SettingsItem {
+	items := make(map[string]terminal.SettingsItem, len(entries))
+	for _, entry := range entries {
+		items[entry.item.ID] = entry.item
+	}
+	return items
+}
+
+func TestSettingsEntriesUseStoredLanguage(t *testing.T) {
+	r := testSettingsRuntime(t)
+	r.settings.Language = config.LanguageChinese
+	items := settingsItemsByID(r.settingsEntries())
+
+	if got := items["auto-compact"].Label; got != "自动压缩" {
+		t.Fatalf("auto-compact label = %q", got)
+	}
+	if got := items["auto-compact"].Description; got != "上下文将满时自动压缩。" {
+		t.Fatalf("auto-compact description = %q", got)
+	}
+	if got := items["auto-compact"].Values[0].Label; got != "关" {
+		t.Fatalf("off label = %q", got)
+	}
+	if got := items["auto-compact"].Values[1].Label; got != "开" {
+		t.Fatalf("on label = %q", got)
+	}
+	if got := items["context-usage"].Values[0].Label; got != "百分比" {
+		t.Fatalf("percent label = %q", got)
+	}
+	if got := items["model-thinking"].Values[0].Label; got != "未设置" {
+		t.Fatalf("model thinking summary = %q", got)
+	}
+	if got := items["language"].Description; got != "内置提示词语言。" {
+		t.Fatalf("language description = %q", got)
+	}
+	picker := r.newSettingsPicker()
+	if !strings.Contains(picker.Hint, "更改") || !strings.Contains(picker.ShortHint, "更改") {
+		t.Fatalf("picker hints = %q / %q", picker.Hint, picker.ShortHint)
+	}
+
+	// A CLI override changes the UI language, not the stored default.
+	r.options.Language = config.LanguageEnglish
+	items = settingsItemsByID(r.settingsEntries())
+	if got := items["auto-compact"].Label; got != "Auto-compact" {
+		t.Fatalf("CLI override label = %q", got)
+	}
+	if r.settings.Language != config.LanguageChinese {
+		t.Fatalf("stored language changed to %q", r.settings.Language)
+	}
+}
+
+// TestSettingsLocalizationCoversEveryRow fails when a settings row is added
+// without a Chinese label or description, or when a catalog key is missing.
+func TestSettingsLocalizationCoversEveryRow(t *testing.T) {
+	labels := func(language string) map[string]terminal.SettingsItem {
+		r := testSettingsRuntime(t)
+		r.settings.Language = language
+		return settingsItemsByID(r.settingsEntries())
+	}
+	english, chinese := labels(config.LanguageEnglish), labels(config.LanguageChinese)
+	for id, en := range english {
+		zh, ok := chinese[id]
+		if !ok {
+			t.Fatalf("row %q missing in Chinese entries", id)
+		}
+		if en.Label == "" || en.Description == "" {
+			t.Fatalf("row %q has empty English text", id)
+		}
+		if zh.Label == "" || zh.Description == "" {
+			t.Fatalf("row %q has empty Chinese text", id)
+		}
+		if strings.Contains(en.Label, "settings.") || strings.Contains(en.Description, "settings.") {
+			t.Fatalf("row %q falls back to a catalog key in English", id)
+		}
+		if strings.Contains(zh.Label, "settings.") || strings.Contains(zh.Description, "settings.") {
+			t.Fatalf("row %q falls back to a catalog key in Chinese", id)
+		}
+		if zh.Label == en.Label {
+			t.Errorf("row %q label is not translated", id)
+		}
+		if zh.Description == en.Description {
+			t.Errorf("row %q description is not translated", id)
+		}
+	}
+}
+
 func TestApplySettingRows(t *testing.T) {
 	r := testSettingsRuntime(t)
 	r.themeCatalog = pitheme.LoadCatalog(pitheme.CatalogOptions{Mode: pitheme.ColorModeTruecolor})

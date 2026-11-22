@@ -3855,6 +3855,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 					}
 					if err == nil {
+						// A language change rebuilds every label, description, and
+						// hint; keep the selected row under the cursor.
+						if item.ID == "language" && r.options.Language == "" {
+							index := r.settingsPicker.Index
+							r.settingsPicker = r.newSettingsPicker()
+							r.settingsPicker.Index = index
+						}
 						if item.ID == "theme" || item.ID == "color-mode" {
 							if watch != nil {
 								watch.SetSelected(r.selectedUserThemePath())
