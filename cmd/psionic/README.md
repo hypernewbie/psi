@@ -27,7 +27,8 @@ Flags:
 | `--agent ID` | Select one configured agent entry. Required when more than one entry exists. |
 | `--workspace DIR` | Override the selected agent's workspace for this process. |
 | `--state-dir DIR` | Psionic's private state directory. Defaults to `psionic` under the OS user configuration directory. |
-| `--agent-dir DIR` | Psi agent directory for `settings.json`, `models.json`, and `auth.json`. Defaults to Psi's normal agent directory. |
+| `--agent-dir DIR` | Psi agent directory for `settings.json`. Defaults to Psi's normal agent directory. |
+| `--shared-agent-dir DIR` | Psi agent directory for `models.json` and `auth.json`. Defaults to the agent directory. Use it to keep a service's own `settings.json` while sharing one catalogue and one credential file with the main Psi installation. No file is copied or linked. |
 | `--secret-store-db PATH` | Existing SQLite database for `store` token references. Opened read-only; overrides automatic lookup beside the settings file. |
 | `--check` | Validate configuration and resolve credentials without connecting to Discord. It can run a configured `exec` provider. |
 | `--version` | Print the version. |
@@ -253,6 +254,13 @@ when the bundled catalogue does not contain it, and provision credentials in
 agent directory. Model and provider settings from the input file are ignored.
 OAuth-only provider modes are not supported in this release; configure an API-key endpoint
 instead.
+
+The three Psi files do not have to sit in one directory. `--agent-dir` holds
+`settings.json`, and `--shared-agent-dir` holds `models.json` and
+`auth.json`. A service can therefore keep its own model selection in its own
+settings file and still use the main installation's catalogue and credentials,
+with no copied and no linked files. `--check` reports when the catalogue comes
+from a shared directory.
 
 ## Security
 

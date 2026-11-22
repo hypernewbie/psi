@@ -119,7 +119,7 @@ func (c *conversation) handleModel(turn sourceTurn, arg string) {
 	model, catalogue, providerID, err := resolveModel(c.rt.models, arg)
 	if err == nil {
 		var client provider.Provider
-		client, err = buildProvider(c.rt.models, c.rt.agentDir, providerID, model, catalogue, 1, "check")
+		client, err = buildProvider(c.rt.models, c.rt.authPath, providerID, model, catalogue, 1, "check")
 		if client != nil {
 			client.CloseIdle()
 		}

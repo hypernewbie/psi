@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -93,7 +94,8 @@ func testRuntime(t *testing.T, workspace string, state *stateStore, tr transport
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, nil, t.TempDir(), state, configDefaults(), tr, log.New(io.Discard, "", 0))
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, nil, agentDir, filepath.Join(agentDir, "auth.json"), state, configDefaults(), tr, log.New(io.Discard, "", 0))
 	rt.clients = factory.build
 	return rt
 }
@@ -235,7 +237,8 @@ func TestMessageToolModeFlushesOnlyTheStagedReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, nil, t.TempDir(), state, configDefaults(), tr, log.New(io.Discard, "", 0))
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, nil, agentDir, filepath.Join(agentDir, "auth.json"), state, configDefaults(), tr, log.New(io.Discard, "", 0))
 	rt.clients = factory.build
 	dm := inboundMessage{MessageID: "223456789012345678", ChannelID: "323456789012345678", AuthorID: "123456789012345678", IsDM: true}
 	chat := &conversation{key: "dm:one", rt: rt}
@@ -287,7 +290,8 @@ func TestGroupReplyModeDoesNotChangeDirectMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, nil, t.TempDir(), state, configDefaults(), tr, log.New(io.Discard, "", 0))
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, nil, agentDir, filepath.Join(agentDir, "auth.json"), state, configDefaults(), tr, log.New(io.Discard, "", 0))
 	rt.clients = factory.build
 	dm := inboundMessage{MessageID: "223456789012345678", ChannelID: "323456789012345678", AuthorID: "123456789012345678", IsDM: true}
 	direct := &conversation{key: "dm:direct", rt: rt}

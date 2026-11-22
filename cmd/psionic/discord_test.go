@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -298,7 +299,8 @@ func TestConversationBusyTracksAnActiveRun(t *testing.T) {
 
 func TestRouteKeySeparatesDMScopes(t *testing.T) {
 	settings := mustSettings(t, `{ channels: { discord: {} }, session: { dmScope: "per-peer" } }`)
-	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, t.TempDir(), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, agentDir, filepath.Join(agentDir, "auth.json"), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
 	if got := rt.routeKey(inboundMessage{IsDM: true, ChannelID: "1", AuthorID: "2"}); got != "dm:2" {
 		t.Fatalf("per-peer key = %q", got)
 	}

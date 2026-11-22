@@ -375,7 +375,8 @@ func TestNativeCommandSetting(t *testing.T) {
 		`{ channels: { discord: {} }, commands: { native: "auto" } }`: true,
 	} {
 		settings := mustSettings(t, body)
-		rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, t.TempDir(), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
+		agentDir := t.TempDir()
+		rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, agentDir, filepath.Join(agentDir, "auth.json"), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
 		if got := rt.commandsEnabled(); got != want {
 			t.Fatalf("native = %v, want %v", got, want)
 		}
@@ -419,7 +420,8 @@ func TestRouteToolsCanOnlyNarrowTheAgentPolicy(t *testing.T) {
   } } } },
   agents: { defaults: { workspace: `+fmt.Sprintf("%q", t.TempDir())+` } },
 }`)
-	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir(), Tools: toolPolicy{Profile: "coding"}}, nil, t.TempDir(), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir(), Tools: toolPolicy{Profile: "coding"}}, nil, agentDir, filepath.Join(agentDir, "auth.json"), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
 	msg := inboundMessage{GuildID: "323456789012345678", ChannelID: "423456789012345678"}
 	policy := rt.routeTools(msg)
 	if policy.allows("message") || policy.allows("memory_get") || !policy.allows("memory_search") {

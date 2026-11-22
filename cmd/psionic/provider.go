@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -92,7 +91,7 @@ func missingAPIKey(err error) bool {
 // stay a later addition. This is a subset of Psi's client-construction block in
 // internal/app/app.go:1085 (configure): the API-key cases only, no OAuth or
 // subscription clients. Keep this in sync with that block when it changes!
-func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta provider.ModelMeta, catalogue config.ModelMeta, maxRetries int, sessionID string) (provider.Provider, error) {
+func buildProvider(models *config.ModelsFile, authPath, providerID string, meta provider.ModelMeta, catalogue config.ModelMeta, maxRetries int, sessionID string) (provider.Provider, error) {
 	headers := map[string]string{}
 	for name, value := range catalogue.Headers {
 		resolved, err := config.ResolveCredential(value)
@@ -101,7 +100,6 @@ func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta 
 		}
 		headers[name] = resolved
 	}
-	authPath := filepath.Join(agentDir, "auth.json")
 	configured := models.Providers[providerID]
 	keyInput, allowMissing := apiKeyPolicy(providerID, catalogue, configured)
 	resolveAPIKey := func() (string, error) {
@@ -189,12 +187,12 @@ func envMap() map[string]string {
 }
 
 // newProviderSet resolves and builds the primary and optional compaction model.
-func newProviderSet(models *config.ModelsFile, agentDir, modelRef, compactionRef, sessionID string, maxRetries int) (*providerSet, error) {
+func newProviderSet(models *config.ModelsFile, authPath, modelRef, compactionRef, sessionID string, maxRetries int) (*providerSet, error) {
 	mainModel, mainCatalogue, providerID, err := resolveModel(models, modelRef)
 	if err != nil {
 		return nil, err
 	}
-	mainClient, err := buildProvider(models, agentDir, providerID, mainModel, mainCatalogue, maxRetries, sessionID)
+	mainClient, err := buildProvider(models, authPath, providerID, mainModel, mainCatalogue, maxRetries, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +203,7 @@ func newProviderSet(models *config.ModelsFile, agentDir, modelRef, compactionRef
 			set.close()
 			return nil, fmt.Errorf("compaction model: %w", err)
 		}
-		compactor, err := buildProvider(models, agentDir, compactorID, compactionModel, compactionCatalogue, maxRetries, sessionID)
+		compactor, err := buildProvider(models, authPath, compactorID, compactionModel, compactionCatalogue, maxRetries, sessionID)
 		if err != nil {
 			set.close()
 			return nil, fmt.Errorf("compaction model: %w", err)

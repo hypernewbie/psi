@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"log"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -148,7 +149,8 @@ func TestChannelCannotWidenGuildTools(t *testing.T) {
     channels: { "423456789012345678": { tools: { alsoAllow: ["message"] } } },
   } } } },
 }`)
-	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, t.TempDir(), nil, configDefaults(), nil, nil)
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, agentDir, filepath.Join(agentDir, "auth.json"), nil, configDefaults(), nil, nil)
 	route := rt.routeTools(inboundMessage{GuildID: "323456789012345678", ChannelID: "423456789012345678"})
 	if route.allows("message") {
 		t.Fatal("channel widened the guild tool policy")
@@ -247,7 +249,8 @@ func TestOwnerBootstrapSkipsWildcardsAndHonorsExplicitOwners(t *testing.T) {
 
 func TestGroupDMRouteIsItsOwnSharedRoom(t *testing.T) {
 	settings := mustSettings(t, `{ channels: { discord: {} } }`)
-	rt := newRuntime(settings, selectedAgent{ID: "main", Workspace: t.TempDir()}, nil, t.TempDir(), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{ID: "main", Workspace: t.TempDir()}, nil, agentDir, filepath.Join(agentDir, "auth.json"), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
 	rt.setBotID("123456789012345678")
 	group := rt.routeKey(inboundMessage{AuthorID: "223456789012345678", ChannelID: "523456789012345678", IsGroupDM: true})
 	dm := rt.routeKey(inboundMessage{AuthorID: "223456789012345678", ChannelID: "523456789012345678", IsDM: true})

@@ -130,13 +130,13 @@ func TestCheckStateDirRejectsOverlaps(t *testing.T) {
 	if err := os.MkdirAll(sessions, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkStateDir(filepath.Join(sessions, "psionic"), workspace, agentDir); err == nil {
+	if err := checkStateDir(filepath.Join(sessions, "psionic"), workspace, agentDir, agentDir); err == nil {
 		t.Fatal("state inside the Psi session root was accepted")
 	}
-	if err := checkStateDir(filepath.Join(workspace, "state"), workspace, agentDir); err == nil {
+	if err := checkStateDir(filepath.Join(workspace, "state"), workspace, agentDir, agentDir); err == nil {
 		t.Fatal("state inside the workspace was accepted")
 	}
-	if err := checkStateDir(t.TempDir(), workspace, agentDir); err != nil {
+	if err := checkStateDir(t.TempDir(), workspace, agentDir, agentDir); err != nil {
 		t.Fatalf("separate state: %v", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestPrepareUsesOnlyThePsionicSessionDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.close()
-	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, models, agentDir, state, configDefaults(), nil, log.New(io.Discard, "", 0))
+	rt := newRuntime(settings, selectedAgent{Workspace: workspace, Model: "demo/large-model"}, models, agentDir, filepath.Join(agentDir, "auth.json"), state, configDefaults(), nil, log.New(io.Discard, "", 0))
 	chat := &conversation{key: "dm:1", rt: rt}
 	chat.ctx, chat.cancel = context.WithCancel(context.Background())
 	defer chat.cancel()
@@ -247,7 +247,7 @@ func TestCheckStateDirRejectsSymlinkedStateDirectory(t *testing.T) {
 	if err := os.Symlink(target, alias); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if err := checkStateDir(alias, t.TempDir(), ""); err == nil {
+	if err := checkStateDir(alias, t.TempDir(), "", ""); err == nil {
 		t.Fatal("symlinked state directory was accepted")
 	}
 }
@@ -268,7 +268,7 @@ func TestCheckStateDirRejectsUnmarkedContents(t *testing.T) {
 			if err := setup(dir); err != nil {
 				t.Fatal(err)
 			}
-			err := checkStateDir(dir, workspace, "")
+			err := checkStateDir(dir, workspace, "", "")
 			if name == "unmarked" && err == nil {
 				t.Fatal("unmarked state directory was accepted")
 			}
@@ -291,7 +291,7 @@ func TestCheckStateDirRejectsSymlinkAlias(t *testing.T) {
 	if err := os.Symlink(sessions, alias); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if err := checkStateDir(filepath.Join(alias, "psionic"), workspace, agentDir); err == nil {
+	if err := checkStateDir(filepath.Join(alias, "psionic"), workspace, agentDir, agentDir); err == nil {
 		t.Fatal("symlinked state inside the Psi session root was accepted")
 	}
 }

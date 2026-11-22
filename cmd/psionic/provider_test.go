@@ -49,7 +49,7 @@ func TestResolveModelKeepsSlashes(t *testing.T) {
 
 func TestNewProviderSetBuildsPrimaryAndCompactor(t *testing.T) {
 	models := testModels(t)
-	set, err := newProviderSet(models, t.TempDir(), "demo/large-model", "demo/small-model", "session-id", 1)
+	set, err := newProviderSet(models, filepath.Join(t.TempDir(), "auth.json"), "demo/large-model", "demo/small-model", "session-id", 1)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestNewProviderSetBuildsPrimaryAndCompactor(t *testing.T) {
 func TestNewProviderSetRejectsUnknownModel(t *testing.T) {
 	models := testModels(t)
 	const privateModelID = "SYNTHETIC_PRIVATE_MODEL_ID"
-	if _, err := newProviderSet(models, t.TempDir(), "demo/"+privateModelID, "", "session-id", 1); err == nil || strings.Contains(err.Error(), privateModelID) {
+	if _, err := newProviderSet(models, filepath.Join(t.TempDir(), "auth.json"), "demo/"+privateModelID, "", "session-id", 1); err == nil || strings.Contains(err.Error(), privateModelID) {
 		t.Fatalf("unknown model diagnostic exposed its ID: %v", err)
 	}
 }

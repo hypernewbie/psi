@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -162,7 +163,8 @@ func TestResetOverridePrefersExactChannel(t *testing.T) {
     "423456789012345678": { mode: "idle", idleMinutes: 30 },
   } },
 }`)
-	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, t.TempDir(), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
+	agentDir := t.TempDir()
+	rt := newRuntime(settings, selectedAgent{Workspace: t.TempDir()}, nil, agentDir, filepath.Join(agentDir, "auth.json"), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
 	if got := rt.resetOverride("423456789012345678"); got == nil || got.Mode != "idle" || got.IdleMinutes == nil || *got.IdleMinutes != 30 {
 		t.Fatalf("exact override = %+v", got)
 	}

@@ -22,13 +22,18 @@ import (
 var version = "0.1.0"
 
 type options struct {
-	configPath    string
-	agentID       string
-	workspace     string
-	stateDir      string
-	agentDir      string
-	secretStoreDB string
-	check         bool
+	configPath string
+	agentID    string
+	workspace  string
+	stateDir   string
+	agentDir   string
+	// sharedAgentDir holds models.json and auth.json. It lets a service keep
+	// its own settings.json while sharing one catalogue and one credential
+	// store with the main Psi installation. It defaults to the agent
+	// directory.
+	sharedAgentDir string
+	secretStoreDB  string
+	check          bool
 }
 
 func main() {
@@ -71,12 +76,13 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.StringVar(&opts.agentID, "agent", "", "agent entry to run")
 	flags.StringVar(&opts.workspace, "workspace", "", "workspace override")
 	flags.StringVar(&opts.stateDir, "state-dir", "", "private state directory")
-	flags.StringVar(&opts.agentDir, "agent-dir", "", "Psi agent directory for settings, models, and credentials")
+	flags.StringVar(&opts.agentDir, "agent-dir", "", "Psi agent directory for settings.json")
+	flags.StringVar(&opts.sharedAgentDir, "shared-agent-dir", "", "Psi agent directory for models.json and auth.json; defaults to the agent directory")
 	flags.StringVar(&opts.secretStoreDB, "secret-store-db", "", "existing read-only SQLite secret-store database")
 	flags.BoolVar(&opts.check, "check", false, "validate settings without a Discord connection or state writes; may execute the configured exec token provider")
 	flags.BoolVar(&showVersion, "version", false, "print the version")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: psionic --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--secret-store-db PATH] [--check]")
+		fmt.Fprintln(stderr, "Usage: psionic --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--agent-dir DIR] [--shared-agent-dir DIR] [--secret-store-db PATH] [--check]")
 		fmt.Fprintln(stderr, "Discord replies are capped at 16 messages; truncated replies include a notice.")
 		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store.")
 		fmt.Fprintln(stderr, "DISCORD_BOT_TOKEN is used only when channels.discord.token is absent.")
@@ -108,8 +114,13 @@ type loaded struct {
 	agent    selectedAgent
 	models   *config.ModelsFile
 	agentDir string
-	token    string
-	defaults config.Settings
+	// authPath is the credential file the providers read.
+	authPath string
+	// sharedCatalogue reports that the catalogue and credentials come from a
+	// different directory than the settings file.
+	sharedCatalogue bool
+	token           string
+	defaults        config.Settings
 }
 
 // prepare resolves configuration and token credentials, validates model
@@ -154,7 +165,18 @@ func prepare(opts options) (*loaded, error) {
 	if agentDir, err = filepath.Abs(agentDir); err != nil {
 		return nil, fmt.Errorf("agent directory: invalid path")
 	}
-	models, err := config.LoadModels(filepath.Join(agentDir, "models.json"))
+	// The catalogue and the credentials may live in another Psi agent
+	// directory than the settings file. That lets a service keep its own
+	// model selection while sharing one catalogue and one credential store
+	// with the main Psi installation, without copying or linking files.
+	sharedDir := opts.sharedAgentDir
+	if sharedDir == "" {
+		sharedDir = agentDir
+	}
+	if sharedDir, err = filepath.Abs(sharedDir); err != nil {
+		return nil, fmt.Errorf("shared agent directory: invalid path")
+	}
+	models, err := config.LoadModels(filepath.Join(sharedDir, "models.json"))
 	if err != nil {
 		return nil, fmt.Errorf("models: model metadata is malformed or unavailable")
 	}
@@ -162,6 +184,7 @@ func prepare(opts options) (*loaded, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent settings: unavailable")
 	}
+	authPath := filepath.Join(sharedDir, "auth.json")
 	providerID := defaults.Settings.DefaultProvider
 	if providerID == "" {
 		return nil, fmt.Errorf("agent settings: defaultProvider is required")
@@ -177,7 +200,7 @@ func prepare(opts options) (*loaded, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := buildProvider(models, agentDir, providerID, mainModel, mainCatalogue, 1, "check")
+	client, err := buildProvider(models, authPath, providerID, mainModel, mainCatalogue, 1, "check")
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +210,7 @@ func prepare(opts options) (*loaded, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compaction model: %w", err)
 		}
-		compactor, err := buildProvider(models, agentDir, compactorID, compactionModel, compactionCatalogue, 1, "check")
+		compactor, err := buildProvider(models, authPath, compactorID, compactionModel, compactionCatalogue, 1, "check")
 		if err != nil {
 			return nil, fmt.Errorf("compaction model: %w", err)
 		}
@@ -208,7 +231,7 @@ func prepare(opts options) (*loaded, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkStateDir(stateDir, agent.Workspace, agentDir); err != nil {
+	if err := checkStateDir(stateDir, agent.Workspace, agentDir, sharedDir); err != nil {
 		return nil, err
 	}
 	if defaults.Settings.SessionDir != "" && overlaps(stateDir, defaults.Settings.SessionDir) {
@@ -222,7 +245,10 @@ func prepare(opts options) (*loaded, error) {
 	// be wiped; dropping references shortens their application-owned lifetime.
 	settings.Channels.Discord.Token = nil
 	settings.Secrets = nil
-	return &loaded{options: opts, settings: settings, agent: agent, models: models, agentDir: agentDir, token: token, defaults: defaults.Settings}, nil
+	return &loaded{
+		options: opts, settings: settings, agent: agent, models: models, agentDir: agentDir,
+		authPath: authPath, sharedCatalogue: sharedDir != agentDir, token: token, defaults: defaults.Settings,
+	}, nil
 }
 
 func botToken(settings *fileSettings, secretStoreDB, settingsPath string) (string, error) {
@@ -243,6 +269,9 @@ func printCheck(w io.Writer, l *loaded) error {
 	fmt.Fprintln(w, "agent: selected")
 	fmt.Fprintln(w, "workspace: configured")
 	fmt.Fprintln(w, "model: validated from Psi settings")
+	if l.sharedCatalogue {
+		fmt.Fprintln(w, "model catalogue: shared Psi agent directory")
+	}
 	if len(l.agent.Fallbacks) > 0 {
 		fmt.Fprintf(w, "model fallbacks: ignored (%d configured)\n", len(l.agent.Fallbacks))
 	}
@@ -346,7 +375,7 @@ func serve(ctx context.Context, l *loaded, stderr io.Writer) error {
 		return fmt.Errorf("discord: settings are invalid (%T)", err)
 	}
 	defer transport.close()
-	rt := newRuntime(l.settings, l.agent, l.models, l.agentDir, state, l.defaults, transport, logger)
+	rt := newRuntime(l.settings, l.agent, l.models, l.agentDir, l.authPath, state, l.defaults, transport, logger)
 	// Install the transport before connecting so command acknowledgements use
 	// the same path as ordinary replies.
 	rt.transport = transport
@@ -371,7 +400,11 @@ func resolveStateDir(configured string) (string, error) {
 	return filepath.Abs(dir)
 }
 
-func checkStateDir(stateDir, workspace, agentDir string) error {
+// checkStateDir refuses a location that overlaps the workspace or known Psi
+// session roots. Psionic transcripts must stay independent from other hosts.
+// Both the agent directory and the shared agent directory are refused, because
+// either one may hold a Psi session root.
+func checkStateDir(stateDir, workspace, agentDir, sharedAgentDir string) error {
 	workspace = resolvePath(workspace)
 	if overlaps(stateDir, workspace) {
 		return fmt.Errorf("state directory overlaps the workspace")
@@ -382,8 +415,11 @@ func checkStateDir(stateDir, workspace, agentDir string) error {
 		// currently points Psi somewhere else.
 		roots = append(roots, filepath.Join(home, ".pi", "agent"), filepath.Join(home, ".pi", "agent", "sessions"))
 	}
-	if agentDir != "" {
-		roots = append(roots, agentDir, session.SessionsRoot(agentDir))
+	for _, dir := range []string{agentDir, sharedAgentDir} {
+		if dir == "" {
+			continue
+		}
+		roots = append(roots, dir, session.SessionsRoot(dir))
 	}
 	if env := os.Getenv("PSI_CODING_AGENT_SESSION_DIR"); env != "" {
 		roots = append(roots, resolvePath(env))

@@ -79,7 +79,11 @@ type referenceReader interface {
 	message(ctx context.Context, channelID, messageID string) (historyMessage, error)
 }
 
-type providerFactory func(models *config.ModelsFile, agentDir, modelRef, compactionRef, sessionID string, maxRetries int) (*providerSet, error)
+// providerFactory builds the provider clients for one conversation. The
+// credential file path is passed instead of an agent directory because the
+// catalogue and the credentials may come from a shared agent directory that
+// differs from the one holding the settings file.
+type providerFactory func(models *config.ModelsFile, authPath, modelRef, compactionRef, sessionID string, maxRetries int) (*providerSet, error)
 
 type runtime struct {
 	settings       *fileSettings
@@ -87,6 +91,7 @@ type runtime struct {
 	policy         *accessPolicy
 	models         *config.ModelsFile
 	agentDir       string
+	authPath       string
 	state          *stateStore
 	defaults       config.Settings
 	defaultReplies string
@@ -110,7 +115,7 @@ type runtime struct {
 
 // newRuntime prepares the shared configuration without creating a session,
 // provider client, or network connection.
-func newRuntime(settings *fileSettings, selected selectedAgent, models *config.ModelsFile, agentDir string, state *stateStore, defaults config.Settings, tr transport, logger *log.Logger) *runtime {
+func newRuntime(settings *fileSettings, selected selectedAgent, models *config.ModelsFile, agentDir, authPath string, state *stateStore, defaults config.Settings, tr transport, logger *log.Logger) *runtime {
 	defaultReplies, groupReplies := replyModes(settings)
 	runTimeout := time.Duration(0)
 	if worker := settings.Channels.Discord.InboundWorker; worker != nil && worker.RunTimeoutMs != nil && *worker.RunTimeoutMs > 0 {
@@ -122,7 +127,7 @@ func newRuntime(settings *fileSettings, selected selectedAgent, models *config.M
 	}
 	return &runtime{
 		settings: settings, agent: selected, policy: newAccessPolicy(settings),
-		models: models, agentDir: agentDir, state: state, defaults: defaults,
+		models: models, agentDir: agentDir, authPath: authPath, state: state, defaults: defaults,
 		defaultReplies: defaultReplies, groupReplies: groupReplies,
 		transport: tr, logger: logger, runTimeout: runTimeout, skills: available,
 		clients: newProviderSet, chats: map[string]*conversation{},
@@ -457,7 +462,7 @@ func (c *conversation) prepare(msg inboundMessage) error {
 		build = newProviderSet
 	}
 	c.modelOverride = modelChoice
-	clients, err := build(c.rt.models, c.rt.agentDir, c.modelRef(), c.rt.agent.Compaction, store.Header().ID, c.rt.defaults.MaxRetries)
+	clients, err := build(c.rt.models, c.rt.authPath, c.modelRef(), c.rt.agent.Compaction, store.Header().ID, c.rt.defaults.MaxRetries)
 	if err != nil {
 		store.Unlock()
 		return err
