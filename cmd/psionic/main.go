@@ -141,10 +141,6 @@ func prepare(opts options) (*loaded, error) {
 	if resolved, err := filepath.EvalSymlinks(agent.Workspace); err == nil {
 		agent.Workspace = resolved
 	}
-	token, err := botToken(settings, opts.secretStoreDB, opts.configPath)
-	if err != nil {
-		return nil, err
-	}
 	agentDir := opts.agentDir
 	if agentDir == "" {
 		agentDir = session.AgentDir()
@@ -212,6 +208,14 @@ func prepare(opts options) (*loaded, error) {
 	if defaults.Settings.SessionDir != "" && overlaps(stateDir, defaults.Settings.SessionDir) {
 		return nil, fmt.Errorf("state directory overlaps another agent's session directory")
 	}
+	token, err := botToken(settings, opts.secretStoreDB, opts.configPath)
+	if err != nil {
+		return nil, err
+	}
+	// Drop raw token settings now that resolution is complete. Go strings cannot
+	// be wiped; dropping references shortens their application-owned lifetime.
+	settings.Channels.Discord.Token = nil
+	settings.Secrets = nil
 	return &loaded{options: opts, settings: settings, agent: agent, models: models, agentDir: agentDir, token: token, defaults: defaults.Settings}, nil
 }
 
@@ -317,9 +321,6 @@ func serve(ctx context.Context, l *loaded, stderr io.Writer) error {
 	logger := log.New(stderr, "psionic: ", log.LstdFlags)
 	transport, err := newDiscordTransport(l.token, l.settings, logger)
 	l.token = ""
-	if l.settings.Channels.Discord.Token != nil {
-		l.settings.Channels.Discord.Token = nil
-	}
 	if err != nil {
 		return fmt.Errorf("discord: settings are invalid (%T)", err)
 	}

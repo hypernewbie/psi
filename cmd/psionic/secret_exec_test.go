@@ -60,6 +60,28 @@ func TestSecretExecProviderPlainOutputMode(t *testing.T) {
 	}
 }
 
+func TestSecretExecOptionsDropOwnedReferences(t *testing.T) {
+	request := []byte("synthetic request")
+	backing := bytes.Repeat([]byte{'x'}, 128)
+	copy(backing, request)
+	options := secretExecOptions{
+		command: "/synthetic/provider", requestedID: "synthetic/token",
+		args:    []string{"--secret", "synthetic-value"},
+		env:     []string{"TOKEN=synthetic-value"},
+		request: backing[:len(request)],
+	}
+
+	options.clearReferences()
+	if options.command != "" || options.requestedID != "" || options.args[0] != "" || options.args[1] != "" || options.env[0] != "" {
+		t.Fatal("exec option references were retained")
+	}
+	for i, value := range backing {
+		if value != 0 {
+			t.Fatalf("request allocation byte %d was not wiped", i)
+		}
+	}
+}
+
 func TestParseSecretExecOutputWipesFullCaptureAllocation(t *testing.T) {
 	response := []byte(`{"protocolVersion":1,"values":{"id":"synthetic-token"}}`)
 	backing := bytes.Repeat([]byte{'x'}, 256)

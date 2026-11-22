@@ -45,6 +45,17 @@ type secretExecOptions struct {
 	requestedID string
 }
 
+// clearReferences drops owned string references and wipes the request buffer.
+// Go strings in args and env are immutable and cannot themselves be erased.
+func (o *secretExecOptions) clearReferences() {
+	clear(o.args)
+	clear(o.env)
+	secretmem.Wipe(o.request[:cap(o.request)])
+	o.request = nil
+	o.command = ""
+	o.requestedID = ""
+}
+
 type secretExecCapture struct {
 	mu       sync.Mutex
 	stdout   bytes.Buffer
@@ -121,12 +132,23 @@ func resolveSecretExec(alias string, provider *secretProvider, id string, lookup
 }
 
 func validateSecretExecConfig(alias string, provider *secretProvider, id string, lookupEnv func(string) (string, bool)) error {
-	_, err := prepareSecretExec(alias, provider, id, lookupEnv)
+	opts, err := prepareSecretExec(alias, provider, id, lookupEnv)
+	opts.clearReferences()
 	return err
 }
 
 func prepareSecretExec(alias string, provider *secretProvider, id string, lookupEnv func(string) (string, bool)) (secretExecOptions, error) {
 	var opts secretExecOptions
+	var args, env []string
+	var request []byte
+	transferred := false
+	defer func() {
+		if !transferred {
+			clear(args)
+			clear(env)
+			secretmem.Wipe(request[:cap(request)])
+		}
+	}()
 	if !validExecSecretID(id) {
 		return opts, fmt.Errorf("invalid exec secret reference")
 	}
@@ -141,7 +163,7 @@ func prepareSecretExec(alias string, provider *secretProvider, id string, lookup
 	if len(provider.Args) > maxSecretExecArgs || len(provider.TrustedDirs) > maxSecretExecTrustedDirs || len(provider.PassEnv) > maxSecretExecPassedEnv {
 		return opts, fmt.Errorf("invalid exec provider arguments")
 	}
-	args := make([]string, len(provider.Args))
+	args = make([]string, len(provider.Args))
 	for i, arg := range provider.Args {
 		if len(arg) > maxSecretExecArgumentBytes {
 			return opts, fmt.Errorf("invalid exec provider arguments")
@@ -172,11 +194,11 @@ func prepareSecretExec(alias string, provider *secretProvider, id string, lookup
 	if maxOutput < 1 || maxOutput > maxSecretExecOutputBytes {
 		return opts, fmt.Errorf("invalid exec provider output limit")
 	}
-	request, err := json.Marshal(secretExecRequest{ProtocolVersion: 1, Provider: alias, IDs: []string{id}})
+	request, err = json.Marshal(secretExecRequest{ProtocolVersion: 1, Provider: alias, IDs: []string{id}})
 	if err != nil || len(request) > maxSecretExecRequestBytes {
 		return opts, fmt.Errorf("exec provider request is too large")
 	}
-	env := make([]string, 0, len(provider.PassEnv)+len(provider.Env))
+	env = make([]string, 0, len(provider.PassEnv)+len(provider.Env))
 	seen := make(map[string]struct{}, len(provider.PassEnv)+len(provider.Env))
 	for _, name := range provider.PassEnv {
 		if !secretEnvName.MatchString(name) {
@@ -210,11 +232,13 @@ func prepareSecretExec(alias string, provider *secretProvider, id string, lookup
 			env = append(env, name+"="+resolved)
 		}
 	}
-	return secretExecOptions{
+	opts = secretExecOptions{
 		command: command, args: args, env: env, request: request, timeout: timeout,
 		noOutput: noOutputTimeout, maxOutput: maxOutput,
 		jsonOnly: provider.JSONOnly == nil || *provider.JSONOnly, requestedID: id,
-	}, nil
+	}
+	transferred = true
+	return opts, nil
 }
 
 func validExecSecretID(id string) bool {
@@ -242,6 +266,11 @@ func runSecretExec(opts secretExecOptions) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	process := startSecretExec(ctx, opts.command, opts.args, opts.env, opts.request)
+	defer func() {
+		clear(process.Args)
+		clear(process.Env)
+		opts.clearReferences()
+	}()
 	capture := &secretExecCapture{limit: opts.maxOutput, exceeded: make(chan struct{}), onOutput: make(chan struct{}, 1)}
 	defer capture.wipe()
 	process.Stdout = capture.stdoutWriter()

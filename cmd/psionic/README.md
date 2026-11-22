@@ -170,9 +170,10 @@ Only allowlisted people reach an agent run. Owner-only controls and private
 memory require `commands.ownerAllowFrom`. Do not publish a bot token in a
 workspace file or a settings example. Token settings and JSON-backed sources
 pass through immutable Go strings; decoders, the runtime, Discord's SDK, and the
-HTTP stack can create copies that cannot be reliably wiped. Psionic wipes owned
-file, exec, and store byte buffers where practical, but does not claim complete
-process-memory erasure.
+HTTP stack can create copies that cannot be reliably wiped. Exec-provider
+arguments and environment values also pass into a child process and OS-owned
+copies. Psionic wipes owned file, exec, and store byte buffers where practical,
+but does not claim complete process-memory erasure.
 
 ## Canary and cutover
 
