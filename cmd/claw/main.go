@@ -76,6 +76,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: claw --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--check]")
 		fmt.Fprintln(stderr, "Discord replies are capped at 16 messages; truncated replies include a notice.")
+		fmt.Fprintln(stderr, "Discord token sources: literal or environment; file, exec, and store are unsupported.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {

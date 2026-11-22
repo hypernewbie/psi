@@ -99,6 +99,29 @@ func TestLoadFileSettingsJSON5(t *testing.T) {
 	}
 }
 
+func TestEnvironmentTokenProviderAllowlist(t *testing.T) {
+	lookup := func(name string) (string, bool) { return "test-token", true }
+	for _, tc := range []struct {
+		name, secrets, provider string
+		wantError               bool
+	}{
+		{"built-in", ``, `default`, false},
+		{"allowed", `secrets: { providers: { trusted: { source: "env", allowlist: ["BOT_TOKEN"] } } },`, `trusted`, false},
+		{"denied", `secrets: { providers: { trusted: { source: "env", allowlist: [] } } },`, `trusted`, true},
+		{"unknown alias", ``, `unknown`, true},
+		{"wrong source", `secrets: { providers: { custom: { source: "file" } } },`, `custom`, true},
+		{"default collision", `secrets: { providers: { default: { source: "file" } } },`, `default`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{ %s channels: { discord: { token: { source: "env", provider: %q, id: "BOT_TOKEN" } } } }`, tc.secrets, tc.provider)
+			_, err := decodeSettings([]byte(body), lookup)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error = %v, wantError = %t", err, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestLoadFileSettingsRejectsUnsupportedPolicies(t *testing.T) {
 	cases := map[string]string{
 		"unknown dm":        `{ channels: { discord: { dmPolicy: "request" } } }`,

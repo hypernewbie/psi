@@ -21,7 +21,22 @@ type fileSettings struct {
 	Messages *messagesSettings `json:"messages"`
 	Session  *sessionSettings  `json:"session"`
 	Commands *commandsSettings `json:"commands"`
+	Secrets  *secretsSettings  `json:"secrets"`
 	Tools    *toolPolicy       `json:"tools"`
+}
+
+type secretsSettings struct {
+	Defaults  secretDefaults             `json:"defaults"`
+	Providers map[string]*secretProvider `json:"providers"`
+}
+
+type secretDefaults struct {
+	Env string `json:"env"`
+}
+
+type secretProvider struct {
+	Source    string   `json:"source"`
+	Allowlist []string `json:"allowlist"`
 }
 
 type agentsSettings struct {
@@ -195,9 +210,10 @@ func (l *stringList) UnmarshalJSON(data []byte) error {
 // secretRef is a literal credential or an environment-backed reference.
 // File, command, and managed-store sources are refused before use.
 type secretRef struct {
-	value   string
-	env     string
-	present bool
+	value    string
+	env      string
+	provider string
+	present  bool
 }
 
 func (s *secretRef) UnmarshalJSON(data []byte) error {
@@ -207,8 +223,9 @@ func (s *secretRef) UnmarshalJSON(data []byte) error {
 		return json5.Unmarshal(data, &s.value)
 	}
 	var object struct {
-		Source string `json:"source"`
-		ID     string `json:"id"`
+		Source   string `json:"source"`
+		Provider string `json:"provider"`
+		ID       string `json:"id"`
 	}
 	if err := json5.Unmarshal(data, &object); err != nil {
 		return err
@@ -219,6 +236,7 @@ func (s *secretRef) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("environment secret needs an id")
 		}
 		s.env = object.ID
+		s.provider = object.Provider
 	default:
 		return fmt.Errorf("unsupported secret source %q", object.Source)
 	}
@@ -318,6 +336,40 @@ func containsInclude(value any, depth int) bool {
 	return false
 }
 
+func (s *fileSettings) validateEnvTokenProvider() error {
+	ref := s.Channels.Discord.Token
+	if ref == nil || ref.env == "" {
+		return nil
+	}
+	defaultProvider := "default"
+	if s.Secrets != nil && s.Secrets.Defaults.Env != "" {
+		defaultProvider = s.Secrets.Defaults.Env
+	}
+	provider := ref.provider
+	if provider == "" {
+		provider = defaultProvider
+	}
+	var configured *secretProvider
+	if s.Secrets != nil {
+		configured = s.Secrets.Providers[provider]
+	}
+	if configured == nil || configured.Source != "env" {
+		if provider == defaultProvider {
+			return nil // The default environment provider is built in.
+		}
+		return fmt.Errorf("settings: environment secret provider is unavailable")
+	}
+	if configured.Allowlist != nil {
+		for _, name := range configured.Allowlist {
+			if name == ref.env {
+				return nil
+			}
+		}
+		return fmt.Errorf("settings: environment secret is not allowed by its provider")
+	}
+	return nil
+}
+
 func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 	if s.Channels == nil || s.Channels.Discord == nil {
 		return fmt.Errorf("settings: channels.discord is required")
@@ -346,6 +398,9 @@ func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 		}
 	}
 	if discord.Token != nil {
+		if err := s.validateEnvTokenProvider(); err != nil {
+			return err
+		}
 		if _, err := discord.Token.resolve(lookupEnv); err != nil {
 			return fmt.Errorf("settings: channels.discord.token: %w", err)
 		}

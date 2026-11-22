@@ -44,6 +44,10 @@ access.
 | Sessions | `session.dmScope`, `session.reset`, `session.resetByType`, and `session.resetByChannel` for Discord. |
 | Commands | `commands.ownerAllowFrom` for owner-only controls. |
 
+`channels.discord.token` accepts a literal or an environment reference. For
+structured environment references, configured provider aliases and allowlists
+are enforced. File, command, and managed-store references are not yet supported.
+
 `channels.discord.dmPolicy: "pairing"` keeps static `allowFrom` entries
 working, but Claw does not implement the pairing workflow. Unknown senders
 stay denied. An `open` policy requires `allowFrom: ["*"]`, matching the
