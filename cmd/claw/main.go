@@ -22,12 +22,13 @@ import (
 var version = "0.1.0"
 
 type options struct {
-	configPath string
-	agentID    string
-	workspace  string
-	stateDir   string
-	agentDir   string
-	check      bool
+	configPath    string
+	agentID       string
+	workspace     string
+	stateDir      string
+	agentDir      string
+	secretStoreDB string
+	check         bool
 }
 
 func main() {
@@ -71,12 +72,13 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.StringVar(&opts.workspace, "workspace", "", "workspace override")
 	flags.StringVar(&opts.stateDir, "state-dir", "", "private state directory")
 	flags.StringVar(&opts.agentDir, "agent-dir", "", "Psi agent directory for settings, models, and credentials")
+	flags.StringVar(&opts.secretStoreDB, "secret-store-db", "", "existing read-only SQLite secret-store database")
 	flags.BoolVar(&opts.check, "check", false, "validate settings without connecting or writing")
 	flags.BoolVar(&showVersion, "version", false, "print the version")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: claw --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--check]")
+		fmt.Fprintln(stderr, "Usage: psionic --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--secret-store-db PATH] [--check]")
 		fmt.Fprintln(stderr, "Discord replies are capped at 16 messages; truncated replies include a notice.")
-		fmt.Fprintln(stderr, "Discord token sources: literal or environment; file, exec, and store are unsupported.")
+		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store. Store tokens need --secret-store-db.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -138,7 +140,7 @@ func prepare(opts options) (*loaded, error) {
 	if resolved, err := filepath.EvalSymlinks(agent.Workspace); err == nil {
 		agent.Workspace = resolved
 	}
-	token, err := botToken(settings)
+	token, err := botToken(settings, opts.secretStoreDB, opts.configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -212,14 +214,18 @@ func prepare(opts options) (*loaded, error) {
 	return &loaded{options: opts, settings: settings, agent: agent, models: models, agentDir: agentDir, token: token, defaults: defaults.Settings}, nil
 }
 
-func botToken(settings *fileSettings) (string, error) {
-	if token := settings.Channels.Discord.Token; token != nil {
-		return token.resolve(os.LookupEnv)
+func botToken(settings *fileSettings, secretStoreDB, settingsPath string) (string, error) {
+	if settings.Channels.Discord.Token != nil && settings.Channels.Discord.Token.store != "" {
+		var err error
+		secretStoreDB, err = resolveSecretStoreDatabase(secretStoreDB, settingsPath, os.LookupEnv)
+		if err != nil {
+			return "", err
+		}
 	}
-	if value := os.Getenv("DISCORD_BOT_TOKEN"); value != "" {
-		return value, nil
+	if settings.Channels.Discord.Token != nil {
+		return settings.resolveDiscordToken(os.LookupEnv, secretStoreDB)
 	}
-	return "", fmt.Errorf("settings: no Discord bot token and DISCORD_BOT_TOKEN is not set")
+	return resolveFallbackDiscordToken(os.LookupEnv)
 }
 
 func printCheck(w io.Writer, l *loaded) error {

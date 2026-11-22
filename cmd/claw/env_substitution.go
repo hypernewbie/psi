@@ -10,9 +10,9 @@ import (
 // the stricter grammar for a whole-value environment secret reference.
 var configEnvName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
-// substituteTokenEnvironment borrows the token string. The configuration and
-// Discord APIs require strings, so the builder and result may retain copies.
-func substituteTokenEnvironment(value string, lookupEnv func(string) (string, bool)) (string, error) {
+// substituteConfigEnvironment borrows value. Configuration and Discord APIs
+// require strings, so the builder and result may retain copies.
+func substituteConfigEnvironment(value string, lookupEnv func(string) (string, bool)) (string, error) {
 	var out strings.Builder
 	end := 0
 	for index := 0; index < len(value); index++ {

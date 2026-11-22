@@ -31,12 +31,27 @@ type secretsSettings struct {
 }
 
 type secretDefaults struct {
-	Env string `json:"env"`
+	Env   string `json:"env"`
+	File  string `json:"file"`
+	Exec  string `json:"exec"`
+	Store string `json:"store"`
 }
 
 type secretProvider struct {
-	Source    string   `json:"source"`
-	Allowlist []string `json:"allowlist"`
+	Source            string            `json:"source"`
+	Allowlist         []string          `json:"allowlist"`
+	Path              string            `json:"path"`
+	Mode              string            `json:"mode"`
+	Command           string            `json:"command"`
+	Args              []string          `json:"args"`
+	TrustedDirs       []string          `json:"trustedDirs"`
+	PassEnv           []string          `json:"passEnv"`
+	Env               map[string]string `json:"env"`
+	JSONOnly          *bool             `json:"jsonOnly"`
+	TimeoutMs         *int              `json:"timeoutMs"`
+	NoOutputTimeoutMs *int              `json:"noOutputTimeoutMs"`
+	MaxBytes          *int              `json:"maxBytes"`
+	MaxOutputBytes    *int              `json:"maxOutputBytes"`
 }
 
 type agentsSettings struct {
@@ -213,11 +228,13 @@ var (
 	secretEnvName      = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
 )
 
-// secretRef is a literal credential or an environment-backed reference.
-// File, command, and managed-store sources are refused before use.
+// secretRef is a literal credential or a provider-backed reference.
 type secretRef struct {
 	value    string
 	env      string
+	file     string
+	exec     string
+	store    string
 	provider string
 	present  bool
 }
@@ -260,6 +277,24 @@ func (s *secretRef) UnmarshalJSON(data []byte) error {
 		}
 		s.env = strings.TrimSpace(object.ID)
 		s.provider = object.Provider
+	case "file":
+		if strings.TrimSpace(object.ID) == "" {
+			return fmt.Errorf("file secret needs an id")
+		}
+		s.file = strings.TrimSpace(object.ID)
+		s.provider = object.Provider
+	case "exec":
+		if strings.TrimSpace(object.ID) == "" {
+			return fmt.Errorf("exec secret needs an id")
+		}
+		s.exec = strings.TrimSpace(object.ID)
+		s.provider = object.Provider
+	case "store":
+		if strings.TrimSpace(object.ID) == "" {
+			return fmt.Errorf("store secret needs an id")
+		}
+		s.store = strings.TrimSpace(object.ID)
+		s.provider = object.Provider
 	default:
 		return fmt.Errorf("unsupported secret source %q", object.Source)
 	}
@@ -280,7 +315,7 @@ func (s *secretRef) load(lookupEnv func(string) (string, bool)) (string, error) 
 	if strings.TrimSpace(s.value) == "" {
 		return "", nil
 	}
-	return substituteTokenEnvironment(s.value, lookupEnv)
+	return substituteConfigEnvironment(s.value, lookupEnv)
 }
 
 func (s *secretRef) resolve(lookupEnv func(string) (string, bool)) (string, error) {
@@ -422,10 +457,7 @@ func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 		}
 	}
 	if discord.Token != nil {
-		if err := s.validateEnvTokenProvider(); err != nil {
-			return err
-		}
-		if _, err := discord.Token.resolve(lookupEnv); err != nil {
+		if err := s.validateSecretTokenReference(lookupEnv); err != nil {
 			return fmt.Errorf("settings: channels.discord.token: %w", err)
 		}
 	}

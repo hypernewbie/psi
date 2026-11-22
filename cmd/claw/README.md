@@ -15,7 +15,8 @@ claw --config ./settings.json5
 
 `--check` reads the settings and model metadata, resolves the bot token, and
 prints the selected behavior. It does not connect, register commands, write
-state, or create a directory.
+state, or create a directory. An `exec` token provider is run during resolution;
+use only a trusted command with known side effects.
 
 Flags:
 
@@ -25,8 +26,9 @@ Flags:
 | `--agent ID` | Select one configured agent entry. Required when more than one entry exists. |
 | `--workspace DIR` | Override the selected agent's workspace for this process. |
 | `--state-dir DIR` | Claw's private state directory. Defaults to `claw` under the OS user configuration directory. |
-| `--agent-dir DIR` | Psi agent directory for `models.json` and `auth.json`. Defaults to Psi's normal agent directory. |
-| `--check` | Offline validation. |
+| `--agent-dir DIR` | Psi agent directory for `settings.json`, `models.json`, and `auth.json`. Defaults to Psi's normal agent directory. |
+| `--secret-store-db PATH` | Existing SQLite database for `store` token references. Opened read-only; overrides automatic lookup beside the settings file. |
+| `--check` | Validate configuration and resolve credentials without connecting to Discord. It can run a configured `exec` provider. |
 | `--version` | Print the version. |
 
 ## Supported settings
@@ -44,14 +46,27 @@ access.
 | Sessions | `session.dmScope`, `session.reset`, `session.resetByType`, and `session.resetByChannel` for Discord. |
 | Commands | `commands.ownerAllowFrom` for owner-only controls. |
 
-`channels.discord.token` accepts a literal or an environment reference. For
-structured references and whole-value `$NAME` or `${NAME}` shorthand,
-configured environment provider aliases and allowlists are enforced. Provider aliases start with a lowercase letter and contain up to
-64 lowercase letters, digits, `_` or `-`. Environment variable IDs start with
-an uppercase letter and contain up to 128 uppercase letters, digits or `_`.
-Embedded `${NAME}` configuration templates are substituted separately; an
-embedded `$NAME` is literal. File, command, and managed-store references are
-not yet supported.
+`channels.discord.token` accepts a literal or an environment, file, exec, or
+store reference. Environment references enforce configured provider aliases
+and allowlists. Whole-value `$NAME` and `${NAME}` shorthand uses the same
+checks; embedded `${NAME}` templates use configuration substitution, while
+embedded `$NAME` is literal. Provider aliases start with a lowercase letter
+and contain up to 64 lowercase letters, digits, `_` or `-`. Environment and
+store IDs start with an uppercase letter and contain up to 128 uppercase
+letters, digits or `_`.
+
+File references use a `source: "file"` provider, JSON-pointer selection or
+`singleValue` mode, and a private unlinked regular file. Reads use the configured
+byte bound and timeout; unsupported ACL verification fails closed. Exec
+references use a manually configured absolute command, isolated environment,
+JSON request/response protocol, bounded output and timeouts. The executable
+must pass platform trust checks; timeout or invalid output blocks startup.
+Plugin-managed exec providers are not supported. Store references read only a
+live team-scoped value from `--secret-store-db` or `PSIONIC_SECRET_STORE_DB`.
+Without either, the CLI looks only in a `state/` directory beside the supplied
+settings file and uses a database only when exactly one private SQLite file
+contains the secret-store table. Reads are read-only. Missing, ambiguous, or
+unavailable databases and missing values block startup.
 
 `channels.discord.dmPolicy: "pairing"` keeps static `allowFrom` entries
 working, but Claw does not implement the pairing workflow. Unknown senders
