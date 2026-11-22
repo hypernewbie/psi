@@ -32,11 +32,13 @@ type admission struct {
 }
 
 type accessPolicy struct {
-	dmPolicy       string
-	allowFrom      map[string]bool
-	groupPolicy    string
-	guilds         map[string]*guildSettings
-	ownerAllowFrom map[string]bool
+	dmPolicy        string
+	allowFrom       map[string]bool
+	dmGroupEnabled  bool
+	dmGroupChannels []string
+	groupPolicy     string
+	guilds          map[string]*guildSettings
+	ownerAllowFrom  map[string]bool
 	// ownerBootstrapped records that the owner set came from the direct-message
 	// allowlist because no owner is configured, mirroring the incumbent's
 	// one-owner pairing bootstrap.
@@ -62,6 +64,10 @@ func newAccessPolicy(s *fileSettings) *accessPolicy {
 		p.groupPolicy = "allowlist"
 	}
 	p.allowFrom = idSet(discord.AllowFrom)
+	if discord.DM != nil {
+		p.dmGroupEnabled = discord.DM.GroupEnabled != nil && *discord.DM.GroupEnabled
+		p.dmGroupChannels = discord.DM.GroupChannels
+	}
 	if s.Commands != nil {
 		p.ownerAllowFrom = idSet(s.Commands.OwnerAllowFrom)
 	}
@@ -85,6 +91,32 @@ func (p *accessPolicy) isOwner(userID string) bool {
 	return p.ownerAllowFrom[normalizeUserID(userID)]
 }
 
+// dmSenderAllowed applies the direct-message policy to one sender. Group DMs
+// reuse it: every member of an admitted group channel must individually pass
+// the same policy as a private DM.
+func (p *accessPolicy) dmSenderAllowed(msg inboundMessage) admission {
+	switch p.dmPolicy {
+	case "disabled":
+		return admission{Reason: "direct messages are disabled"}
+	case "open":
+		return admission{Allowed: true}
+	case "allowlist":
+		if p.allowFrom["*"] || p.allowFrom[normalizeUserID(msg.AuthorID)] {
+			return admission{Allowed: true}
+		}
+		return admission{Reason: "sender is not in the direct-message allowlist"}
+	case dmPolicyPairing:
+		// Static allowFrom entries remain usable. The pairing workflow itself
+		// is not implemented, so an unknown sender stays denied.
+		if p.allowFrom["*"] || p.allowFrom[normalizeUserID(msg.AuthorID)] {
+			return admission{Allowed: true}
+		}
+		return admission{Reason: "sender is not paired or allowlisted"}
+	default:
+		return admission{Reason: "unsupported direct-message policy"}
+	}
+}
+
 // admit applies DM and guild policy in the same order as the existing
 // installation: destination policy first, then guild/channel enablement,
 // sender lists, and finally mention gating.
@@ -93,29 +125,22 @@ func (p *accessPolicy) admit(msg inboundMessage, mentioned bool) admission {
 		return admission{Reason: "not a human message"}
 	}
 	if msg.IsGroupDM {
-		return admission{Reason: "group direct messages are not supported"}
+		// Group DMs are opt-in through channels.discord.dm.groupEnabled, with
+		// an optional channel allowlist, and every sender still passes the DM
+		// policy. They are shared rooms: no private scoping applies downstream.
+		if p.dmPolicy == "disabled" {
+			return admission{Reason: "direct messages are disabled"}
+		}
+		if !p.dmGroupEnabled {
+			return admission{Reason: "group direct messages are not enabled"}
+		}
+		if len(p.dmGroupChannels) > 0 && !containsID(p.dmGroupChannels, msg.ChannelID) {
+			return admission{Reason: "group channel is not in the group allowlist"}
+		}
+		return p.dmSenderAllowed(msg)
 	}
 	if msg.IsDM {
-		switch p.dmPolicy {
-		case "disabled":
-			return admission{Reason: "direct messages are disabled"}
-		case "open":
-			return admission{Allowed: true}
-		case "allowlist":
-			if p.allowFrom["*"] || p.allowFrom[normalizeUserID(msg.AuthorID)] {
-				return admission{Allowed: true}
-			}
-			return admission{Reason: "sender is not in the direct-message allowlist"}
-		case dmPolicyPairing:
-			// Static allowFrom entries remain usable. The pairing workflow itself
-			// is not implemented, so an unknown sender stays denied.
-			if p.allowFrom["*"] || p.allowFrom[normalizeUserID(msg.AuthorID)] {
-				return admission{Allowed: true}
-			}
-			return admission{Reason: "sender is not paired or allowlisted"}
-		default:
-			return admission{Reason: "unsupported direct-message policy"}
-		}
+		return p.dmSenderAllowed(msg)
 	}
 	switch p.groupPolicy {
 	case "disabled":

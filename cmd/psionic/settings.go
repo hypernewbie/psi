@@ -88,6 +88,7 @@ type discordSettings struct {
 	Token          *secretRef                  `json:"token"`
 	DMPolicy       string                      `json:"dmPolicy"`
 	AllowFrom      stringList                  `json:"allowFrom"`
+	DM             *dmSettings                 `json:"dm"`
 	GroupPolicy    string                      `json:"groupPolicy"`
 	Guilds         map[string]*guildSettings   `json:"guilds"`
 	HistoryLimit   *int                        `json:"historyLimit"`
@@ -103,6 +104,14 @@ type discordSettings struct {
 
 type inboundWorker struct {
 	RunTimeoutMs *int64 `json:"runTimeoutMs"`
+}
+
+// dmSettings is the direct-message subgroup. Only the group-DM switches are
+// projected; group DMs are disabled unless groupEnabled is set.
+type dmSettings struct {
+	Enabled       *bool      `json:"enabled"`
+	GroupEnabled  *bool      `json:"groupEnabled"`
+	GroupChannels stringList `json:"groupChannels"`
 }
 
 type guildSettings struct {

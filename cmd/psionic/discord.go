@@ -181,6 +181,8 @@ func (r *runtime) handleInteraction(d *discordTransport, event *discordgo.Intera
 		// An unknown direct-message channel could be a group conversation.
 		msg.IsGroupDM = true
 	}
+	// A group DM is a shared room, not a private peer DM.
+	msg.IsDM = event.GuildID == "" && !msg.IsGroupDM
 	if decision := r.policy.admit(msg, true); !decision.Allowed {
 		d.respond(event, "Not available here.", true)
 		return
@@ -359,6 +361,9 @@ func normalizeDiscord(s *discordgo.Session, m *discordgo.MessageCreate, botID st
 		// An unknown direct-message channel could be a group conversation.
 		msg.IsGroupDM = true
 	}
+	// A group DM is a shared room, not a private peer DM: it never receives
+	// per-peer DM scoping or private prompt material.
+	msg.IsDM = m.GuildID == "" && !msg.IsGroupDM
 	for _, user := range m.Mentions {
 		if user.ID == botID {
 			msg.MentionsBot = true

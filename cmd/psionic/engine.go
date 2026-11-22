@@ -129,6 +129,11 @@ func (r *runtime) routeKey(msg inboundMessage) string {
 	if botID != "" || r.agent.ID != "" {
 		prefix = botID + ":" + r.agent.ID + ":"
 	}
+	if msg.IsGroupDM {
+		// A group DM is one shared room: its key is the group channel, never
+		// merged with any per-peer direct-message route.
+		return prefix + "groupdm:" + msg.ChannelID
+	}
 	if msg.IsDM {
 		switch r.dmScope() {
 		case "main":

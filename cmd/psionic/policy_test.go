@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"io"
+	"log"
+	"strings"
+	"testing"
+)
 
 func TestAdmissionDMDirectPolicy(t *testing.T) {
 	base := `{ channels: { discord: { dmPolicy: "allowlist", allowFrom: ["123456789012345678"] } } }`
@@ -172,11 +177,35 @@ func TestThreadUsesParentChannelPolicy(t *testing.T) {
 	}
 }
 
-func TestGroupDMsAreDenied(t *testing.T) {
+func TestGroupDMsAreDeniedWithoutOptIn(t *testing.T) {
 	settings := mustSettings(t, `{ channels: { discord: { dmPolicy: "open", allowFrom: ["*"] } } }`)
 	policy := newAccessPolicy(settings)
-	if got := policy.admit(inboundMessage{AuthorID: "123456789012345678", IsDM: true, IsGroupDM: true}, false); got.Allowed {
-		t.Fatal("group DM was admitted")
+	if got := policy.admit(inboundMessage{AuthorID: "123456789012345678", ChannelID: "323456789012345678", IsGroupDM: true}, false); got.Allowed {
+		t.Fatal("group DM was admitted without opt-in")
+	}
+}
+
+func TestGroupDMAdmissionUsesChannelAllowlistAndSenderPolicy(t *testing.T) {
+	settings := mustSettings(t, `{
+  channels: { discord: {
+    dmPolicy: "allowlist", allowFrom: ["123456789012345678"],
+    dm: { groupEnabled: true, groupChannels: ["523456789012345678"] },
+  } },
+}`)
+	policy := newAccessPolicy(settings)
+	member := inboundMessage{AuthorID: "123456789012345678", ChannelID: "523456789012345678", IsGroupDM: true}
+	if got := policy.admit(member, false); !got.Allowed {
+		t.Fatalf("allowed group DM denied: %+v", got)
+	}
+	stranger := member
+	stranger.AuthorID = "999999999999999999"
+	if got := policy.admit(stranger, false); got.Allowed {
+		t.Fatal("non-allowlisted sender admitted to a group DM")
+	}
+	otherChannel := member
+	otherChannel.ChannelID = "623456789012345678"
+	if got := policy.admit(otherChannel, false); got.Allowed {
+		t.Fatal("unlisted group channel admitted")
 	}
 }
 
@@ -213,5 +242,19 @@ func TestOwnerBootstrapSkipsWildcardsAndHonorsExplicitOwners(t *testing.T) {
 	}
 	if !policy.isOwner("323456789012345678") || policy.isOwner("223456789012345678") {
 		t.Fatal("explicit owner set is wrong")
+	}
+}
+
+func TestGroupDMRouteIsItsOwnSharedRoom(t *testing.T) {
+	settings := mustSettings(t, `{ channels: { discord: {} } }`)
+	rt := newRuntime(settings, selectedAgent{ID: "main", Workspace: t.TempDir()}, nil, t.TempDir(), nil, configDefaults(), nil, log.New(io.Discard, "", 0))
+	rt.setBotID("123456789012345678")
+	group := rt.routeKey(inboundMessage{AuthorID: "223456789012345678", ChannelID: "523456789012345678", IsGroupDM: true})
+	dm := rt.routeKey(inboundMessage{AuthorID: "223456789012345678", ChannelID: "523456789012345678", IsDM: true})
+	if group == dm || !strings.Contains(group, "groupdm:523456789012345678") {
+		t.Fatalf("group key = %q, dm key = %q", group, dm)
+	}
+	if rt.isOwnerDM(inboundMessage{AuthorID: "123456789012345678", IsGroupDM: true}) {
+		t.Fatal("group DM counted as a private owner DM")
 	}
 }
