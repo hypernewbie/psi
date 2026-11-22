@@ -1,5 +1,12 @@
 # Psionic
 
+> **Stage: pre-alpha.** Psionic is a work in progress, not a supported
+> deployment. It is not hardened enough to run against a real bot token, and
+> it is not covered by the security guarantees this README describes. Do not
+> point it at a production bot. Run it against a separate Discord application
+> with a throwaway token, in a scratch workspace, until the hardening work
+> listed at the end of this file is done.
+
 Psionic is a Discord front end for Psi. One process runs one bot and one selected
 agent. It reads an existing settings file and workspace in place, and uses
 Psi's agent loop, sessions, model catalogue, credentials, compaction, and
@@ -344,3 +351,29 @@ route starts a new transcript; no pending work or old transcript is imported.
 Stop Psionic, keep its state directory for diagnosis, and start the service it
 replaced. Do not delete or rewrite either service's state. If the cutover
 changed command registrations, restore only those known commands.
+
+## Before this is more than pre-alpha
+
+This list is the remaining hardening work. It is deliberately not a
+checklist that can be quietly ticked off; each item needs its own change and
+its own review.
+
+- **The exec tool needs a sandbox story.** It runs with the bot's own user
+  permissions. Either it gains a real isolation boundary, or it is removed
+  from the release.
+- **The attachment reader is newer than the surface it replaces.** Bounded,
+  memory-only, and Discord-CDN-only, but it has never run against a
+  production bot.
+- **Native Windows and macOS runs.** Only cross-compilation has been
+  verified. The repository's CI defines native jobs; they must pass on real
+  runners.
+- **The shared workspace is an input to review.** `USER.md`, `MEMORY.md`, and
+  the quoted history are treated as untrusted data, but those files are
+  authored by another process and have not been audited as an attack surface
+  for this tool set.
+- **The context volume is bounded by policy, not by design.** A large
+  configured history limit multiplies the cost, the latency, and the blast
+  radius of one turn. It needs an explicit ceiling and a per-turn budget.
+- **A live cutover rehearsal on a second Discord application**, with a
+  rollback that has actually been executed, before any real token is
+  involved.
