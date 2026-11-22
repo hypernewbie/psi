@@ -72,6 +72,24 @@ func TestCheckOutputOmitsConfiguredIdentifiers(t *testing.T) {
 	}
 }
 
+func TestDiscordTokenFallbackRequiresAbsentExplicitToken(t *testing.T) {
+	t.Setenv("DISCORD_BOT_TOKEN", "synthetic-fallback-token")
+	settings := &fileSettings{Channels: &channelsSettings{Discord: &discordSettings{}}}
+	got, err := botToken(settings, "", "")
+	if err != nil || got != "synthetic-fallback-token" {
+		t.Fatalf("fallback token = %q, %v", got, err)
+	}
+
+	settings.Channels.Discord.Token = &secretRef{env: "SYNTHETIC_MISSING_TOKEN"}
+	got, err = botToken(settings, "", "")
+	if err == nil || got != "" {
+		t.Fatalf("explicit missing reference fell back: token=%q err=%v", got, err)
+	}
+	if strings.Contains(err.Error(), "SYNTHETIC_MISSING_TOKEN") || strings.Contains(err.Error(), "synthetic-fallback-token") {
+		t.Fatalf("token diagnostic exposed a value: %v", err)
+	}
+}
+
 func TestPrepareUsesPsiModelInsteadOfExternalModelSettings(t *testing.T) {
 	agentDir := t.TempDir()
 	writeTestModels(t, agentDir)

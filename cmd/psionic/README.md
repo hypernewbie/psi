@@ -48,8 +48,9 @@ access.
 | Commands | `commands.ownerAllowFrom` for owner-only controls. |
 
 `channels.discord.token` accepts a literal or an environment, file, exec, or
-store reference. Environment references enforce configured provider aliases
-and allowlists. Whole-value `$NAME` and `${NAME}` shorthand uses the same
+store reference. `DISCORD_BOT_TOKEN` is used only when that field is absent; an
+invalid explicit reference does not fall back. Environment references enforce
+configured provider aliases and allowlists. Whole-value `$NAME` and `${NAME}` shorthand uses the same
 checks; embedded `${NAME}` templates use configuration substitution, while
 embedded `$NAME` is literal. Provider aliases start with a lowercase letter
 and contain up to 64 lowercase letters, digits, `_` or `-`. Environment and

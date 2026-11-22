@@ -78,7 +78,9 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: psionic --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--secret-store-db PATH] [--check]")
 		fmt.Fprintln(stderr, "Discord replies are capped at 16 messages; truncated replies include a notice.")
-		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store. Store uses a unique private sibling database or --secret-store-db.")
+		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store.")
+		fmt.Fprintln(stderr, "DISCORD_BOT_TOKEN is used only when channels.discord.token is absent.")
+		fmt.Fprintln(stderr, "Store uses --secret-store-db, PSIONIC_SECRET_STORE_DB, or a unique private sibling database.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
