@@ -129,6 +129,30 @@ func TestSplitDiscordTextFenceMarkersStayWithinCharacterAndLineLimits(t *testing
 	}
 }
 
+func TestSplitDiscordTextSkipsFenceBalancingWhenLimitsCannotFitMarkers(t *testing.T) {
+	text := "```go\nalpha\nbeta\n```"
+	for _, tc := range []struct {
+		name  string
+		limit int
+		lines int
+	}{
+		{name: "character limit", limit: 8, lines: 5},
+		{name: "line limit", limit: 100, lines: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chunks := splitDiscordText(text, tc.limit, tc.lines)
+			for i, chunk := range chunks {
+				if len(chunk) > tc.limit {
+					t.Fatalf("chunk %d exceeds character limit: %q", i, chunk)
+				}
+				if lines := strings.Count(chunk, "\n") + 1; lines > tc.lines {
+					t.Fatalf("chunk %d exceeds line limit: %d > %d", i, lines, tc.lines)
+				}
+			}
+		})
+	}
+}
+
 func TestSplitDiscordTextBoundsChunkCount(t *testing.T) {
 	text := strings.Repeat("x", discordMaxChars*maxDiscordChunks+100)
 	chunks := splitDiscordText(text, discordMaxChars, maxDiscordChunks)
