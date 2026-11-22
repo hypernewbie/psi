@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -43,6 +44,40 @@ func TestSecretExecProviderRequestAndResponse(t *testing.T) {
 	got, err := resolveSecretExec("local", provider, "synthetic/token", os.LookupEnv)
 	if err != nil || got != "synthetic-token" {
 		t.Fatalf("exec provider failed: %v", err)
+	}
+}
+
+func TestCheckExecTokenProviderDoesNotPrintTokenOrWriteState(t *testing.T) {
+	t.Setenv("PSIONIC_TEST_INHERITED", "must-not-pass")
+	t.Setenv("PSIONIC_TEST_ALLOWED", "allowed")
+	command := secureExecTestBinary(t)
+	agentDir := t.TempDir()
+	writeTestModels(t, agentDir)
+	workspace := t.TempDir()
+	settingsPath := filepath.Join(t.TempDir(), "settings.json5")
+	settings := fmt.Sprintf(`{
+  agents: { defaults: { workspace: %q } },
+  channels: { discord: { token: { source: "exec", provider: "local", id: "synthetic/token" } } },
+  secrets: { providers: { local: {
+    source: "exec", command: %q, args: ["-test.run=^TestSecretExecProviderHelper$"],
+    trustedDirs: [%q], passEnv: ["PSIONIC_TEST_ALLOWED"],
+    env: { PSIONIC_TEST_SECRET_EXEC: "1" },
+  } } },
+}`, workspace, command, filepath.Dir(command))
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--config", settingsPath, "--agent-dir", agentDir, "--state-dir", stateDir, "--check"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("check with exec token provider: %v\n%s", err, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "synthetic-token") || strings.Contains(stderr.String(), "synthetic-token") {
+		t.Fatal("check output exposed the resolved token")
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("check created state directory: %v", err)
 	}
 }
 
