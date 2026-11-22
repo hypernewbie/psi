@@ -476,21 +476,41 @@ func (d *discordTransport) sendMessage(ctx context.Context, channelID, replyTo, 
 	return last, nil
 }
 
-// splitDiscordText applies the character and soft line limits, marking replies
-// cut short by the message count or text budget.
+// splitDiscordText applies the configured character and line limits, marking
+// replies cut short by the message count or text budget.
 func splitDiscordText(text string, limit, maxLines int) []string {
-	if strings.Contains(text, "```") || strings.Contains(text, "~~~") {
-		// Leave room for a closing and reopening fence around a chunk.
-		limit = max(1, limit-32)
-	}
 	truncated := false
 	if limit > 0 && len(text) > limit*maxDiscordChunks {
 		text = truncateUTF8(text, limit*maxDiscordChunks)
 		truncated = true
 	}
+
+	contentLimit, contentLineLimit := limit, maxLines
+	fenceOverhead := discordFenceOverhead(text)
+	balance := fenceOverhead > 0
+	if balance && limit > 0 {
+		if fenceOverhead >= limit {
+			balance = false
+		} else {
+			contentLimit -= fenceOverhead
+		}
+	}
+	if balance && maxLines > 0 {
+		if maxLines <= 2 {
+			// There is no room for content plus both fence markers.
+			balance = false
+		} else {
+			// Reopening and closing a fence each add one line to a chunk.
+			contentLineLimit -= 2
+		}
+	}
+	if !balance {
+		contentLimit, contentLineLimit = limit, maxLines
+	}
+
 	var out []string
-	for _, chunk := range chunkText(text, limit) {
-		out = append(out, chunkLines(chunk, maxLines)...)
+	for _, chunk := range chunkText(text, contentLimit) {
+		out = append(out, chunkLines(chunk, contentLineLimit)...)
 	}
 	if len(out) > maxDiscordChunks {
 		out = out[:maxDiscordChunks]
@@ -500,9 +520,42 @@ func splitDiscordText(text string, limit, maxLines int) []string {
 		if len(out) == 0 {
 			out = append(out, "")
 		}
-		out[len(out)-1] = markDiscordTruncated(out[len(out)-1], limit)
+		out[len(out)-1] = markDiscordTruncated(out[len(out)-1], contentLimit)
 	}
-	return balanceFences(out)
+	if balance {
+		balanced := balanceFences(append([]string(nil), out...))
+		if discordChunksWithinLimits(balanced, limit, maxLines) {
+			return balanced
+		}
+	}
+	return out
+}
+
+// discordFenceOverhead returns the largest combined prefix and suffix that
+// fence balancing can add to one message, including their line breaks.
+func discordFenceOverhead(text string) int {
+	var current *fence
+	overhead := 0
+	for _, line := range strings.Split(text, "\n") {
+		next := scanFence(line, current)
+		if current == nil && next != nil {
+			overhead = max(overhead, len(next.open)+len(next.close)+2)
+		}
+		current = next
+	}
+	return overhead
+}
+
+func discordChunksWithinLimits(chunks []string, maxChars, maxLines int) bool {
+	for _, chunk := range chunks {
+		if maxChars > 0 && len(chunk) > maxChars && chunk != "[truncated]" {
+			return false
+		}
+		if maxLines > 0 && strings.Count(chunk, "\n")+1 > maxLines {
+			return false
+		}
+	}
+	return true
 }
 
 // markDiscordTruncated leaves the notice on the same line so it does not
@@ -537,7 +590,8 @@ type fence struct {
 }
 
 // balanceFences closes an open code fence at a chunk boundary and reopens it
-// in the next chunk. The added markers are small enough for Discord's limit.
+// in the next chunk. Callers must reserve room for the markers and verify the
+// resulting character and line limits.
 func balanceFences(chunks []string) []string {
 	var current *fence
 	for i, chunk := range chunks {

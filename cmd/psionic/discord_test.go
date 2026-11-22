@@ -92,6 +92,43 @@ func TestSplitDiscordTextBalancesCodeFences(t *testing.T) {
 	}
 }
 
+func TestSplitDiscordTextFenceMarkersStayWithinCharacterAndLineLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		text  string
+		limit int
+		lines int
+	}{
+		{
+			name:  "ordinary fence",
+			text:  "```go\n" + strings.Repeat("short line\n", 80) + "```",
+			limit: 120,
+			lines: 5,
+		},
+		{
+			name:  "long fence opener",
+			text:  "```" + strings.Repeat("x", 40) + "\n" + strings.Repeat("body\n", 20) + "```",
+			limit: 80,
+			lines: 5,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chunks := splitDiscordText(tc.text, tc.limit, tc.lines)
+			if len(chunks) == 0 || len(chunks) > maxDiscordChunks {
+				t.Fatalf("chunk count = %d", len(chunks))
+			}
+			for i, chunk := range chunks {
+				if len(chunk) > tc.limit && chunk != "[truncated]" {
+					t.Fatalf("chunk %d exceeds character limit: %d > %d", i, len(chunk), tc.limit)
+				}
+				if lines := strings.Count(chunk, "\n") + 1; lines > tc.lines {
+					t.Fatalf("chunk %d exceeds line limit: %d > %d: %q", i, lines, tc.lines, chunk)
+				}
+			}
+		})
+	}
+}
+
 func TestSplitDiscordTextBoundsChunkCount(t *testing.T) {
 	text := strings.Repeat("x", discordMaxChars*maxDiscordChunks+100)
 	chunks := splitDiscordText(text, discordMaxChars, maxDiscordChunks)
