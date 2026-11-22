@@ -14,8 +14,9 @@ psionic --config ./settings.json5
 ```
 
 `--check` reads the settings and model metadata, resolves the bot token, and
-prints the selected behavior. It does not connect, register commands, write
-state, or create a directory. An `exec` token provider is run during resolution;
+prints a privacy-safe summary without configured IDs or values. It does not
+connect, register commands, write state, or create a directory. An `exec` token
+provider is run during resolution;
 use only a trusted command with known side effects.
 
 Flags:

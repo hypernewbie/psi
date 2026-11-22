@@ -38,7 +38,7 @@ func resolveModel(models *config.ModelsFile, ref string) (provider.ModelMeta, co
 	}
 	meta, err := models.SelectModel(providerID, modelID)
 	if err != nil {
-		return provider.ModelMeta{}, config.ModelMeta{}, "", err
+		return provider.ModelMeta{}, config.ModelMeta{}, "", fmt.Errorf("model metadata is unavailable")
 	}
 	return providerModel(providerID, meta), meta, providerID, nil
 }
@@ -92,7 +92,7 @@ func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta 
 	for name, value := range catalogue.Headers {
 		resolved, err := config.ResolveCredential(value)
 		if err != nil {
-			return nil, fmt.Errorf("provider header %s: %w", name, err)
+			return nil, fmt.Errorf("provider header credentials are unavailable")
 		}
 		headers[name] = resolved
 	}
@@ -110,14 +110,14 @@ func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta 
 	if authErr != nil && !(allowMissing && missingAPIKey(authErr)) {
 		// The credential resolver can include the auth file path in its error.
 		// Keep the startup diagnostic to the provider and failure class.
-		return nil, fmt.Errorf("provider %q: credentials are unavailable", providerID)
+		return nil, fmt.Errorf("provider credentials are unavailable")
 	}
 	applyAuthHeader := func(headers map[string]string) error {
 		if !catalogue.AuthHeader {
 			return nil
 		}
 		if strings.TrimSpace(key) == "" {
-			return fmt.Errorf("provider %q requests authHeader but has no resolved API key", providerID)
+			return fmt.Errorf("provider requires an API key for its Authorization header")
 		}
 		headers["Authorization"] = "Bearer " + key
 		return nil
@@ -141,7 +141,7 @@ func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta 
 		client = c
 	case "openai-responses":
 		if providerID == "openai" && !meta.Custom {
-			return nil, fmt.Errorf("provider %q needs an API key in models.json; subscription sign-in is not supported", providerID)
+			return nil, fmt.Errorf("provider requires an API key in models.json; subscription sign-in is not supported")
 		}
 		if err := applyAuthHeader(headers); err != nil {
 			return nil, err
@@ -164,9 +164,9 @@ func buildProvider(models *config.ModelsFile, agentDir, providerID string, meta 
 		c.Headers, c.SessionID = headers, sessionID
 		client = c
 	case "openai-codex-responses":
-		return nil, fmt.Errorf("provider %q uses OAuth sign-in; API-key mode only in this release", providerID)
+		return nil, fmt.Errorf("OAuth sign-in is not supported; use API-key mode")
 	default:
-		return nil, fmt.Errorf("unsupported provider API %q", meta.API)
+		return nil, fmt.Errorf("provider API is unsupported")
 	}
 	return client, nil
 }

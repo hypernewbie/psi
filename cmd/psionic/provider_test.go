@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hypernewbie/psi/internal/config"
@@ -63,7 +64,8 @@ func TestNewProviderSetBuildsPrimaryAndCompactor(t *testing.T) {
 
 func TestNewProviderSetRejectsUnknownModel(t *testing.T) {
 	models := testModels(t)
-	if _, err := newProviderSet(models, t.TempDir(), "demo/missing-model", "", "session-id", 1); err == nil {
-		t.Fatal("expected an error")
+	const privateModelID = "SYNTHETIC_PRIVATE_MODEL_ID"
+	if _, err := newProviderSet(models, t.TempDir(), "demo/"+privateModelID, "", "session-id", 1); err == nil || strings.Contains(err.Error(), privateModelID) {
+		t.Fatalf("unknown model diagnostic exposed its ID: %v", err)
 	}
 }

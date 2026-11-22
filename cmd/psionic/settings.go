@@ -296,7 +296,7 @@ func (s *secretRef) UnmarshalJSON(data []byte) error {
 		s.store = strings.TrimSpace(object.ID)
 		s.provider = object.Provider
 	default:
-		return fmt.Errorf("unsupported secret source %q", object.Source)
+		return fmt.Errorf("unsupported secret source")
 	}
 	return nil
 }
@@ -441,10 +441,10 @@ func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 		return fmt.Errorf("settings: multiple Discord accounts are not supported")
 	}
 	if discord.GroupPolicy != "" && discord.GroupPolicy != "allowlist" && discord.GroupPolicy != "open" && discord.GroupPolicy != "disabled" {
-		return fmt.Errorf("settings: channels.discord.groupPolicy %q is not supported", discord.GroupPolicy)
+		return fmt.Errorf("settings: channels.discord.groupPolicy is not supported")
 	}
 	if discord.DMPolicy != "" && discord.DMPolicy != "allowlist" && discord.DMPolicy != "open" && discord.DMPolicy != "disabled" && discord.DMPolicy != dmPolicyPairing {
-		return fmt.Errorf("settings: channels.discord.dmPolicy %q is not supported; use allowlist, pairing, open, or disabled", discord.DMPolicy)
+		return fmt.Errorf("settings: channels.discord.dmPolicy is not supported; use allowlist, pairing, open, or disabled")
 	}
 	switch discord.DMPolicy {
 	case "open":
@@ -464,7 +464,7 @@ func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 	switch discord.ReplyToMode {
 	case "", "off", "first", "all", "batched":
 	default:
-		return fmt.Errorf("settings: channels.discord.replyToMode %q is not supported", discord.ReplyToMode)
+		return fmt.Errorf("settings: channels.discord.replyToMode is not supported")
 	}
 	if discord.TextChunkLimit != nil && *discord.TextChunkLimit <= 0 {
 		return fmt.Errorf("settings: channels.discord.textChunkLimit must be positive")
@@ -517,7 +517,7 @@ func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 		switch s.Session.DMScope {
 		case "", "main", "per-peer", "per-channel-peer", "per-account-channel-peer":
 		default:
-			return fmt.Errorf("settings: session.dmScope %q is not supported", s.Session.DMScope)
+			return fmt.Errorf("settings: session.dmScope is not supported")
 		}
 		if s.Session.DMScope == "main" && discord.DMPolicy != "disabled" {
 			if len(discord.AllowFrom) != 1 || normalizeUserID(discord.AllowFrom[0]) == "*" {
@@ -553,8 +553,8 @@ func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 		if err := validateTools(s.Agents.Defaults, "agents.defaults.tools"); err != nil {
 			return err
 		}
-		for id, entry := range s.Agents.Entries {
-			if err := validateTools(entry, "agents.entries."+id+".tools"); err != nil {
+		for _, entry := range s.Agents.Entries {
+			if err := validateTools(entry, "agents.entries[].tools"); err != nil {
 				return err
 			}
 		}
@@ -569,7 +569,7 @@ func validateResetSettings(reset *resetSettings) error {
 	switch reset.Mode {
 	case "", "none", "daily", "idle":
 	default:
-		return fmt.Errorf("mode %q is not supported", reset.Mode)
+		return fmt.Errorf("session reset mode is not supported")
 	}
 	if reset.IdleMinutes != nil && *reset.IdleMinutes < 0 {
 		return fmt.Errorf("idleMinutes must not be negative")
@@ -592,7 +592,7 @@ func validatePolicyTools(tools *toolPolicy, field string) error {
 	case "minimal", "coding", "messaging", "full":
 		return nil
 	default:
-		return fmt.Errorf("settings: %s.profile %q is not supported", field, tools.Profile)
+		return fmt.Errorf("settings: %s.profile is not supported", field)
 	}
 }
 
@@ -616,7 +616,7 @@ func validVisibleReplies(value visibleReplies) error {
 	case "", "automatic", "message_tool":
 		return nil
 	default:
-		return fmt.Errorf("settings: messages.visibleReplies %q is not supported", value)
+		return fmt.Errorf("settings: messages.visibleReplies is not supported")
 	}
 }
 
@@ -644,7 +644,7 @@ func resolveAgent(s *fileSettings, id string) (selectedAgent, error) {
 	entry := (*agentSettings)(nil)
 	if id != "" {
 		if s.Agents == nil || s.Agents.Entries[id] == nil {
-			return selectedAgent{}, fmt.Errorf("agent %q is not configured", id)
+			return selectedAgent{}, fmt.Errorf("selected agent is not configured")
 		}
 		entry = s.Agents.Entries[id]
 	} else if s.Agents != nil && len(s.Agents.Entries) == 1 {
@@ -740,7 +740,7 @@ func expandUser(path string) (string, error) {
 func splitModelRef(ref string) (provider, model string, err error) {
 	provider, model, ok := strings.Cut(ref, "/")
 	if !ok || provider == "" || model == "" {
-		return "", "", fmt.Errorf("model %q needs a provider/model reference", ref)
+		return "", "", fmt.Errorf("model reference must use provider/model form")
 	}
 	return provider, model, nil
 }

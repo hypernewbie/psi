@@ -227,6 +227,27 @@ func TestLoadFileSettingsRejectsUnsupportedPolicies(t *testing.T) {
 	}
 }
 
+func TestSettingsErrorsDoNotEchoPrivateValues(t *testing.T) {
+	const privateValue = "SYNTHETIC_PRIVATE_VALUE"
+	for name, body := range map[string]string{
+		"unknown secret source": `{ channels: { discord: { token: { source: "` + privateValue + `", id: "` + privateValue + `" } } } }`,
+		"unknown group policy":  `{ channels: { discord: { groupPolicy: "` + privateValue + `" } } }`,
+		"unknown reply mode":    `{ messages: { visibleReplies: "` + privateValue + `" } }`,
+		"unknown tool profile":  `{ agents: { entries: { "` + privateValue + `": { tools: { profile: "` + privateValue + `" } } } } }`,
+		"unknown reset mode":    `{ session: { reset: { mode: "` + privateValue + `" } } }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeSettings([]byte(body), func(string) (string, bool) { return "", false })
+			if err == nil {
+				t.Fatal("unsupported setting was accepted")
+			}
+			if strings.Contains(err.Error(), privateValue) {
+				t.Fatalf("error echoed a configured value: %v", err)
+			}
+		})
+	}
+}
+
 func TestResolveAgentRequiresSelectionForMultipleAgents(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json5")
@@ -251,6 +272,10 @@ func TestResolveAgentRequiresSelectionForMultipleAgents(t *testing.T) {
 	}
 	if agent, err := resolveAgent(settings, "two"); err != nil || agent.Workspace != two {
 		t.Fatalf("agent = %+v, %v", agent, err)
+	}
+	const privateID = "SYNTHETIC_PRIVATE_AGENT_ID"
+	if _, err := resolveAgent(settings, privateID); err == nil || strings.Contains(err.Error(), privateID) {
+		t.Fatalf("invalid agent diagnostic exposed its ID: %v", err)
 	}
 }
 

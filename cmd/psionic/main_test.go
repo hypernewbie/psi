@@ -25,8 +25,8 @@ func TestCheckDoesNotWriteOrConnect(t *testing.T) {
 		t.Fatalf("check: %v\n%s", err, stderr.String())
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "model: demo/large-model") {
-		t.Fatalf("output = %q", output)
+	if !strings.Contains(output, "model: validated from Psi settings") || strings.Contains(output, "demo/large-model") {
+		t.Fatalf("model selection was not reported safely: %q", output)
 	}
 	if strings.Contains(output, "test-token") {
 		t.Fatal("token value was printed")
@@ -36,6 +36,39 @@ func TestCheckDoesNotWriteOrConnect(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(stateDir); err != nil || len(entries) != 0 {
 		t.Fatalf("check changed the state directory: %v, %v", entries, err)
+	}
+}
+
+func TestCheckOutputOmitsConfiguredIdentifiers(t *testing.T) {
+	settings := &fileSettings{
+		Channels: &channelsSettings{Discord: &discordSettings{
+			Guilds: map[string]*guildSettings{"synthetic-guild-identifier": nil},
+		}},
+	}
+	loaded := &loaded{
+		settings: settings,
+		agent: selectedAgent{
+			ID: "synthetic-agent-identifier", Model: "demo/private-model-identifier",
+			Compaction: "demo/private-compaction-identifier", Fallbacks: []string{"demo/private-fallback"},
+			Tools: toolPolicy{Deny: []string{"private-tool-identifier"}},
+		},
+	}
+	var output bytes.Buffer
+	if err := printCheck(&output, loaded); err != nil {
+		t.Fatal(err)
+	}
+	for _, privateValue := range []string{
+		"synthetic-agent-identifier", "synthetic-guild-identifier", "demo/private-model-identifier",
+		"demo/private-compaction-identifier", "demo/private-fallback", "private-tool-identifier",
+	} {
+		if strings.Contains(output.String(), privateValue) {
+			t.Fatalf("check output exposed %q: %q", privateValue, output.String())
+		}
+	}
+	for _, safeSummary := range []string{"agent: selected", "model: validated from Psi settings", "denied tools: 1 configured"} {
+		if !strings.Contains(output.String(), safeSummary) {
+			t.Fatalf("check output omitted %q: %q", safeSummary, output.String())
+		}
 	}
 }
 

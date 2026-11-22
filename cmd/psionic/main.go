@@ -85,7 +85,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 		return options{}, false, err
 	}
 	if flags.NArg() != 0 {
-		return options{}, false, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+		return options{}, false, fmt.Errorf("unexpected positional argument")
 	}
 	if showVersion {
 		return opts, true, nil
@@ -162,7 +162,7 @@ func prepare(opts options) (*loaded, error) {
 	}
 	catalogue, err := models.SelectModel(providerID, defaults.Settings.DefaultModel)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("model: Psi default is unavailable")
 	}
 	agent.Model = providerID + "/" + catalogue.ID
 	agent.Fallbacks = nil
@@ -234,14 +234,14 @@ func botToken(settings *fileSettings, secretStoreDB, settingsPath string) (strin
 }
 
 func printCheck(w io.Writer, l *loaded) error {
-	fmt.Fprintf(w, "agent: %s\n", l.agent.ID)
+	fmt.Fprintln(w, "agent: selected")
 	fmt.Fprintln(w, "workspace: configured")
-	fmt.Fprintf(w, "model: %s\n", l.agent.Model)
+	fmt.Fprintln(w, "model: validated from Psi settings")
 	if len(l.agent.Fallbacks) > 0 {
 		fmt.Fprintf(w, "model fallbacks: ignored (%d configured)\n", len(l.agent.Fallbacks))
 	}
 	if l.agent.Compaction != "" {
-		fmt.Fprintf(w, "compaction: %s\n", l.agent.Compaction)
+		fmt.Fprintln(w, "compaction: configured")
 	} else {
 		fmt.Fprintln(w, "compaction: primary model")
 	}
@@ -264,7 +264,7 @@ func printCheck(w io.Writer, l *loaded) error {
 		fmt.Fprintln(w, "tool filters: profile, allow, alsoAllow, and deny applied")
 	}
 	if len(l.agent.Tools.Deny) > 0 {
-		fmt.Fprintf(w, "denied tools: %s\n", strings.Join(l.agent.Tools.Deny, ", "))
+		fmt.Fprintf(w, "denied tools: %d configured\n", len(l.agent.Tools.Deny))
 	}
 	return nil
 }
