@@ -45,7 +45,7 @@ func TestOfflineTurnThroughPsi(t *testing.T) {
 	if err := loop.Submit(context.Background(), "hello", rt.agentConfig(clients, toolSet{}, sections)); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if got := lastAssistantText(store); got != "answer" {
+	if got := assistantTextAfter(store, 0); got != "answer" {
 		t.Fatalf("answer = %q", got)
 	}
 	full, err := store.Projection()

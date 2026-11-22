@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -181,7 +182,7 @@ func (r *runtime) handleInteraction(d *discordTransport, event *discordgo.Intera
 		d.respond(event, "Not authorized.", true)
 		return
 	}
-	admitted, err := r.state.admitEvent(botID+"\x00interaction:"+event.ID, timeNow())
+	admitted, err := r.state.admitEvent(botID+"\x00interaction:"+event.ID, time.Now())
 	if err != nil {
 		d.respond(event, "Unavailable.", true)
 		return
@@ -268,7 +269,7 @@ func (r *runtime) handleDiscord(d *discordTransport, event *discordgo.MessageCre
 	if isCommand && !r.policy.isOwner(msg.AuthorID) {
 		return
 	}
-	admitted, err := r.state.admitEvent(botID+"\x00"+msg.MessageID, timeNow())
+	admitted, err := r.state.admitEvent(botID+"\x00"+msg.MessageID, time.Now())
 	if err != nil {
 		r.logger.Printf("admission failed (%T)", err)
 		return

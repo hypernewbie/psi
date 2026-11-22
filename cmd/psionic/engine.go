@@ -413,7 +413,7 @@ func (c *conversation) prepare(msg inboundMessage) error {
 	if build == nil {
 		build = newProviderSet
 	}
-	clients, err := build(c.rt.models, c.rt.agentDir, c.rt.agent.Model, compactionModel(c.rt.agent), store.Header().ID, c.rt.defaults.MaxRetries)
+	clients, err := build(c.rt.models, c.rt.agentDir, c.rt.agent.Model, c.rt.agent.Compaction, store.Header().ID, c.rt.defaults.MaxRetries)
 	if err != nil {
 		store.Unlock()
 		return err
@@ -693,10 +693,6 @@ func (r *runtime) replyMode(msg inboundMessage) string {
 	return r.defaultReplies
 }
 
-func compactionModel(agent selectedAgent) string {
-	return agent.Compaction
-}
-
 func (r *runtime) dmScope() string {
 	if r.settings.Session == nil {
 		return "per-channel-peer"
@@ -705,10 +701,6 @@ func (r *runtime) dmScope() string {
 		return "per-channel-peer"
 	}
 	return r.settings.Session.DMScope
-}
-
-func lastAssistantText(store *session.Store) string {
-	return assistantTextAfter(store, 0)
 }
 
 // assistantTextAfter ignores replies that predate this run. A tool-only or
@@ -760,8 +752,6 @@ func turnContent(turn sourceTurn) string {
 	b.WriteString(turn.text)
 	return b.String()
 }
-
-var timeNow = time.Now
 
 func boundedHistory(messages []historyMessage, limit int) []historyMessage {
 	total := 0
