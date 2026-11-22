@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +74,7 @@ func isSQLiteDatabaseName(name string) bool {
 }
 
 func hasSecretStoreTable(path string) bool {
-	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	uri := storeDatabaseURI(path)
 	database, err := sql.Open("sqlite", uri+"?mode=ro")
 	if err != nil {
 		return false

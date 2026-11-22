@@ -248,13 +248,16 @@ func buildTools(workspace string, includeMemory, allowSend bool, policy toolPoli
 				return toolError("skill is unavailable")
 			}
 			// Recheck links at invocation: the skill tree can change after
-			// discovery.
+			// discovery. The workspace and the skill paths are compared in
+			// their resolved form, because a temporary directory has a
+			// different name than its real location on macOS and Windows.
+			root := resolvePath(workspace)
 			file, err := filepath.EvalSymlinks(selected.FilePath)
-			if err != nil || !inside(workspace, file) {
+			if err != nil || !inside(root, file) {
 				return toolError("skill is unavailable")
 			}
 			base, err := filepath.EvalSymlinks(selected.BaseDir)
-			if err != nil || !inside(workspace, base) {
+			if err != nil || !inside(root, base) {
 				return toolError("skill is unavailable")
 			}
 			text, err := skills.Invoke([]skills.Skill{*selected}, name, args)

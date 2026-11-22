@@ -125,7 +125,8 @@ func TestStoreDatabaseDiscoveryUsesOnlySiblingStateDirectory(t *testing.T) {
 	got, err = resolveSecretStoreDatabase("", settingsPath, func(name string) (string, bool) {
 		return outside, name == "PSIONIC_SECRET_STORE_DB"
 	})
-	if err != nil || got != resolvePath(outside) {
+	// An explicit path is used as given, without resolving it.
+	if err != nil || got != outside {
 		t.Fatalf("explicit environment path was not honored: %q, %v", got, err)
 	}
 }
@@ -187,5 +188,25 @@ func TestStoreSecretRejectsMissingDatabaseWithoutCreatingIt(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("created database unexpectedly: %v", err)
+	}
+}
+
+// TestStoreDatabaseURIPutsTheDriveBehindTheRoot proves the SQLite URI names
+// the file on every platform. A Windows drive letter behind "file://" would
+// be read as a host, so the driver would open the wrong file.
+func TestStoreDatabaseURIPutsTheDriveBehindTheRoot(t *testing.T) {
+	cases := []struct {
+		path string
+		goos string
+		want string
+	}{
+		{`C:\Users\test\AppData\Local\Temp\store.sqlite`, "windows", "file:///C:/Users/test/AppData/Local/Temp/store.sqlite"},
+		{"/tmp/store.sqlite", "linux", "file:///tmp/store.sqlite"},
+	}
+	for _, tc := range cases {
+		got := storeDatabaseURIFor(tc.path, tc.goos)
+		if got != tc.want {
+			t.Fatalf("uri for %q = %q, want %q", tc.path, got, tc.want)
+		}
 	}
 }

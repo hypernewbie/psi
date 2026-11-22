@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"time"
 
 	"github.com/hypernewbie/psi/internal/secretmem"
@@ -41,7 +43,7 @@ func (s *fileSettings) storeToken(ref *secretRef, databasePath string) (string, 
 	if err != nil || !secretStoreDatabasePrivate(path, before) {
 		return "", fmt.Errorf("store secret is unavailable")
 	}
-	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	uri := storeDatabaseURI(path)
 	query := url.Values{"mode": []string{"ro"}}
 	database, err := sql.Open("sqlite", uri+"?"+query.Encode())
 	if err != nil {
@@ -73,4 +75,24 @@ func (s *fileSettings) storeToken(ref *secretRef, databasePath string) (string, 
 		return "", fmt.Errorf("store secret is unavailable")
 	}
 	return string(value), nil
+}
+
+// storeDatabaseURI builds the SQLite URI of a database path.
+func storeDatabaseURI(path string) string {
+	return storeDatabaseURIFor(path, goruntime.GOOS)
+}
+
+// storeDatabaseURIFor builds the SQLite URI of a database path for one
+// platform. A Windows path needs its drive letter behind the root:
+// "file://C:/path" parses the drive as a host and points the driver at the
+// wrong file.
+func storeDatabaseURIFor(path, goos string) string {
+	slashed := path
+	if goos == "windows" {
+		slashed = strings.ReplaceAll(path, `\`, "/")
+		if !strings.HasPrefix(slashed, "/") {
+			slashed = "/" + slashed
+		}
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
 }

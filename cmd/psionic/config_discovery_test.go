@@ -105,7 +105,7 @@ func TestDiscordConfigReferenceSuppliesOnlyDiscordSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.Workspace != resolvePath(serviceWorkspace) {
+	if agent.Workspace != serviceWorkspace {
 		t.Fatalf("workspace = %q", agent.Workspace)
 	}
 	if agent.Model != "" {
