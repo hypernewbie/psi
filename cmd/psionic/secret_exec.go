@@ -58,11 +58,12 @@ type secretExecCapture struct {
 func (c *secretExecCapture) write(target *bytes.Buffer, data []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.combined += len(data)
-	if c.combined > c.limit {
+	if len(data) > 0 && (c.limit <= 0 || c.combined >= c.limit || len(data) > c.limit-c.combined) {
+		c.combined = c.limit
 		c.once.Do(func() { close(c.exceeded) })
 		return len(data), nil
 	}
+	c.combined += len(data)
 	if target != nil {
 		_, _ = target.Write(data)
 	}
@@ -77,6 +78,15 @@ func (c *secretExecCapture) stdoutWriter() io.Writer {
 	return secretExecWriter{capture: c, stdout: true}
 }
 func (c *secretExecCapture) stderrWriter() io.Writer { return secretExecWriter{capture: c} }
+
+// wipe clears the full owned stdout allocation and releases its buffer.
+func (c *secretExecCapture) wipe() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	output := c.stdout.Bytes()
+	secretmem.Wipe(output[:cap(output)])
+	c.stdout = bytes.Buffer{}
+}
 
 type secretExecWriter struct {
 	capture *secretExecCapture
@@ -233,6 +243,7 @@ func runSecretExec(opts secretExecOptions) (string, error) {
 	defer cancel()
 	process := startSecretExec(ctx, opts.command, opts.args, opts.env, opts.request)
 	capture := &secretExecCapture{limit: opts.maxOutput, exceeded: make(chan struct{}), onOutput: make(chan struct{}, 1)}
+	defer capture.wipe()
 	process.Stdout = capture.stdoutWriter()
 	process.Stderr = capture.stderrWriter()
 	wait := make(chan error, 1)
@@ -273,15 +284,15 @@ func runSecretExec(opts secretExecOptions) (string, error) {
 	}
 }
 
+// parseSecretExecOutput borrows the capture and returns a string because the
+// Discord client requires that type. JSON decoding also creates immutable
+// string copies; this function wipes its temporary and capture buffers.
 func parseSecretExecOutput(capture *secretExecCapture, opts secretExecOptions) (string, error) {
 	capture.mu.Lock()
 	output := append([]byte(nil), capture.stdout.Bytes()...)
 	capture.mu.Unlock()
 	defer secretmem.Wipe(output[:cap(output)])
-	defer func() {
-		secretmem.Wipe(capture.stdout.Bytes())
-		capture.stdout.Reset()
-	}()
+	defer capture.wipe()
 	trimmed := bytes.TrimSpace(bytes.TrimPrefix(output, []byte("\xef\xbb\xbf")))
 	if len(trimmed) == 0 {
 		return "", fmt.Errorf("exec provider returned empty output")

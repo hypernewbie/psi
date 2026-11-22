@@ -60,6 +60,23 @@ func TestSecretExecProviderPlainOutputMode(t *testing.T) {
 	}
 }
 
+func TestParseSecretExecOutputWipesFullCaptureAllocation(t *testing.T) {
+	response := []byte(`{"protocolVersion":1,"values":{"id":"synthetic-token"}}`)
+	backing := bytes.Repeat([]byte{'x'}, 256)
+	copy(backing, response)
+	capture := &secretExecCapture{stdout: *bytes.NewBuffer(backing[:len(response)])}
+
+	got, err := parseSecretExecOutput(capture, secretExecOptions{requestedID: "id", jsonOnly: true})
+	if err != nil || got != "synthetic-token" {
+		t.Fatalf("parse output = %q, %v", got, err)
+	}
+	for i, value := range backing {
+		if value != 0 {
+			t.Fatalf("capture allocation byte %d was not wiped", i)
+		}
+	}
+}
+
 func TestSecretExecRejectsInvalidIDsAndProtocol(t *testing.T) {
 	for _, id := range []string{"", "../token", "x/./token", "x/../token", "has space", "colon;command"} {
 		if validExecSecretID(id) {

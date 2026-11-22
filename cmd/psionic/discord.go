@@ -38,6 +38,9 @@ type discordTransport struct {
 }
 
 func newDiscordTransport(token string, settings *fileSettings, logger *log.Logger) (*discordTransport, error) {
+	// discordgo requires an immutable authorization string and retains it on
+	// the session. The caller drops its references after construction, but
+	// runtime, SDK, and HTTP copies cannot be reliably wiped.
 	if !strings.HasPrefix(token, "Bot ") && !strings.HasPrefix(token, "Bearer ") {
 		token = "Bot " + token
 	}

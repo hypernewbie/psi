@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// resolveDiscordToken borrows settings and environment values and returns the
+// immutable string required by discordgo. Source-specific byte buffers are
+// wiped by their readers where this process owns them.
 func (s *fileSettings) resolveDiscordToken(lookupEnv func(string) (string, bool), storeDatabase string) (string, error) {
 	ref := s.Channels.Discord.Token
 	switch {

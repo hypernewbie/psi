@@ -168,7 +168,11 @@ instead.
 The security boundary is who can talk to the bot, not the model's tool list.
 Only allowlisted people reach an agent run. Owner-only controls and private
 memory require `commands.ownerAllowFrom`. Do not publish a bot token in a
-workspace file or a settings example.
+workspace file or a settings example. Token settings and JSON-backed sources
+pass through immutable Go strings; decoders, the runtime, Discord's SDK, and the
+HTTP stack can create copies that cannot be reliably wiped. Psionic wipes owned
+file, exec, and store byte buffers where practical, but does not claim complete
+process-memory erasure.
 
 ## Canary and cutover
 

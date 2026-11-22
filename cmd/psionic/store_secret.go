@@ -19,8 +19,9 @@ const (
 	secretStoreQueryTimeout  = 5 * time.Second
 )
 
-// resolveStoreToken reads one team-scoped secret value from an explicitly
-// selected existing SQLite database. It never creates or modifies the file.
+// storeToken reads one team-scoped secret value from an explicitly selected
+// existing SQLite database. It never creates or modifies the file. The returned
+// immutable string is required by discordgo; the owned database value is wiped.
 func (s *fileSettings) storeToken(ref *secretRef, databasePath string) (string, error) {
 	_, provider, err := s.secretProviderForRef("store", ref.provider)
 	if err != nil {
