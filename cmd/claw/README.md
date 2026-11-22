@@ -49,7 +49,9 @@ structured references and whole-value `$NAME` or `${NAME}` shorthand,
 configured environment provider aliases and allowlists are enforced. Provider aliases start with a lowercase letter and contain up to
 64 lowercase letters, digits, `_` or `-`. Environment variable IDs start with
 an uppercase letter and contain up to 128 uppercase letters, digits or `_`.
-File, command, and managed-store references are not yet supported.
+Embedded `${NAME}` configuration templates are substituted separately; an
+embedded `$NAME` is literal. File, command, and managed-store references are
+not yet supported.
 
 `channels.discord.dmPolicy: "pairing"` keeps static `allowFrom` entries
 working, but Claw does not implement the pairing workflow. Unknown senders

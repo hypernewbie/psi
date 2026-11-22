@@ -155,6 +155,34 @@ func TestEnvironmentTokenShorthandUsesProviderAllowlist(t *testing.T) {
 	}
 }
 
+func TestDiscordTokenConfigurationSubstitution(t *testing.T) {
+	lookup := func(name string) (string, bool) {
+		if name == "VALUE" {
+			return "resolved", true
+		}
+		return "", false
+	}
+	for _, tc := range []struct {
+		name, input, want string
+		wantError         bool
+	}{
+		{"embedded shorthand is literal", "prefix-$VALUE", "prefix-$VALUE", false},
+		{"embedded template", "prefix-${VALUE}", "prefix-resolved", false},
+		{"escaped template", "$${VALUE}", "${VALUE}", false},
+		{"fallback", "prefix-${MISSING:-fallback}", "prefix-fallback", false},
+		{"invalid template remains literal", "${bad}", "${bad}", false},
+		{"missing template", "prefix-${MISSING}", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := &secretRef{value: tc.input}
+			got, err := ref.load(lookup)
+			if (err != nil) != tc.wantError || got != tc.want {
+				t.Fatalf("got %q, error %v", got, err)
+			}
+		})
+	}
+}
+
 func TestMissingEnvironmentTokenDoesNotExposeReference(t *testing.T) {
 	body := `{ channels: { discord: { token: { source: "env", provider: "default", id: "SYNTHETIC_PRIVATE_NAME" } } } }`
 	_, err := decodeSettings([]byte(body), func(string) (string, bool) { return "", false })

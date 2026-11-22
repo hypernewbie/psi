@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/secretmem"
 	"github.com/titanous/json5"
 )
@@ -281,9 +280,7 @@ func (s *secretRef) load(lookupEnv func(string) (string, bool)) (string, error) 
 	if strings.TrimSpace(s.value) == "" {
 		return "", nil
 	}
-	// Reuse Psi's credential reference syntax so a literal or ${VAR} behaves
-	// like the rest of the installation.
-	return config.ResolveCredentialWithEnv(s.value, lookupEnv)
+	return substituteTokenEnvironment(s.value, lookupEnv)
 }
 
 func (s *secretRef) resolve(lookupEnv func(string) (string, bool)) (string, error) {
