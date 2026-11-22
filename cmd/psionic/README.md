@@ -207,10 +207,10 @@ The command runs through the system shell with the workspace as its working
 directory. It runs with this process's own user permissions and **no
 sandbox**. Output is bounded: the first three quarters and the last quarter
 of the output are kept, with a truncation marker between them. A run that
-reaches its timeout kills the whole process group; on Windows the shell and
-its children are killed with `taskkill`, and a grandchild process can outlive
-that kill. A nonzero exit status is reported as text, not as a failed tool
-call.
+reaches its timeout, or a turn that is stopped with `/stop`, kills the whole
+process group; on Windows the shell and its children are killed with
+`taskkill`, and a grandchild process can outlive that kill. A nonzero exit
+status is reported as text, not as a failed tool call.
 
 ## Attachments
 

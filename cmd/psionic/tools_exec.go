@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -134,16 +135,22 @@ func runExec(ctx context.Context, workspace, command string, limits execLimits) 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	var waitErr error
-	timedOut := false
+	stopped := false
 	select {
 	case waitErr = <-done:
 	case <-runCtx.Done():
-		timedOut = true
+		// The run was cancelled or ran out of time. The process group is
+		// killed so no child outlives the turn.
+		stopped = true
 		stopExecCommand(cmd)
 		<-done
 	}
-	if timedOut {
-		return execResult{output: output.text(), status: fmt.Sprintf("timed out after %s", limits.timeout), err: runCtx.Err(), command: command}
+	if stopped {
+		status := "cancelled"
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			status = fmt.Sprintf("timed out after %s", limits.timeout)
+		}
+		return execResult{output: output.text(), status: status, err: runCtx.Err(), command: command}
 	}
 	status := "exit 0"
 	if waitErr != nil {
