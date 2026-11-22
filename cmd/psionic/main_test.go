@@ -12,6 +12,16 @@ import (
 	"testing"
 )
 
+func TestHelpDisclosesExecProviderMayRunDuringCheck(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--help"}, &stdout, &stderr); err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "may execute the configured exec token provider") {
+		t.Fatalf("help does not disclose exec behavior: %q", stderr.String())
+	}
+}
+
 func TestCheckDoesNotWriteOrConnect(t *testing.T) {
 	agentDir := t.TempDir()
 	writeTestModels(t, agentDir)

@@ -73,7 +73,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.StringVar(&opts.stateDir, "state-dir", "", "private state directory")
 	flags.StringVar(&opts.agentDir, "agent-dir", "", "Psi agent directory for settings, models, and credentials")
 	flags.StringVar(&opts.secretStoreDB, "secret-store-db", "", "existing read-only SQLite secret-store database")
-	flags.BoolVar(&opts.check, "check", false, "validate settings without a Discord connection or state writes")
+	flags.BoolVar(&opts.check, "check", false, "validate settings without a Discord connection or state writes; may execute the configured exec token provider")
 	flags.BoolVar(&showVersion, "version", false, "print the version")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: psionic --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--secret-store-db PATH] [--check]")
