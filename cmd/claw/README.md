@@ -37,8 +37,8 @@ access.
 
 | Area | Supported |
 | --- | --- |
-| Agent | `agents.defaults` and one `agents.entries` profile: workspace, model, identity, compaction model, and `tools` filters. |
-| Model | `agents.*.model` in scalar or `primary`/`fallbacks` form. Fallbacks are recorded but not retried in this release. `models.providers` supplies custom metadata that Psi merges with its catalogue. |
+| Agent | `agents.defaults` and one `agents.entries` profile: workspace, identity, and `tools` filters. |
+| Model | Psi's `settings.json` selects the model; Psi's catalogue and credentials configure its provider. Model settings in the input file are ignored. |
 | Discord | `channels.discord`: token, DM policy, allow lists, group policy, guild and channel entries, sender and role lists, mention overrides, history limit, text chunk limit, line limit, reply mode, embed suppression, inbound run timeout. |
 | Replies | `messages.visibleReplies` and `messages.groupChat.visibleReplies`, including the older boolean form. |
 | Sessions | `session.dmScope`, `session.reset`, `session.resetByType`, and `session.resetByChannel` for Discord. |
@@ -133,9 +133,8 @@ not replayed automatically.
 Psi resolves model metadata and API keys. Put the model in Psi's `models.json`
 when the bundled catalogue does not contain it, and provision credentials in
 `auth.json` or the provider's environment variable. Claw reads the same Psi
-agent directory. Provider entries in the settings file are merged into Psi's
-catalogue; Claw does not translate another tool's credential store. OAuth-only
-provider modes are not supported in this release; configure an API-key endpoint
+agent directory. Model and provider settings from the input file are ignored.
+OAuth-only provider modes are not supported in this release; configure an API-key endpoint
 instead.
 
 ## Security

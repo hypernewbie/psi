@@ -67,31 +67,3 @@ func TestNewProviderSetRejectsUnknownModel(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
-
-func TestSettingsModelMetadataStaysInPsiCatalogue(t *testing.T) {
-	settings := mustSettings(t, `{
-		channels: { discord: {} },
-		models: { providers: { demo: {
-			baseUrl: "https://example.invalid/v1",
-			api: "openai-completions",
-			apiKey: "configured-key",
-			models: [{ id: "large-model", name: "Large", contextWindow: 131072, maxTokens: 8192, reasoning: true, input: ["text"] }],
-		} } },
-	}`)
-	models := &config.ModelsFile{}
-	if err := applyModelSettings(settings, models, func(string) (string, bool) { return "", false }); err != nil {
-		t.Fatal(err)
-	}
-	meta, catalogue, providerID, err := resolveModel(models, "demo/large-model")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if providerID != "demo" || meta.ID != "large-model" || catalogue.ContextWindow != 131072 || !catalogue.Custom {
-		t.Fatalf("meta = %+v, catalogue = %+v", meta, catalogue)
-	}
-	client, err := buildProvider(models, t.TempDir(), providerID, meta, catalogue, 1, "session")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.CloseIdle()
-}

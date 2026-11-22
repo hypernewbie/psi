@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/hypernewbie/psi/internal/config"
-	"github.com/hypernewbie/psi/internal/modelmeta"
 	"github.com/hypernewbie/psi/internal/secretmem"
 	"github.com/titanous/json5"
 )
@@ -22,7 +21,6 @@ type fileSettings struct {
 	Messages *messagesSettings `json:"messages"`
 	Session  *sessionSettings  `json:"session"`
 	Commands *commandsSettings `json:"commands"`
-	Models   *modelsSettings   `json:"models"`
 	Tools    *toolPolicy       `json:"tools"`
 }
 
@@ -32,11 +30,9 @@ type agentsSettings struct {
 }
 
 type agentSettings struct {
-	Workspace  string      `json:"workspace"`
-	Model      modelRef    `json:"model"`
-	Identity   *identity   `json:"identity"`
-	Compaction *compaction `json:"compaction"`
-	Tools      *toolPolicy `json:"tools"`
+	Workspace string      `json:"workspace"`
+	Identity  *identity   `json:"identity"`
+	Tools     *toolPolicy `json:"tools"`
 }
 
 type identity struct {
@@ -46,71 +42,11 @@ type identity struct {
 	Avatar string `json:"avatar"`
 }
 
-type compaction struct {
-	Model string `json:"model"`
-}
-
-type modelRef struct {
-	Primary   string
-	Fallbacks []string
-}
-
-// UnmarshalJSON accepts the documented scalar and primary/fallbacks forms.
-func (m *modelRef) UnmarshalJSON(data []byte) error {
-	data = bytes.TrimSpace(data)
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
-		return nil
-	}
-	if data[0] == '"' {
-		return json5.Unmarshal(data, &m.Primary)
-	}
-	var object struct {
-		Primary   string   `json:"primary"`
-		Fallbacks []string `json:"fallbacks"`
-	}
-	if err := json5.Unmarshal(data, &object); err != nil {
-		return err
-	}
-	m.Primary = object.Primary
-	m.Fallbacks = object.Fallbacks
-	return nil
-}
-
 type toolPolicy struct {
 	Profile   string   `json:"profile"`
 	Allow     []string `json:"allow"`
 	AlsoAllow []string `json:"alsoAllow"`
 	Deny      []string `json:"deny"`
-}
-
-type modelsSettings struct {
-	Providers map[string]*modelProviderSettings `json:"providers"`
-}
-
-type modelProviderSettings struct {
-	BaseURL    string                `json:"baseUrl"`
-	API        string                `json:"api"`
-	APIKey     *secretRef            `json:"apiKey"`
-	Auth       string                `json:"auth"`
-	AuthHeader bool                  `json:"authHeader"`
-	Compat     modelmeta.Compat      `json:"compat"`
-	Headers    map[string]*secretRef `json:"headers"`
-	Models     []*modelDefinition    `json:"models"`
-}
-
-type modelDefinition struct {
-	ID               string                `json:"id"`
-	Name             string                `json:"name"`
-	API              string                `json:"api"`
-	BaseURL          string                `json:"baseUrl"`
-	Reasoning        bool                  `json:"reasoning"`
-	Input            []string              `json:"input"`
-	ContextWindow    int                   `json:"contextWindow"`
-	ContextTokens    int                   `json:"contextTokens"`
-	MaxTokens        int                   `json:"maxTokens"`
-	ThinkingLevelMap map[string]*string    `json:"thinkingLevelMap"`
-	Compat           modelmeta.Compat      `json:"compat"`
-	Headers          map[string]*secretRef `json:"headers"`
 }
 
 type channelsSettings struct {
@@ -610,33 +546,19 @@ func resolveAgent(s *fileSettings, id string) (selectedAgent, error) {
 	mergeTools(&chosen.Tools, s.Tools)
 	if defaults != nil {
 		chosen.Workspace = defaults.Workspace
-		chosen.Model = defaults.Model.Primary
-		chosen.Fallbacks = append([]string(nil), defaults.Model.Fallbacks...)
 		if defaults.Identity != nil {
 			chosen.Identity = *defaults.Identity
 		}
 		mergeTools(&chosen.Tools, defaults.Tools)
-		if defaults.Compaction != nil {
-			chosen.Compaction = defaults.Compaction.Model
-		}
 	}
 	if entry != nil {
 		if entry.Workspace != "" {
 			chosen.Workspace = entry.Workspace
 		}
-		if entry.Model.Primary != "" {
-			chosen.Model = entry.Model.Primary
-		}
-		if len(entry.Model.Fallbacks) > 0 {
-			chosen.Fallbacks = append([]string(nil), entry.Model.Fallbacks...)
-		}
 		if entry.Identity != nil {
 			mergeIdentity(&chosen.Identity, *entry.Identity)
 		}
 		mergeTools(&chosen.Tools, entry.Tools)
-		if entry.Compaction != nil && entry.Compaction.Model != "" {
-			chosen.Compaction = entry.Compaction.Model
-		}
 	}
 	if chosen.ID == "" {
 		chosen.ID = "main"

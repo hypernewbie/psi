@@ -26,6 +26,9 @@ func writeTestModels(t *testing.T, agentDir string) {
 	if err := os.WriteFile(filepath.Join(agentDir, "models.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"defaultProvider":"demo","defaultModel":"large-model"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func loadTestModels(t *testing.T, agentDir string) (*config.ModelsFile, error) {

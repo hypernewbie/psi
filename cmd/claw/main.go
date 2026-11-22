@@ -70,7 +70,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.StringVar(&opts.agentID, "agent", "", "agent entry to run")
 	flags.StringVar(&opts.workspace, "workspace", "", "workspace override")
 	flags.StringVar(&opts.stateDir, "state-dir", "", "private state directory")
-	flags.StringVar(&opts.agentDir, "agent-dir", "", "Psi agent directory for models and credentials")
+	flags.StringVar(&opts.agentDir, "agent-dir", "", "Psi agent directory for settings, models, and credentials")
 	flags.BoolVar(&opts.check, "check", false, "validate settings without connecting or writing")
 	flags.BoolVar(&showVersion, "version", false, "print the version")
 	flags.Usage = func() {
@@ -152,11 +152,21 @@ func prepare(opts options) (*loaded, error) {
 	if err != nil {
 		return nil, fmt.Errorf("models: model metadata is malformed or unavailable")
 	}
-	if err := applyModelSettings(settings, models, os.LookupEnv); err != nil {
+	defaults, err := config.LoadSettings(filepath.Join(agentDir, "settings.json"), "", false)
+	if err != nil {
+		return nil, fmt.Errorf("agent settings: unavailable")
+	}
+	providerID := defaults.Settings.DefaultProvider
+	if providerID == "" {
+		return nil, fmt.Errorf("agent settings: defaultProvider is required")
+	}
+	catalogue, err := models.SelectModel(providerID, defaults.Settings.DefaultModel)
+	if err != nil {
 		return nil, err
 	}
-	// The merged catalogue owns the provider metadata after this point.
-	settings.Models = nil
+	agent.Model = providerID + "/" + catalogue.ID
+	agent.Fallbacks = nil
+	agent.Compaction = ""
 	mainModel, mainCatalogue, providerID, err := resolveModel(models, agent.Model)
 	if err != nil {
 		return nil, err
@@ -176,10 +186,6 @@ func prepare(opts options) (*loaded, error) {
 			return nil, fmt.Errorf("compaction model: %w", err)
 		}
 		compactor.CloseIdle()
-	}
-	defaults, err := config.LoadSettings("", "", false)
-	if err != nil {
-		return nil, fmt.Errorf("agent settings: unavailable")
 	}
 	direct, group := replyModes(settings)
 	if direct == "message_tool" || group == "message_tool" {

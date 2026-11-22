@@ -39,6 +39,28 @@ func TestCheckDoesNotWriteOrConnect(t *testing.T) {
 	}
 }
 
+func TestPrepareUsesPsiModelInsteadOfExternalModelSettings(t *testing.T) {
+	agentDir := t.TempDir()
+	writeTestModels(t, agentDir)
+	workspace := t.TempDir()
+	path := filepath.Join(t.TempDir(), "settings.json5")
+	body := fmt.Sprintf(`{
+		agents: { defaults: { workspace: %q, model: { primary: "other/missing" }, compaction: { model: "other/missing" } } },
+		models: { providers: { demo: { auth: "unsupported", apiKey: { source: "exec", id: "ignored" } } } },
+		channels: { discord: { token: "test-token" } }
+	}`, workspace)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := prepare(options{configPath: path, agentDir: agentDir, stateDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.agent.Model != "demo/large-model" || loaded.agent.Compaction != "" {
+		t.Fatalf("unexpected model selection: %+v", loaded.agent)
+	}
+}
+
 func TestCheckStateDirRejectsOverlaps(t *testing.T) {
 	agentDir := t.TempDir()
 	t.Setenv("PSI_CODING_AGENT_DIR", agentDir)

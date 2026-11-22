@@ -88,8 +88,8 @@ func TestLoadFileSettingsJSON5(t *testing.T) {
 	if agent.Workspace != filepath.Join(home, "workspace") {
 		t.Fatalf("workspace = %q", agent.Workspace)
 	}
-	if agent.Model != "demo/large-model" {
-		t.Fatalf("model = %q", agent.Model)
+	if agent.Model != "" {
+		t.Fatalf("external model selection was not ignored: %q", agent.Model)
 	}
 	if agent.Identity.Name != "Aster" {
 		t.Fatalf("identity = %+v", agent.Identity)
