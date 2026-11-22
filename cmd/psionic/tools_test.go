@@ -28,7 +28,7 @@ func (f fakeConversationIO) message(context.Context, string, string) (historyMes
 func TestMessageToolReadAndSend(t *testing.T) {
 	dir := writeWorkspace(t, map[string]string{"MEMORY.md": "fact"})
 	turn := &activeTurn{channelID: "423456789012345678"}
-	set, err := buildTools(dir, true, true, toolPolicy{}, nil, turn, fakeConversationIO{messages: []historyMessage{{ID: "1", Author: "Aster", Text: "hello"}}})
+	set, err := buildTools(dir, true, true, toolPolicy{}, nil, turn, fakeConversationIO{messages: []historyMessage{{ID: "1", Author: "Aster", Text: "hello"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestMessageToolReadAndSend(t *testing.T) {
 func TestMessageToolSendDisabledInAutomaticMode(t *testing.T) {
 	dir := writeWorkspace(t, nil)
 	turn := &activeTurn{channelID: "423456789012345678"}
-	set, err := buildTools(dir, false, false, toolPolicy{}, nil, turn, fakeConversationIO{})
+	set, err := buildTools(dir, false, false, toolPolicy{}, nil, turn, fakeConversationIO{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,14 +73,14 @@ func TestMessageToolSendDisabledInAutomaticMode(t *testing.T) {
 
 func TestToolPolicyDenyAndMemoryScope(t *testing.T) {
 	dir := writeWorkspace(t, map[string]string{"MEMORY.md": "fact"})
-	set, err := buildTools(dir, true, false, toolPolicy{Deny: []string{"memory_search"}}, nil, &activeTurn{channelID: "423456789012345678"}, nil)
+	set, err := buildTools(dir, true, false, toolPolicy{Deny: []string{"memory_search"}}, nil, &activeTurn{channelID: "423456789012345678"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := set.handlers["memory_search"]; ok {
 		t.Fatal("denied tool kept a handler")
 	}
-	shared, err := buildTools(dir, false, false, toolPolicy{}, nil, &activeTurn{channelID: "423456789012345678"}, nil)
+	shared, err := buildTools(dir, false, false, toolPolicy{}, nil, &activeTurn{channelID: "423456789012345678"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestSkillToolLoadsOnlyDiscoveredWorkspaceSkill(t *testing.T) {
 	if len(diagnostics) != 0 || len(found) != 1 {
 		t.Fatalf("skills = %+v, diagnostics = %+v", found, diagnostics)
 	}
-	set, err := buildTools(dir, false, false, toolPolicy{}, found, &activeTurn{channelID: "423456789012345678"}, nil)
+	set, err := buildTools(dir, false, false, toolPolicy{}, found, &activeTurn{channelID: "423456789012345678"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestToolProfilesFilterImplementedTools(t *testing.T) {
 		"messaging": {"message"},
 		"full":      {"memory_search", "memory_get", "message"},
 	} {
-		set, err := buildTools(dir, true, false, toolPolicy{Profile: profile}, nil, &activeTurn{channelID: "423456789012345678"}, io)
+		set, err := buildTools(dir, true, false, toolPolicy{Profile: profile}, nil, &activeTurn{channelID: "423456789012345678"}, io, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func TestToolProfilesFilterImplementedTools(t *testing.T) {
 
 func TestToolPolicyAllowAlsoAllowAndDeny(t *testing.T) {
 	dir := writeWorkspace(t, map[string]string{"MEMORY.md": "fact"})
-	set, err := buildTools(dir, true, false, toolPolicy{Profile: "minimal", AlsoAllow: []string{"memory_*"}, Deny: []string{"memory_get"}}, nil, &activeTurn{channelID: "423456789012345678"}, nil)
+	set, err := buildTools(dir, true, false, toolPolicy{Profile: "minimal", AlsoAllow: []string{"memory_*"}, Deny: []string{"memory_get"}}, nil, &activeTurn{channelID: "423456789012345678"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestToolPolicyAllowAlsoAllowAndDeny(t *testing.T) {
 	if _, ok := set.handlers["memory_get"]; ok {
 		t.Fatal("deny did not remove memory_get")
 	}
-	only, err := buildTools(dir, true, false, toolPolicy{Allow: []string{"memory_get"}}, nil, &activeTurn{channelID: "423456789012345678"}, nil)
+	only, err := buildTools(dir, true, false, toolPolicy{Allow: []string{"memory_get"}}, nil, &activeTurn{channelID: "423456789012345678"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestSkillToolBoundsLargeInstructions(t *testing.T) {
 	if len(diagnostics) != 0 || len(found) != 1 {
 		t.Fatalf("skills = %+v, diagnostics = %+v", found, diagnostics)
 	}
-	set, err := buildTools(dir, false, false, toolPolicy{}, found, &activeTurn{}, nil)
+	set, err := buildTools(dir, false, false, toolPolicy{}, found, &activeTurn{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestSkillToolRejectsALinkedReplacement(t *testing.T) {
 	if err := os.Symlink(outside, skillPath); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	set, err := buildTools(dir, false, false, toolPolicy{}, found, &activeTurn{}, nil)
+	set, err := buildTools(dir, false, false, toolPolicy{}, found, &activeTurn{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

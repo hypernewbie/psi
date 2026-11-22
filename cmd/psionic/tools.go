@@ -107,7 +107,10 @@ func messageToolDefinition(allowSend bool) provider.ToolDef {
 	}
 }
 
-var implementedTools = []string{"memory_search", "memory_get", "message", "skill"}
+// implementedTools lists every tool this release can implement. The exec tool
+// is listed so explicit allow/deny entries can match it, but no profile
+// includes it: it needs tools.exec.enabled and the owner DM route.
+var implementedTools = []string{"memory_search", "memory_get", "message", "skill", "exec"}
 
 // profileTools mirrors the tool-profile subsets that apply to the tools Psionic
 // implements. The coding profile excludes the messaging tool and the
@@ -178,8 +181,11 @@ func toolMatches(pattern, name string) bool {
 }
 
 // buildTools applies the route's memory visibility and the configured tool
-// policy before any tool definition or handler is exposed.
-func buildTools(workspace string, includeMemory, allowSend bool, policy toolPolicy, available []skills.Skill, turn *activeTurn, io conversationIO) (toolSet, error) {
+// policy before any tool definition or handler is exposed. The exec tool is
+// additionally opt-in: it needs tools.exec.enabled and an owner direct-message
+// route (includeMemory), regardless of profile or allow entries in a shared
+// room.
+func buildTools(workspace string, includeMemory, allowSend bool, policy toolPolicy, available []skills.Skill, turn *activeTurn, io conversationIO, execCfg *execSettings) (toolSet, error) {
 	set := toolSet{handlers: map[string]agentToolHandler{}}
 	var memory *memoryIndex
 	if includeMemory && (policy.allows("memory_search") || policy.allows("memory_get")) {
@@ -317,6 +323,18 @@ func buildTools(workspace string, includeMemory, allowSend bool, policy toolPoli
 			default:
 				return toolError("action must be read or send")
 			}
+		})
+	}
+	// The exec tool is owner-DM-only and opt-in. includeMemory is true exactly
+	// on the owner direct-message route, so a shared room never registers it,
+	// no matter what its profile or allow lists say.
+	if execCfg != nil && execCfg.enabled() && includeMemory {
+		limits := resolveExecLimits(execCfg)
+		workspaceDir := workspace
+		add(execToolDefinition(), func(ctx context.Context, inv tools.Invocation) tools.Result {
+			command, _ := inv.Arguments["command"].(string)
+			result := runExec(ctx, workspaceDir, command, limits)
+			return toolText(result.replyText())
 		})
 	}
 	return set, nil

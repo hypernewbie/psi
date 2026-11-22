@@ -487,7 +487,7 @@ func (c *conversation) buildTurnConfig(msg inboundMessage) (agent.Config, *activ
 	if !effectiveTools.allows("skill") {
 		availableSkills = nil
 	}
-	toolsForTurn, err := buildTools(c.rt.agent.Workspace, includeMemory, replyMode == "message_tool", effectiveTools, availableSkills, active, c.rt.transport)
+	toolsForTurn, err := buildTools(c.rt.agent.Workspace, includeMemory, replyMode == "message_tool", effectiveTools, availableSkills, active, c.rt.transport, execConfigFor(c.rt.settings, includeMemory))
 	if err != nil {
 		return agent.Config{}, nil, err
 	}

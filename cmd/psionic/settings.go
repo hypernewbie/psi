@@ -22,7 +22,53 @@ type fileSettings struct {
 	Session  *sessionSettings  `json:"session"`
 	Commands *commandsSettings `json:"commands"`
 	Secrets  *secretsSettings  `json:"secrets"`
-	Tools    *toolPolicy       `json:"tools"`
+	Tools    *toolsSettings    `json:"tools"`
+}
+
+// toolsSettings is the top-level tools object: the shared profile filters
+// plus the exec subset. Only the explicit exec switches are honored; absent
+// means the exec tool stays unregistered.
+type toolsSettings struct {
+	toolPolicy
+	Exec *execSettings `json:"exec"`
+}
+
+// execSettings is the projected tools.exec subset. The tool is opt-in:
+// nothing is registered unless enabled is true, and it is offered only on the
+// owner direct-message route.
+type execSettings struct {
+	Enabled        *bool    `json:"enabled"`
+	PassEnv        []string `json:"passEnv"`
+	TimeoutMs      *int64   `json:"timeoutMs"`
+	MaxOutputBytes *int64   `json:"maxOutputBytes"`
+}
+
+func (e *execSettings) enabled() bool { return e != nil && e.Enabled != nil && *e.Enabled }
+
+func validateExecSettings(e *execSettings) error {
+	if e == nil {
+		return nil
+	}
+	for _, name := range e.PassEnv {
+		if !secretEnvName.MatchString(name) {
+			return fmt.Errorf("settings: tools.exec.passEnv entries must be environment names")
+		}
+	}
+	if e.TimeoutMs != nil && (*e.TimeoutMs < 1000 || *e.TimeoutMs > 300000) {
+		return fmt.Errorf("settings: tools.exec.timeoutMs must be between 1000 and 300000")
+	}
+	if e.MaxOutputBytes != nil && (*e.MaxOutputBytes < 1024 || *e.MaxOutputBytes > 65536) {
+		return fmt.Errorf("settings: tools.exec.maxOutputBytes must be between 1024 and 65536")
+	}
+	return nil
+}
+
+// toolsPolicy returns the shared filters, tolerating a nil object.
+func (t *toolsSettings) toolsPolicy() *toolPolicy {
+	if t == nil {
+		return nil
+	}
+	return &t.toolPolicy
 }
 
 type secretsSettings struct {
@@ -553,8 +599,13 @@ func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
 			}
 		}
 	}
-	if err := validatePolicyTools(s.Tools, "tools"); err != nil {
-		return err
+	if s.Tools != nil {
+		if err := validatePolicyTools(&s.Tools.toolPolicy, "tools"); err != nil {
+			return err
+		}
+		if err := validateExecSettings(s.Tools.Exec); err != nil {
+			return err
+		}
 	}
 	if s.Agents != nil {
 		if err := validateTools(s.Agents.Defaults, "agents.defaults.tools"); err != nil {
@@ -661,7 +712,7 @@ func resolveAgent(s *fileSettings, id string) (selectedAgent, error) {
 	} else if s.Agents != nil && len(s.Agents.Entries) > 1 {
 		return selectedAgent{}, fmt.Errorf("multiple agents are configured; select one with --agent")
 	}
-	mergeTools(&chosen.Tools, s.Tools)
+	mergeTools(&chosen.Tools, s.Tools.toolsPolicy())
 	if defaults != nil {
 		chosen.Workspace = defaults.Workspace
 		if defaults.Identity != nil {
