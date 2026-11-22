@@ -562,7 +562,7 @@ func (r *runtime) saveThinkingDefault(level string, out io.Writer) error {
 
 func (r *runtime) handleSettingsCommand(arg string, out io.Writer) (bool, error) {
 	if strings.TrimSpace(arg) != "" {
-		return false, fmt.Errorf("use /settings")
+		return false, r.localizedError("error.use-settings")
 	}
 	for _, item := range r.newSettingsPicker().Items {
 		value, _ := item.Current()

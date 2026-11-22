@@ -136,7 +136,7 @@ func (r *runtime) refreshModelsForPicker(notice func(terminal.NoticeKind, string
 		return
 	}
 	if err := r.reloadModels(); err != nil {
-		notice(terminal.NoticeError, "models.json error: "+err.Error())
+		notice(terminal.NoticeError, r.localized("notice.models-json-error", err.Error()))
 	}
 }
 

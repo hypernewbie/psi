@@ -71,10 +71,13 @@ the `skills` prompt section; a `/skill:` invocation adds the body to that user
 message, and discovery still advertises names, descriptions, and paths only.
 
 `language: "zh"` localizes the built-in prose in these sections, adds a
-Simplified Chinese reply rule, and localizes the `/settings` picker labels,
-descriptions, prose value labels, and key hint; theme names and config literals
-stay unchanged. Section names, tool names, XML tags,
-paths, and user-authored text stay unchanged. A custom preamble is not
+Simplified Chinese reply rule, localizes the `/settings` picker labels,
+descriptions, prose value labels, and key hint, and localizes app-authored
+terminal notices, command usage errors, and the `error:` prefix; theme names and
+config literals stay unchanged. Section names, tool names, XML tags,
+paths, and user-authored text stay unchanged. Terminal chrome (including notice
+kind labels), login and logout status text, replay and offline banners, and
+error details from lower layers remain English. A custom preamble is not
 translated and does not receive the Chinese reply rule. The interactive
 terminal displays reasoning text when the model emits it, unless hidden with
 `Ctrl+T` or `hideThinkingBlock`. The language setting does not force the

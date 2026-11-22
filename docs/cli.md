@@ -242,11 +242,14 @@ client for one run. See [MCP servers](mcp.md).
 - `--language en|zh` selects the built-in system-prompt language for this run.
   `en` is the default; `zh` means Simplified Chinese. The flag overrides
   project and user settings, survives `/reload`, and applies to a resumed
-  session instead of its stored prompt. It localizes prompt text and the
-  `/settings` labels, descriptions, prose value labels, and key hint. Theme
-  names, config literals, terminal chrome, notices, errors, embedded docs, user
-  files, skill metadata, skill bodies, compaction prompts, and tool schemas stay
-  unchanged. Pi has no such flag; it is Psi-only.
+  session instead of its stored prompt. It localizes prompt text, the
+  `/settings` labels, descriptions, prose value labels, and key hint, and
+  app-authored terminal notices, command usage errors, and the `error:` prefix.
+  Theme names, config literals, terminal chrome (including notice kind labels),
+  login and logout status text, replay and offline banners, embedded docs, user
+  files, skill metadata, skill bodies, compaction prompts, tool schemas, and
+  error details from lower layers stay unchanged. Pi has no such flag; it is
+  Psi-only.
 - `--system-prompt <text|file>` replaces the base preamble. A path that exists
   is read as a file. Custom prompt text suppresses the built-in tools, rules,
   and docs, so it does not receive the Chinese reply rule; project-context and

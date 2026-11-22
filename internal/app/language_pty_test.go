@@ -469,8 +469,8 @@ func TestActualAppLanguageSettings(t *testing.T) {
 		waitLanguageEditorReady(t, q)
 		openLanguageRow(t, q)
 		q.write("\r")
-		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Stored the default language`))
-		if strings.Contains(q.screen.Text(), "Saved for this session only") {
+		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Stored the default language|已\s*保\s*存\s*默\s*认\s*语\s*言`))
+		if regexp.MustCompile(`Saved for this session only|仅\s*本\s*会\s*话\s*有\s*效`).MatchString(q.screen.Text()) {
 			t.Fatalf("stored-default notice was replaced by session-only:\n%s", q.screen.Text())
 		}
 		closeLanguageRow(t, q)
@@ -494,8 +494,8 @@ func TestActualAppLanguageSettings(t *testing.T) {
 		}
 		openLanguageRow(t, q)
 		q.write("\r")
-		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Saved for this session only`))
-		if strings.Contains(q.screen.Text(), "Stored the default language") {
+		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Saved for this session only|仅\s*本\s*会\s*话\s*有\s*效`))
+		if regexp.MustCompile(`Stored the default language|已\s*保\s*存\s*默\s*认\s*语\s*言`).MatchString(q.screen.Text()) {
 			t.Fatalf("false stored-default notice:\n%s", q.screen.Text())
 		}
 		closeLanguageRow(t, q)
@@ -523,8 +523,8 @@ func TestActualAppLanguageSettings(t *testing.T) {
 		}
 		openLanguageRow(t, q)
 		q.write("\r")
-		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Saved for this session only`))
-		if strings.Contains(q.screen.Text(), "Stored the default language") {
+		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Saved for this session only|仅\s*本\s*会\s*话\s*有\s*效`))
+		if regexp.MustCompile(`Stored the default language|已\s*保\s*存\s*默\s*认\s*语\s*言`).MatchString(q.screen.Text()) {
 			t.Fatalf("false stored-default notice with corrupt settings:\n%s", q.screen.Text())
 		}
 		closeLanguageRow(t, q)
@@ -591,4 +591,19 @@ func TestActualAppLanguageStreamFailure(t *testing.T) {
 	if got := requests.count(); got != 2 {
 		t.Fatalf("provider requests = %d, want exactly 2", got)
 	}
+}
+
+// TestChineseCommandErrorNotice proves that a command usage error is rendered
+// in Simplified Chinese when the language setting is zh. The test also runs
+// against a real binary through -reviewBinary.
+func TestChineseCommandErrorNotice(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	agentDir := filepath.Join(home, "agent")
+	reviewSettings(t, agentDir, "http://127.0.0.1:9")
+	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--language", "zh")
+	waitLanguageEditorReady(t, q)
+	q.write("/thinking nope\r")
+	waitLanguageScreenMatch(t, q, regexp.MustCompile(`错\s*误\s*：\s*未\s*知\s*思\s*考\s*级\s*别`))
+	q.write("/quit\r")
+	q.finish()
 }
