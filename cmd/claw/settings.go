@@ -227,7 +227,24 @@ func (s *secretRef) UnmarshalJSON(data []byte) error {
 	s.present = true
 	data = bytes.TrimSpace(data)
 	if len(data) > 0 && data[0] == '"' {
-		return json5.Unmarshal(data, &s.value)
+		if err := json5.Unmarshal(data, &s.value); err != nil {
+			return err
+		}
+		// Whole-value environment shorthand is a secret reference, so it must
+		// pass the selected provider's allowlist like the structured form.
+		candidate := strings.TrimSpace(s.value)
+		if strings.HasPrefix(candidate, "${") && strings.HasSuffix(candidate, "}") {
+			candidate = candidate[2 : len(candidate)-1]
+		} else if strings.HasPrefix(candidate, "$") {
+			candidate = candidate[1:]
+		} else {
+			return nil
+		}
+		if secretEnvName.MatchString(candidate) {
+			s.env = candidate
+			s.value = ""
+		}
+		return nil
 	}
 	var object struct {
 		Source   string `json:"source"`

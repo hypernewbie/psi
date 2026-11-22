@@ -123,6 +123,38 @@ func TestEnvironmentTokenProviderAllowlist(t *testing.T) {
 	}
 }
 
+func TestEnvironmentTokenShorthandUsesProviderAllowlist(t *testing.T) {
+	lookup := func(name string) (string, bool) {
+		return "test-token", name == "BOT_TOKEN"
+	}
+	for _, shorthand := range []string{"$BOT_TOKEN", "${BOT_TOKEN}"} {
+		t.Run(shorthand, func(t *testing.T) {
+			for _, tc := range []struct {
+				allowlist string
+				wantError bool
+			}{
+				{`["BOT_TOKEN"]`, false},
+				{`[]`, true},
+			} {
+				body := fmt.Sprintf(`{
+					secrets: { defaults: { env: "restricted" }, providers: { restricted: { source: "env", allowlist: %s } } },
+					channels: { discord: { token: %q } }
+				}`, tc.allowlist, shorthand)
+				settings, err := decodeSettings([]byte(body), lookup)
+				if (err != nil) != tc.wantError {
+					t.Fatalf("allowlist %s: error = %v", tc.allowlist, err)
+				}
+				if err == nil {
+					value, err := settings.Channels.Discord.Token.resolve(lookup)
+					if err != nil || value != "test-token" {
+						t.Fatalf("reference did not resolve: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestEnvironmentTokenRejectsInvalidReferenceID(t *testing.T) {
 	lookup := func(string) (string, bool) { return "test-token", true }
 	for _, id := range []string{"lowercase", "1TOKEN", strings.Repeat("A", 129)} {
