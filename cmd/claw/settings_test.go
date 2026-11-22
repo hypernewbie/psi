@@ -111,6 +111,7 @@ func TestEnvironmentTokenProviderAllowlist(t *testing.T) {
 		{"unknown alias", ``, `unknown`, true},
 		{"wrong source", `secrets: { providers: { custom: { source: "file" } } },`, `custom`, true},
 		{"default collision", `secrets: { providers: { default: { source: "file" } } },`, `default`, false},
+		{"invalid alias", ``, `BadAlias`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := fmt.Sprintf(`{ %s channels: { discord: { token: { source: "env", provider: %q, id: "BOT_TOKEN" } } } }`, tc.secrets, tc.provider)
@@ -119,6 +120,16 @@ func TestEnvironmentTokenProviderAllowlist(t *testing.T) {
 				t.Fatalf("error = %v, wantError = %t", err, tc.wantError)
 			}
 		})
+	}
+}
+
+func TestEnvironmentTokenRejectsInvalidReferenceID(t *testing.T) {
+	lookup := func(string) (string, bool) { return "test-token", true }
+	for _, id := range []string{"lowercase", "1TOKEN", strings.Repeat("A", 129)} {
+		body := fmt.Sprintf(`{ channels: { discord: { token: { source: "env", provider: "default", id: %q } } } }`, id)
+		if _, err := decodeSettings([]byte(body), lookup); err == nil {
+			t.Fatalf("accepted invalid environment reference %q", id)
+		}
 	}
 }
 

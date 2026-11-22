@@ -46,7 +46,10 @@ access.
 
 `channels.discord.token` accepts a literal or an environment reference. For
 structured environment references, configured provider aliases and allowlists
-are enforced. File, command, and managed-store references are not yet supported.
+are enforced. Provider aliases start with a lowercase letter and contain up to
+64 lowercase letters, digits, `_` or `-`. Environment variable IDs start with
+an uppercase letter and contain up to 128 uppercase letters, digits or `_`.
+File, command, and managed-store references are not yet supported.
 
 `channels.discord.dmPolicy: "pairing"` keeps static `allowFrom` entries
 working, but Claw does not implement the pairing workflow. Unknown senders

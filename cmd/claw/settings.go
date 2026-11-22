@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/hypernewbie/psi/internal/config"
@@ -207,6 +208,12 @@ func (l *stringList) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// The provider and environment-name grammars are shared by secret references.
+var (
+	secretProviderName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+	secretEnvName      = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
+)
+
 // secretRef is a literal credential or an environment-backed reference.
 // File, command, and managed-store sources are refused before use.
 type secretRef struct {
@@ -235,7 +242,7 @@ func (s *secretRef) UnmarshalJSON(data []byte) error {
 		if strings.TrimSpace(object.ID) == "" {
 			return fmt.Errorf("environment secret needs an id")
 		}
-		s.env = object.ID
+		s.env = strings.TrimSpace(object.ID)
 		s.provider = object.Provider
 	default:
 		return fmt.Errorf("unsupported secret source %q", object.Source)
@@ -342,12 +349,15 @@ func (s *fileSettings) validateEnvTokenProvider() error {
 		return nil
 	}
 	defaultProvider := "default"
-	if s.Secrets != nil && s.Secrets.Defaults.Env != "" {
-		defaultProvider = s.Secrets.Defaults.Env
+	if s.Secrets != nil && strings.TrimSpace(s.Secrets.Defaults.Env) != "" {
+		defaultProvider = strings.TrimSpace(s.Secrets.Defaults.Env)
 	}
 	provider := ref.provider
 	if provider == "" {
 		provider = defaultProvider
+	}
+	if !secretProviderName.MatchString(provider) || !secretEnvName.MatchString(ref.env) {
+		return fmt.Errorf("settings: invalid environment secret reference")
 	}
 	var configured *secretProvider
 	if s.Secrets != nil {
