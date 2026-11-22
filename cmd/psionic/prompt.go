@@ -93,9 +93,9 @@ func truncateUTF8(text string, limit int) string {
 	return text[:limit]
 }
 
-// buildPromptSections composes the stable Claw sections in one fixed order.
+// buildPromptSections composes the stable Psionic sections in one fixed order.
 func buildPromptSections(agent selectedAgent, files workspaceFiles, toolNames []string, available []skills.Skill, visibleReplies string) []config.PromptSection {
-	preamble := "You are a personal assistant running inside Claw."
+	preamble := "You are a personal assistant running inside Psionic."
 	if strings.TrimSpace(agent.Identity.Name) != "" {
 		preamble += " Your name is " + strings.TrimSpace(agent.Identity.Name) + "."
 	}

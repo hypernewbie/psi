@@ -267,7 +267,7 @@ func TestTurnHistoryOmitsTheBotEcho(t *testing.T) {
 		settings: &fileSettings{Channels: &channelsSettings{Discord: &discordSettings{}}},
 		transport: &recordingTransport{history: []historyMessage{
 			{ID: "1", Author: "Aster", AuthorID: "223456789012345678", Text: "hello"},
-			{ID: "2", Author: "Claw", AuthorID: "999999999999999999", Text: "answer"},
+			{ID: "2", Author: "Psionic", AuthorID: "999999999999999999", Text: "answer"},
 		}},
 	}
 	got := rt.turnHistory(context.Background(), sourceTurn{message: inboundMessage{MessageID: "3"}})

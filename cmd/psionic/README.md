@@ -1,6 +1,6 @@
-# Claw
+# Psionic
 
-Claw is a Discord front end for Psi. One process runs one bot and one selected
+Psionic is a Discord front end for Psi. One process runs one bot and one selected
 agent. It reads an existing settings file and workspace in place, and uses
 Psi's agent loop, sessions, model catalogue, credentials, compaction, and
 skills.
@@ -8,9 +8,9 @@ skills.
 ## Build and run
 
 ```sh
-go install ./cmd/claw
-claw --config ./settings.json5 --check
-claw --config ./settings.json5
+go install ./cmd/psionic
+psionic --config ./settings.json5 --check
+psionic --config ./settings.json5
 ```
 
 `--check` reads the settings and model metadata, resolves the bot token, and
@@ -25,7 +25,7 @@ Flags:
 | `--config PATH` | Required settings file. |
 | `--agent ID` | Select one configured agent entry. Required when more than one entry exists. |
 | `--workspace DIR` | Override the selected agent's workspace for this process. |
-| `--state-dir DIR` | Claw's private state directory. Defaults to `claw` under the OS user configuration directory. |
+| `--state-dir DIR` | Psionic's private state directory. Defaults to `psionic` under the OS user configuration directory. |
 | `--agent-dir DIR` | Psi agent directory for `settings.json`, `models.json`, and `auth.json`. Defaults to Psi's normal agent directory. |
 | `--secret-store-db PATH` | Existing SQLite database for `store` token references. Opened read-only; overrides automatic lookup beside the settings file. |
 | `--check` | Validate configuration and resolve credentials without connecting to Discord. It can run a configured `exec` provider. |
@@ -33,7 +33,7 @@ Flags:
 
 ## Supported settings
 
-Claw reads the JSON5 settings file directly. Unknown optional features are
+Psionic reads the JSON5 settings file directly. Unknown optional features are
 ignored. A known policy it cannot honor blocks startup instead of widening
 access.
 
@@ -69,13 +69,13 @@ contains the secret-store table. Reads are read-only. Missing, ambiguous, or
 unavailable databases and missing values block startup.
 
 `channels.discord.dmPolicy: "pairing"` keeps static `allowFrom` entries
-working, but Claw does not implement the pairing workflow. Unknown senders
+working, but Psionic does not implement the pairing workflow. Unknown senders
 stay denied. An `open` policy requires `allowFrom: ["*"]`, matching the
 existing schema.
 Multiple Discord accounts and `$include` are not supported. A
 `session.dmScope` of `"main"` is accepted only when the single allowed
 direct-message peer is also listed in `commands.ownerAllowFrom`; otherwise
-Claw requires peer isolation.
+Psionic requires peer isolation.
 The settings file is read once at startup; restart after changing it. Workspace
 prompt files are read on every turn.
 
@@ -140,12 +140,12 @@ other private data it should not expose.
 
 ## State and transcripts
 
-Claw keeps JSONL transcripts under `<state>/sessions/` and a small bbolt
+Psionic keeps JSONL transcripts under `<state>/sessions/` and a small bbolt
 database at `<state>/state.db`.
 Transcripts start fresh. They are never read from, written to, or discovered by
 another Psi or Pi installation. `--state-dir` is rejected if it overlaps the
 workspace or a known Psi/Pi session directory. A non-empty state directory must
-carry Claw's marker file; an unrelated directory is refused.
+carry Psionic's marker file; an unrelated directory is refused.
 
 Each direct-message peer, guild channel, or thread has its own conversation,
 queue, and active run, subject to `session.dmScope`. A duplicate Discord event
@@ -156,7 +156,7 @@ not replayed automatically.
 
 Psi resolves model metadata and API keys. Put the model in Psi's `models.json`
 when the bundled catalogue does not contain it, and provision credentials in
-`auth.json` or the provider's environment variable. Claw reads the same Psi
+`auth.json` or the provider's environment variable. Psionic reads the same Psi
 agent directory. Model and provider settings from the input file are ignored.
 OAuth-only provider modes are not supported in this release; configure an API-key endpoint
 instead.
@@ -178,12 +178,12 @@ cancellation, and restart. Never run two processes with the same bot token,
 and do not change the incumbent service or its state during the canary.
 
 Cut over by stopping the service that uses the intended token, confirming it
-has disconnected, and then starting Claw with a fresh state directory. Keep
+has disconnected, and then starting Psionic with a fresh state directory. Keep
 the same application identity and workspace. The first conversation in each
 route starts a new transcript; no pending work or old transcript is imported.
 
 ## Rollback
 
-Stop Claw, keep its state directory for diagnosis, and start the service it
+Stop Psionic, keep its state directory for diagnosis, and start the service it
 replaced. Do not delete or rewrite either service's state. If the cutover
 changed command registrations, restore only those known commands.

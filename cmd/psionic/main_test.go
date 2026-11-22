@@ -69,7 +69,7 @@ func TestCheckStateDirRejectsOverlaps(t *testing.T) {
 	if err := os.MkdirAll(sessions, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkStateDir(filepath.Join(sessions, "claw"), workspace, agentDir); err == nil {
+	if err := checkStateDir(filepath.Join(sessions, "psionic"), workspace, agentDir); err == nil {
 		t.Fatal("state inside the Psi session root was accepted")
 	}
 	if err := checkStateDir(filepath.Join(workspace, "state"), workspace, agentDir); err == nil {
@@ -80,7 +80,7 @@ func TestCheckStateDirRejectsOverlaps(t *testing.T) {
 	}
 }
 
-func TestPrepareUsesOnlyTheClawSessionDirectory(t *testing.T) {
+func TestPrepareUsesOnlyThePsionicSessionDirectory(t *testing.T) {
 	agentDir := t.TempDir()
 	writeTestModels(t, agentDir)
 	t.Setenv("PSI_CODING_AGENT_DIR", agentDir)
@@ -230,7 +230,7 @@ func TestCheckStateDirRejectsSymlinkAlias(t *testing.T) {
 	if err := os.Symlink(sessions, alias); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if err := checkStateDir(filepath.Join(alias, "claw"), workspace, agentDir); err == nil {
+	if err := checkStateDir(filepath.Join(alias, "psionic"), workspace, agentDir); err == nil {
 		t.Fatal("symlinked state inside the Psi session root was accepted")
 	}
 }

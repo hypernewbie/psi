@@ -33,7 +33,7 @@ type options struct {
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(os.Stderr, "claw: %s\n", err)
+		fmt.Fprintf(os.Stderr, "psionic: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -65,7 +65,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) {
 	var opts options
 	var showVersion bool
-	flags := flag.NewFlagSet("claw", flag.ContinueOnError)
+	flags := flag.NewFlagSet("psionic", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&opts.configPath, "config", "", "path to an existing settings file")
 	flags.StringVar(&opts.agentID, "agent", "", "agent entry to run")
@@ -73,12 +73,12 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.StringVar(&opts.stateDir, "state-dir", "", "private state directory")
 	flags.StringVar(&opts.agentDir, "agent-dir", "", "Psi agent directory for settings, models, and credentials")
 	flags.StringVar(&opts.secretStoreDB, "secret-store-db", "", "existing read-only SQLite secret-store database")
-	flags.BoolVar(&opts.check, "check", false, "validate settings without connecting or writing")
+	flags.BoolVar(&opts.check, "check", false, "validate settings without a Discord connection or state writes")
 	flags.BoolVar(&showVersion, "version", false, "print the version")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: psionic --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--secret-store-db PATH] [--check]")
 		fmt.Fprintln(stderr, "Discord replies are capped at 16 messages; truncated replies include a notice.")
-		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store. Store tokens need --secret-store-db.")
+		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store. Store uses a unique private sibling database or --secret-store-db.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -106,8 +106,9 @@ type loaded struct {
 	defaults config.Settings
 }
 
-// prepare resolves configuration without creating state, a session, or a
-// provider client, so --check can share the same path.
+// prepare resolves configuration and token credentials, validates model
+// metadata and provider setup without a model request, and checks paths. An
+// exec token provider may run during --check.
 func prepare(opts options) (*loaded, error) {
 	settings, err := loadFileSettings(opts.configPath, os.LookupEnv)
 	if err != nil {
@@ -313,7 +314,7 @@ func serve(ctx context.Context, l *loaded, stderr io.Writer) error {
 	if err := state.pruneEvents(time.Now().Add(-eventRetention)); err != nil {
 		return fmt.Errorf("state: storage is unavailable")
 	}
-	logger := log.New(stderr, "claw: ", log.LstdFlags)
+	logger := log.New(stderr, "psionic: ", log.LstdFlags)
 	transport, err := newDiscordTransport(l.token, l.settings, logger)
 	l.token = ""
 	if l.settings.Channels.Discord.Token != nil {
@@ -335,7 +336,7 @@ func serve(ctx context.Context, l *loaded, stderr io.Writer) error {
 }
 
 // checkStateDir refuses a location that overlaps the workspace or known Psi
-// session roots. Claw transcripts must stay independent from other hosts.
+// session roots. Psionic transcripts must stay independent from other hosts.
 func resolveStateDir(configured string) (string, error) {
 	dir := configured
 	if dir == "" {
@@ -343,7 +344,7 @@ func resolveStateDir(configured string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("state directory is unavailable")
 		}
-		dir = filepath.Join(configDir, "claw")
+		dir = filepath.Join(configDir, "psionic")
 	}
 	return filepath.Abs(dir)
 }
@@ -376,7 +377,7 @@ func checkStateDir(stateDir, workspace, agentDir string) error {
 	return checkStateContents(stateDir)
 }
 
-// checkStateContents refuses an existing non-empty directory unless Claw
+// checkStateContents refuses an existing non-empty directory unless Psionic
 // created it. It is read-only so --check keeps its no-write guarantee.
 func checkStateContents(dir string) error {
 	info, err := os.Lstat(dir)
@@ -399,7 +400,7 @@ func checkStateContents(dir string) error {
 	marker := filepath.Join(dir, stateMarker)
 	info, err = os.Lstat(marker)
 	if os.IsNotExist(err) {
-		return fmt.Errorf("state directory is not a Claw state directory")
+		return fmt.Errorf("state directory is not a Psionic state directory")
 	}
 	if err != nil {
 		return fmt.Errorf("state directory marker is invalid")

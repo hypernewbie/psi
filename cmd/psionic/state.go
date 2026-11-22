@@ -37,8 +37,8 @@ type stateStore struct {
 }
 
 const (
-	stateMarker         = ".claw-state"
-	stateMarkerContents = "psi-claw state\n"
+	stateMarker         = ".psionic-state"
+	stateMarkerContents = "psionic state\n"
 	maxStateMarkerBytes = 64
 )
 
@@ -65,7 +65,7 @@ func markStateDir(dir string) error {
 		info, err := os.Lstat(marker)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("state directory is not a Claw state directory")
+				return fmt.Errorf("state directory is not a Psionic state directory")
 			}
 			return err
 		}

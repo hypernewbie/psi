@@ -109,7 +109,7 @@ func messageToolDefinition(allowSend bool) provider.ToolDef {
 
 var implementedTools = []string{"memory_search", "memory_get", "message", "skill"}
 
-// profileTools mirrors the tool-profile subsets that apply to the tools Claw
+// profileTools mirrors the tool-profile subsets that apply to the tools Psionic
 // implements. The coding profile excludes the messaging tool and the
 // messaging profile excludes memory tools; minimal has neither.
 var profileTools = map[string]map[string]bool{

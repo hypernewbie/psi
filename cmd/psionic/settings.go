@@ -13,7 +13,7 @@ import (
 	"github.com/titanous/json5"
 )
 
-// fileSettings is the supported projection of an existing Claw settings file.
+// fileSettings is the supported projection of an existing Psionic settings file.
 // Pointer fields keep "absent" distinct from false or zero.
 type fileSettings struct {
 	Agents   *agentsSettings   `json:"agents"`

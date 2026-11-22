@@ -28,7 +28,7 @@ func testSettings(t *testing.T) (*fileSettings, string) {
   },
   channels: {
     discord: {
-      token: { source: "env", id: "CLAW_TEST_BOT_TOKEN" },
+      token: { source: "env", id: "PSIONIC_TEST_BOT_TOKEN" },
       dmPolicy: "allowlist",
       allowFrom: ["123456789012345678", "<@!223456789012345678>"],
       groupPolicy: "allowlist",
@@ -53,7 +53,7 @@ func testSettings(t *testing.T) (*fileSettings, string) {
 		t.Fatal(err)
 	}
 	env := func(key string) (string, bool) {
-		if key == "CLAW_TEST_BOT_TOKEN" {
+		if key == "PSIONIC_TEST_BOT_TOKEN" {
 			return "test-token", true
 		}
 		return "", false
