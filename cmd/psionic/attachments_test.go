@@ -60,6 +60,11 @@ func (a *attachmentTransport) fetches() []string {
 	return append([]string(nil), a.fetched...)
 }
 
+// startTyping is a no-op for the test transport.
+func (a *attachmentTransport) startTyping(context.Context, string) func() {
+	return func() {}
+}
+
 func (a *attachmentTransport) messages() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -108,6 +108,9 @@ func (d *discordTransport) run(ctx context.Context, rt *runtime) error {
 	botID := d.session.State.User.ID
 	rt.setBotID(botID)
 	d.setBotID(botID)
+	if err := d.applyPresence(rt.presenceStatus(), rt.presenceActivity()); err != nil {
+		d.logger.Printf("presence update failed (%T)", err)
+	}
 	if rt.commandsEnabled() {
 		if err := d.registerCommands(); err != nil {
 			d.logger.Printf("command registration failed (%T)", err)
@@ -553,6 +556,40 @@ func (r *runtime) turnHistory(ctx context.Context, turn sourceTurn) []historyMes
 		filtered = append(filtered, message)
 	}
 	return filtered
+}
+
+// startTyping shows Discord's typing indicator in a channel and keeps it
+// alive while the turn runs.
+func (d *discordTransport) startTyping(ctx context.Context, channelID string) func() {
+	return startTyping(ctx, channelID, typingRefresh, typingMaxDuration, d.sendTyping, d.logger)
+}
+
+// sendTyping sends one typing request for a channel.
+func (d *discordTransport) sendTyping(channelID string) error {
+	if d.session == nil {
+		return fmt.Errorf("discord session is unavailable")
+	}
+	return d.session.ChannelTyping(channelID)
+}
+
+// applyPresence sets the bot's presence: its online state and the custom
+// status text shown next to its name.
+func (d *discordTransport) applyPresence(status, activity string) error {
+	if d.session == nil {
+		return fmt.Errorf("discord session is unavailable")
+	}
+	if status == "" {
+		status = "online"
+	}
+	data := discordgo.UpdateStatusData{Status: status}
+	if activity != "" {
+		// Discord requires a non-empty activity name, so the custom status
+		// carries the text in the state field.
+		data.Activities = []*discordgo.Activity{{
+			Name: "Custom Status", Type: discordgo.ActivityTypeCustom, State: activity,
+		}}
+	}
+	return d.session.UpdateStatusComplex(data)
 }
 
 func (d *discordTransport) sendMessage(ctx context.Context, channelID, replyTo, text string) (string, error) {

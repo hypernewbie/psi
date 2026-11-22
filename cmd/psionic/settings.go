@@ -34,8 +34,20 @@ type fileSettings struct {
 	// the shared catalogue and credential file.
 	Psi *psiSettings `json:"psi"`
 
+	// Presence is the bot's Discord presence: its online state and the
+	// custom status text.
+	Presence *presenceSettings `json:"presence"`
+
 	// StateDir is where Psionic keeps its transcripts.
 	StateDir string `json:"stateDir"`
+}
+
+// presenceSettings is the Discord presence of the bot.
+type presenceSettings struct {
+	// Status is one of online, dnd, idle, or invisible.
+	Status string `json:"status"`
+	// Activity is the custom status text. An empty string hides it.
+	Activity *string `json:"activity"`
 }
 
 // psiSettings points at the Psi directories Psionic reads.
@@ -577,6 +589,16 @@ func (s *fileSettings) validateEnvTokenProvider() error {
 }
 
 func (s *fileSettings) validate(lookupEnv func(string) (string, bool)) error {
+	if s.Presence != nil {
+		switch s.Presence.Status {
+		case "", "online", "dnd", "idle", "invisible":
+		default:
+			return fmt.Errorf("settings: presence.status must be online, dnd, idle, or invisible")
+		}
+		if s.Presence.Activity != nil && len(*s.Presence.Activity) > maxPresenceActivity {
+			return fmt.Errorf("settings: presence.activity is longer than %d characters", maxPresenceActivity)
+		}
+	}
 	if s.Channels == nil || s.Channels.Discord == nil {
 		return fmt.Errorf("settings: channels.discord is required")
 	}

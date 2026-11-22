@@ -76,6 +76,7 @@ access.
 | Commands | `commands.ownerAllowFrom` for owner-only controls. |
 | Tools | The shared `tools` filters plus `tools.exec` for the bounded shell tool. |
 | Locations | `discordConfig` for the Discord block of another file, `psi.agentDir` and `psi.sharedAgentDir` for the Psi directories, and `stateDir` for the transcripts. |
+| Presence | `presence.status` (`online`, `dnd`, `idle`, `invisible`) and `presence.activity`, the custom status text shown next to the bot's name. |
 
 `channels.discord.token` accepts a literal or an environment, file, exec, or
 store reference. `DISCORD_BOT_TOKEN` is used only when that field is absent; an
@@ -117,6 +118,9 @@ Discord settings. It keeps the Discord credentials in one place when another
 tool maintains them. Only that block is read: the referenced file's model,
 tool, agent, and session settings are ignored, and the two Discord sources
 cannot both be present.
+`presence` sets what Discord shows next to the bot's name. The status defaults
+to `online` and the custom status defaults to `Psionic`; an empty
+`presence.activity` hides the custom status.
 The settings file is read once at startup; restart after changing it. Workspace
 prompt files are read on every turn.
 
@@ -129,6 +133,10 @@ invite must include the `applications.commands` scope for native commands.
 - One bot. Direct messages, guild text channels, and existing threads. Edits
   are not processed. Group direct messages are off by default and handled as
   shared rooms when `channels.discord.dm.groupEnabled` is true.
+- While a turn runs, the bot shows Discord's typing indicator in that channel.
+  The indicator is renewed every four seconds, stops when the reply is
+  delivered, and gives up after three failed requests or fifteen minutes.
+  Commands answer immediately and do not show it.
 - Guild messages require a mention by default. Guild and channel entries can
   change that.
 - Guild allowlist semantics: a guild must have an entry unless the group policy

@@ -382,6 +382,19 @@ func printCheck(w io.Writer, l *loaded) error {
 		fmt.Fprintln(w, "exec tool: disabled")
 	}
 	fmt.Fprintln(w, "attachments: memory only, Discord CDN only")
+	presence := &presenceSettings{}
+	if l.settings.Presence != nil {
+		presence = l.settings.Presence
+	}
+	status := presence.Status
+	if status == "" {
+		status = "online"
+	}
+	if presence.Activity != nil && *presence.Activity == "" {
+		fmt.Fprintf(w, "presence: %s, no activity\n", status)
+	} else {
+		fmt.Fprintf(w, "presence: %s, activity shown\n", status)
+	}
 	return nil
 }
 

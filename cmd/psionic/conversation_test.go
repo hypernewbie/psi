@@ -19,6 +19,7 @@ type recordingTransport struct {
 	mu      sync.Mutex
 	sent    []string
 	history []historyMessage
+	typing  []string
 }
 
 func (r *recordingTransport) readMessages(context.Context, string, int, string, string) ([]historyMessage, error) {
@@ -34,6 +35,14 @@ func (r *recordingTransport) sendMessage(_ context.Context, _, _, text string) (
 
 func (r *recordingTransport) fetchAttachment(_ context.Context, _ string, _ int64) ([]byte, error) {
 	return nil, fmt.Errorf("attachment fetch is unavailable")
+}
+
+// startTyping records the typing indicator calls so a test can assert them.
+func (r *recordingTransport) startTyping(ctx context.Context, channelID string) func() {
+	r.mu.Lock()
+	r.typing = append(r.typing, channelID)
+	r.mu.Unlock()
+	return func() {}
 }
 
 func (r *recordingTransport) messages() []string {

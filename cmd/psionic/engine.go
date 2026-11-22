@@ -73,6 +73,9 @@ type transport interface {
 	// fetchAttachment downloads one attachment into memory, bounded by
 	// maxBytes. It must not write to disk.
 	fetchAttachment(ctx context.Context, url string, maxBytes int64) ([]byte, error)
+	// startTyping shows the working indicator in a channel and returns the
+	// function that stops it.
+	startTyping(ctx context.Context, channelID string) func()
 }
 
 type referenceReader interface {
@@ -546,6 +549,10 @@ func (c *conversation) handle(turn sourceTurn) {
 		c.handleCommand(turn, command, arg)
 		return
 	}
+	// Show the working indicator for the whole turn. It stops when the reply
+	// is delivered, when the turn fails, or when the turn is cancelled.
+	stopTyping := c.rt.transport.startTyping(c.ctx, turn.message.ChannelID)
+	defer stopTyping()
 	c.mu.Lock()
 	c.running = true
 	c.mu.Unlock()
@@ -771,6 +778,22 @@ func (r *runtime) replyMode(msg inboundMessage) string {
 		return r.groupReplies
 	}
 	return r.defaultReplies
+}
+
+// presenceStatus is the bot's Discord presence state.
+func (r *runtime) presenceStatus() string {
+	if r.settings.Presence == nil || r.settings.Presence.Status == "" {
+		return "online"
+	}
+	return r.settings.Presence.Status
+}
+
+// presenceActivity is the custom status text shown next to the bot's name.
+func (r *runtime) presenceActivity() string {
+	if r.settings.Presence == nil || r.settings.Presence.Activity == nil {
+		return defaultPresenceActivity
+	}
+	return *r.settings.Presence.Activity
 }
 
 func (r *runtime) dmScope() string {
