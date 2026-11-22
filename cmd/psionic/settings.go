@@ -236,11 +236,9 @@ type secretRef struct {
 	exec     string
 	store    string
 	provider string
-	present  bool
 }
 
 func (s *secretRef) UnmarshalJSON(data []byte) error {
-	s.present = true
 	data = bytes.TrimSpace(data)
 	if len(data) > 0 && data[0] == '"' {
 		if err := json5.Unmarshal(data, &s.value); err != nil {
