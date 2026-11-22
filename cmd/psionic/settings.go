@@ -23,6 +23,28 @@ type fileSettings struct {
 	Commands *commandsSettings `json:"commands"`
 	Secrets  *secretsSettings  `json:"secrets"`
 	Tools    *toolsSettings    `json:"tools"`
+
+	// DiscordConfig names another settings file whose channels.discord block
+	// supplies the Discord settings. It keeps one copy of the Discord
+	// credentials when the operator maintains them in another tool's file.
+	// Everything else in the referenced file is ignored.
+	DiscordConfig string `json:"discordConfig"`
+
+	// Psi locates the Psi-owned files: the service's own settings.json and
+	// the shared catalogue and credential file.
+	Psi *psiSettings `json:"psi"`
+
+	// StateDir is where Psionic keeps its transcripts.
+	StateDir string `json:"stateDir"`
+}
+
+// psiSettings points at the Psi directories Psionic reads.
+type psiSettings struct {
+	// AgentDir holds settings.json, including the model selection.
+	AgentDir string `json:"agentDir"`
+	// SharedAgentDir holds models.json and auth.json. It defaults to the
+	// agent directory.
+	SharedAgentDir string `json:"sharedAgentDir"`
 }
 
 // toolsSettings is the top-level tools object: the shared profile filters
@@ -400,10 +422,85 @@ func loadFileSettings(path string, lookupEnv func(string) (string, bool)) (*file
 		return nil, fmt.Errorf("settings: file cannot be read")
 	}
 	defer secretmem.Wipe(data)
-	return decodeSettings(data, lookupEnv)
+	settings, err := decodeSettingsRaw(data)
+	if err != nil {
+		return nil, err
+	}
+	// The Discord block may come from a referenced file, so the settings are
+	// validated after the reference is resolved.
+	if err := settings.applyDiscordReference(path, lookupEnv); err != nil {
+		return nil, err
+	}
+	if err := settings.validate(lookupEnv); err != nil {
+		return nil, err
+	}
+	return settings, nil
+}
+
+// applyDiscordReference replaces the Discord block with the one from the
+// referenced file. The reference keeps the Discord credentials in a single
+// place. The referenced file contributes nothing else: its model, tool, and
+// agent settings are not Psionic's to read.
+func (s *fileSettings) applyDiscordReference(sourcePath string, lookupEnv func(string) (string, bool)) error {
+	if s.DiscordConfig == "" {
+		return nil
+	}
+	if s.Channels != nil && s.Channels.Discord != nil {
+		return fmt.Errorf("settings: configure either channels.discord or discordConfig, not both")
+	}
+	path, err := expandUser(s.DiscordConfig)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return fmt.Errorf("settings: discordConfig path is invalid")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(sourcePath), path)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("settings: the referenced Discord settings file is unavailable")
+	}
+	if info.Size() > 4<<20 {
+		return fmt.Errorf("settings: the referenced Discord settings file is larger than 4 MiB")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("settings: the referenced Discord settings file cannot be read")
+	}
+	defer secretmem.Wipe(data)
+	var referenced struct {
+		Channels *channelsSettings `json:"channels"`
+	}
+	if err := json5.Unmarshal(data, &referenced); err != nil {
+		return fmt.Errorf("settings: the referenced Discord settings file is malformed")
+	}
+	if referenced.Channels == nil || referenced.Channels.Discord == nil {
+		return fmt.Errorf("settings: the referenced file has no channels.discord block")
+	}
+	discord := referenced.Channels.Discord
+	// The referenced block is validated on its own: only the Discord
+	// settings it carries are honored.
+	holder := &fileSettings{Channels: &channelsSettings{Discord: discord}}
+	if err := holder.validate(lookupEnv); err != nil {
+		return err
+	}
+	s.Channels = &channelsSettings{Discord: discord}
+	return nil
 }
 
 func decodeSettings(data []byte, lookupEnv func(string) (string, bool)) (*fileSettings, error) {
+	raw, err := decodeSettingsRaw(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := raw.validate(lookupEnv); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// decodeSettingsRaw decodes the settings without validating them. The
+// Discord block may still be missing because it comes from a referenced file.
+func decodeSettingsRaw(data []byte) (*fileSettings, error) {
 	var included any
 	if err := json5.Unmarshal(data, &included); err != nil {
 		// Never echo the decoder's input fragment: it can contain credentials.
@@ -415,9 +512,6 @@ func decodeSettings(data []byte, lookupEnv func(string) (string, bool)) (*fileSe
 	var raw fileSettings
 	if err := json5.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("settings: malformed JSON5")
-	}
-	if err := raw.validate(lookupEnv); err != nil {
-		return nil, err
 	}
 	return &raw, nil
 }

@@ -9,13 +9,39 @@ skills.
 
 ```sh
 go install ./cmd/psionic
-psionic --config ./settings.json5 --check
-psionic --config ./settings.json5
+psionic
 ```
 
-`--check` reads the settings and model metadata, resolves the bot token, and
-prints a privacy-safe summary without configured IDs or values. It does not
-connect, register commands, write state, or create a directory. An `exec` token
+Running `psionic` with no flag is the normal case. It reads
+`~/.config/psionic/config.json5`, or the file named by `PSIONIC_CONFIG`, and
+starts the bot. Every flag below is an override for one run.
+
+A minimal configuration file:
+
+```json5
+{
+  // The Discord channel settings stay where the operator keeps them. Only
+  // channels.discord is read from the referenced file.
+  discordConfig: "~/.openclaw/openclaw.json",
+
+  // The workspace with the prompt files and the memory.
+  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
+
+  // Psi owns the model. This directory holds the service's settings.json, and
+  // the shared directory holds the catalogue and the credentials.
+  psi: {
+    agentDir: "~/.pi/psionic-agent",
+    sharedAgentDir: "~/.pi/agent",
+  },
+
+  // The transcripts live here.
+  stateDir: "~/.local/state/psionic",
+}
+```
+
+`psionic --check` reads the same file, resolves the bot token, and prints a
+privacy-safe summary without configured IDs or values. It does not connect,
+register commands, write state, or create a directory. An `exec` token
 provider is run during resolution;
 use only a trusted command with known side effects.
 
@@ -23,12 +49,12 @@ Flags:
 
 | Flag | Meaning |
 | --- | --- |
-| `--config PATH` | Required settings file. |
+| `--config PATH` | Settings file to use instead of the discovered one. |
 | `--agent ID` | Select one configured agent entry. Required when more than one entry exists. |
 | `--workspace DIR` | Override the selected agent's workspace for this process. |
-| `--state-dir DIR` | Psionic's private state directory. Defaults to `psionic` under the OS user configuration directory. |
-| `--agent-dir DIR` | Psi agent directory for `settings.json`. Defaults to Psi's normal agent directory. |
-| `--shared-agent-dir DIR` | Psi agent directory for `models.json` and `auth.json`. Defaults to the agent directory. Use it to keep a service's own `settings.json` while sharing one catalogue and one credential file with the main Psi installation. No file is copied or linked. |
+| `--state-dir DIR` | Psionic's private state directory. Overrides the settings file; defaults to `~/.local/state/psionic`. |
+| `--agent-dir DIR` | Psi agent directory for `settings.json`. Overrides the settings file; defaults to Psi's normal agent directory. |
+| `--shared-agent-dir DIR` | Psi agent directory for `models.json` and `auth.json`. Overrides the settings file; defaults to the agent directory. Use it to keep a service's own `settings.json` while sharing one catalogue and one credential file with the main Psi installation. No file is copied or linked. |
 | `--secret-store-db PATH` | Existing SQLite database for `store` token references. Opened read-only; overrides automatic lookup beside the settings file. |
 | `--check` | Validate configuration and resolve credentials without connecting to Discord. It can run a configured `exec` provider. |
 | `--version` | Print the version. |
@@ -49,6 +75,7 @@ access.
 | Sessions | `session.dmScope`, `session.reset`, `session.resetByType`, and `session.resetByChannel` for Discord. |
 | Commands | `commands.ownerAllowFrom` for owner-only controls. |
 | Tools | The shared `tools` filters plus `tools.exec` for the bounded shell tool. |
+| Locations | `discordConfig` for the Discord block of another file, `psi.agentDir` and `psi.sharedAgentDir` for the Psi directories, and `stateDir` for the transcripts. |
 
 `channels.discord.token` accepts a literal or an environment, file, exec, or
 store reference. `DISCORD_BOT_TOKEN` is used only when that field is absent; an
@@ -85,6 +112,11 @@ Multiple Discord accounts and `$include` are not supported. A
 `session.dmScope` of `"main"` is accepted only when the single allowed
 direct-message peer is also listed in `commands.ownerAllowFrom`; otherwise
 Psionic requires peer isolation.
+`discordConfig` names a file whose `channels.discord` block supplies the
+Discord settings. It keeps the Discord credentials in one place when another
+tool maintains them. Only that block is read: the referenced file's model,
+tool, agent, and session settings are ignored, and the two Discord sources
+cannot both be present.
 The settings file is read once at startup; restart after changing it. Workspace
 prompt files are read on every turn.
 
@@ -235,7 +267,8 @@ of running the turn.
 ## State and transcripts
 
 Psionic keeps JSONL transcripts under `<state>/sessions/` and a small bbolt
-database at `<state>/state.db`.
+database at `<state>/state.db`. The state directory defaults to
+`~/.local/state/psionic`; the settings file and `--state-dir` override it.
 Transcripts start fresh. They are never read from, written to, or discovered by
 another Psi or Pi installation. `--state-dir` is rejected if it overlaps the
 workspace or a known Psi/Pi session directory. A non-empty state directory must

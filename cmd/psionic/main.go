@@ -82,7 +82,8 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	flags.BoolVar(&opts.check, "check", false, "validate settings without a Discord connection or state writes; may execute the configured exec token provider")
 	flags.BoolVar(&showVersion, "version", false, "print the version")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: psionic --config PATH [--agent ID] [--workspace DIR] [--state-dir DIR] [--agent-dir DIR] [--shared-agent-dir DIR] [--secret-store-db PATH] [--check]")
+		fmt.Fprintln(stderr, "Usage: psionic [--config PATH] [--agent ID] [--workspace DIR] [--state-dir DIR] [--agent-dir DIR] [--shared-agent-dir DIR] [--secret-store-db PATH] [--check]")
+		fmt.Fprintln(stderr, "Running psionic with no flag uses ~/.config/psionic/config.json5, or PSIONIC_CONFIG when it is set.")
 		fmt.Fprintln(stderr, "Discord replies are capped at 16 messages; truncated replies include a notice.")
 		fmt.Fprintln(stderr, "Discord token sources: literal, environment, private file, exec, or store.")
 		fmt.Fprintln(stderr, "DISCORD_BOT_TOKEN is used only when channels.discord.token is absent.")
@@ -102,9 +103,6 @@ func parseFlags(args []string, stdout, stderr io.Writer) (options, bool, error) 
 	if showVersion {
 		return opts, true, nil
 	}
-	if opts.configPath == "" {
-		return options{}, false, fmt.Errorf("--config is required")
-	}
 	return opts, false, nil
 }
 
@@ -123,11 +121,69 @@ type loaded struct {
 	defaults        config.Settings
 }
 
+// resolveConfigPath finds the settings file. Precedence: the --config flag,
+// then PSIONIC_CONFIG, then the standard configuration file under the user's
+// configuration directory. Running Psionic without any flag must work, so the
+// standard location is the normal case.
+func resolveConfigPath(flagValue string, lookupEnv func(string) (string, bool)) (string, error) {
+	if flagValue != "" {
+		return filepath.Abs(flagValue)
+	}
+	if env, ok := lookupEnv("PSIONIC_CONFIG"); ok && strings.TrimSpace(env) != "" {
+		expanded, err := expandUser(env)
+		if err != nil {
+			return "", fmt.Errorf("configuration file path is invalid")
+		}
+		return filepath.Abs(expanded)
+	}
+	for _, candidate := range defaultConfigPaths() {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no configuration file: create %s or pass --config", defaultConfigPaths()[0])
+}
+
+// defaultConfigPaths lists the standard configuration file locations, most
+// preferred first.
+func defaultConfigPaths() []string {
+	dir := psionicConfigDir()
+	return []string{filepath.Join(dir, "config.json5"), filepath.Join(dir, "config.json")}
+}
+
+// psionicConfigDir is the directory that holds Psionic's configuration file.
+func psionicConfigDir() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "psionic")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	return filepath.Join(home, ".config", "psionic")
+}
+
+// psionicStateDir is the directory that holds Psionic's transcripts.
+func psionicStateDir() string {
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return filepath.Join(dir, "psionic")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	return filepath.Join(home, ".local", "state", "psionic")
+}
+
 // prepare resolves configuration and token credentials, validates model
 // metadata and provider setup without a model request, and checks paths. An
 // exec token provider may run during --check.
 func prepare(opts options) (*loaded, error) {
-	settings, err := loadFileSettings(opts.configPath, os.LookupEnv)
+	configPath, err := resolveConfigPath(opts.configPath, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := loadFileSettings(configPath, os.LookupEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -159,10 +215,13 @@ func prepare(opts options) (*loaded, error) {
 		agent.Workspace = resolved
 	}
 	agentDir := opts.agentDir
+	if agentDir == "" && settings.Psi != nil {
+		agentDir = settings.Psi.AgentDir
+	}
 	if agentDir == "" {
 		agentDir = session.AgentDir()
 	}
-	if agentDir, err = filepath.Abs(agentDir); err != nil {
+	if agentDir, err = filepath.Abs(expandHomePath(agentDir)); err != nil {
 		return nil, fmt.Errorf("agent directory: invalid path")
 	}
 	// The catalogue and the credentials may live in another Psi agent
@@ -170,10 +229,13 @@ func prepare(opts options) (*loaded, error) {
 	// model selection while sharing one catalogue and one credential store
 	// with the main Psi installation, without copying or linking files.
 	sharedDir := opts.sharedAgentDir
+	if sharedDir == "" && settings.Psi != nil {
+		sharedDir = settings.Psi.SharedAgentDir
+	}
 	if sharedDir == "" {
 		sharedDir = agentDir
 	}
-	if sharedDir, err = filepath.Abs(sharedDir); err != nil {
+	if sharedDir, err = filepath.Abs(expandHomePath(sharedDir)); err != nil {
 		return nil, fmt.Errorf("shared agent directory: invalid path")
 	}
 	models, err := config.LoadModels(filepath.Join(sharedDir, "models.json"))
@@ -227,7 +289,11 @@ func prepare(opts options) (*loaded, error) {
 			return nil, err
 		}
 	}
-	stateDir, err := resolveStateDir(opts.stateDir)
+	stateDirOption := opts.stateDir
+	if stateDirOption == "" {
+		stateDirOption = settings.StateDir
+	}
+	stateDir, err := resolveStateDir(stateDirOption)
 	if err != nil {
 		return nil, err
 	}
@@ -388,16 +454,23 @@ func serve(ctx context.Context, l *loaded, stderr io.Writer) error {
 
 // checkStateDir refuses a location that overlaps the workspace or known Psi
 // session roots. Psionic transcripts must stay independent from other hosts.
+// expandHomePath expands a leading ~ in a path.
+func expandHomePath(path string) string {
+	expanded, err := expandUser(path)
+	if err != nil {
+		return path
+	}
+	return expanded
+}
+
+// resolveStateDir finds the transcript directory. Precedence: the --state-dir
+// flag, then the settings file, then the standard state location.
 func resolveStateDir(configured string) (string, error) {
 	dir := configured
 	if dir == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return "", fmt.Errorf("state directory is unavailable")
-		}
-		dir = filepath.Join(configDir, "psionic")
+		dir = psionicStateDir()
 	}
-	return filepath.Abs(dir)
+	return filepath.Abs(expandHomePath(dir))
 }
 
 // checkStateDir refuses a location that overlaps the workspace or known Psi
