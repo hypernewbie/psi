@@ -733,7 +733,7 @@ func TestIndexedFallbackMatchesPiPaletteSlots(t *testing.T) {
 }
 
 func TestFooterQuotaSuffixUsesOnlyUnusedGap(t *testing.T) {
-	quota := "[████▎░░░░░] Codex: 58% Left"
+	quota := "[█████▊░░░░] Codex: 58% Left"
 	without, withoutWidths := formatFooter(PresentationSnapshot{
 		ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
 		Model: "m", NoColor: true,
@@ -821,7 +821,7 @@ func TestFooterQuotaSuffixUsesOnlyUnusedGap(t *testing.T) {
 }
 
 func TestFooterQuotaExpiresAtCompositionTime(t *testing.T) {
-	quota := "[░░░░░░░░░░] Codex: 100% Left"
+	quota := "[██████████] Codex: 100% Left"
 	base := PresentationSnapshot{
 		ContextPercent: 40, ContextUsageLabel: "40%", ContextWindowLabel: "100k",
 		Model: "m", NoColor: true,

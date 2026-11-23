@@ -146,11 +146,12 @@ When the active built-in `openai-codex` model uses the
 `openai-codex-responses` API, psi periodically reads the account's used primary
 quota from the fixed `https://chatgpt.com/backend-api/wham/usage` endpoint and
 shows the remaining percentage in a ten-cell track (one cell per ten percent)
-inside unused footer space. Polling is faster near a limit, backs off
-exponentially after failures, honors `Retry-After`, and stops for the rest of
-the session when the server asks for more than 24 hours. The reading is best
-effort and uses only a locally valid Codex OAuth entry; it does not sign in,
-refresh or write credentials, create an auth lease, or use an API-key fallback.
+that starts full and drains as quota is used, inside unused footer space.
+Polling is faster near a limit, backs off exponentially after failures,
+honors `Retry-After`, and stops for the rest of the session when the server
+asks for more than 24 hours. The reading is best effort and uses only a
+locally valid Codex OAuth entry; it does not sign in, refresh or write
+credentials, create an auth lease, or use an API-key fallback.
 The indicator is hidden for custom models, non-official endpoints, and any
 configured `Authorization` header or `authHeader`. Direct-use `openai`
 credentials do not provide this reading; manage ChatGPT plan usage at

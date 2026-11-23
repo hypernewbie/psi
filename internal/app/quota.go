@@ -20,7 +20,8 @@ const (
 	quotaLocalRetry         = 5 * time.Minute
 	quotaSampleTTL          = 5 * time.Minute
 	quotaBackoffMaxFailures = 4
-	// One filled cell is ten percent of the remaining-quota track.
+	// The Codex track has ten cells; one filled cell is ten percent of the
+	// remaining quota. It starts full and drains as quota is used.
 	codexQuotaTrackCells = 10
 )
 
@@ -579,6 +580,6 @@ func codexQuotaSuffix(used float64) string {
 			label = "0% Left"
 		}
 	}
-	filled, empty := terminal.FooterBarCells(terminal.FooterBarEighths(used, codexQuotaTrackCells), codexQuotaTrackCells)
+	filled, empty := terminal.FooterBarCells(terminal.FooterBarEighths(remaining, codexQuotaTrackCells), codexQuotaTrackCells)
 	return "[" + filled + empty + "] Codex: " + label
 }
