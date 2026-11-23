@@ -149,7 +149,12 @@ Tool-list change notifications trigger coalesced, rate-limited catalog refreshes
 A failed refresh keeps the previous catalog available and records a warning; a
 later successful refresh publishes the updated catalog and clears the warning.
 Changes to connection identity replace a session. Exposure and call timeout
-changes can take effect without replacing the connection.
+changes can take effect without replacing the connection. If policy blocks
+publication of a new connection, a reload that restores permission retries setup.
+
+The call timeout is an idle limit. A finite progress update for that call
+starts a new idle interval only if its value advances. Progress does not
+extend the hard deadline, which is ten times the call timeout.
 
 A configured HTTP server is rejected with the `unsupported` error class before
 the manager makes any request to its endpoint. The manager does not fall back

@@ -144,6 +144,57 @@ func TestManagerFailedReloadAppliesOnlyCurrentPolicy(t *testing.T) {
 	}
 }
 
+func TestManagerRetriesSetupAfterTrustReturns(t *testing.T) {
+	dir := t.TempDir()
+	config := `{"mcpServers": {` + testServerConfig("fixture", "basic", "") + `}}`
+	trusted := Input{ProjectPath: writeTestFile(t, dir, "mcp.json", config), ProjectTrusted: true, Cwd: dir}
+	manager := NewManager(Options{Input: trusted})
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
+	// Hold scheduled setup workers so the test can pause a real connection
+	// after discovery, before the manager publishes its tools.
+	for range cap(manager.setupSlot) {
+		manager.setupSlot <- struct{}{}
+	}
+	manager.Reload(trusted)
+	manager.applyReload(<-manager.reloads)
+	state := manager.servers["fixture"]
+	if state == nil {
+		t.Fatal("project fixture not loaded")
+	}
+	epoch := state.epoch
+	_, conn, err := manager.connect(t.Context(), state, epoch, state.cfg, trusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.closeAsync)
+
+	untrusted := trusted
+	untrusted.ProjectTrusted = false
+	manager.Reload(untrusted)
+	manager.publishConnection(state, epoch, conn)
+	snapshot := manager.Snapshot()
+	if len(snapshot.Tools) != 0 || len(snapshot.Servers) != 1 || snapshot.Servers[0].ErrorClass != "permission" {
+		t.Fatalf("setup at trust loss did not withdraw the connection as a permission failure: %+v", snapshot)
+	}
+
+	// No untrusted config was accepted. The trusted reload must still start
+	// a replacement rather than reuse setup that has already been rejected.
+	manager.Reload(trusted)
+	manager.applyReload(<-manager.reloads)
+	if state.epoch == epoch || !state.setupActive {
+		t.Fatalf("restored trust did not schedule replacement setup: %+v", manager.Snapshot())
+	}
+	manager.runSetup(state, state.epoch, t.Context())
+	tool, ok := manager.Snapshot().Find("mcp__fixture__echo")
+	if !ok {
+		t.Fatalf("replacement did not publish echo: %+v", manager.Snapshot())
+	}
+	result := manager.Call(t.Context(), tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "restored"}})
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "restored" {
+		t.Fatalf("echo after trust returned = %+v", result)
+	}
+}
+
 func TestManagerConnectUsesCapturedServerDuringReload(t *testing.T) {
 	manager := NewManager(Options{})
 	t.Cleanup(manager.Stop)

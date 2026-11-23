@@ -411,31 +411,37 @@ func TestManagerReloadNullRootKeepsAcceptedConfig(t *testing.T) {
 }
 
 func TestManagerProgressAndDeadlines(t *testing.T) {
+	continuous := make([]float64, 20)
+	for i := range continuous {
+		continuous[i] = float64(i)
+	}
 	for _, test := range []struct {
 		name      string
-		progress  int
+		progress  []float64
 		wantError bool
 		want      string
 	}{
-		{name: "renewed-idle", progress: 3, want: "progress done"},
+		{name: "renewed-idle", progress: []float64{0, 1, 2}, want: "progress done"},
+		{name: "duplicate-progress", progress: []float64{1, 1, 1}, wantError: true, want: "timed out (waiting for progress)"},
+		{name: "backward-progress", progress: []float64{2, 1, 0}, wantError: true, want: "timed out (waiting for progress)"},
 		{name: "stalled", wantError: true, want: "timed out (waiting for progress)"},
-		{name: "hard-limit", progress: 20, wantError: true, want: "timed out (hard deadline)"},
+		{name: "hard-limit", progress: continuous, wantError: true, want: "timed out (hard deadline)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				server := sdk.NewServer(&sdk.Implementation{Name: "fixture", Version: "1"}, nil)
 				server.AddTool(sdkTool("progress", "Report progress", map[string]any{"type": "object"}), func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-					for i := 0; i < test.progress; i++ {
+					for _, progress := range test.progress {
 						select {
 						case <-ctx.Done():
 							return nil, ctx.Err()
 						case <-time.After(750 * time.Millisecond):
 						}
-						if err := req.Session.NotifyProgress(ctx, &sdk.ProgressNotificationParams{ProgressToken: req.Params.GetProgressToken(), Progress: float64(i)}); err != nil {
+						if err := req.Session.NotifyProgress(ctx, &sdk.ProgressNotificationParams{ProgressToken: req.Params.GetProgressToken(), Progress: progress}); err != nil {
 							return nil, err
 						}
 					}
-					if test.progress == 0 {
+					if len(test.progress) == 0 {
 						<-ctx.Done()
 						return nil, ctx.Err()
 					}
@@ -777,9 +783,14 @@ func TestManagerRouteLiveRechecksRawName(t *testing.T) {
 	}
 }
 
-func TestManagerPublishesConfigWarnings(t *testing.T) {
+func TestManagerPublishesBoundedConfigWarnings(t *testing.T) {
 	dir := t.TempDir()
-	config := `{"mcpServers": {` + testServerConfig("fixture", "basic", "") + `, "bad": {"command": "node", "exposure": "not-an-exposure"}}}`
+	const omitted = 5
+	entries := []string{testServerConfig("fixture", "basic", "")}
+	for i := range maxConfigWarnings + omitted {
+		entries = append(entries, fmt.Sprintf(`"bad%d": {"command": "node", "exposure": "not-an-exposure"}`, i))
+	}
+	config := `{"mcpServers": {` + strings.Join(entries, ",") + `}}`
 	path := writeTestFile(t, dir, "mcp.json", config)
 	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
 	manager.Start()
@@ -788,11 +799,15 @@ func TestManagerPublishesConfigWarnings(t *testing.T) {
 		manager.Wait()
 	})
 	snapshot := waitServerState(t, manager, "fixture", serverStateReady)
-	if len(snapshot.Warnings) == 0 {
-		t.Fatalf("config warning missing: %+v", snapshot)
+	warnings := snapshot.Warnings
+	if len(warnings) != maxConfigWarnings+1 {
+		t.Fatalf("got %d config warnings, want %d and an omission notice", len(warnings), maxConfigWarnings)
 	}
-	if !strings.Contains(snapshot.Warnings[0], "bad") {
-		t.Fatalf("config warning did not identify the entry: %v", snapshot.Warnings)
+	if !strings.Contains(warnings[0], `"bad0"`) {
+		t.Errorf("first config warning did not identify the entry: %q", warnings[0])
+	}
+	if warnings[maxConfigWarnings] != fmt.Sprintf("%d more config warnings", omitted) {
+		t.Errorf("config warning omission notice = %q", warnings[maxConfigWarnings])
 	}
 }
 
@@ -830,21 +845,6 @@ func TestCallFailureDistinguishesConnectionLossFromCallerCancellation(t *testing
 				t.Fatalf("call failure = %+v; want %q", result, want)
 			}
 		})
-	}
-}
-
-func TestManagerBoundsConfigWarnings(t *testing.T) {
-	manager := NewManager(Options{})
-	for i := 0; i < maxConfigWarnings+5; i++ {
-		manager.warnings = append(manager.warnings, fmt.Sprintf("warning %d", i))
-	}
-	manager.publishLocked()
-	warnings := manager.Snapshot().Warnings
-	if len(warnings) != maxConfigWarnings+1 {
-		t.Fatalf("bounded warnings = %d", len(warnings))
-	}
-	if warnings[len(warnings)-1] != "5 more config warnings" {
-		t.Fatalf("warning trailer = %q", warnings[len(warnings)-1])
 	}
 }
 

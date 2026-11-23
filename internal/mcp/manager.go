@@ -152,20 +152,26 @@ type connection struct {
 }
 
 type callState struct {
-	token   string
-	timeout time.Duration
-	timer   *time.Timer
-	mu      sync.Mutex
-	retired bool
-	idle    atomic.Bool
+	token        string
+	timeout      time.Duration
+	timer        *time.Timer
+	mu           sync.Mutex
+	retired      bool
+	hasProgress  bool
+	lastProgress float64
+	idle         atomic.Bool
 }
 
-func (c *callState) touch() {
+func (c *callState) advanceProgress(progress float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.retired {
+	// MCP progress must advance for the same token. Repeated and out-of-order
+	// notifications do not keep a stalled call alive.
+	if c.retired || (c.hasProgress && progress <= c.lastProgress) {
 		return
 	}
+	c.hasProgress = true
+	c.lastProgress = progress
 	if c.timer != nil {
 		c.timer.Reset(c.timeout)
 	}
@@ -810,9 +816,18 @@ func (m *Manager) policyAllows(server Server) bool {
 
 func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *connection) {
 	m.mu.Lock()
-	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || state.cfg.Enabled == false || !m.policyAllows(state.cfg) {
+	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || !state.cfg.Enabled {
+		conn.closeAsyncLocked()
 		m.mu.Unlock()
-		conn.closeAsync()
+		return
+	}
+	if !m.policyAllows(state.cfg) {
+		// A newer reload can restore trust before the revoking config loads.
+		// Retire this setup now so that reload can start a replacement.
+		m.withdrawLocked(state, "permission")
+		conn.closeAsyncLocked()
+		m.publishLocked()
+		m.mu.Unlock()
 		return
 	}
 	if state.conn != nil && state.conn != conn {
@@ -831,6 +846,7 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 	state.catalog = conn.catalog
 	state.listenerUnavailable = conn.listenerUnavailable.Load()
 	m.pending += 2
+	m.publishLocked()
 	m.mu.Unlock()
 	go func() {
 		defer m.workerDone()
@@ -840,9 +856,6 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 		defer m.workerDone()
 		conn.watch()
 	}()
-	m.mu.Lock()
-	m.publishLocked()
-	m.mu.Unlock()
 }
 
 func (m *Manager) setupFailed(state *serverState, epoch uint64, err error) {
@@ -1373,12 +1386,15 @@ func (c *connection) noteProgress(token any, progress float64) {
 	if math.IsNaN(progress) || math.IsInf(progress, 0) {
 		return
 	}
-	key := fmt.Sprint(token)
+	key, ok := token.(string)
+	if !ok {
+		return
+	}
 	c.mu.Lock()
 	state := c.tokens[key]
 	c.mu.Unlock()
 	if state != nil {
-		state.touch()
+		state.advanceProgress(progress)
 	}
 }
 
