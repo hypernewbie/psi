@@ -2,6 +2,8 @@ module github.com/hypernewbie/psi
 
 go 1.25.0
 
+tool github.com/hypernewbie/psi/cmd/dev
+
 require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/charmbracelet/x/vt v0.1.0

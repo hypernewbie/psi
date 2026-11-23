@@ -137,6 +137,14 @@ A separate, manually run developer command produces a candidate embedded
 catalog. It requires network access and explicit catalog review; no build,
 install, or startup step runs it, and the agent has no tool for it.
 
+From the checkout root, use the repo-local developer command:
+
+```sh
+go tool dev bake <new-output-directory>
+```
+
+The direct Go command remains available:
+
 ```sh
 go run ./cmd/catalog-bake <new-output-directory>
 ```
