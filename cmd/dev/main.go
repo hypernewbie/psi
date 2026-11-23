@@ -128,9 +128,10 @@ func printUsage(writer io.Writer) {
 func printCheckUsage(writer io.Writer) {
 	fmt.Fprintln(writer, "Usage: go tool dev check [--no-js-only] [--skip-race]")
 	fmt.Fprintln(writer, "Run from the checkout root. Check the Git file gate, gofmt, vet, tests, race tests, and build.")
-	fmt.Fprintln(writer, "Requires Go 1.25 or later and Git on PATH; race tests run by default.")
+	fmt.Fprintln(writer, "Requires Go 1.25 or later and Git on PATH.")
+	fmt.Fprintln(writer, "On Linux and Windows, the default race tests require cgo and a compatible C compiler.")
 	fmt.Fprintln(writer, "  --no-js-only  Run only the Git file gate.")
-	fmt.Fprintln(writer, "  --skip-race   Explicitly omit race tests (used by Windows CI).")
+	fmt.Fprintln(writer, "  --skip-race   Run the other checks without race tests (used by Windows CI).")
 }
 
 func checkoutRoot() (string, error) {

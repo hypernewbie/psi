@@ -34,8 +34,9 @@ In the examples below, use `psi` instead of `./psi` when you run an installed bi
 ## Developer commands
 
 Run these checkout-local commands from the repository root with Go 1.25 or later.
-`check` also requires Git on `PATH`; it uses `gofmt` from the Go toolchain and
-Git for its JavaScript and TypeScript file gate.
+`check` requires Git on `PATH`. It uses Git to list tracked and non-ignored
+untracked files for the JavaScript and TypeScript gate. It uses `gofmt` from
+the Go toolchain.
 
 ```sh
 go tool dev build
@@ -59,9 +60,10 @@ normal download and verification settings. A failure is reported without an
 automatic retry or stale-binary fallback.
 
 `check` runs the Git file gate, gofmt, vet, tests, race tests, and build.
-`--no-js-only` runs only the Git file gate. `--skip-race` explicitly omits race
-tests; Windows CI passes this option. The full checker includes race tests by
-default on every OS.
+`--no-js-only` runs only the Git file gate. Race tests run by default. On Linux
+and Windows, race tests require cgo and a compatible C compiler. If the
+required toolchain is unavailable, use `--skip-race` to run the other checks.
+Windows CI uses `--skip-race`.
 
 ## Run
 

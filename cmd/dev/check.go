@@ -5,29 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 )
 
 type checkOptions struct {
 	noJSOnly bool
 	skipRace bool
-}
-
-// Each case-insensitive pathspec has root and nested forms to preserve the
-// checker's existing coverage for source extensions and package manifests.
-var forbiddenPathspecs = []string{
-	":(icase)*.js", ":(icase)**/*.js",
-	":(icase)*.mjs", ":(icase)**/*.mjs",
-	":(icase)*.cjs", ":(icase)**/*.cjs",
-	":(icase)*.jsx", ":(icase)**/*.jsx",
-	":(icase)*.ts", ":(icase)**/*.ts",
-	":(icase)*.mts", ":(icase)**/*.mts",
-	":(icase)*.cts", ":(icase)**/*.cts",
-	":(icase)*.tsx", ":(icase)**/*.tsx",
-	":(icase)package.json", ":(icase)**/package.json",
 }
 
 func runCheck(root string, options checkOptions, stdout, stderr io.Writer, runner commandRunner) int {
@@ -99,17 +84,16 @@ func rootGoFiles(root string) ([]string, error) {
 			files = append(files, "./"+name)
 		}
 	}
-	sort.Strings(files)
 	return files, nil
 }
 
 func checkForbiddenFiles(runner commandRunner, stderr io.Writer) int {
+	// Let Git apply its index and ignore rules, but match filenames here so
+	// Git's pathspec settings cannot change the check.
 	arguments := []string{
 		"ls-files", "--cached", "--others", "--exclude-standard",
 		"-z", // NUL records preserve filenames that contain whitespace or newlines.
-		"--",
 	}
-	arguments = append(arguments, forbiddenPathspecs...)
 
 	var output bytes.Buffer
 	if err := runner("git", arguments, &output); err != nil {
@@ -121,14 +105,33 @@ func checkForbiddenFiles(runner commandRunner, stderr io.Writer) int {
 		return 0
 	}
 	if output.Bytes()[output.Len()-1] != 0 {
-		fmt.Fprintf(stderr, "dev: Git file gate returned malformed NUL-delimited output: %s\n", strconv.Quote(string(output.Bytes())))
+		fmt.Fprintln(stderr, "dev: Git file gate returned malformed NUL-delimited output")
 		return 1
 	}
 
-	paths := bytes.Split(output.Bytes(), []byte{0})
-	fmt.Fprintln(stderr, "dev: JavaScript and TypeScript sources are not allowed:")
-	for _, path := range paths[:len(paths)-1] {
-		fmt.Fprintf(stderr, "  %s\n", strconv.Quote(string(path)))
+	code := 0
+	for name := range bytes.SplitSeq(output.Bytes(), []byte{0}) {
+		if !isForbiddenFile(string(name)) {
+			continue
+		}
+		if code == 0 {
+			fmt.Fprintln(stderr, "dev: JavaScript and TypeScript sources are not allowed:")
+			code = 1
+		}
+		fmt.Fprintf(stderr, "  %q\n", name)
 	}
-	return 1
+	return code
+}
+
+func isForbiddenFile(name string) bool {
+	// Git uses slash-separated paths even on Windows.
+	base := strings.ToLower(path.Base(name))
+	if base == "package.json" {
+		return true
+	}
+	switch path.Ext(base) {
+	case ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx":
+		return true
+	}
+	return false
 }
