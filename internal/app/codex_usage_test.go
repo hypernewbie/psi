@@ -102,11 +102,8 @@ func TestCodexQuotaOwnerPublishesPrimaryReading(t *testing.T) {
 		t.Fatal("first usable reading did not request a redraw")
 	}
 	text, token, deadline := q.presentation(r)
-	// The sample uses 42%, so the track should show the 58% remainder.
-	filled, empty := terminal.FooterBarCells(terminal.FooterBarEighths(58, codexQuotaTrackCells), codexQuotaTrackCells)
-	want := "[" + filled + empty + "] Codex: 58% Left"
-	if text != want || token != terminal.TokenMuted {
-		t.Fatalf("presentation = %q/%q, want %q/%q", text, token, want, terminal.TokenMuted)
+	if text == "" || token != terminal.TokenMuted {
+		t.Fatalf("presentation = %q/%q, want a nonempty reading with token %q", text, token, terminal.TokenMuted)
 	}
 	if !deadline.Equal(clock.at.Add(quotaSampleTTL)) {
 		t.Fatalf("deadline = %v, want %v", deadline, clock.at.Add(quotaSampleTTL))
@@ -135,7 +132,6 @@ func TestCodexQuotaSuffixDrainsRemainingTrack(t *testing.T) {
 	}{
 		{0, "[██████████] Codex: 100% Left"},
 		{0.01, "[██████████] Codex: 99% Left"},
-		{42, "[█████▊░░░░] Codex: 58% Left"},
 		{75, "[██▌░░░░░░░] Codex: 25% Left"},
 		{99, "[▏░░░░░░░░░] Codex: 1% Left"},
 		{99.5, "[▏░░░░░░░░░] Codex: <1% Left"},
@@ -710,7 +706,7 @@ func TestCodexQuotaIndicatorThroughREPL(t *testing.T) {
 		return codexQuotaSampleResult(42, started, started.Add(time.Hour))
 	}
 	_, out, _, _ := startLoginTestREPLWidth(t, r, 160)
-	waitAppOutput(t, out, "Codex: 58% Left")
+	waitAppOutput(t, out, "[█████▊░░░░] Codex: 58% Left")
 	if strings.Contains(out.String(), "Using ChatGPT plan") || strings.Contains(out.String(), "Manage usage") {
 		t.Fatalf("old fallback text remained: %q", out.String())
 	}
@@ -769,7 +765,7 @@ func TestCodexQuotaFailedPollClearsBarWithoutChangingReply(t *testing.T) {
 		}
 	}
 	_, out, inputWrite, result := startLoginTestREPLWidth(t, r, 160)
-	waitRendered := func(name string, match func(string) bool) string {
+	waitRendered := func(name string, match func(string) bool) {
 		t.Helper()
 		timer := time.NewTimer(5 * time.Second)
 		defer timer.Stop()
@@ -777,18 +773,14 @@ func TestCodexQuotaFailedPollClearsBarWithoutChangingReply(t *testing.T) {
 			select {
 			case quota := <-rendered:
 				if match(quota) {
-					return quota
+					return
 				}
 			case <-timer.C:
 				t.Fatalf("timed out waiting for %s", name)
-				return ""
 			}
 		}
 	}
-	bar := waitRendered("quota bar", func(quota string) bool { return quota != "" })
-	if bar != "[█████▊░░░░] Codex: 58% Left" {
-		t.Fatalf("rendered quota = %q", bar)
-	}
+	waitRendered("quota bar", func(quota string) bool { return quota != "" })
 	waitRendered("cleared quota", func(quota string) bool { return quota == "" })
 	if calls.Load() != 2 {
 		t.Fatalf("quota calls = %d, want 2", calls.Load())

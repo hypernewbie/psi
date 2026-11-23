@@ -20,8 +20,7 @@ const (
 	quotaLocalRetry         = 5 * time.Minute
 	quotaSampleTTL          = 5 * time.Minute
 	quotaBackoffMaxFailures = 4
-	// The Codex track has ten cells; one filled cell is ten percent of the
-	// remaining quota. It starts full and drains as quota is used.
+	// Each full cell represents ten percentage points of quota left.
 	codexQuotaTrackCells = 10
 )
 
