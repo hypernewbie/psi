@@ -202,6 +202,7 @@ type Manager struct {
 	servers    map[string]*serverState
 	order      []string
 	generation uint64
+	lastEpoch  uint64
 	reloadErr  string
 	warnings   []string
 	input      Input
@@ -250,11 +251,10 @@ func (m *Manager) Start() {
 		return
 	}
 	m.started = true
+	m.enqueueReloadLocked()
 	m.pending++
 	go m.reloadLoop()
-	input := m.input
 	m.mu.Unlock()
-	m.enqueueReload(input)
 }
 
 func (m *Manager) reloadLoop() {
@@ -269,58 +269,48 @@ func (m *Manager) reloadLoop() {
 	}
 }
 
-func (m *Manager) enqueueReload(input Input) {
-	m.mu.Lock()
+func (m *Manager) enqueueReloadLocked() {
 	m.generation++
-	req := reloadRequest{generation: m.generation, input: input}
-	m.mu.Unlock()
+	// Producers hold m.mu. The worker only drains the one-slot queue, so
+	// nothing can refill it between dropping the old request and sending.
 	select {
-	case m.reloads <- req:
+	case <-m.reloads:
 	default:
-		// Keep only the newest generation.
-		select {
-		case <-m.reloads:
-		default:
-		}
-		select {
-		case m.reloads <- req:
-		case <-m.ctx.Done():
-		}
 	}
+	m.reloads <- reloadRequest{generation: m.generation, input: m.input}
 }
 
 // Reload schedules a fresh config read. It never waits for I/O.
 func (m *Manager) Reload(input Input) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return
+	}
 	m.input = input
-	m.mu.Unlock()
-	m.enqueueReload(input)
+	m.enqueueReloadLocked()
 }
 
 func (m *Manager) applyReload(req reloadRequest) {
 	cfg, err := LoadConfig(req.input.UserPath, req.input.ProjectPath, req.input.ProjectTrusted)
-	if err != nil {
-		m.mu.Lock()
-		if req.generation == m.generation {
-			m.reloadErr = ErrorClass(err)
-		}
-		m.applyPolicyLossLocked(req.input)
-		m.publishLocked()
-		m.mu.Unlock()
-		return
+	var resolutions map[string]reloadResolution
+	if err == nil {
+		resolutions = m.prepareReloadResolutions(cfg, req.input)
 	}
-	resolutions := m.prepareReloadResolutions(cfg, req.input)
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if req.generation != m.generation || m.stopped {
-		m.mu.Unlock()
 		return
 	}
-	m.reloadErr = ""
-	m.warnings = append(m.warnings[:0], cfg.Warnings...)
-	m.input = req.input
-	m.acceptConfigLocked(cfg, req.input, resolutions)
+	if err != nil {
+		m.reloadErr = ErrorClass(err)
+		m.applyPolicyLossLocked(req.input)
+	} else {
+		m.reloadErr = ""
+		m.warnings = append(m.warnings[:0], cfg.Warnings...)
+		m.acceptConfigLocked(cfg, req.input, resolutions)
+	}
 	m.publishLocked()
-	m.mu.Unlock()
 }
 
 // prepareReloadResolutions re-resolves only unchanged connections that use
@@ -396,7 +386,7 @@ func (m *Manager) acceptConfigLocked(cfg *Config, input Input, resolutions map[s
 		newOrder = append(newOrder, server.Name)
 		old := m.servers[server.Name]
 		if old == nil {
-			state := &serverState{cfg: server, status: serverStateConnecting, epoch: 1}
+			state := &serverState{cfg: server, status: serverStateConnecting, epoch: m.nextEpochLocked()}
 			newServers[server.Name] = state
 			continue
 		}
@@ -639,7 +629,7 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 	connCtx, connCancel := context.WithCancel(context.Background())
 	conn := &connection{
 		manager:         m,
-		server:          state.cfg.Name,
+		server:          server.Name,
 		epoch:           epoch,
 		ctx:             connCtx,
 		cancel:          connCancel,
@@ -873,8 +863,15 @@ func (m *Manager) setupFailed(state *serverState, epoch uint64, err error) {
 	m.publishLocked()
 }
 
+// Allocate epochs across the manager so a removed server's routes stay stale
+// even if another server is later added under the same name.
+func (m *Manager) nextEpochLocked() uint64 {
+	m.lastEpoch++
+	return m.lastEpoch
+}
+
 func (m *Manager) withdrawLocked(state *serverState, reason string) {
-	state.epoch++
+	state.epoch = m.nextEpochLocked()
 	if state.setupCancel != nil {
 		state.setupCancel()
 		state.setupCancel = nil
@@ -930,7 +927,7 @@ func (m *Manager) connectionLost(conn *connection, err error) {
 		return
 	}
 	state.reconnects++
-	state.epoch++
+	state.epoch = m.nextEpochLocked()
 	state.setupActive = false
 	state.status = serverStateReconnecting
 	state.errClass = class

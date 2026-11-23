@@ -126,8 +126,11 @@ func waitServerState(t *testing.T, manager *Manager, name, want string) *Snapsho
 // so synctest can control deadlines and wait for queued calls deterministically.
 func connectInMemoryServer(t *testing.T, manager *Manager, name string, server *sdk.Server, timeout time.Duration) *Snapshot {
 	t.Helper()
+	manager.mu.Lock()
+	epoch := manager.nextEpochLocked()
+	manager.mu.Unlock()
 	ctx, cancel := context.WithCancel(manager.ctx)
-	conn := &connection{manager: manager, server: name, epoch: 1, ctx: ctx, cancel: cancel,
+	conn := &connection{manager: manager, server: name, epoch: epoch, ctx: ctx, cancel: cancel,
 		permits: make(chan struct{}, maxCallsPerServer), tokens: map[string]*callState{}, listCh: make(chan struct{}, 1)}
 	clientTransport, serverTransport := sdk.NewInMemoryTransports()
 	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
