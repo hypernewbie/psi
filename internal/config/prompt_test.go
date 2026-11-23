@@ -208,3 +208,21 @@ func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
 		t.Fatalf("web tool order: %d %d %d", search, fetch, content)
 	}
 }
+
+func TestPowerShellPromptGuidanceMatchesPi(t *testing.T) {
+	psOnly := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read", "powershell"}, "", false, nil))
+	if !strings.Contains(psOnly, "- powershell: Execute PowerShell commands") {
+		t.Fatalf("missing powershell snippet: %s", psOnly)
+	}
+	if !strings.Contains(psOnly, "- Use PowerShell for file operations like listing, searching, and finding files") {
+		t.Fatalf("missing powershell-only rule: %s", psOnly)
+	}
+	if strings.Contains(psOnly, "Use bash for file operations") {
+		t.Fatalf("unexpected bash rule in powershell-only prompt: %s", psOnly)
+	}
+
+	both := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read", "bash", "powershell"}, "", false, nil))
+	if !strings.Contains(both, "- Use bash or PowerShell for file operations like listing, searching, and finding files") {
+		t.Fatalf("missing combined bash+powershell rule: %s", both)
+	}
+}

@@ -322,6 +322,7 @@ func TestDefaultToolsSemantics(t *testing.T) {
 		{"replace in default order", []string{"fetch_content", "read"}, []string{"read", "fetch_content"}},
 		{"remove web tools", []string{"-web_search", "-fetch_content", "-get_search_content"}, []string{"read", "bash", "edit", "write"}},
 		{"add to plain selection", []string{"get_search_content", "+bash"}, []string{"bash", "get_search_content"}},
+		{"swap bash for powershell", []string{"-bash", "+powershell", "-web_search", "-fetch_content", "-get_search_content"}, []string{"read", "powershell", "edit", "write"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

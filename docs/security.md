@@ -27,9 +27,9 @@ untrusted input: it becomes part of the system prompt.
 ## No sandbox
 
 Trust controls which resources load. It does not limit what a tool can do. The
-`bash`, `write`, and `edit` tools run with the permissions of the psi process:
+`bash`, `powershell`, `write`, and `edit` tools run with the permissions of the psi process:
 
-- `bash` can read, modify, or delete anything your user can.
+- `bash` and `powershell` can read, modify, or delete anything your user can.
 - `write` and `edit` can change any path the process can reach.
 - Network access depends on the process environment, not on psi.
 
@@ -49,7 +49,7 @@ not yet load MCP files or connect to MCP servers.
 
 ## Shell and environment
 
-The `bash` tool inherits the psi process environment, including provider API
+The `bash` and `powershell` tools inherit the psi process environment, including provider API
 keys. A command that prints its environment exposes them to the transcript and,
 through it, to the provider.
 

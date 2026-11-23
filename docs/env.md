@@ -85,13 +85,26 @@ source, psi calls the service without an `Authorization` header.
 
 | Variable | Effect |
 |---|---|
-| `PSI_SHELL` | Fallback shell for the `bash` tool when `shellPath` is unset; default `bash` |
+| `PSI_SHELL` | Fallback shell for the `bash` tool and MCP `!command` interpolation when `shellPath` is unset |
 
-`shellPath` selects the shell first. When it is empty, psi uses `PSI_SHELL`, then
-`bash`. `shellCommandPrefix` is prepended to each command with a newline. Project
-settings for either key require project consent.
+`bash` resolves its shell in Pi's order:
 
-The `bash` tool inherits the whole environment, including provider keys. A
+1. `shellPath` in `settings.json`
+2. `PSI_SHELL` in the environment
+3. On Windows: `%ProgramFiles%\Git\bin\bash.exe`, then `%ProgramFiles(x86)%\Git\bin\bash.exe`, then `bash.exe` on `PATH` (using `-s` over stdin when the resolved path is the legacy WSL `System32`/`Sysnative` `bash.exe` launcher)
+4. On Unix: `/bin/bash`, then `bash` on `PATH`, then `sh`
+
+`shellCommandPrefix` is prepended to each `bash` command with a newline. Project
+settings for `shellPath` or `shellCommandPrefix` require project consent.
+
+The optional `powershell` tool is Windows-only and off by default (enable it via
+`--tools` or `defaultTools`, such as `["-bash", "+powershell"]`). It resolves
+PowerShell in Pi's order: `pwsh.exe` on `PATH`, `%ProgramFiles%\PowerShell\7\pwsh.exe`,
+`powershell.exe` on `PATH`, then `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`,
+and runs with `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command` and UTF-8
+output encoding. `shellPath` and `shellCommandPrefix` do not apply to `powershell`.
+
+The `bash` and `powershell` tools inherit the whole environment, including provider keys. A
 command that dumps the environment writes secrets into the session.
 
 ## Display

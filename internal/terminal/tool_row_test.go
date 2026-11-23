@@ -43,6 +43,14 @@ func TestToolRowSanitizesUntrustedPreview(t *testing.T) {
 	}
 }
 
+func TestToolRowRendersPowerShellPrompt(t *testing.T) {
+	summary := event.ToolSummary{Kind: "powershell", Command: "Get-ChildItem", Available: true}
+	row := Sanitize(FormatToolRow(summary, "powershell", "running", 80, true))
+	if !strings.Contains(row, "◌ PS>  Get-ChildItem · running") {
+		t.Fatalf("unexpected powershell row %q", row)
+	}
+}
+
 func TestTruncatePrefixAndSuffixPreview(t *testing.T) {
 	// truncatePrefixPreview
 	if got := truncatePrefixPreview("hello", 0); got != "" {

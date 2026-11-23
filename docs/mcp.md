@@ -59,7 +59,11 @@ The resolver processes values in `env` and `headers`:
 - `${NAME}` expands from the psi process environment. An unset variable makes
   resolution fail.
 - A whole value that starts with `!` runs a shell command. The resolver uses
-  `PSI_SHELL`, or `bash` when it is unset or blank, and passes the command to `-c`.
+  `PSI_SHELL` when set, otherwise Pi's platform shell resolution (Git Bash in
+  `ProgramFiles` before `bash.exe` on `PATH` on Windows; `/bin/bash`, `bash` on
+  `PATH`, then `sh` on Unix). Commands pass via `-c`, except when the resolved
+  Windows shell is the legacy WSL `System32`/`Sysnative` `bash.exe` launcher,
+  which receives the command on stdin via `-s`.
   Each command has a 10-second deadline, a 64 KiB stdout limit, and a bounded
   64 KiB retained stderr tail. Trailing CR and LF characters are removed.
   If cancellation occurs before the command starts, the resolver does not run it.

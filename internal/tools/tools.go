@@ -18,10 +18,11 @@ import (
 
 // Names in the supported subset.
 const (
-	Read  = "read"
-	Write = "write"
-	Edit  = "edit"
-	Bash  = "bash"
+	Read       = "read"
+	Write      = "write"
+	Edit       = "edit"
+	Bash       = "bash"
+	PowerShell = "powershell"
 )
 
 // Result is the model-facing tool result.
@@ -53,18 +54,26 @@ type Invocation struct {
 
 // Registry dispatches known tools.
 type Registry struct {
-	Cwd   string
-	Read  *ReadTool
-	Write *WriteTool
-	Edit  *EditTool
-	Bash  *BashTool
+	Cwd        string
+	Read       *ReadTool
+	Write      *WriteTool
+	Edit       *EditTool
+	Bash       *BashTool
+	PowerShell *PowerShellTool
 }
 
 func NewRegistry(cwd string) *Registry {
 	// One mutation queue is shared by write and edit so same-file mutations
 	// serialize across both tools, like Pi's file-mutation-queue.
 	mutations := NewMutationQueue()
-	return &Registry{Cwd: cwd, Read: &ReadTool{Cwd: cwd}, Write: &WriteTool{Cwd: cwd, Mutations: mutations}, Edit: &EditTool{Cwd: cwd, Mutations: mutations}, Bash: &BashTool{Cwd: cwd}}
+	return &Registry{
+		Cwd:        cwd,
+		Read:       &ReadTool{Cwd: cwd},
+		Write:      &WriteTool{Cwd: cwd, Mutations: mutations},
+		Edit:       &EditTool{Cwd: cwd, Mutations: mutations},
+		Bash:       &BashTool{Cwd: cwd},
+		PowerShell: &PowerShellTool{Cwd: cwd},
+	}
 }
 
 // Prepare pre-registers mutation slots in call order before workers start.
@@ -102,8 +111,10 @@ func (r *Registry) DispatchCtx(ctx context.Context, inv Invocation) Result {
 		return r.Edit.ExecuteCtx(ctx, inv)
 	case Bash:
 		return r.Bash.ExecuteCtx(ctx, inv)
+	case PowerShell:
+		return r.PowerShell.ExecuteCtx(ctx, inv)
 	default:
-		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("unknown tool %q: first release supports read, write, edit, bash only", inv.Name)}}, IsError: true}
+		return Result{Content: []Block{{Type: "text", Text: fmt.Sprintf("unknown tool %q: supported built-in tools are read, write, edit, bash, powershell", inv.Name)}}, IsError: true}
 	}
 }
 

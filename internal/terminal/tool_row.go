@@ -46,7 +46,7 @@ func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, wid
 	body, bodyToken := "", TokenToolOutput
 	if summary.Available {
 		switch summary.Kind {
-		case "bash":
+		case "bash", "powershell":
 			body, bodyToken = firstCommandDisplayLine(summary.Command), TokenToolTitle
 		case "read":
 			body, bodyToken = summary.Path+summary.LineRange, TokenAccent
@@ -68,8 +68,11 @@ func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, wid
 
 	fixed := gutter + marker + " "
 	nameToken := TokenToolTitle
-	if summary.Kind == "bash" {
+	switch summary.Kind {
+	case "bash":
 		name, nameToken = "$", TokenToolTitle
+	case "powershell":
+		name, nameToken = "PS>", TokenToolTitle
 	}
 	prefix := fixed + name
 	separator := ""
@@ -100,7 +103,7 @@ func FormatToolRowWithDisplay(summary event.ToolSummary, name, state string, wid
 	if body != "" {
 		originalBody := body
 		if CellWidth(body) > bodyBudget {
-			if summary.Kind == "bash" {
+			if summary.Kind == "bash" || summary.Kind == "powershell" {
 				body = truncatePrefixPreview(body, bodyBudget)
 			} else {
 				body = truncateSuffixPreview(body, bodyBudget)

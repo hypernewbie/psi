@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/net/http/httpguts"
+
+	"github.com/hypernewbie/psi/internal/shellutil"
 )
 
 const (
@@ -785,11 +787,20 @@ func runInterpolationCommand(parent context.Context, command string) (string, er
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	shell := os.Getenv("PSI_SHELL")
-	if strings.TrimSpace(shell) == "" {
-		shell = "bash"
+	shellCfg, err := shellutil.GetShellConfig(strings.TrimSpace(os.Getenv("PSI_SHELL")))
+	if err != nil {
+		return "", configErr("command", "cannot start interpolation command")
 	}
-	cmd := exec.CommandContext(ctx, shell, "-c", command)
+	var cmd *exec.Cmd
+	if shellCfg.CommandTransport == shellutil.TransportStdin {
+		cmd = exec.CommandContext(ctx, shellCfg.Shell, shellCfg.Args...)
+		cmd.Stdin = strings.NewReader(command)
+	} else {
+		args := make([]string, len(shellCfg.Args)+1)
+		copy(args, shellCfg.Args)
+		args[len(shellCfg.Args)] = command
+		cmd = exec.CommandContext(ctx, shellCfg.Shell, args...)
+	}
 	// Start checks the context. This function owns cancellation after start
 	// so it can terminate the whole process group on Unix.
 	cmd.Cancel = nil
@@ -801,6 +812,7 @@ func runInterpolationCommand(parent context.Context, command string) (string, er
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	prepareCommand(cmd)
+	shellutil.HideWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		if err := ctx.Err(); err != nil {
 			return "", err

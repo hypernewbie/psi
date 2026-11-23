@@ -23,12 +23,12 @@ var (
 	authorization    = regexp.MustCompile(`(?i)(authorization\s*:\s*)((?:bearer|basic)\s+)?[^\s,;]+`)
 )
 
-// SummarizeArguments extracts only the display fields for psi's four tools.
+// SummarizeArguments extracts only the display fields for psi's built-in tools.
 // It never copies hidden write/edit bodies into an event or summary cache.
 func SummarizeArguments(name string, args map[string]any, cwd, home string) event.ToolSummary {
 	out := event.ToolSummary{Kind: name, Available: true}
 	switch name {
-	case "read", "write", "edit", "bash":
+	case "read", "write", "edit", "bash", "powershell":
 	default:
 		out.Available = false
 		return out
@@ -37,7 +37,7 @@ func SummarizeArguments(name string, args map[string]any, cwd, home string) even
 		out.Available = false
 		return out
 	}
-	if name == "bash" {
+	if name == "bash" || name == "powershell" {
 		if command, ok := args["command"].(string); ok {
 			out.Command, out.Truncated = summarizeCommand(command, false)
 		}
@@ -101,13 +101,13 @@ func SummarizeArguments(name string, args map[string]any, cwd, home string) even
 func SummarizeArgumentsJSON(name string, data []byte, cwd, home string) event.ToolSummary {
 	out := event.ToolSummary{Kind: name, Available: true}
 	switch name {
-	case "read", "write", "edit", "bash":
+	case "read", "write", "edit", "bash", "powershell":
 	default:
 		out.Available = false
 		return out
 	}
 	fields := []string{"path", "file_path"}
-	if name == "bash" {
+	if name == "bash" || name == "powershell" {
 		fields = []string{"command"}
 	} else if name == "read" {
 		fields = append(fields, "offset", "limit")
@@ -117,7 +117,7 @@ func SummarizeArgumentsJSON(name string, data []byte, cwd, home string) event.To
 		out.Available = false
 		return out
 	}
-	if name == "bash" {
+	if name == "bash" || name == "powershell" {
 		command, truncated, valid := decodeJSONStringPrefix(selected["command"], 4096)
 		if valid {
 			out.Command, out.Truncated = summarizeCommand(command, truncated)

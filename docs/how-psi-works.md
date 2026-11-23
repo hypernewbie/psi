@@ -30,7 +30,7 @@ expand)` and shows the arguments as a separate user row. `Ctrl+O` expands or
 collapses skill blocks in memory; it is not saved.
 
 Tool calls in one assistant response run concurrently. `write` and `edit` share
-one per-file queue so mutations serialize; `read` and `bash` do not queue.
+one per-file queue so mutations serialize; `read`, `bash`, and `powershell` do not queue.
 Results settle in call order behind a barrier the next request cannot cross.
 
 Steering messages enter at the next turn boundary. Follow-up messages enter
@@ -107,6 +107,6 @@ Before reading `.pi/settings.json`, project skills, project themes, or a project
 `--approve` and `--deny-project` answer ahead of time; deny is the default.
 
 Trust controls which project resources load. It is not a sandbox. Tools run
-with the permissions of the psi process, and the `bash` tool inherits its
+with the permissions of the psi process, and the `bash` and `powershell` tools inherit its
 environment. Context files such as `AGENTS.md` load without the trust prompt,
 matching Pi.

@@ -492,7 +492,7 @@ func TestSummaryJSONNumberAndNumberValue(t *testing.T) {
 func TestBashShellEnv(t *testing.T) {
 	t.Setenv("PSI_SHELL", "/bin/sh")
 	tool := &BashTool{}
-	if s := tool.shell(); s != "/bin/sh" {
+	if s := tool.customShell(); s != "/bin/sh" {
 		t.Errorf("got %q, want /bin/sh", s)
 	}
 }

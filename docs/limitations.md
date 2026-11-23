@@ -29,11 +29,11 @@ phi injects the endpoint and token at spawn; psi clears them before any tool run
 ## Tool execution
 
 Tool calls from one assistant response run concurrently, like Pi's parallel default.
-A `read` can overlap a `write`, `edit`, or `bash` call.
+A `read` can overlap a `write`, `edit`, `bash`, or `powershell` call.
 If one call depends on another call's result, the model must use separate turns.
 `write` and `edit` serialize per file through one shared queue, in registration order; mutations to different files overlap.
 A missing path keys by its resolved absolute path, matching Pi.
-`read` and `bash` calls never queue there.
+`read`, `bash`, and `powershell` calls never queue there.
 Results settle in assistant-call order behind a barrier the next model request cannot cross.
 
 Two psi deviations from Pi stay explicit:

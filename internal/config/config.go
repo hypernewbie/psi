@@ -130,9 +130,13 @@ type Settings struct {
 
 var defaultToolNames = []string{"read", "bash", "edit", "write", "web_search", "fetch_content", "get_search_content"}
 
-// DefaultToolsCSV lists the selectable built-in tools in their default order.
+// selectableToolNames includes optional built-in tools (such as powershell on
+// Windows) in canonical order without enabling them in defaultSettings().
+var selectableToolNames = []string{"read", "bash", "powershell", "edit", "write", "web_search", "fetch_content", "get_search_content"}
+
+// DefaultToolsCSV lists the selectable built-in tools in their canonical order.
 func DefaultToolsCSV() string {
-	return strings.Join(defaultToolNames, ",")
+	return strings.Join(selectableToolNames, ",")
 }
 
 func defaultSettings() Settings {
@@ -687,25 +691,25 @@ func ResolveTools(list, inherited []string) ([]string, error) {
 			return nil, fmt.Errorf("empty tool name")
 		case t[0] == '+':
 			name := t[1:]
-			if !slices.Contains(defaultToolNames, name) {
+			if !slices.Contains(selectableToolNames, name) {
 				return nil, fmt.Errorf("unknown tool %q", name)
 			}
 			set[name] = true
 		case t[0] == '-':
 			name := t[1:]
-			if !slices.Contains(defaultToolNames, name) {
+			if !slices.Contains(selectableToolNames, name) {
 				return nil, fmt.Errorf("unknown tool %q", name)
 			}
 			delete(set, name)
 		default:
-			if !slices.Contains(defaultToolNames, t) {
+			if !slices.Contains(selectableToolNames, t) {
 				return nil, fmt.Errorf("unknown tool %q", t)
 			}
 			// Plain names formed the base before modifiers were applied.
 		}
 	}
 	var out []string
-	for _, k := range defaultToolNames {
+	for _, k := range selectableToolNames {
 		if set[k] {
 			out = append(out, k)
 		}

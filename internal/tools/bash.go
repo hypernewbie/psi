@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/hypernewbie/psi/internal/shellutil"
 )
 
 // BashTool executes shell commands with bounded memory and process-group cancellation.
@@ -23,14 +25,15 @@ type BashTool struct {
 	now func() time.Time
 }
 
-func (t *BashTool) shell() string {
+func (t *BashTool) customShell() string {
 	if t.ShellPath != "" {
 		return t.ShellPath
 	}
-	if v := os.Getenv("PSI_SHELL"); v != "" {
-		return v
-	}
-	return "bash"
+	return strings.TrimSpace(os.Getenv("PSI_SHELL"))
+}
+
+func (t *BashTool) resolveShell() (shellutil.Config, error) {
+	return shellutil.GetShellConfig(t.customShell())
 }
 
 // idleDrainGrace is the Pi-compatible post-exit grace: every stdout/stderr
@@ -39,18 +42,47 @@ func (t *BashTool) shell() string {
 const idleDrainGrace = 100 * time.Millisecond
 
 func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
+	cmdStr, timeout, errRes := parseShellInvocation("bash", inv)
+	if errRes != nil {
+		return *errRes
+	}
+	if t.ShellPrefix != "" {
+		cmdStr = t.ShellPrefix + "\n" + cmdStr
+	}
+	return executeShellCommand(ctx, t.Cwd, "bash", "psi-bash-*", t.resolveShell, func(_ shellutil.Config, cmd string) string {
+		return cmd
+	}, cmdStr, timeout, t.now)
+}
+
+func parseShellInvocation(toolName string, inv Invocation) (string, time.Duration, *Result) {
 	cmdStr, _ := argString(inv.Arguments, "command")
 	if cmdStr == "" {
-		return errResult("bash: command is required")
+		res := errResult(toolName + ": command is required")
+		return "", 0, &res
 	}
 	var timeout time.Duration
 	if _, present := inv.Arguments["timeout"]; present {
 		f, ok := argFloat(inv.Arguments, "timeout")
 		if !ok || f <= 0 || !isFinite(f) || f > 2147483.647 {
-			return errResult("bash: timeout must be a finite number of seconds in (0, 2147483.647]")
+			res := errResult(toolName + ": timeout must be a finite number of seconds in (0, 2147483.647]")
+			return "", 0, &res
 		}
 		timeout = time.Duration(f * float64(time.Second))
 	}
+	return cmdStr, timeout, nil
+}
+
+func executeShellCommand(
+	ctx context.Context,
+	cwd string,
+	shellName string,
+	tempFilePrefix string,
+	resolveShell func() (shellutil.Config, error),
+	wrapCommand func(shellutil.Config, string) string,
+	cmdStr string,
+	timeout time.Duration,
+	now func() time.Time,
+) Result {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	if timeout > 0 {
@@ -61,9 +93,18 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	if err := runCtx.Err(); err != nil {
 		return errResult("Command cancelled")
 	}
-	f, err := os.CreateTemp("", "psi-bash-*") // 0600 from creation, not after the command
+	shellCfg, err := resolveShell()
 	if err != nil {
-		return errResult(fmt.Sprintf("bash: cannot capture output: %v", err))
+		return errResult(fmt.Sprintf("%s: %v", strings.ToLower(shellName), err))
+	}
+	if cwd != "" {
+		if _, err := os.Stat(cwd); err != nil {
+			return errResult(fmt.Sprintf("Working directory does not exist: %s\nCannot execute %s commands.", cwd, shellName))
+		}
+	}
+	f, err := os.CreateTemp("", tempFilePrefix) // 0600 from creation, not after the command
+	if err != nil {
+		return errResult(fmt.Sprintf("%s: cannot capture output: %v", strings.ToLower(shellName), err))
 	}
 	keepFile := false
 	defer func() {
@@ -72,28 +113,38 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 			os.Remove(f.Name())
 		}
 	}()
-	capture := &tailCapture{file: f, cancel: stop, now: t.now}
+	capture := &tailCapture{file: f, cancel: stop, now: now}
 	capture.touch()
-	if t.ShellPrefix != "" {
-		cmdStr = t.ShellPrefix + "\n" + cmdStr
-	}
+	resolvedCmd := wrapCommand(shellCfg, cmdStr)
 	// Own the stdio pipes so leader exit, pipe completion, and idle drain
 	// stay distinct (F07). Go's WaitDelay uses one fixed deadline from exit;
 	// Pi re-arms a 100ms idle timer on every chunk instead.
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		return errResult(fmt.Sprintf("bash: cannot capture output: %v", err))
+		return errResult(fmt.Sprintf("%s: cannot capture output: %v", strings.ToLower(shellName), err))
 	}
-	cmd := exec.Command(t.shell(), "-c", cmdStr)
-	cmd.Dir = t.Cwd
+	var cmd *exec.Cmd
+	if shellCfg.CommandTransport == shellutil.TransportStdin {
+		cmd = exec.Command(shellCfg.Shell, shellCfg.Args...)
+		cmd.Stdin = strings.NewReader(resolvedCmd)
+	} else {
+		args := make([]string, len(shellCfg.Args)+1)
+		copy(args, shellCfg.Args)
+		args[len(shellCfg.Args)] = resolvedCmd
+		cmd = exec.Command(shellCfg.Shell, args...)
+	}
+	cmd.Dir = cwd
 	setNewProcessGroup(cmd)
+	shellutil.HideWindow(cmd)
 	cmd.Stdout, cmd.Stderr = pw, pw
 	startedAt := time.Now()
 	if err := cmd.Start(); err != nil {
 		pr.Close()
 		pw.Close()
-		return errResult(fmt.Sprintf("bash: %v", err))
+		return errResult(fmt.Sprintf("%s: %v", strings.ToLower(shellName), err))
 	}
+	pg := attachProcessGroup(cmd)
+	defer closeProcessGroup(pg)
 	// Parent copies only; the child ends stay open across descendants.
 	_ = pw.Close()
 	copyDone := make(chan struct{})
@@ -126,7 +177,7 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	}()
 	var exited shellExit
 	var timedOut bool
-	killGroup := func() { killProcessGroup(cmd) }
+	killGroup := func() { killProcessGroup(cmd, pg) }
 	drain := func() {
 		tick := time.NewTicker(10 * time.Millisecond)
 		defer tick.Stop()
@@ -175,10 +226,10 @@ func (t *BashTool) ExecuteCtx(ctx context.Context, inv Invocation) Result {
 	<-copyDone
 	closeErr := f.Close()
 	if capture.err != nil {
-		return errResult(fmt.Sprintf("bash: output capture failed: %v", capture.err))
+		return errResult(fmt.Sprintf("%s: output capture failed: %v", strings.ToLower(shellName), capture.err))
 	}
 	if closeErr != nil {
-		return errResult(fmt.Sprintf("bash: output capture failed: %v", closeErr))
+		return errResult(fmt.Sprintf("%s: output capture failed: %v", strings.ToLower(shellName), closeErr))
 	}
 	output := string(capture.tail)
 	for len(output) > 0 && !utf8.RuneStart(output[0]) {

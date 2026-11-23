@@ -29,6 +29,9 @@ func Definitions(names []string) []provider.ToolDef {
 		Bash: {Name: Bash, Description: "Run a shell command in the workspace. Returns the last 2000 lines or 50 KiB, with a full-output file when truncated. No default timeout.", Schema: obj(map[string]any{
 			"command": str("Shell command"), "timeout": map[string]any{"type": "number", "exclusiveMinimum": 0, "description": "Optional timeout in seconds"},
 		}, "command")},
+		PowerShell: {Name: PowerShell, Description: "Run a PowerShell command in the workspace. Returns the last 2000 lines or 50 KiB, with a full-output file when truncated. No default timeout.", Schema: obj(map[string]any{
+			"command": str("PowerShell command"), "timeout": map[string]any{"type": "number", "exclusiveMinimum": 0, "description": "Optional timeout in seconds"},
+		}, "command")},
 	}
 	var out []provider.ToolDef
 	for _, name := range names {

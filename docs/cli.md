@@ -191,7 +191,9 @@ psi --no-tools
 - `-nt`, `--no-tools` disables all selectable tools.
 - `-nbt`, `--no-builtin-tools` behaves like `--no-tools`.
 
-These flags apply only to the tools listed under `--tools`. Web tools honor the
+These flags apply only to the tools listed under `--tools`. `powershell` is an
+optional Windows-only shell tool that is off by default; select it with `--tools`
+or `defaultTools` (for example `["-bash", "+powershell"]`). Web tools honor the
 `web-search.json` switches described in [Web access](web.md). Excluding
 `fetch_content` also blocks `web_search` with `includeContent: true` before any
 network request; metadata-only search remains available. A readable

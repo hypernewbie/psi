@@ -22,6 +22,7 @@ const defaultPreamble = "You are psi, a minimal Go coding agent. Use the declare
 var toolSnippets = map[string]string{
 	"read":               "Read file contents",
 	"bash":               "Execute shell commands",
+	"powershell":         "Execute PowerShell commands",
 	"edit":               "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
 	"write":              "Create or overwrite files",
 	"web_search":         "Search the web with one to three queries; returns ranked results and a responseId",
@@ -152,10 +153,22 @@ func rulesSection(tools []string) string {
 		seen[rule] = true
 		rules = append(rules, rule)
 	}
+	var hasBash, hasPowerShell bool
 	for _, name := range tools {
-		if name == "bash" {
-			add("Use bash for file operations like ls, rg, find")
+		switch name {
+		case "bash":
+			hasBash = true
+		case "powershell":
+			hasPowerShell = true
 		}
+	}
+	switch {
+	case hasBash && hasPowerShell:
+		add("Use bash or PowerShell for file operations like listing, searching, and finding files")
+	case hasPowerShell:
+		add("Use PowerShell for file operations like listing, searching, and finding files")
+	case hasBash:
+		add("Use bash for file operations like ls, rg, find")
 	}
 	for _, name := range tools {
 		for _, rule := range toolGuidelines[name] {

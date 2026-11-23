@@ -465,6 +465,7 @@ Interactive Enter submits; an empty Enter retries an unfinished turn when idle, 
 During a run, /session, /hotkeys, and /name work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
+The optional powershell tool is off by default and available on Windows only; enable it with --tools or defaultTools (for example ["-bash", "+powershell"]).
 Inline search content requires selected and enabled fetch_content.
 Readable fetch_content may use a configured Crawl4AI fallback (crawl4aiBaseUrl) after a direct failure; raw mode is direct HTTP only.
 read_session remains available independently of tool-selection flags. loop_next/loop_done/loop_approve and syncboard have separate availability checks.

@@ -40,7 +40,7 @@ func RunIsolated(run func() int) int {
 	// Unix tests use a fixed minimal PATH.
 	keep["PATH"] = "/usr/local/bin:/usr/bin:/bin"
 	if runtime.GOOS == "windows" {
-		for _, k := range []string{"SystemRoot", "PATHEXT", "PATH"} {
+		for _, k := range []string{"SystemRoot", "PATHEXT", "PATH", "ProgramFiles", "ProgramFiles(x86)"} {
 			if v := os.Getenv(k); v != "" {
 				keep[k] = v
 			}

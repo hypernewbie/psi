@@ -38,14 +38,14 @@ never change `--docs`; it reads embedded bytes only.
 | Provider/model | `defaultProvider`, `defaultModel` | `anthropic`, `openai-codex`, `minimax`, `opencode-go`, `deepseek`, `zai`, `google`, `xiaomi`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-sgp`, `moonshotai`, `kimi-coding`, `qwen-token-plan`, `openrouter`, `xai`, `groq`, or `mistral` |
 | Reasoning | `defaultThinkingLevel`, `modelThinkingLevels` | off/minimal/low/medium/high/xhigh/max; `modelThinkingLevels` keys are `provider/modelId` |
 | Sessions | `sessionDir` | CLI > env (`PI_CODING_AGENT_SESSION_DIR`) > settings > default |
-| Tools | `defaultTools` | names listed under `--tools` in `psi --help`; plain names replace, `+`/`-` modify |
+| Tools | `defaultTools` | names listed under `--tools` in `psi --help`; plain names replace, `+`/`-` modify (`powershell` is optional and Windows-only, e.g. `["-bash", "+powershell"]`) |
 | Skills | `skills`, `enableSkillCommands` | skill paths; `enableSkillCommands` is parsed but not wired, so `/skill:` stays registered |
 | Compaction | `compaction.enabled,reserveTokens,keepRecentTokens,modelOverrides` | bounded summaries; per-model reserve overrides; `/ac` controls are session-local |
 | Queues | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`, as in Pi |
 | Theme | `theme`, `themes`, `terminal.trueColor` | Pi theme selection, local resources, terminal color mode |
 | Display | `editorPaddingX`, `outputPad`, `softWrap`, `autocompleteMaxVisible`, `markdown.codeBlockIndent`, `contextUsageDisplay` | bounded inline spacing, committed-output wrapping, code-block indent, and footer context caption |
 | Reasoning display | `hideThinkingBlock` | `true` collapses reasoning blocks to one `Thinking...` label; `Ctrl+T` toggles and saves it |
-| Shell | `shellPath`, `shellCommandPrefix` | `shellPath` selects the shell; `shellCommandPrefix` prepends commands; project values require consent |
+| Shell | `shellPath`, `shellCommandPrefix` | `shellPath` overrides `bash` shell discovery (Windows defaults to Git Bash before `PATH`); `shellCommandPrefix` prepends `bash` commands; project values require consent |
 | Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`, `retry.maxAgentDelayMs` | default idle timeout 300000 ms; 0 disables it; at most 10 retries; summary retries default to 2s exponential backoff capped at 60s |
 | Instructions | user/project files | see below |
 | Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | bundled catalog and Pi cache; no network refresh |
