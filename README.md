@@ -31,6 +31,40 @@ go build -o psi.exe .
 
 In the examples below, use `psi` instead of `./psi` when you run an installed binary.
 
+## Developer commands
+
+Run these checkout-local commands from the repository root with Go 1.25 or later.
+`check` requires Git on `PATH`. It uses Git to list tracked and non-ignored
+untracked files for the JavaScript and TypeScript gate. It uses `gofmt` from
+the Go toolchain.
+
+```sh
+go tool dev build
+go tool dev run [args...]
+go tool dev install
+go tool dev bake <new-output-directory>
+go tool dev check
+```
+
+`build` creates the native `psi` or `psi.exe` binary in the checkout. `install`
+installs psi from this checkout to `GOBIN`, or to Go's default install directory
+when `GOBIN` is empty. `build`, `run`, and `install` wrap `go build .`, `go run .`,
+and `go install .`; the direct Go forms remain available. The public
+`go install github.com/hypernewbie/psi@latest` command in the Install section
+installs a published version instead.
+
+`build`, `run`, and `install` do not bake catalogs. `bake` runs the existing
+catalog generator and needs network access; its destination and fetch limits are
+in [Catalog bake](docs/config.md#catalog-bake-developer). Go commands use Go's
+normal download and verification settings. A failure is reported without an
+automatic retry or stale-binary fallback.
+
+`check` runs the Git file gate, gofmt, vet, tests, race tests, and build.
+`--no-js-only` runs only the Git file gate. Race tests run by default. On Linux
+and Windows, race tests require cgo and a compatible C compiler. If the
+required toolchain is unavailable, use `--skip-race` to run the other checks.
+Windows CI uses `--skip-race`.
+
 ## Run
 
 ```sh
@@ -58,7 +92,7 @@ Use `/model` to see locally available models. Psi reads the bundled public snaps
 ## Test
 
 ```sh
-./scripts/check.sh
+go tool dev check
 ```
 
-Live provider tests stay off unless you pass the `liveprovider` tag yourself.
+`./scripts/check.sh` remains available as a compatibility shim. Live provider tests stay off unless you pass the `liveprovider` tag yourself.

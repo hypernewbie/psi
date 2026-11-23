@@ -117,8 +117,10 @@ These are unfinished PLAN2 requirements, not permanent product exclusions.
 Run routine checks:
 
 ```sh
-./scripts/check.sh
+go tool dev check
 ```
+
+`./scripts/check.sh` remains available as a compatibility shim for this command.
 
 The former Node reference adapter and the optional Pi interchange checks were
 retired with the scripts that built them. Recorded comparisons above are

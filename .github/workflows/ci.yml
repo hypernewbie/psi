@@ -6,6 +6,9 @@ on:
 
 jobs:
   ci:
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +22,8 @@ jobs:
           cache: true
           # Keep checksum-based keys; setup-go v7 defaults to go.mod.
           cache-dependency-path: go.sum
+      - name: go-version
+        run: go version
       - name: git-bash-on-path
         if: runner.os == 'Windows'
         # bash, sleep, and seq live in Git\usr\bin (see the bash.EXE
@@ -28,26 +33,41 @@ jobs:
           Add-Content $env:GITHUB_PATH 'C:\Program Files\Git\usr\bin'
           Add-Content $env:GITHUB_PATH 'C:\Program Files\Git\bin'
           where.exe bash
-      - name: no-javascript
-        shell: bash
-        run: sh scripts/check.sh --no-js-only
-      - name: gofmt
+      - name: check
+        if: runner.os != 'Windows'
+        run: go tool dev check
+      - name: check-windows
+        if: runner.os == 'Windows'
+        run: go tool dev check --skip-race
+      - name: wrapper-smoke
         shell: bash
         run: |
-          unformatted=$(gofmt -l ./*.go cmd internal docs)
-          if [ -n "$unformatted" ]; then
-            echo "Files need gofmt:"
-            echo "$unformatted"
+          set -eu
+          state="$RUNNER_TEMP/psi-dev-smoke"
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then
+            state="$(cygpath -u "$state")"
+            exe=".exe"
+          fi
+          # Refuse an occupied task path instead of deleting it.
+          mkdir "$state"
+          mkdir "$state/install with spaces" "$state/existing bake target"
+          printf 'keep\n' > "$state/expected"
+          printf 'keep\n' > "$state/existing bake target/sentinel.txt"
+          install_dir="$state/install with spaces"
+          if [ "$RUNNER_OS" = Windows ]; then
+            install_dir="$(cygpath -w "$install_dir")"
+          fi
+          go tool dev check --no-js-only
+          go tool dev build
+          "./psi$exe" --version
+          go tool dev run --help > "$state/help.out"
+          grep -F 'Usage:' "$state/help.out"
+          GOBIN="$install_dir" go tool dev install
+          "$state/install with spaces/psi$exe" --version
+          if go tool dev bake "$state/existing bake target" > "$state/bake.out" 2> "$state/bake.err"; then
+            printf '%s\n' 'bake unexpectedly accepted an existing destination' >&2
             exit 1
           fi
-      - name: vet
-        run: go vet ./...
-      - name: test
-        run: go test ./...
-      - name: race
-        # The race detector needs cgo, which the Windows runner does not
-        # provide. Linux and macOS match the local ./scripts/check.sh gate.
-        if: runner.os != 'Windows'
-        run: go test -race ./...
-      - name: build
-        run: go build ./...
+          grep -F 'already exists' "$state/bake.err"
+          cmp "$state/expected" "$state/existing bake target/sentinel.txt"
