@@ -18,7 +18,7 @@ func TestReloadResourcesRefreshesInstructionsAndSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &runtime{store: store, agentDir: agentDir, projectTrusted: true, settings: config.Settings{DefaultTools: []string{"read"}}}
+	r := &runtime{store: store, agentDir: agentDir, projectTrust: projectTrusted, settings: config.Settings{DefaultTools: []string{"read"}}}
 	skillDir := filepath.Join(cwd, ".pi", "skills", "fresh")
 	if err := os.MkdirAll(skillDir, 0700); err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func TestReloadResourcesRefreshesInstructionsAndSkills(t *testing.T) {
 	if !strings.Contains(r.prompt, "new instructions") || !strings.Contains(r.prompt, "fresh") || len(r.skills) != 1 || r.cfg.System != r.prompt {
 		t.Fatalf("resources not refreshed: skills=%v prompt=%s", r.skills, r.prompt)
 	}
-	r.projectTrusted = false
+	r.projectTrust = projectUntrusted
 	if err := r.reloadResources(); err != nil {
 		t.Fatal(err)
 	}
@@ -62,13 +62,41 @@ func TestReloadResourcesHonorsDisabledOptions(t *testing.T) {
 	}
 }
 
+func TestReloadResourcesInstallsMCPOptInTransactionally(t *testing.T) {
+	cwd, agentDir := t.TempDir(), t.TempDir()
+	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &runtime{store: store, agentDir: agentDir, projectTrust: projectTrusted, settings: config.Settings{DefaultTools: []string{"read"}}}
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"mcp":{"allowProjectCommands":true}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	if !r.settings.MCPAllowProjectCommands {
+		t.Fatal("MCP opt-in was not installed")
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"mcp":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadResources(); err == nil {
+		t.Fatal("malformed settings must fail the reload")
+	}
+	if !r.settings.MCPAllowProjectCommands {
+		t.Fatal("failed reload changed the MCP opt-in")
+	}
+}
+
 func TestReloadResourcesAppliesQueueModes(t *testing.T) {
 	cwd, agentDir := t.TempDir(), t.TempDir()
 	store, err := session.New(session.OpenOptions{Cwd: cwd, AgentDir: agentDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &runtime{store: store, agentDir: agentDir, projectTrusted: true, settings: config.Settings{
+	r := &runtime{store: store, agentDir: agentDir, projectTrust: projectTrusted, settings: config.Settings{
 		DefaultTools: []string{"read"}, SteeringMode: "one-at-a-time", FollowUpMode: "one-at-a-time",
 	}}
 	settingsPath := filepath.Join(agentDir, "settings.json")

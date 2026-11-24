@@ -4,8 +4,15 @@
 
 psi is an inline terminal agent, not a visual Pi clone.
 It has no fullscreen mode, widgets, panels, session-tree interface, or Pi TUI API.
-It has no extension runtime, MCP, codemode, tool search, subagents, public SDK, or Pi JSON event mode.
+It has no extension runtime, codemode, tool search, subagents, public SDK, or Pi JSON event mode.
 Print mode, HTML export, sharing, bug uploads, hosted services, telemetry, and automatic updates are excluded.
+
+This layer's MCP client supports tools over stdio only. Streamable HTTP is
+unavailable until layer 7. The client does not run MCP Apps, JavaScript,
+codemode, `tool_search`, prompts, resources,
+resource subscriptions, sampling, elicitation, roots, tasks, OAuth, or automatic
+provider-token forwarding. Legacy SSE is rejected. A tool result can contain an
+embedded resource, but psi does not fetch its URI.
 
 See [Providers](providers.md) for supported providers and protocols. Unsupported provider/API pairs and compatibility features remain unavailable.
 

@@ -24,6 +24,7 @@ import (
 	"github.com/hypernewbie/psi/internal/agent"
 	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/event"
+	"github.com/hypernewbie/psi/internal/mcp"
 	"github.com/hypernewbie/psi/internal/provider"
 	"github.com/hypernewbie/psi/internal/session"
 	"github.com/hypernewbie/psi/internal/skills"
@@ -138,13 +139,25 @@ func (s *rpcRunner) emit(v any) {
 func (s *rpcRunner) runConfig() agent.Config {
 	r := s.r
 	cfg := r.cfg
+	mcpManager := r.mcpManager()
+	var mcpToolsAtRequest []mcp.Tool
 	cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 		definitions := append(tools.Definitions(r.settings.DefaultTools), r.webDefinitions()...)
 		if r.syncboardAvailable() {
 			definitions = append(definitions, syncboardToolDefinition())
 		}
 		definitions = append(definitions, readSessionToolDefinition())
-		return r.prompt, r.sections, definitions
+		var mcpDefinitions []provider.ToolDef
+		mcpToolsAtRequest, mcpDefinitions = requestMCPSnapshot(mcpManager)
+		definitions = append(definitions, mcpDefinitions...)
+		if len(mcpToolsAtRequest) == 0 {
+			return r.prompt, r.sections, definitions
+		}
+		sections := r.mcpSections(r.sections, mcpToolsAtRequest)
+		return config.RenderSections(sections), sections, definitions
+	}
+	cfg.ConcurrentTools = func(name string) (agent.InternalToolHandler, bool) {
+		return concurrentMCPTool(mcpManager, mcpToolsAtRequest, name)
 	}
 	cfg.InternalTools = map[string]agent.InternalToolHandler{
 		syncboardToolName:   r.syncboardInternalHandler,

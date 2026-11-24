@@ -134,8 +134,9 @@ submission cancels the confirmation and follows its normal path.
   context files), skills, and `steeringMode`/`followUpMode`. New queue modes
   apply to the next run. It refreshes the local model catalog, including
   `models.json`, without changing the selected model. If `models.json` is
-  malformed or unreadable, psi warns and keeps the previous catalog. It does
-  not change keybindings or reload tool, shell, or network settings.
+  malformed or unreadable, psi warns and keeps the previous catalog. It also
+  re-reads MCP configuration in the background unless MCP is disabled. It
+  does not change keybindings or reload built-in tool, shell, or web settings.
 
 Startup selection uses `--provider`, `--model`, and `--thinking`; see
 [Command line](cli.md). Model IDs come from the bundled catalog and Pi's local
@@ -185,6 +186,15 @@ the timeout message includes the shell's exit code and elapsed time.
 or a batch of up to 20. `get_search_content` pages retained text by
 `responseId`. Web tools read `web-search.json`; see [Web access](web.md) for
 configuration, limits, and the network guard.
+
+## Use MCP tools
+
+MCP servers are configured in `<agentDir>/mcp.json` and, for a trusted
+project, `.pi/mcp.json`. This layer supports stdio only; HTTP entries are
+unavailable. psi starts stdio servers in the background, so the first request
+can proceed before they are ready. Use `/mcp` to check server state and
+exposed tool counts. `/reload` re-reads the configuration. `--no-mcp` disables
+the client for one run. See [MCP servers](mcp.md).
 
 ## Adjust the terminal
 

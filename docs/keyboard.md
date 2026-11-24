@@ -42,7 +42,8 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 - `/compact [focus]` — cancel an active run once, wait for durable settlement, then create a cancellable compact summary; idle compact uses the same operation
 - `/b`, `/bump` — request another response without adding a prompt. Available only while idle, outside pickers, runs, and compaction. Explicit commands bypass the unfinished-turn gate but keep storage, auth, and continuation checks. Empty `Enter` retries unfinished turns only. All admission refusals stay silent; started runs report failures, cancellation, partial output, and unsaved output normally.
 - `/resume` — search workspace sessions; same-session selection is a no-op
-- `/reload` — reload themes, display settings, prompt inputs, skills, queue modes, and the local model catalog without changing the selected model
+- `/reload` — reload themes, display settings, prompt inputs, skills, queue modes, and the local model catalog without changing the selected model; re-read MCP configuration in the background
+- `/mcp` — show MCP server and tool status while idle
 - `/quit` — release the terminal first, then settle and exit
 - `/ac`, `/autocompact`, `/loop`, and `/loop-stop` — embedded adaptive-compaction and loop extensions
 - `/skill:name [args]` — invoke a skill with reproducible input (`psi.input`). The transcript shows `[skill] name (ctrl+o to expand)` with the arguments in a separate user row; `Ctrl+O` expands or collapses the body. An unknown, unreadable, or oversized skill is refused instead of sent as text

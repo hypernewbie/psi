@@ -313,14 +313,15 @@ func writeThemeDiagnostics(out io.Writer, diagnostics []pitheme.Diagnostic, fall
 func (r *runtime) reloadTheme() error {
 	userPath := filepath.Join(r.agentDir, "settings.json")
 	projectPath := filepath.Join(r.store.Cwd(), ".pi", "settings.json")
-	loaded, err := config.LoadSettings(userPath, projectPath, r.projectTrusted)
+	consent := r.projectTrust.allowsResources()
+	loaded, err := config.LoadSettings(userPath, projectPath, consent)
 	if err != nil {
 		return fmt.Errorf("reload theme settings: %w", err)
 	}
 	mode := pitheme.DetectColorMode(loaded.Settings.TerminalTrueColor, envMap(), goruntime.GOOS)
 	setting := selectedThemeSetting(loaded.Settings, r.options)
 	appearance := pitheme.DetectTerminalAppearance(r.themeColors, r.reportedColorScheme, os.Getenv("COLORFGBG"))
-	catalog := pitheme.LoadCatalog(themeCatalogOptions(loaded.Settings, r.options, r.agentDir, r.store.Cwd(), r.projectTrusted, mode))
+	catalog := pitheme.LoadCatalog(themeCatalogOptions(loaded.Settings, r.options, r.agentDir, r.store.Cwd(), consent, mode))
 	saturation := 0.0
 	if r.themeColorsReceived {
 		saturation = 1

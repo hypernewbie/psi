@@ -33,6 +33,7 @@ import (
 	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/event"
 	"github.com/hypernewbie/psi/internal/loop"
+	"github.com/hypernewbie/psi/internal/mcp"
 	"github.com/hypernewbie/psi/internal/pibridge"
 	"github.com/hypernewbie/psi/internal/provider"
 	"github.com/hypernewbie/psi/internal/providerregistry"
@@ -55,7 +56,7 @@ type Options struct {
 	Docs                                                                 bool
 	DocsTopic                                                            string
 	NoTools, NoSession, AllowProj, DenyProj                              bool
-	NoThemes, NoSkills, NoContextFiles, Offline                          bool
+	NoMCP, NoThemes, NoSkills, NoContextFiles, Offline                   bool
 	UseTheme                                                             string
 	ThemePaths                                                           []string
 	Messages                                                             []string
@@ -74,6 +75,7 @@ var cliBoolFlags = map[string]bool{
 	"continue": true, "c": true, "resume": true, "r": true,
 	"no-session": true, "no-tools": true, "nt": true,
 	"no-builtin-tools": true, "nbt": true,
+	"no-mcp":        true,
 	"allow-project": true, "approve": true, "a": true,
 	"deny-project": true, "no-approve": true, "na": true,
 	"no-themes": true, "no-skills": true, "ns": true,
@@ -225,6 +227,7 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.BoolVar(&o.NoTools, "nt", false, "disable all selectable tools (Pi alias)")
 	fs.BoolVar(&o.NoTools, "no-builtin-tools", false, "alias for --no-tools")
 	fs.BoolVar(&o.NoTools, "nbt", false, "alias for --no-tools (Pi alias)")
+	fs.BoolVar(&o.NoMCP, "no-mcp", false, "disable MCP config reads and stdio servers (HTTP unavailable)")
 	fs.BoolVar(&o.NoSession, "no-session", false, "in-memory session")
 	fs.BoolVar(&o.AllowProj, "allow-project", false, "allow protected project resources")
 	fs.BoolVar(&o.AllowProj, "approve", false, "allow project resources (Pi alias)")
@@ -442,6 +445,7 @@ Pi-compatible options:
   --exclude-tools, -xt <list> Disable selected tools
   --no-tools, -nt            Disable all selectable tools
   --no-builtin-tools, -nbt   Alias for --no-tools
+  --no-mcp                   Disable MCP config reads and stdio servers (HTTP unavailable)
   --approve, -a              Allow project resources
   --no-approve, -na          Deny project resources
   --theme <path>             Load a theme (repeatable)
@@ -475,7 +479,8 @@ Change it in /settings, or edit settings.json and run /reload. It is a settings 
 OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API key, or OPENAI_API_KEY. OpenAI Codex uses /login openai-codex and never falls back to an API key.
 A custom provider using openai-completions, openai-responses, or anthropic-messages may omit the API key; built-in openai and anthropic may omit it only on an explicit non-default baseUrl override. An omitted key sends no generated auth header. authHeader: true still requires a key; explicit headers still apply.
 Eligible built-in openai-codex, zai and opencode-go models show remaining quota in unused footer space. Codex shows primary ChatGPT quota; Go shows rolling (R), weekly (W), and monthly (M) percentages. Reads are best effort and back off after failures.
-Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, MCP, and prompt templates.
+MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; this layer supports stdio only. --no-mcp disables MCP.
+Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }
 
@@ -512,6 +517,12 @@ func Run(args []string, version string) error {
 	if err != nil {
 		return err
 	}
+	var waitMCPRuntime *runtime
+	defer func() {
+		if waitMCPRuntime != nil {
+			waitMCPRuntime.waitMCP(30 * time.Second)
+		}
+	}()
 	defer tty.Restore()
 	console := terminal.NewConsole(os.Stdin, os.Stdout)
 	defer console.Close()
@@ -562,10 +573,11 @@ func Run(args []string, version string) error {
 	userTheme, _, _ := resolveThemeSnapshot(userCatalog, selectedThemeSetting(userSettings.Settings, o), colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
 	_, noColor := os.LookupEnv("NO_COLOR")
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: userTheme, NoColor: noColor, Display: presentationDisplay(userSettings.Settings)})
-	consent, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, console, lifecycle)
+	trust, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, console, lifecycle)
 	if err != nil {
 		return err
 	}
+	consent := trust.allowsResources()
 	loaded := userSettings
 	if consent {
 		if loaded, err = config.LoadProjectSettings(userSettings, projectPath); err != nil {
@@ -601,7 +613,7 @@ func Run(args []string, version string) error {
 		live:         newLiveConfig(),
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
-		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
+		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrust: trust,
 		loops: loop.NewController(store),
 		ac:    ac.NewController(),
 	}
@@ -624,6 +636,8 @@ func Run(args []string, version string) error {
 			return fmt.Errorf("set session name: %w", err)
 		}
 	}
+	r.startMCP()
+	waitMCPRuntime = r
 	r.tty, r.lifecycle, r.signals = tty, lifecycle, signals
 	r.queryTerminalColors(console, 100*time.Millisecond)
 	console.SetDeferDraw(true)
@@ -801,7 +815,9 @@ type runtime struct {
 	themeAppearance     string
 	themeFallback       string
 	themeDiagnostics    []pitheme.Diagnostic
-	projectTrusted      bool
+	projectTrust        projectTrustDecision
+	mcpAccount          *mcpAccount
+	mcpEnabled          bool
 	loops               *loop.Controller
 	ac                  *ac.Controller
 	cancelACEndTurn     func()
@@ -1743,6 +1759,7 @@ func (r *runtime) replace(next *session.Store) error {
 	r.adoptConfiguration(&candidate)
 	r.store = next
 	r.publishLive()
+	r.restartMCP()
 	// Undelivered prompts belonged to the replaced session; keeping them
 	// would let a later attachment send content the user has moved away from.
 	r.clearRecovery()
@@ -1882,6 +1899,7 @@ func (r *runtime) newLoop(sink func(event.Event)) *agent.Loop {
 }
 
 func (r *runtime) repl(console *terminal.Console) error {
+	defer r.stopMCP()
 	// Some embedded callers construct runtime directly instead of going through
 	// Run. Keep the loop feature safe for those callers as well.
 	if r.ac == nil {
@@ -2213,7 +2231,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		}
 		currentText := "untrusted"
-		if r.projectTrusted {
+		if r.projectTrust == projectTrusted {
 			currentText = "trusted"
 		}
 		trustOptions := projectTrustOptions(cwd)
@@ -2635,6 +2653,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cfg.CompactionProvider = func() (provider.Provider, provider.ModelMeta, func(), error) {
 			return r.compactionProvider(r.ac.Snapshot().CompactorModel, compactionSettings)
 		}
+		mcpManager := r.mcpManager()
+		var mcpToolsAtRequest []mcp.Tool
 		cfg.DynamicConfig = func() (string, []config.PromptSection, []provider.ToolDef) {
 			state := r.loops.Snapshot()
 			definitions := append(tools.Definitions(defaultTools), webDefinitions...)
@@ -2643,11 +2663,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 				definitions = append(definitions, syncboardToolDefinition())
 			}
 			definitions = append(definitions, readSessionToolDefinition())
+			var mcpDefinitions []provider.ToolDef
+			mcpToolsAtRequest, mcpDefinitions = requestMCPSnapshot(mcpManager)
+			definitions = append(definitions, mcpDefinitions...)
 			sections := r.sections
+			sections = r.mcpSections(sections, mcpToolsAtRequest)
 			if addition := strings.TrimSpace(loop.SystemPromptAddition(state)); addition != "" {
 				sections = append(append([]config.PromptSection(nil), sections...), config.PromptSection{Name: "loop", Body: "<loop>\n" + addition + "\n</loop>"})
 			}
 			return config.RenderSections(sections), sections, definitions
+		}
+		cfg.ConcurrentTools = func(name string) (agent.InternalToolHandler, bool) {
+			return concurrentMCPTool(mcpManager, mcpToolsAtRequest, name)
 		}
 		cfg.InternalTools = map[string]agent.InternalToolHandler{
 			loop.DoneToolName: func(_ context.Context, invocation tools.Invocation) tools.Result {
@@ -4391,6 +4418,8 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 		return false, r.logoutCommand(cmd.Arg, console, out)
 	case "reload":
 		return r.handleReloadCommand(cmd.Arg, out)
+	case "mcp":
+		return r.handleMCPCommand(cmd.Arg, out)
 	case "new":
 		return r.handleNewCommand(cmd.Arg, out)
 	case "name":
@@ -4570,7 +4599,7 @@ func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
 // renderProjectTrustWarningIfNeeded shows Pi's warning when the project is
 // not trusted and holds trust-requiring resources.
 func (r *runtime) renderProjectTrustWarningIfNeeded(console *terminal.Console) {
-	if r.projectTrusted || !hasTrustRequiringProjectResources(r.store.Cwd()) {
+	if r.projectTrust == projectTrusted || !hasTrustRequiringProjectResources(r.store.Cwd()) {
 		return
 	}
 	// Pi renders warning-colored chat text without the showWarning prefix.

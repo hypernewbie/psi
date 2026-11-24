@@ -43,7 +43,8 @@ var commandSpecs = []CommandSpec{
 	{Name: "b", Description: "Request another response without a new prompt"},
 	{Name: "bump", Description: "Request another response without a new prompt"},
 	{Name: "resume", Description: "Resume another session"},
-	{Name: "reload", Description: "Reload themes, display settings, prompt inputs, skills, queue modes, and the local model catalog"},
+	{Name: "reload", Description: "Reload themes, display settings, prompt inputs, skills, queue modes, the local model catalog, and MCP configuration"},
+	{Name: "mcp", Description: "Show MCP server and tool status"},
 	{Name: "quit", Description: "Quit " + AppName},
 	// Embedded extensions requested for psi: adaptive compaction and the loop.
 	{Name: "ac", Description: "adaptive automatic compaction controls"},
@@ -133,7 +134,7 @@ func ParseCommand(line string) (*Command, bool) {
 // handler reads an argument; every other spelling is ordinary user text.
 func CommandTakesArgument(name string) bool {
 	switch name {
-	case "model", "thinking", "name", "compact", "ac", "autocompact", "loop", "login":
+	case "model", "thinking", "name", "compact", "ac", "autocompact", "loop", "login", "mcp":
 		return true
 	}
 	return false

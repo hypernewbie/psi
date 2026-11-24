@@ -140,19 +140,19 @@ func TestResolveProjectTrustOrder(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(work, ".pi", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if trusted, err := resolveProjectTrust(Options{}, work, agentDir, "ask", nil, nil); err != nil || trusted {
+	if trusted, err := resolveProjectTrust(Options{}, work, agentDir, "ask", nil, nil); err != nil || trusted != projectUntrusted {
 		t.Fatalf("undecided folder = %v, %v", trusted, err)
 	}
-	if trusted, err := resolveProjectTrust(Options{AllowProj: true}, work, agentDir, "never", nil, nil); err != nil || !trusted {
+	if trusted, err := resolveProjectTrust(Options{AllowProj: true}, work, agentDir, "never", nil, nil); err != nil || trusted != projectTrusted {
 		t.Fatalf("approved folder = %v, %v", trusted, err)
 	}
-	if trusted, err := resolveProjectTrust(Options{DenyProj: true}, work, agentDir, "always", nil, nil); err != nil || trusted {
+	if trusted, err := resolveProjectTrust(Options{DenyProj: true}, work, agentDir, "always", nil, nil); err != nil || trusted != projectUntrusted {
 		t.Fatalf("denied folder = %v, %v", trusted, err)
 	}
-	if trusted, err := resolveProjectTrust(Options{}, work, agentDir, "always", nil, nil); err != nil || !trusted {
+	if trusted, err := resolveProjectTrust(Options{}, work, agentDir, "always", nil, nil); err != nil || trusted != projectTrusted {
 		t.Fatalf("always setting = %v, %v", trusted, err)
 	}
-	if trusted, err := resolveProjectTrust(Options{}, work, agentDir, "never", nil, nil); err != nil || trusted {
+	if trusted, err := resolveProjectTrust(Options{}, work, agentDir, "never", nil, nil); err != nil || trusted != projectUntrusted {
 		t.Fatalf("never setting = %v, %v", trusted, err)
 	}
 	store := newProjectTrustStore(agentDir)
@@ -160,11 +160,11 @@ func TestResolveProjectTrustOrder(t *testing.T) {
 	if err := store.setMany([]projectTrustUpdate{{path: work, decision: &trusted}}); err != nil {
 		t.Fatal(err)
 	}
-	if decision, err := resolveProjectTrust(Options{}, work, agentDir, "never", nil, nil); err != nil || !decision {
+	if decision, err := resolveProjectTrust(Options{}, work, agentDir, "never", nil, nil); err != nil || decision != projectTrusted {
 		t.Fatalf("stored decision = %v, %v", decision, err)
 	}
 	plain := t.TempDir()
-	if decision, err := resolveProjectTrust(Options{}, plain, agentDir, "never", nil, nil); err != nil || !decision {
+	if decision, err := resolveProjectTrust(Options{}, plain, agentDir, "never", nil, nil); err != nil || decision != projectPromptSkipped {
 		t.Fatalf("folder without project resources = %v, %v", decision, err)
 	}
 }
