@@ -3,6 +3,7 @@
 Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 
 - `Enter` submit outside bracketed paste; pasted newlines are literal, never submit. When psi is idle, one empty `Enter` retries an unfinished turn (failed, interrupted, or recovered from a crash). Otherwise the empty submission is ignored silently.
+- A bare `quit` or `exit` in the main editor asks for confirmation. The match is the exact whole word, ignoring surrounding whitespace and case; `quit now`, `exit!`, and ordinary sentences remain prompt text. The first keyword shows a one-line hint, does not reach the provider, and does not interrupt or queue anything during a run. Submit a bare keyword again (either spelling) to confirm: idle exits, busy releases the terminal first, cancels the run, and settles before exit, exactly like `/quit`. Any other submission, including empty `Enter`, clears the hint and follows its normal behavior. There is no timeout. If the viewport cannot show the full hint, psi does not arm it; resize the terminal or use `/quit`. This is local main-editor input: pickers, secret prompts, the bridge, and RPC do not use it.
 - `/b` and `/bump` request another response from the current context without adding a user message. They work after a completed or output-limited answer as well as after an unfinished turn, and use the current model, thinking level, tools, system prompt, and compaction policy. `/b anything` and `/bump anything` are ordinary prompt text.
 - `Ctrl+J` newline (reliable legacy binding)
 - `Left/Right` move by grapheme cluster (uniseg)

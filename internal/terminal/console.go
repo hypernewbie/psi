@@ -44,6 +44,10 @@ const maxActiveFragmentBytes = 64 * 1024
 // fragment. Older rows are appended to native scrollback as they complete.
 const liveThinkingTailRows = 4
 
+// ExitHintText is the confirmation shown above the editor after the user
+// submits a bare quit or exit keyword. A second keyword confirms.
+const ExitHintText = "Type quit or exit again to exit."
+
 type Console struct {
 	In     *os.File
 	Out    io.Writer
@@ -99,6 +103,7 @@ type Console struct {
 	followUpTexts       []string
 	loopRows            []string
 	loopText            string
+	exitHint            string
 	thinking            bool
 	thinkingStream      *MarkdownStream
 	thinkingWidth       int
@@ -1004,6 +1009,46 @@ func (c *Console) renderLoopRows(width int) {
 	c.loopRows = []string{FormatStyledRow(row, width, c.presentation.NoColor, c.presentation.Theme)}
 }
 
+// exitHintFits reports whether the stored hint can occupy one complete row
+// above the editor. Both the renderer and SetExitHint use this check, so a
+// caller never arms a confirmation that the frame cannot show.
+func (c *Console) exitHintFits(width, height int) bool {
+	return c.exitHint != "" && c.picker == nil && c.secret == nil &&
+		CellWidth(c.exitHint) <= width-1 &&
+		len(c.completionRows) < EditorComponentRowBudget(height)
+}
+
+func (c *Console) renderExitHintRows(width, height int) []string {
+	if !c.exitHintFits(width, height) {
+		return nil
+	}
+	row := StyledRow{Spans: []StyledSpan{{Text: c.exitHint, Token: TokenMuted}}}
+	return []string{FormatStyledRow(row, width, c.presentation.NoColor, c.presentation.Theme)}
+}
+
+// SetExitHint shows one confirmation row above the editor. It reports whether
+// this call emitted a complete frame that contains the full hint. A hint that
+// cannot be drawn is discarded, so a later resize cannot reveal a confirmation
+// that was never armed.
+func (c *Console) SetExitHint(text string) bool {
+	hint := strings.TrimSpace(SanitizeStatusRow(text))
+	if hint == "" {
+		c.exitHint = ""
+		c.Draw()
+		return false
+	}
+	c.exitHint = hint
+	width, height := c.size()
+	c.Draw()
+	shown := c.err == nil && !c.closed && !c.released && !c.deferDraw && c.frameDepth == 0 &&
+		c.lastW == width && c.lastH == height && c.exitHintFits(width, height)
+	if !shown {
+		c.exitHint = ""
+		c.dirty = true
+	}
+	return shown
+}
+
 // Status is the activity shown in Pi's editor top border. It remains owned by
 // the composed tail until the application clears or replaces it.
 // Status(text string) sets the transient activity shown in the editor's top
@@ -1353,6 +1398,9 @@ func (c *Console) emitComposed(appendText string) error {
 	default:
 		if !hasStream && len(c.streamFragment) > 0 && width > 3 {
 			fragmentRows = wrapAssistantFragment(string(c.streamFragment), width)
+		}
+		if hintRows := c.renderExitHintRows(width, height); len(hintRows) > 0 {
+			fragmentRows = append(append([]string(nil), fragmentRows...), hintRows...)
 		}
 		view = ComposeConsoleViewComponents(width, height, buf, pos, c.presentation, c.activity, fragmentRows, c.completionRows)
 	}

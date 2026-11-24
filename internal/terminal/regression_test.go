@@ -83,6 +83,41 @@ func TestLoopStatusRowRendersAndClears(t *testing.T) {
 	}
 }
 
+// TestExitHintCannotArmWhenClipped proves the fail-closed layout boundary: a
+// viewport without a free fragment row, or one cell too narrow, cannot arm a
+// confirmation. A rejected hint must not appear later without a new call.
+func TestExitHintCannotArmWhenClipped(t *testing.T) {
+	vt := testutil.NewVTModel(80, 40)
+	width, height := 80, 5
+	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return width, height }}
+	c.SetPresentation(PresentationSnapshot{NoColor: true})
+	c.Draw()
+	if c.SetExitHint(ExitHintText) {
+		t.Fatal("exit hint armed without a free fragment row")
+	}
+	if text := vt.Text(); strings.Contains(text, "Type quit") {
+		t.Fatalf("clipped exit hint was drawn: %q", text)
+	}
+	width, height = CellWidth(ExitHintText), 40
+	if c.SetExitHint(ExitHintText) {
+		t.Fatal("exit hint armed one cell too narrow")
+	}
+	if text := vt.Text(); strings.Contains(text, "Type quit") {
+		t.Fatalf("narrow exit hint was drawn or partially drawn: %q", text)
+	}
+	width, height = 80, 40
+	c.Draw()
+	if text := vt.Text(); strings.Contains(text, ExitHintText) {
+		t.Fatalf("rejected exit hint reappeared after resize: %q", text)
+	}
+	if !c.SetExitHint(ExitHintText) {
+		t.Fatal("exit hint did not arm in a large viewport")
+	}
+	if text := vt.Text(); !strings.Contains(text, ExitHintText) {
+		t.Fatalf("armed exit hint is missing from the screen: %q", text)
+	}
+}
+
 func TestSteeringRowsRenderAboveEditorLikePendingMessages(t *testing.T) {
 	vt := testutil.NewVTModel(60, 20)
 	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 60, 20 }}
