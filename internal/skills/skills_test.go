@@ -90,7 +90,7 @@ func TestRepoAddSlashCommandSkill(t *testing.T) {
 	if got[0].FilePath != dstPath {
 		t.Fatalf("skill path = %q, want %q", got[0].FilePath, dstPath)
 	}
-	if prompt := FormatForPrompt(got); prompt != "" {
+	if prompt := FormatForPrompt(got, "en"); prompt != "" {
 		t.Fatalf("explicit-only skill was advertised in the prompt: %q", prompt)
 	}
 	if _, err := Invoke(got, "add-slash-command", ""); err != nil {
