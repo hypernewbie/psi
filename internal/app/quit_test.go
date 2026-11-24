@@ -160,7 +160,7 @@ func TestQuitDuringRunReleasesTerminalBeforeSettlement(t *testing.T) {
 	assertAbortedQuitPartial(t, r.store.File())
 }
 
-func assertAbortedQuitSession(t *testing.T, work, agentDir string) {
+func assertAbortedQuitSession(t *testing.T, work, agentDir string) string {
 	t.Helper()
 	dir := session.DefaultSessionDir(work, agentDir)
 	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
@@ -168,6 +168,7 @@ func assertAbortedQuitSession(t *testing.T, work, agentDir string) {
 		t.Fatalf("expected one session in %s; got %v (%v)", dir, files, err)
 	}
 	assertAbortedQuitPartial(t, files[0])
+	return files[0]
 }
 
 func assertAbortedQuitPartial(t *testing.T, file string) {

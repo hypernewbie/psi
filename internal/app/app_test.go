@@ -708,8 +708,10 @@ func TestAppProcess(t *testing.T) {
 // Use an allowlist instead of os.Environ: test subprocesses must not inherit
 // developer credentials, Pi directories, proxies, or live-test opt-in flags.
 func appTestEnv(home, agentDir string) []string {
+	tmp := filepath.Join(home, "tmp")
 	return []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + home, "PI_CODING_AGENT_DIR=" + agentDir,
-		"PI_CODING_AGENT_SESSION_DIR=", "TERM=xterm", "LANG=C.UTF-8", "PSI_APP_TEST_PROCESS=1"}
+		"PI_CODING_AGENT_SESSION_DIR=", "TERM=xterm", "LANG=C.UTF-8", "PSI_APP_TEST_PROCESS=1",
+		"TMPDIR=" + tmp, "TMP=" + tmp, "TEMP=" + tmp}
 }
 
 func TestAppSubprocessEnvironmentIsIsolated(t *testing.T) {
@@ -718,8 +720,15 @@ func TestAppSubprocessEnvironmentIsIsolated(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "/synthetic-parent-pi-directory")
 	t.Setenv("PSI_LIVE_PROVIDER", "1")
 	t.Setenv("HTTPS_PROXY", "http://synthetic-parent-proxy.invalid")
+	t.Setenv("BASH_ENV", "/synthetic-parent-bash-env")
+	t.Setenv("ENV", "/synthetic-parent-env")
+	t.Setenv("SHELL", "/synthetic-parent-shell")
+	t.Setenv("PSI_SHELL", "/synthetic-parent-psi-shell")
+	t.Setenv("TMPDIR", "/synthetic-parent-tmp")
+	t.Setenv("TMP", "/synthetic-parent-tmp")
+	t.Setenv("TEMP", "/synthetic-parent-tmp")
 	env := strings.Join(appTestEnv("/synthetic-home", "/synthetic-agent"), "\n")
-	for _, forbidden := range []string{"synthetic-parent", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "PSI_LIVE_PROVIDER", "HTTPS_PROXY"} {
+	for _, forbidden := range []string{"synthetic-parent", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "PSI_LIVE_PROVIDER", "HTTPS_PROXY", "BASH_ENV", "SHELL=", "PSI_SHELL", "TMPDIR=/synthetic-parent", "TMP=/synthetic-parent", "TEMP=/synthetic-parent"} {
 		if strings.Contains(env, forbidden) {
 			t.Fatal("test subprocess inherited a forbidden environment value")
 		}

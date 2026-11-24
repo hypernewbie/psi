@@ -49,9 +49,19 @@ not yet load MCP files or connect to MCP servers.
 
 ## Shell and environment
 
-The `bash` and `powershell` tools inherit the psi process environment, including provider API
-keys. A command that prints its environment exposes them to the transcript and,
-through it, to the provider.
+The `bash` and `powershell` tools and the interactive `!command` path inherit
+the psi process environment, including provider API keys. A command that prints
+its environment exposes them to the terminal and, for included tool text, to
+the provider. `!!command` keeps its command and output out of model requests,
+but they remain in the local JSONL session file. When output is truncated,
+psi may also keep the raw output in a local capture file. Treat both files as
+sensitive, not as secret stores.
+
+The interactive shell has no per-command approval. It runs with process
+permissions and can change files before cancellation or a storage error; psi
+cannot roll those changes back and does not retry the command. A configured
+`shellPath`, `shellCommandPrefix`, or `PSI_SHELL` selects executable code; a
+project-provided value requires project consent.
 
 The `read` tool can read supported image files. It cannot read beyond the
 process permissions.

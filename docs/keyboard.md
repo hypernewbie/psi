@@ -18,6 +18,8 @@ Fixed map (no Kitty, no Shift+Enter detection; portable newline is Ctrl+J):
 - `Ctrl+O` expands or collapses all skill blocks and web tool cards, also during a run. It changes only the transcript display: it does not submit a message or call a provider, and it leaves the draft and cursor position intact. The state is not saved; a restart starts collapsed. It affects skill blocks and the `web_search`, `fetch_content`, and `get_search_content` cards only
 - Completion and picker search never scan files or call a provider; picker queries are not conversation messages
 - `Ctrl+C` cancels a picker; during a run it cancels the run. When idle it clears the draft first and exits only when the draft is empty
+- `!command` runs a local shell command in the session cwd; `!!command` also excludes its saved command and output from model context. Enter submits; multiline commands are allowed. Empty prefixes stay ordinary text. Esc/`Ctrl+C` cancels a running shell
+- While a shell is unsettled, psi refuses a second shell, model/session mutation, `Ctrl+P`, `Ctrl+L`, `Shift+Tab`, and mutating slash commands. `/quit`, `/session`, `/hotkeys`, and display toggles such as `Ctrl+T` remain available
 - `Ctrl+D` deletes at cursor when nonempty, exits when empty
 - On Unix, `Ctrl+Z` settles cancellation, restores terminal modes, and suspends. `SIGCONT` resumes the draft without transcript replay.
 - Bracketed paste: one literal bounded paste (256 KiB), CRLF→LF, no submit/cancel/exec, oversized rejected as whole edit
@@ -39,7 +41,7 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 - `/clone` — duplicate the session at the current position
 - `/new` — start a session (keeps scrollback, resets recall)
 - `/compact [focus]` — cancel an active run once, wait for durable settlement, then create a cancellable compact summary; idle compact uses the same operation
-- `/b`, `/bump` — request another response without adding a prompt. Available only while idle, outside pickers, runs, and compaction. Explicit commands bypass the unfinished-turn gate but keep storage, auth, and continuation checks. Empty `Enter` retries unfinished turns only. All admission refusals stay silent; started runs report failures, cancellation, partial output, and unsaved output normally.
+- `/b`, `/bump` — request another response without adding a prompt. Available only while idle, outside pickers, runs, and compaction. Explicit commands bypass the unfinished-turn gate but keep storage, auth, and continuation checks. Empty `Enter` retries unfinished turns only. An explicit bump refused during a shell command returns to the draft. Other refusals stay silent; started runs report failures, cancellation, partial output, and unsaved output normally.
 - `/resume` — search workspace sessions; same-session selection is a no-op
 - `/reload` — reload keybindings, extensions, skills, prompts, themes, and context files
 - `/quit` — release the terminal first, then settle and exit

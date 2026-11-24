@@ -85,17 +85,29 @@ source, psi calls the service without an `Authorization` header.
 
 | Variable | Effect |
 |---|---|
-| `PSI_SHELL` | Fallback shell for the `bash` tool and MCP `!command` interpolation when `shellPath` is unset |
+| `PSI_SHELL` | Explicit shell for the `bash` tool and interactive `!command` when `shellPath` is unset |
+| `SHELL` | Unix login-shell hint; ignored on Windows |
 
-`bash` resolves its shell in Pi's order:
+The interactive `!command` path and the model `bash` tool share one resolver.
+Shell precedence is `shellPath`, then `PSI_SHELL`. On macOS and Linux, when both
+are unset, psi uses the inherited `SHELL`; an unusable `SHELL` falls back to `sh`
+on `PATH`. This deliberately differs from Pi's Bash-first fallback. On Windows,
+psi ignores `SHELL` and checks `%ProgramFiles%\Git\bin\bash.exe`, then
+`%ProgramFiles(x86)%\Git\bin\bash.exe`, then `bash.exe` on `PATH`, using `-s`
+over stdin when the resolved path is the legacy WSL `System32`/`Sysnative`
+`bash.exe` launcher.
 
-1. `shellPath` in `settings.json`
-2. `PSI_SHELL` in the environment
-3. On Windows: `%ProgramFiles%\Git\bin\bash.exe`, then `%ProgramFiles(x86)%\Git\bin\bash.exe`, then `bash.exe` on `PATH` (using `-s` over stdin when the resolved path is the legacy WSL `System32`/`Sysnative` `bash.exe` launcher)
-4. On Unix: `/bin/bash`, then `bash` on `PATH`, then `sh`
+Each value names one executable, not a command plus arguments. An invalid
+explicit `shellPath` or `PSI_SHELL` is an error; psi never hides it by choosing
+another shell. A bare name uses native `PATH` lookup; a path with a separator,
+such as `./helper`, anchors to the stored session cwd without lexically
+cleaning symlink-sensitive components. Windows drive-relative and
+root-relative selectors keep native start behavior. Lookup errors, including
+`exec.ErrDot`, count as failed lookups.
 
-`shellCommandPrefix` is prepended to each `bash` command with a newline. Project
-settings for `shellPath` or `shellCommandPrefix` require project consent.
+`shellCommandPrefix` is prepended to each command with a newline and must use
+the selected shell's syntax. The tool name `bash` is not a Bash-language
+guarantee. Project settings for either key require project consent.
 
 The optional `powershell` tool is Windows-only and off by default (enable it via
 `--tools` or `defaultTools`, such as `["-bash", "+powershell"]`). It resolves
@@ -104,8 +116,9 @@ PowerShell in Pi's order: `pwsh.exe` on `PATH`, `%ProgramFiles%\PowerShell\7\pws
 and runs with `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command` and UTF-8
 output encoding. `shellPath` and `shellCommandPrefix` do not apply to `powershell`.
 
-The `bash` and `powershell` tools inherit the whole environment, including provider keys. A
-command that dumps the environment writes secrets into the session.
+The `bash` and `powershell` tools and the interactive `!command` path inherit the
+whole environment, including provider keys. A command that dumps the environment
+writes secrets into the session or terminal.
 
 ## Display
 

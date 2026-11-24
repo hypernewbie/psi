@@ -199,8 +199,16 @@ func TestBash(t *testing.T) {
 	// Truncation to temp file.
 	big := "for i in $(seq 1 5000); do echo line-$i; done"
 	res = r.Dispatch(Invocation{ID: "5", Name: "bash", Arguments: map[string]any{"command": big}})
-	if !strings.Contains(res.Content[0].Text, "truncated") {
-		t.Errorf("bash truncation expected")
+	if details, ok := res.Details.(map[string]any); ok {
+		if path, ok := details["fullOutputPath"].(string); ok {
+			t.Cleanup(func() { _ = os.Remove(path) })
+		}
+	}
+	text := res.Content[0].Text
+	// The last 2000 lines include the empty line after the final newline.
+	// The notice must not consume any of that output budget.
+	if !strings.HasPrefix(text, "line-3002\n") || !strings.Contains(text, "line-5000\n\n\n[Output truncated.") {
+		t.Errorf("bash truncation lost output or notice: starts with %q", text[:min(len(text), 80)])
 	}
 }
 
@@ -488,11 +496,15 @@ func TestSummaryJSONNumberAndNumberValue(t *testing.T) {
 	_ = sNaN
 }
 
-// TestBashShellEnv: coverage for PSI_SHELL env var.
+// TestBashShellEnv: coverage for PSI_SHELL env var and shellPath precedence.
 func TestBashShellEnv(t *testing.T) {
 	t.Setenv("PSI_SHELL", "/bin/sh")
 	tool := &BashTool{}
 	if s := tool.customShell(); s != "/bin/sh" {
 		t.Errorf("got %q, want /bin/sh", s)
+	}
+	tool.ShellPath = "/bin/dash"
+	if s := tool.customShell(); s != "/bin/dash" {
+		t.Errorf("got %q, want shellPath to win", s)
 	}
 }

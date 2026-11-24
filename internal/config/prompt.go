@@ -21,7 +21,7 @@ const defaultPreamble = "You are psi, a minimal Go coding agent. Use the declare
 // not import tools, because tools imports provider and provider imports config.
 var toolSnippets = map[string]string{
 	"read":               "Read file contents",
-	"bash":               "Execute shell commands",
+	"bash":               "Run commands in the selected shell (the tool name is not a Bash-language guarantee)",
 	"powershell":         "Execute PowerShell commands",
 	"edit":               "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
 	"write":              "Create or overwrite files",
@@ -33,6 +33,7 @@ var toolSnippets = map[string]string{
 
 var toolGuidelines = map[string][]string{
 	"read": {"Use read to examine files instead of cat or sed."},
+	"bash": {"Use the selected shell's syntax and a matching shellCommandPrefix; explicitly invoke an available sh or bash when a command requires that language."},
 	"edit": {
 		"Use edit for precise changes (edits[].oldText must match exactly)",
 		"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
