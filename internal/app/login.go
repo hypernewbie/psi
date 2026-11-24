@@ -297,6 +297,41 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 	r.draw(console)
 }
 
+// logoutConfirmation keeps the picked credential pending until the user types
+// y or Y. The picker stays open so n, N, Esc, and Ctrl+C can cancel.
+type logoutConfirmation struct {
+	credential provider.StoredCredential
+	name       string
+}
+
+func (r *runtime) startLogoutConfirm(selected provider.StoredCredential, console *terminal.Console) {
+	name := selected.ProviderID
+	if spec, ok := providerregistry.Lookup(selected.ProviderID); ok {
+		name = spec.Name
+	}
+	r.logoutConfirm = &logoutConfirmation{credential: selected, name: name}
+	r.draw(console)
+}
+
+// logoutConfirmDialog builds the y/n dialog rows for the terminal width and
+// row budget. It reports false when no readable layout can show the provider
+// and the keys; the key handler then refuses a confirmation the user cannot
+// read.
+func logoutConfirmDialog(name, providerID string, width, rowBudget int) ([]string, bool) {
+	limit := max(1, width-1)
+	title := "Log out of " + name + "?"
+	choices := "Y — Yes    N — No"
+	if rowBudget >= 2 && terminal.CellWidth(title) <= limit && terminal.CellWidth(choices) <= limit {
+		return []string{title, choices}, true
+	}
+	if rowBudget >= 1 {
+		if oneLine := "Log out " + providerID + "? y/n"; terminal.CellWidth(oneLine) <= limit {
+			return []string{oneLine}, true
+		}
+	}
+	return []string{"Widen terminal to confirm"}, false
+}
+
 func (r *runtime) logoutCommand(arg string, console *terminal.Console, out io.Writer) error {
 	if err := r.authCommandAvailable(console, "logout"); err != nil {
 		return err
@@ -320,6 +355,7 @@ func (r *runtime) logoutCommand(arg string, console *terminal.Console, out io.Wr
 
 func (r *runtime) finishLogout(selected provider.StoredCredential, console *terminal.Console, out io.Writer) {
 	r.selector = nil
+	r.logoutConfirm = nil
 	console.ClearPickerRows()
 	r.selectorDraft, r.selectorCursor, r.selectorRestoreOnSuccess = "", 0, false
 	console.Editor.Clear()

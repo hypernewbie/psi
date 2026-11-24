@@ -141,8 +141,10 @@ model. If model selection or defaults persistence fails after the key is saved,
 psi reports the failure and keeps the saved key.
 
 Use `/logout` to select and remove a stored built-in credential from
-`auth.json`. The picker lists stored API keys, direct OpenAI ChatGPT OAuth, and
-OpenAI Codex OAuth. For OAuth, logout sends one best-effort POST to
+`auth.json`. Choosing a provider asks for confirmation: `y` or `Y` removes it,
+while `n`, `N`, `Esc`, or `Ctrl+C` returns to the picker. The picker lists
+stored API keys, direct OpenAI ChatGPT OAuth, and OpenAI Codex OAuth. For
+OAuth, logout sends one best-effort POST to
 `https://auth.openai.com/oauth/revoke` with a ten-second limit and no redirects.
 A rejected, timed-out, or failed request does not block local deletion. The
 notice reports the two outcomes separately: a concurrent file change can stop

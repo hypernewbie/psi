@@ -37,7 +37,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "clone", Description: "Duplicate the current session at the current position"},
 	{Name: "trust", Description: "Save project trust decision for future sessions"},
 	{Name: "login", Description: "Configure provider authentication", ArgumentHint: "[provider]"},
-	{Name: "logout", Description: "Remove a stored API key or OAuth credential"},
+	{Name: "logout", Description: "Remove a stored API key or OAuth credential after confirmation"},
 	{Name: "new", Description: "Start a new session"},
 	{Name: "compact", Description: "Manually compact the session context"},
 	{Name: "b", Description: "Request another response without a new prompt"},

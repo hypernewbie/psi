@@ -189,19 +189,19 @@ selects that model and saves the new defaults. Otherwise, it keeps the current
 model. Anthropic API-key login is not available in psi; use the matching
 environment variable or `models.json`. OpenAI Codex uses `/login openai-codex`.
 
-Use `/logout` to select and remove a stored built-in credential. The picker
-lists API keys for built-in API-key providers, direct OpenAI ChatGPT OAuth,
-and OpenAI Codex OAuth. For OAuth, psi sends one bounded request to
-`https://auth.openai.com/oauth/revoke` and reports the remote outcome
-separately. Local deletion continues if that request is rejected, redirected,
-times out, or cannot be sent. A 2xx response only accepts the request; it does
-not prove that already-issued access tokens stopped working. Removal does not
-affect environment variables or credentials from `models.json`; an API key is
-removed locally and is not revoked at the provider. Removing the active
-provider credential reloads that provider from the remaining credential
-sources. If none exists, an eligible keyless override can stay online;
-otherwise, psi goes offline until you configure a credential. If Pi uses the
-same `auth.json`, its next successful read sees the deletion.
+Use `/logout` to select and remove a stored built-in credential after a y/n
+confirmation. The picker lists API keys for built-in API-key providers,
+direct OpenAI ChatGPT OAuth, and OpenAI Codex OAuth. For OAuth, psi sends one
+bounded request to `https://auth.openai.com/oauth/revoke` and reports the
+remote outcome separately. Local deletion continues if that request is
+rejected, redirected, times out, or cannot be sent. A 2xx response only accepts
+the request; it does not prove that already-issued access tokens stopped
+working. Removal does not affect environment variables or credentials from
+`models.json`; an API key is removed locally and is not revoked at the
+provider. Removing the active provider credential reloads that provider from
+the remaining credential sources. If none exists, an eligible keyless override
+can stay online; otherwise, psi goes offline until you configure a credential.
+If Pi uses the same `auth.json`, its next successful read sees the deletion.
 
 ## Choose a model
 

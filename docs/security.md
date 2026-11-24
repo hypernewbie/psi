@@ -85,10 +85,11 @@ resolved-target rule. `/logout` also takes Pi's resolved-target lease when it
 differs from the logical lease, and both acquisitions share a five-second
 budget. For OAuth logout, psi checks that the document entries and permission
 bits still match the original read before staging and again before replacement.
-`/logout` removes the selected stored API key or OAuth credential, not
-environment variables or `models.json` credentials. An API-key logout removes
-the stored copy only; it does not revoke the key at the provider. ChatGPT
-sign-in and refresh refuse to write through an `auth.json` symlink.
+`/logout` removes the selected stored API key or OAuth credential after a y/n
+confirmation, not environment variables or `models.json` credentials. An
+API-key logout removes the stored copy only; it does not revoke the key at the
+provider. ChatGPT sign-in and refresh refuse to write through an `auth.json`
+symlink.
 
 OAuth logout sends one best-effort JSON request to the fixed
 `https://auth.openai.com/oauth/revoke` endpoint. It sends a nonblank refresh

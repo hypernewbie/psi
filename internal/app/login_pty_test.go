@@ -32,7 +32,24 @@ func TestActualAppLogoutMVP(t *testing.T) {
 		waitLoginReady(t, q, "initial prompt", "anthropic-secret-canary")
 		q.write("/logout\r")
 		waitLoginScreen(t, q, "logout provider picker", "Stored credentials", "anthropic-secret-canary")
+		baseline, err := os.ReadFile(authPath)
+		if err != nil {
+			t.Fatal("could not read auth.json before confirmation")
+		}
 		q.write("anthropic\r")
+		waitLoginScreen(t, q, "logout confirmation", "Log out of Anthropic?", "anthropic-secret-canary")
+		waitLoginScreen(t, q, "logout confirmation choices", "Y — Yes", "anthropic-secret-canary")
+		if data, err := os.ReadFile(authPath); err != nil || !bytes.Equal(data, baseline) {
+			t.Fatalf("logout changed auth.json before confirmation: err=%v", err)
+		}
+		q.write("n")
+		waitLoginScreen(t, q, "logout cancellation", "Stored credentials", "anthropic-secret-canary")
+		if data, err := os.ReadFile(authPath); err != nil || !bytes.Equal(data, baseline) {
+			t.Fatalf("cancel changed auth.json: err=%v", err)
+		}
+		q.write("\r")
+		waitLoginScreen(t, q, "logout confirmation after cancel", "Log out of Anthropic?", "anthropic-secret-canary")
+		q.write("Y")
 		waitLoginOutput(t, q, "Anthropic key removed", "Removed stored API key for Anthropic", "anthropic-secret-canary")
 		q.write("/quit\r")
 		finishLoginPTY(t, q, "anthropic-secret-canary")
@@ -80,6 +97,8 @@ func TestActualAppLogoutMVP(t *testing.T) {
 		q.write("/logout\r")
 		waitLoginScreen(t, q, "logout provider picker", "OpenAI Codex · OAuth credential", canary)
 		q.write("openai-codex\r")
+		waitLoginScreen(t, q, "Codex logout confirmation", "Log out of OpenAI Codex?", canary)
+		q.write("y")
 		waitLoginOutput(t, q, "Codex OAuth credential removed", "Removed stored OAuth credential for OpenAI Codex", canary)
 		waitLoginOutput(t, q, "Codex remote outcome", "No usable token", canary)
 		q.write("/quit\r")
@@ -140,6 +159,8 @@ func runOpenAILogoutFixture(t *testing.T, openAIEntry, row, success, remote stri
 	q.write("/logout\r")
 	waitLoginScreen(t, q, "logout provider picker", row, canary)
 	q.write("openai\r")
+	waitLoginScreen(t, q, "OpenAI logout confirmation", "Log out of OpenAI?", canary)
+	q.write("y")
 	waitLoginOutput(t, q, "OpenAI credential removed", success, canary)
 	if remote != "" {
 		waitLoginOutput(t, q, "OpenAI remote outcome", remote, canary)
@@ -267,6 +288,8 @@ func TestActualAppAuthSymlinkMVP(t *testing.T) {
 	q2.write("/logout\r")
 	waitLoginScreen(t, q2, "logout provider picker", "Stored credentials", enteredKey)
 	q2.write("deepseek\r")
+	waitLoginScreen(t, q2, "DeepSeek logout confirmation", "Log out of DeepSeek?", enteredKey)
+	q2.write("y")
 	waitLoginOutput(t, q2, "DeepSeek key removed", "Removed stored API key for DeepSeek", enteredKey)
 	assertAuthSymlink(t, authPath, targetPath, rel, targetMode)
 	q2.write("/quit\r")

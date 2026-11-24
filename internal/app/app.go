@@ -457,7 +457,7 @@ Pi-compatible options:
   --help, -h                 Show this help
   --version, -v              Show version, commit, and build
 
-Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in in a dedicated panel, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code; in device code mode, Enter opens the verification page. Esc cancels Codex sign-in, and Ctrl+D cancels and quits. /logout removes the selected stored API key or OAuth credential and attempts OAuth revocation. See docs/security.md for credential handling.
+Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in in a dedicated panel, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code; in device code mode, Enter opens the verification page. Esc cancels Codex sign-in, and Ctrl+D cancels and quits. /logout asks for confirmation, then removes the selected stored API key or OAuth credential and attempts OAuth revocation. See docs/security.md for credential handling.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
@@ -755,6 +755,7 @@ type runtime struct {
 	bridge                   *pibridge.Client
 	bridgeTried              bool
 	selector                 *Selector
+	logoutConfirm            *logoutConfirmation
 	settingsPicker           *terminal.SettingsPicker
 	login                    *loginPrompt
 	selectorDraft            string
@@ -1863,7 +1864,17 @@ func (r *runtime) refreshPickerRows(console *terminal.Console) {
 		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else if r.selector != nil {
 		width, rows := console.PickerSize()
-		if r.selector.AuthMode == AuthCodexMethods {
+		if r.logoutConfirm != nil {
+			dialog, _ := logoutConfirmDialog(r.logoutConfirm.name, r.logoutConfirm.credential.ProviderID, width, rows)
+			for i, row := range dialog {
+				token, bold := terminal.TokenText, false
+				if i == 0 {
+					token, bold = terminal.TokenAccent, true
+				}
+				dialog[i] = terminal.FormatStyledRow(terminal.StyledRow{Spans: []terminal.StyledSpan{{Text: row, Token: token, Bold: bold}}}, width, r.footerSnapshot.NoColor, r.footerSnapshot.Theme)
+			}
+			console.SetPickerChoiceRows(dialog)
+		} else if r.selector.AuthMode == AuthCodexMethods {
 			console.SetPickerChoiceRows(r.selector.RenderPickerRows(width, max(1, rows), r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 		} else {
 			console.SetPickerRows(r.selector.RenderPickerRows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
@@ -2162,6 +2173,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	closeSelector := func(restoreDraft bool) {
 		returnToSettings := r.selector.ModelThinking || r.selector.ModelThinkingLevel
 		r.selector = nil
+		r.logoutConfirm = nil
 		console.ClearPickerRows()
 		r.selectorRestoreOnSuccess = false
 		restorePickerState()
@@ -3778,6 +3790,30 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if r.selector != nil {
 				key := string(input.Key)
+				if r.logoutConfirm != nil {
+					if input.Paste || fromPendingInput {
+						// A paste or queued input never answers a destructive prompt.
+						continue
+					}
+					width, rowBudget := console.PickerSize()
+					_, confirmable := logoutConfirmDialog(r.logoutConfirm.name, r.logoutConfirm.credential.ProviderID, width, rowBudget)
+					switch key {
+					case "y", "Y":
+						if !confirmable {
+							continue
+						}
+						selected := r.logoutConfirm.credential
+						r.logoutConfirm = nil
+						r.finishLogout(selected, console, out)
+						continue
+					case "n", "N", "\x1b", "\x03":
+						r.logoutConfirm = nil
+						r.draw(console)
+						continue
+					default:
+						continue
+					}
+				}
 				if !input.Paste {
 					switch key {
 					case "\x1b", string([]byte{3}):
@@ -3930,7 +3966,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						if r.selector.AuthMode == AuthLogout {
 							selectedCredential := provider.StoredCredential{ProviderID: selected.ID, Kind: r.selector.CredentialKinds[selected.ID]}
-							r.finishLogout(selectedCredential, console, out)
+							r.startLogoutConfirm(selectedCredential, console)
 							continue
 						}
 						if selected.ID == r.store.Header().ID {
