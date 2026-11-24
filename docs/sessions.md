@@ -82,6 +82,11 @@ error. Otherwise a new session is created with the ID.
 | `/trust` | Save project trust for future sessions |
 | `/quit` | Settle work and restore the terminal |
 
+The native editor also accepts a bare `quit` or `exit` as a confirmation
+keyword: submit either word again to leave, and any other submission cancels.
+Use `/quit` to exit immediately or when the confirmation cannot fit. See
+[Keyboard](keyboard.md).
+
 `/clone` writes a new file and switches to it, so the original stays untouched.
 The display name is stored in session metadata and shown by `/session` and the
 session picker; it is not sent to the model.

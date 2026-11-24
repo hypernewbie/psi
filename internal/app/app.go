@@ -462,6 +462,7 @@ Session storage (Unix): new directories and missing parents use mode 0700. Exist
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
+A bare quit or exit asks for confirmation; submit either word again to leave. Any other submission cancels. Use /quit to exit immediately or when the confirmation cannot fit.
 During a run, /session, /hotkeys, and /name work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
@@ -1933,6 +1934,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 	}()
 	busy, exiting, compacting, released := false, false, false, false
+	var exitPending bool
 	var cancel context.CancelFunc
 	var manualCompact *manualCompactReservation
 	var activeLoop *agent.Loop
@@ -4049,6 +4051,20 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if !submitted {
 				continue
+			}
+			if terminal.IsExitKeyword(text) {
+				if !exitPending {
+					// The first keyword only arms the confirmation. It never
+					// interrupts a run or reaches the provider.
+					exitPending = console.SetExitHint(terminal.ExitHintText)
+					continue
+				}
+				// The second keyword uses the ordinary /quit path: idle exits the
+				// REPL, busy releases the terminal and cancels the run.
+				text = "/quit"
+			} else if exitPending {
+				exitPending = false
+				console.SetExitHint("")
 			}
 			if strings.TrimSpace(text) == "" {
 				// An empty Enter is silent unless it starts a real bump. Admission

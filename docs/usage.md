@@ -106,6 +106,10 @@ Follow-ups wait until the whole run ends. Pending text is shown as dim
 the draft. `steeringMode` and `followUpMode` pick `one-at-a-time` (default,
 one message per turn) or `all`.
 
+A bare `quit` or `exit` during a run only shows the confirmation. A second bare
+keyword releases the terminal first and cancels the run, like `/quit`; any other
+submission cancels the confirmation and follows its normal path.
+
 ## Change the model or thinking level
 
 - `/model` opens a searchable model picker for providers that already have a
@@ -155,6 +159,11 @@ Sessions are saved automatically unless `--no-session` is used.
 - `/name [name]` sets or shows the session display name.
 - `/clone` copies the current branch into a new session file.
 - `/quit` releases the terminal first, then settles and exits.
+
+The native editor also accepts a bare `quit` or `exit` as a confirmation
+keyword. Submit either word again to exit; any other submission cancels the
+hint. Use `/quit` to exit immediately or when the hint cannot fit. See
+[Keyboard](keyboard.md).
 
 After leaving psi, run `psi --continue` from the same folder to resume the most
 recent session. See [Sessions](sessions.md).

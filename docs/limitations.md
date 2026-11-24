@@ -138,6 +138,7 @@ select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 `/model`, `/thinking`, and `/settings` work during a run. Request settings apply to the next request.
 `/session`, `/hotkeys`, and `/name` run immediately without cancelling the run.
 `/quit` releases the terminal first, then the run settles behind it and the process exits.
+Bare `quit` and `exit` are local main-editor keywords: the first shows a confirmation without interrupting the run, and a second one follows the busy `/quit` path. Phrases such as `quit now` remain prompt text. Pickers, secret prompts, the bridge, and RPC are unaffected.
 Unknown slash text queues as ordinary prompt text. Recognized commands without
 busy-run handling and a bare `/` return to the draft.
 Phi can also change the model or thinking level during a run. Bridge reload

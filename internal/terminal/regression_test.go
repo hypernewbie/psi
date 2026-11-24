@@ -83,6 +83,74 @@ func TestLoopStatusRowRendersAndClears(t *testing.T) {
 	}
 }
 
+// TestExitHintCannotArmWhenClipped proves the fail-closed layout boundary: a
+// viewport without a free fragment row, or one cell too narrow, cannot arm a
+// confirmation. A rejected hint must not appear later without a new call.
+func TestExitHintCannotArmWhenClipped(t *testing.T) {
+	vt := testutil.NewVTModel(80, 40)
+	width, height := 80, 5
+	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return width, height }}
+	c.SetPresentation(PresentationSnapshot{NoColor: true})
+	c.Draw()
+	if c.SetExitHint(ExitHintText) {
+		t.Fatal("exit hint armed without a free fragment row")
+	}
+	if text := vt.Text(); strings.Contains(text, "Type quit") {
+		t.Fatalf("clipped exit hint was drawn: %q", text)
+	}
+	width, height = CellWidth(ExitHintText), 40
+	if c.SetExitHint(ExitHintText) {
+		t.Fatal("exit hint armed one cell too narrow")
+	}
+	if text := vt.Text(); strings.Contains(text, "Type quit") {
+		t.Fatalf("narrow exit hint was drawn or partially drawn: %q", text)
+	}
+	width, height = 80, 40
+	c.Draw()
+	if text := vt.Text(); strings.Contains(text, ExitHintText) {
+		t.Fatalf("rejected exit hint reappeared after resize: %q", text)
+	}
+	if !c.SetExitHint(ExitHintText) {
+		t.Fatal("exit hint did not arm in a large viewport")
+	}
+	if text := vt.Text(); !strings.Contains(text, ExitHintText) {
+		t.Fatalf("armed exit hint is missing from the screen: %q", text)
+	}
+}
+
+func TestExitHintArmsWhenResizeStillLeavesRoom(t *testing.T) {
+	vt := testutil.NewVTModel(80, 39)
+	out := vtFeed{vt}
+	c := &Console{Editor: NewEditor(), Out: out, writer: NewWriter(out), SizeFunc: func() (int, int) {
+		width, height := vt.Width, vt.Height
+		// The terminal grows after the first size sample. Both heights fit
+		// the hint, regardless of which one the frame uses.
+		if height == 39 {
+			vt.Resize(width, 40)
+		}
+		return width, height
+	}}
+	armed := c.SetExitHint(ExitHintText)
+	if !strings.Contains(vt.Text(), ExitHintText) {
+		t.Fatalf("confirmation missing after resize: %q", vt.Text())
+	}
+	if !armed {
+		t.Fatal("confirmation was visible but did not arm")
+	}
+}
+
+func TestExitHintDoesNotDrawAfterClose(t *testing.T) {
+	var out strings.Builder
+	c := &Console{Editor: NewEditor(), Out: &out, writer: NewWriter(&out), SizeFunc: func() (int, int) { return 80, 40 }}
+	c.Close()
+	if c.SetExitHint(ExitHintText) {
+		t.Fatal("confirmation armed on a closed console")
+	}
+	if out.Len() != 0 {
+		t.Fatal("exit confirmation wrote to a closed console")
+	}
+}
+
 func TestSteeringRowsRenderAboveEditorLikePendingMessages(t *testing.T) {
 	vt := testutil.NewVTModel(60, 20)
 	c := &Console{Editor: NewEditor(), Out: vtFeed{vt}, writer: NewWriter(vtFeed{vt}), SizeFunc: func() (int, int) { return 60, 20 }}

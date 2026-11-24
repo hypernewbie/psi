@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	pibridgepb "github.com/hypernewbie/psi/internal/pibridge/pb"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // drainOutputAfterExit closes the harness's extra slave descriptor, then
@@ -46,12 +48,55 @@ type quitFixture struct {
 	requests             atomic.Int32
 }
 
+// quitFixtureGate opts a fixture into holding the request body and the SSE
+// partial until the test releases them. It lets a test observe the keyword
+// confirmation while the same run is still active.
+type quitFixtureGate struct {
+	bodies  chan []byte
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *quitFixtureGate) open() {
+	g.once.Do(func() { close(g.release) })
+}
+
 func newQuitFixture(t *testing.T) *quitFixture {
+	t.Helper()
+	return newQuitFixtureGated(t, nil)
+}
+
+func newGatedQuitFixture(t *testing.T) (*quitFixture, *quitFixtureGate) {
+	t.Helper()
+	gate := &quitFixtureGate{bodies: make(chan []byte, 1), release: make(chan struct{})}
+	return newQuitFixtureGated(t, gate), gate
+}
+
+func newQuitFixtureGated(t *testing.T, gate *quitFixtureGate) *quitFixture {
 	t.Helper()
 	f := &quitFixture{home: t.TempDir(), work: t.TempDir()}
 	f.agentDir = filepath.Join(f.home, "agent")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.Copy(io.Discard, r.Body)
+		if gate == nil {
+			io.Copy(io.Discard, r.Body)
+		} else {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read quit fixture request: %v", err)
+				http.Error(w, "cannot read request", http.StatusBadRequest)
+				return
+			}
+			select {
+			case gate.bodies <- body:
+			case <-r.Context().Done():
+				return
+			}
+			select {
+			case <-gate.release:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		f.requests.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(w, `event: message_start
@@ -105,6 +150,76 @@ func TestActualAppQuitReleasesTTYAndPersistsPartial(t *testing.T) {
 	q.wait(quitReleaseMarker)
 	q.finish()
 	f.assertSettled(t, q.drainOutputAfterExit(), 1)
+}
+
+// TestActualAppExitKeywordsBusy proves a normal prompt disarms confirmation,
+// a keyword does not interrupt a live run, and a second keyword exits through
+// the busy /quit path.
+func TestActualAppExitKeywordsBusy(t *testing.T) {
+	f, gate := newGatedQuitFixture(t)
+	defer gate.open()
+	q := startReviewPTY(t, f.home, f.work, f.agentDir, "--deny-project", "--no-tools")
+	q.prompt()
+	q.write("quit\r")
+	q.waitScreen(terminal.ExitHintText)
+	q.write("quit now\r")
+	body := busyWaitBody(t, gate.bodies)
+	if !strings.Contains(string(body), "quit now") {
+		t.Fatalf("first request missing the original prompt: %s", body)
+	}
+	q.waitScreen("› quit now")
+	if strings.Contains(q.screen.Text(), terminal.ExitHintText) {
+		t.Fatalf("confirmation stayed visible after a normal prompt: %q", q.screen.Text())
+	}
+
+	// This quit must show a fresh hint, not confirm the one before the prompt.
+	q.write("quit\r")
+	q.waitScreen(terminal.ExitHintText)
+	if screen := q.screen.Text(); strings.Contains(screen, "Steering: quit") || strings.Contains(screen, "Follow-up: quit") {
+		t.Fatalf("first keyword was queued during the run: %q", screen)
+	}
+	gate.open()
+	q.wait(quitPartial)
+	if !strings.Contains(q.screen.Text(), terminal.ExitHintText) {
+		t.Fatalf("confirmation disappeared before the second keyword: %q", q.screen.Text())
+	}
+	q.write("exit\r")
+	q.wait(quitReleaseMarker)
+	q.finish()
+	f.assertSettled(t, q.drainOutputAfterExit(), 1)
+}
+
+// TestActualAppExitKeywordsIdle proves normalization, cancellation by another
+// submission, the reverse spelling order, and that no prompt reaches a
+// provider.
+func TestActualAppExitKeywordsIdle(t *testing.T) {
+	f := newQuitFixture(t)
+	q := startReviewPTY(t, f.home, f.work, f.agentDir, "--deny-project", "--no-tools")
+	q.prompt()
+	q.write(" EXIT \r")
+	q.waitScreen(terminal.ExitHintText)
+	q.write("/hotkeys\r")
+	q.waitScreen("Keys (fixed, no Kitty required):")
+	if strings.Contains(q.screen.Text(), terminal.ExitHintText) {
+		t.Fatalf("confirmation stayed visible after another command: %q", q.screen.Text())
+	}
+	q.write("exit\r")
+	q.waitScreen(terminal.ExitHintText)
+	q.write("\r")
+	const draft = "unsubmitted exit-state draft"
+	q.write(draft)
+	q.waitScreen(draft)
+	if strings.Contains(q.screen.Text(), terminal.ExitHintText) {
+		t.Fatalf("confirmation stayed armed after an empty submission: %q", q.screen.Text())
+	}
+	q.write("\x15") // Ctrl+U erases the draft.
+	q.write("exit\r")
+	q.waitScreen(terminal.ExitHintText)
+	q.write("quit\r")
+	q.finish()
+	if n := f.requests.Load(); n != 0 {
+		t.Fatalf("provider requests = %d, want 0", n)
+	}
 }
 
 func TestActualAppQuitWithBridgeConnected(t *testing.T) {
