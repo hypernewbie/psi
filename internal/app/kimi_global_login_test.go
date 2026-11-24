@@ -50,10 +50,13 @@ func TestKimiGlobalTrialREPL(t *testing.T) {
 			completionRequests = append(completionRequests, values...)
 		}
 	}
+	const verificationLink = "https://www.kimi.ai/code/authorize_device?user_code=KIMI-CODE"
 	browserTargets := make(chan string, 1)
+	browserOpened := make(chan struct{})
 	r.kimiBrowser = func(_ context.Context, target string) error {
 		browserCalls.Add(1)
 		browserTargets <- target
+		close(browserOpened)
 		return nil
 	}
 	r.kimiTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -65,7 +68,7 @@ func TestKimiGlobalTrialREPL(t *testing.T) {
 			}
 			form := readKimiForm(t, req)
 			record("grant", form.Get("client_id"))
-			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"device_code":"kimi-device-secret","user_code":"KIMI-CODE","verification_uri":"https://www.kimi.ai/code/authorize_device","verification_uri_complete":"https://www.kimi.ai/code/authorize_device?code=ignored","interval":1,"expires_in":900}`))}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"device_code":"kimi-device-secret","user_code":"KIMI-CODE","verification_uri":"https://www.kimi.ai/code/authorize_device","verification_uri_complete":"https://www.kimi.ai/code/authorize_device?user_code=KIMI-CODE","interval":1,"expires_in":900}`))}, nil
 		case "https://auth.kimi.ai/api/oauth/token":
 			n := polls.Add(1)
 			if req.Header.Get("User-Agent") != "psi/test" {
@@ -78,6 +81,12 @@ func TestKimiGlobalTrialREPL(t *testing.T) {
 			}
 			if n != 2 {
 				t.Errorf("unexpected poll %d", n)
+			}
+			// The server can issue a token only after the browser handoff.
+			select {
+			case <-browserOpened:
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"kimi-access","refresh_token":"kimi-refresh","expires_in":3600,"token_type":"Bearer"}`))}, nil
 		case "https://api.kimi.ai/coding/v1/chat/completions":
@@ -119,7 +128,7 @@ func TestKimiGlobalTrialREPL(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitAppOutput(t, out, "KIMI-CODE")
-	waitAppOutput(t, out, "https://www.kimi.ai/code/authorize_device")
+	waitAppOutput(t, out, verificationLink)
 	if browserCalls.Load() != 0 {
 		t.Fatal("device sign-in launched a browser before Enter")
 	}
@@ -131,7 +140,7 @@ func TestKimiGlobalTrialREPL(t *testing.T) {
 	}
 	select {
 	case target := <-browserTargets:
-		if target != "https://www.kimi.ai/code/authorize_device" {
+		if target != verificationLink {
 			t.Fatalf("browser target = %q", target)
 		}
 	case <-time.After(60 * time.Second):

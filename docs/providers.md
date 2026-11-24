@@ -130,7 +130,10 @@ cancellation.
 
 `kimi-coding-global` is a Kimi Code OAuth trial for the Global endpoint. Its
 only model is `kimi-for-coding`. `/login kimi-coding-global` starts a device
-grant and stores the Pi OAuth fields `{type, access, refresh, expires}`. psi
+grant. The panel opens the Global Kimi verification link with the grant's
+user code. psi stops if the link is missing or does not match the expected
+page and code. After browser approval, psi polls for the token and stores
+the Pi OAuth fields `{type, access, refresh, expires}`. psi
 sends the bearer only to `https://api.kimi.ai/coding/v1/chat/completions`.
 It stores the refresh token for format compatibility but does not use it.
 When the access token expires, sign in again. The provider does not accept

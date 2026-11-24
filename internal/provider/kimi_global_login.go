@@ -133,8 +133,8 @@ func (l *KimiGlobalLogin) wait(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// Run executes one complete attempt. ready receives the user code and fixed
-// verification URL before polling starts. A nil error means the credential was
+// Run executes one complete attempt. ready receives the user code and validated
+// verification link before polling starts. A nil error means the credential was
 // saved. A context error means the caller cancelled before commit.
 func (l *KimiGlobalLogin) Run(ctx context.Context, ready func(userCode, verificationURL string)) error {
 	if l.Path == "" {
@@ -157,7 +157,7 @@ func (l *KimiGlobalLogin) Run(ctx context.Context, ready func(userCode, verifica
 		return err
 	}
 	if ready != nil {
-		ready(start.userCode, kimiGlobalVerifyURL)
+		ready(start.userCode, start.verificationURL)
 	}
 	token, err := l.poll(ctx, start, started)
 	if err != nil {
@@ -172,10 +172,11 @@ func (l *KimiGlobalLogin) Run(ctx context.Context, ready func(userCode, verifica
 }
 
 type kimiGlobalStart struct {
-	deviceCode string
-	userCode   string
-	interval   time.Duration
-	lifetime   time.Duration
+	deviceCode      string
+	userCode        string
+	verificationURL string
+	interval        time.Duration
+	lifetime        time.Duration
 }
 
 // start requests one device authorization. It never retries; a fresh /login
@@ -198,11 +199,12 @@ func (l *KimiGlobalLogin) start(ctx context.Context) (kimiGlobalStart, error) {
 		return kimiGlobalStart{}, errKimiGlobalNetwork
 	}
 	var response struct {
-		DeviceCode      string `json:"device_code"`
-		UserCode        string `json:"user_code"`
-		VerificationURI string `json:"verification_uri"`
-		Interval        any    `json:"interval"`
-		ExpiresIn       any    `json:"expires_in"`
+		DeviceCode              string `json:"device_code"`
+		UserCode                string `json:"user_code"`
+		VerificationURI         string `json:"verification_uri"`
+		VerificationURIComplete string `json:"verification_uri_complete"`
+		Interval                any    `json:"interval"`
+		ExpiresIn               any    `json:"expires_in"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -212,6 +214,10 @@ func (l *KimiGlobalLogin) start(ctx context.Context) (kimiGlobalStart, error) {
 	if !kimiGlobalPrintable(response.DeviceCode, 0) ||
 		!kimiGlobalPrintable(response.UserCode, kimiGlobalUserCodeLimit) ||
 		response.VerificationURI != kimiGlobalVerifyURL {
+		return kimiGlobalStart{}, errKimiGlobalInvalid
+	}
+	verificationURL := kimiGlobalVerificationURL(response.VerificationURIComplete, response.UserCode)
+	if verificationURL == "" {
 		return kimiGlobalStart{}, errKimiGlobalInvalid
 	}
 	interval, ok := kimiGlobalDuration(response.Interval, kimiGlobalDefaultInterval, false)
@@ -226,7 +232,26 @@ func (l *KimiGlobalLogin) start(ctx context.Context) (kimiGlobalStart, error) {
 	if !ok || lifetime <= 0 {
 		return kimiGlobalStart{}, errKimiGlobalInvalid
 	}
-	return kimiGlobalStart{deviceCode: response.DeviceCode, userCode: response.UserCode, interval: interval, lifetime: lifetime}, nil
+	return kimiGlobalStart{
+		deviceCode: response.DeviceCode, userCode: response.UserCode, verificationURL: verificationURL,
+		interval: interval, lifetime: lifetime,
+	}, nil
+}
+
+// Kimi's verification page needs the code in the link. Admit exactly the
+// pinned HTTPS page and the grant's user code; do not forward other query
+// fields, such as the device code, to the panel or browser.
+func kimiGlobalVerificationURL(link, userCode string) string {
+	page, rawQuery, hasQuery := strings.Cut(link, "?")
+	if !hasQuery || page != kimiGlobalVerifyURL || strings.ContainsRune(rawQuery, '#') {
+		return ""
+	}
+	query, err := url.ParseQuery(rawQuery)
+	codes := query["user_code"]
+	if err != nil || len(query) != 1 || len(codes) != 1 || codes[0] != userCode {
+		return ""
+	}
+	return kimiGlobalVerifyURL + "?user_code=" + url.QueryEscape(userCode)
 }
 
 // kimiGlobalDuration accepts an integral JSON number of seconds. The default

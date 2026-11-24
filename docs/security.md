@@ -88,8 +88,11 @@ bits still match the original read before staging and again before replacement.
 `/logout` removes the selected stored API key or OAuth credential, not
 environment variables or `models.json` credentials. An API-key logout removes
 the stored copy only; it does not revoke the key at the provider. Kimi Code
-(Global) logout also makes no provider request. ChatGPT sign-in and refresh
-refuse to write through an `auth.json` symlink.
+(Global) logout also makes no provider request. The Kimi sign-in panel keeps
+its verification link and user code out of chat and session data. The link
+contains the user code and can remain in browser history or terminal
+scrollback. Do not share it. ChatGPT sign-in and refresh refuse to write
+through an `auth.json` symlink.
 
 OpenAI and Codex OAuth logout send one best-effort JSON request to the fixed
 `https://auth.openai.com/oauth/revoke` endpoint. It sends a nonblank refresh

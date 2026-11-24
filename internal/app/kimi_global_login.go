@@ -10,8 +10,8 @@ import (
 )
 
 // runKimiGlobalLogin runs one Global Kimi Code device attempt. It never binds
-// a listener; only an explicit Enter in the login panel can open the fixed
-// verification page.
+// a listener; only an explicit Enter in the login panel can open the validated
+// verification link.
 func runKimiGlobalLogin(ctx context.Context, req oauthLoginRequest, updates chan<- oauthLoginUpdate) oauthLoginResult {
 	login := &provider.KimiGlobalLogin{
 		Path:      filepath.Join(req.agentDir, "auth.json"),

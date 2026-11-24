@@ -44,8 +44,10 @@ func (c *kimiFakeClock) recordedWaits() []time.Duration {
 	return append([]time.Duration(nil), c.waits...)
 }
 
+const kimiDeviceCompleteURL = kimiGlobalVerifyURL + "?user_code=KIMI-CODE"
+
 func kimiDeviceStartBody(interval, expiresIn string) string {
-	return fmt.Sprintf(`{"device_code":"kimi-device-secret","user_code":"KIMI-CODE","verification_uri":%q,"verification_uri_complete":"https://www.kimi.ai/code/authorize_device?code=ignored","interval":%s,"expires_in":%s}`, kimiGlobalVerifyURL, interval, expiresIn)
+	return fmt.Sprintf(`{"device_code":"kimi-device-secret","user_code":"KIMI-CODE","verification_uri":%q,"verification_uri_complete":%q,"interval":%s,"expires_in":%s}`, kimiGlobalVerifyURL, kimiDeviceCompleteURL, interval, expiresIn)
 }
 
 const kimiDeviceSuccessBody = `{"access_token":"kimi-access","refresh_token":"kimi-refresh","expires_in":3600,"token_type":"Bearer"}`
@@ -104,6 +106,14 @@ func TestKimiGlobalDeviceFailure(t *testing.T) {
 		body string
 	}{
 		{name: "wrong verification URI", body: strings.Replace(validStart, kimiGlobalVerifyURL, "https://example.com/authorize", 1)},
+		{name: "missing complete URI", body: strings.Replace(validStart, `"verification_uri_complete":"`+kimiDeviceCompleteURL+`",`, "", 1)},
+		{name: "wrong complete URI host", body: strings.Replace(validStart, kimiDeviceCompleteURL, "https://www.kimi.ai.example.com/code/authorize_device?user_code=KIMI-CODE", 1)},
+		{name: "wrong complete URI path", body: strings.Replace(validStart, kimiDeviceCompleteURL, "https://www.kimi.ai/other?user_code=KIMI-CODE", 1)},
+		{name: "complete URI missing code", body: strings.Replace(validStart, kimiDeviceCompleteURL, kimiGlobalVerifyURL, 1)},
+		{name: "complete URI code mismatch", body: strings.Replace(validStart, kimiDeviceCompleteURL, kimiGlobalVerifyURL+"?user_code=OTHER-CODE", 1)},
+		{name: "duplicate complete URI code", body: strings.Replace(validStart, kimiDeviceCompleteURL, kimiDeviceCompleteURL+"&user_code=OTHER-CODE", 1)},
+		{name: "unexpected complete URI parameter", body: strings.Replace(validStart, kimiDeviceCompleteURL, kimiDeviceCompleteURL+"&device_code=kimi-device-secret", 1)},
+		{name: "complete URI fragment", body: strings.Replace(validStart, kimiDeviceCompleteURL, kimiDeviceCompleteURL+"#fragment", 1)},
 		{name: "user code with a newline", body: strings.Replace(validStart, "KIMI-CODE", `BAD\nCODE`, 1)},
 		{name: "missing device code", body: strings.Replace(validStart, `"device_code":"kimi-device-secret",`, "", 1)},
 		{name: "missing user code", body: strings.Replace(validStart, `"user_code":"KIMI-CODE",`, "", 1)},
@@ -138,11 +148,13 @@ func TestKimiGlobalDeviceFailure(t *testing.T) {
 		}
 		responses[0].Header.Set("Retry-After", "3")
 		ready := 0
-		err, clock, polls := runKimiDevice(t, authPath, kimiDeviceStartBody("1", "60"), func(n int) *http.Response {
+		// Percent-encoded values must match the grant after decoding.
+		start := strings.Replace(validStart, kimiDeviceCompleteURL, kimiGlobalVerifyURL+"?user_code=KIMI%2DCODE", 1)
+		err, clock, polls := runKimiDevice(t, authPath, start, func(n int) *http.Response {
 			return responses[n-1]
 		}, context.Background(), nil, func(code, uri string) {
 			ready++
-			if code != "KIMI-CODE" || uri != kimiGlobalVerifyURL {
+			if code != "KIMI-CODE" || uri != kimiDeviceCompleteURL {
 				t.Fatalf("ready = %q, %q", code, uri)
 			}
 		})
@@ -180,7 +192,7 @@ func TestKimiGlobalDeviceFailure(t *testing.T) {
 
 	t.Run("absent interval and lifetime use the RFC defaults", func(t *testing.T) {
 		authPath := filepath.Join(t.TempDir(), "auth.json")
-		absent := `{"device_code":"kimi-device-secret","user_code":"KIMI-CODE","verification_uri":"https://www.kimi.ai/code/authorize_device","interval":null,"expires_in":null}`
+		absent := kimiDeviceStartBody("null", "null")
 		err, clock, polls := runKimiDevice(t, authPath, absent, func(n int) *http.Response {
 			if n == 1 {
 				return kimiJSON(http.StatusBadRequest, `{"error":"authorization_pending"}`)

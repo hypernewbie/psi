@@ -117,8 +117,10 @@ Availability depends on the account. Press `Esc` to cancel sign-in or
 `Ctrl+D` to cancel and quit psi.
 
 Select Kimi For Coding (Global) or enter `/login kimi-coding-global` to start
-its Kimi Code (OAuth) device trial. The panel shows the user code and
-`https://www.kimi.ai/code/authorize_device`. Press `Enter` to open that page.
+its Kimi Code (OAuth) device trial. Press `Enter` to open Kimi's verification
+link, or open the full link from the panel in your browser. It contains your
+user code; do not share it. Approve the sign-in at Kimi. There is no code to
+paste back into psi.
 The trial has no API-key method or automatic refresh. When the access token
 expires, sign in again. Stock Pi does not recognize this provider ID.
 
