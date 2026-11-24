@@ -163,6 +163,14 @@ var noticesCatalog = i18n.Catalog{
 		English: "use /loop-stop",
 		Chinese: "使用 /loop-stop",
 	},
+	"notice.reloaded-resources": {
+		English: "Reloaded themes, display settings, prompt inputs, skills, and queue modes",
+		Chinese: "已重新加载主题、显示设置、提示词输入、技能和队列模式",
+	},
+	"notice.reloaded-model-catalog": {
+		English: "; refreshed model catalog",
+		Chinese: "；已刷新模型目录",
+	},
 	"notice.no-credentialed-models": {
 		English: "No credentialed models. Run /login or set a provider API key.",
 		Chinese: "没有可用凭据的模型。运行 /login 或设置提供方 API 密钥。",

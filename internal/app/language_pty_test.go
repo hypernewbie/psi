@@ -294,7 +294,7 @@ func TestActualAppLanguageControls(t *testing.T) {
 		assertPromptLanguage(t, requests.system(t, 0), config.LanguageChinese)
 
 		q.write("/reload\r")
-		q.wait("Reloaded keybindings, extensions, skills, prompts, themes, and context files")
+		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Reloaded themes, display settings|已\s*重\s*新\s*加\s*载\s*主\s*题`))
 		waitLanguageEditorReady(t, q)
 		q.write("second\r")
 		q.wait("LANG_DONE_2")
@@ -324,7 +324,7 @@ func TestActualAppLanguageControls(t *testing.T) {
 
 		writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","language":"zh","compaction":{"enabled":false}}`)
 		q.write("/reload\r")
-		q.wait("Reloaded keybindings, extensions, skills, prompts, themes, and context files")
+		waitLanguageScreenMatch(t, q, regexp.MustCompile(`Reloaded themes, display settings|已\s*重\s*新\s*加\s*载\s*主\s*题`))
 		waitLanguageEditorReady(t, q)
 		q.write("second\r")
 		q.wait("LANG_DONE_2")

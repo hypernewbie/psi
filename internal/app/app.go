@@ -4589,11 +4589,11 @@ func (r *runtime) handleReloadCommand(arg string, out io.Writer) (bool, error) {
 	if r.lifecycle != nil && r.lifecycle.console != nil {
 		r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
 	}
-	status := "Reloaded themes, display settings, prompt inputs, skills, and queue modes"
+	status := r.localized("notice.reloaded-resources")
 	if modelsErr != nil {
-		printWarningText(out, "models.json error: "+modelsErr.Error())
+		printWarningText(out, r.localized("notice.models-json-error", modelsErr.Error()))
 	} else {
-		status += "; refreshed model catalog"
+		status += r.localized("notice.reloaded-model-catalog")
 	}
 	printStatusText(out, status)
 	return false, nil
