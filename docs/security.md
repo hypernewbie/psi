@@ -53,8 +53,9 @@ The `bash` and `powershell` tools and the interactive `!command` path inherit
 the psi process environment, including provider API keys. A command that prints
 its environment exposes them to the terminal and, for included tool text, to
 the provider. `!!command` keeps its command and output out of model requests,
-but they remain in the local JSONL session file. Treat that file as sensitive,
-not as a secret store.
+but they remain in the local JSONL session file. When output is truncated,
+psi may also keep the raw output in a local capture file. Treat both files as
+sensitive, not as secret stores.
 
 The interactive shell has no per-command approval. It runs with process
 permissions and can change files before cancellation or a storage error; psi

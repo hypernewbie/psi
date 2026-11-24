@@ -48,28 +48,17 @@ func reopenShellSession(t *testing.T, path, cwd string) []*session.BashExecution
 		if entry.Message != nil && entry.Message.Message.BashExecution != nil {
 			messages = append(messages, entry.Message.Message.BashExecution)
 		}
-		if entry.Message != nil && entry.Message.Message.Role == "user" && strings.Contains(sessionMessageText(entry), "seed") {
-			continue
-		}
 	}
 	return messages
-}
-
-func sessionMessageText(entry *session.Entry) string {
-	if entry.Message == nil || entry.Message.Message.User == nil {
-		return ""
-	}
-	if content, ok := entry.Message.Message.User.Content.(string); ok {
-		return content
-	}
-	return ""
 }
 
 func TestBangShellMVPActualApp(t *testing.T) {
 	home, launch := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	sessionDir := filepath.Join(home, "sessions")
-	os.MkdirAll(sessionDir, 0o700)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	bashEnvMarker := filepath.Join(home, "bash-env-ran")
 	bashEnv := filepath.Join(home, "bash-env.sh")
 	writeAppFile(t, bashEnv, fmt.Sprintf("#!/bin/sh\ntouch %q\n", bashEnvMarker))
@@ -82,19 +71,31 @@ func TestBangShellMVPActualApp(t *testing.T) {
 	q.write("!printf '%s%s\\n' PSI_ SHELL_MVP\r")
 	q.waitScreen("PSI_SHELL_MVP")
 	q.prompt()
+	q.write("!!printf '%s%s\\n' PSI_ PRIVATE_SHELL\r")
+	q.waitScreen("PSI_PRIVATE_SHELL")
+	q.prompt()
 	q.write("/quit\r")
 	q.finish()
 	sessionPath := filepath.Join(sessionDir, id+".jsonl")
 	messages := reopenShellSession(t, sessionPath, launch)
-	if len(messages) != 1 {
-		t.Fatalf("shell entries = %d", len(messages))
+	if len(messages) != 2 {
+		t.Fatalf("shell entries = %d, want 2", len(messages))
 	}
-	message := messages[0]
-	if message.Command != "printf '%s%s\\n' PSI_ SHELL_MVP" || !strings.Contains(message.Output, "PSI_SHELL_MVP") {
-		t.Fatalf("saved shell = %+v", message)
-	}
-	if message.ExitCode == nil || *message.ExitCode != 0 || message.Cancelled {
-		t.Fatalf("outcome = %+v", message)
+	for i, want := range []struct {
+		command string
+		output  string
+		exclude bool
+	}{
+		{"printf '%s%s\\n' PSI_ SHELL_MVP", "PSI_SHELL_MVP\n", false},
+		{"printf '%s%s\\n' PSI_ PRIVATE_SHELL", "PSI_PRIVATE_SHELL\n", true},
+	} {
+		got := messages[i]
+		if got.Command != want.command || got.Output != want.output || got.ExcludeFromContext == nil || *got.ExcludeFromContext != want.exclude {
+			t.Fatalf("shell entry %d = %+v, want %+v", i, got, want)
+		}
+		if got.ExitCode == nil || *got.ExitCode != 0 || got.Cancelled {
+			t.Fatalf("shell entry %d outcome = %+v", i, got)
+		}
 	}
 	if _, err := os.Stat(bashEnvMarker); !os.IsNotExist(err) {
 		t.Fatal("parent BASH_ENV leaked into the shell")
@@ -102,16 +103,22 @@ func TestBangShellMVPActualApp(t *testing.T) {
 }
 
 func TestBangShellStalledActualApp(t *testing.T) {
+	if *reviewBinary == "" {
+		t.Skip("native process cleanup acceptance requires -psi-test-binary")
+	}
 	home, launch := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	sessionDir := filepath.Join(home, "sessions")
-	os.MkdirAll(sessionDir, 0o700)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	pidPath := filepath.Join(home, "stalled.pid")
 	id := "shell-stalled"
 	q := startReviewProcess(t, home, launch, agentDir, *reviewBinary, "",
 		"--deny-project", "--no-tools", "--session-dir", sessionDir, "--session-id", id)
 	q.prompt()
-	q.write(fmt.Sprintf("!sleep 30 & child=$!; echo $child > %s; printf PARTIAL_MARKER; wait\r", pidPath))
+	// Rename the readiness file so the reader never sees a half-written PID.
+	q.write(fmt.Sprintf("!sleep 30 & child=$!; printf PARTIAL_MARKER; echo $child > %q && mv %q %q; wait\r", pidPath+".tmp", pidPath+".tmp", pidPath))
 	pidDeadline := time.Now().Add(3 * time.Second)
 	var pid int
 	for {
@@ -204,7 +211,9 @@ func TestBangShellConfiguredActualApp(t *testing.T) {
 		home, launch := t.TempDir(), t.TempDir()
 		agentDir := filepath.Join(home, "agent")
 		sessionDir := filepath.Join(home, "sessions")
-		os.MkdirAll(sessionDir, 0o700)
+		if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
 		argsPath := filepath.Join(home, "shell-args")
 		helper := filepath.Join(home, "fixture-shell")
 		writeShellHelper(t, helper, fmt.Sprintf("#!/bin/sh\nprintf 'ARG:%%s\\n' \"$@\" > %q\nprintf 'SHELL_HELPER_OK\\n'\n", argsPath))
