@@ -55,6 +55,21 @@ func (body unreadUsageBody) Read([]byte) (int, error) {
 
 func (unreadUsageBody) Close() error { return nil }
 
+func TestZaiUsageRateLimitDoesNotReadBody(t *testing.T) {
+	client := newUsageHTTPClient(codexUsageTransportFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": {"120"}},
+			Body:       unreadUsageBody{t},
+		}, nil
+	}))
+	got := fetchZaiUsage(context.Background(), "test-key", time.Time{}, client)
+	if got.Status != http.StatusTooManyRequests || got.Outcome != QuotaUsageTemporarilyUnavailable ||
+		got.Sample || got.RetryAt.Before(got.StartedAt.Add(2*time.Minute)) {
+		t.Fatalf("rate-limited Z.AI lookup: %+v", got)
+	}
+}
+
 func TestUsageTransport(t *testing.T) {
 	production := newUsageHTTPClient(nil)
 	policy := production.Transport.(*http.Transport)

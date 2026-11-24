@@ -75,10 +75,18 @@ type QuotaUsageResult struct {
 	EntryHash   [32]byte
 }
 
+type quotaBodyPolicy bool
+
+const (
+	// Preserve the legacy pollers' classification of unreadable error bodies.
+	readRejectedQuotaBody quotaBodyPolicy = true
+	skipRejectedQuotaBody quotaBodyPolicy = false
+)
+
 // fetchQuota owns the bounded response buffer; the parser borrows it only for
 // the duration of the call. HTTP and JSON may retain their own copies.
 func fetchQuota(ctx context.Context, endpoint string, headers http.Header, client *http.Client, parse func([]byte) ([3]float64, bool)) QuotaUsageResult {
-	return fetchQuotaWith(ctx, endpoint, headers, client, func(body []byte) quotaSample {
+	return fetchQuotaWith(ctx, endpoint, headers, client, readRejectedQuotaBody, func(body []byte) quotaSample {
 		values, ok := parse(body)
 		return quotaSample{values: values, ok: ok}
 	})
@@ -87,7 +95,7 @@ func fetchQuota(ctx context.Context, endpoint string, headers http.Header, clien
 // fetchQuotaWith performs the bounded GET and lets one fetcher decode a typed
 // sample. The parser borrows the body only for the call; HTTP and JSON may keep
 // their own copies.
-func fetchQuotaWith(ctx context.Context, endpoint string, headers http.Header, client *http.Client, parse func([]byte) quotaSample) QuotaUsageResult {
+func fetchQuotaWith(ctx context.Context, endpoint string, headers http.Header, client *http.Client, readRejectedBody quotaBodyPolicy, parse func([]byte) quotaSample) QuotaUsageResult {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, quotaTimeout)
 	defer cancel()
@@ -103,6 +111,10 @@ func fetchQuotaWith(ctx context.Context, endpoint string, headers http.Header, c
 	defer resp.Body.Close()
 	retryAt, stop := quotaRetry(resp.StatusCode, resp.Header.Values("Retry-After"), time.Now())
 	result := QuotaUsageResult{Status: resp.StatusCode, StartedAt: started, RetryAt: retryAt, StopPolling: stop}
+	if !readRejectedBody && result.Status != http.StatusOK {
+		result.Outcome = quotaStatusOutcome(result.Status)
+		return result
+	}
 	body, readErr := readQuotaBody(resp.Body)
 	defer secretmem.Wipe(body[:cap(body)])
 	if readErr != nil {

@@ -506,7 +506,8 @@ func usageFailureReason(result provider.QuotaUsageResult, ctx context.Context) u
 	if result.Outcome == provider.QuotaUsageNoCredential {
 		return usageReasonNoCredential
 	}
-	if result.Status == 0 || result.Status == http.StatusRequestTimeout || result.Status >= 500 {
+	if result.Outcome == provider.QuotaUsageTemporarilyUnavailable ||
+		result.Status == 0 || result.Status == http.StatusRequestTimeout || result.Status >= 500 {
 		if ctx.Err() != nil && result.Status == 0 {
 			return usageReasonTimeout
 		}

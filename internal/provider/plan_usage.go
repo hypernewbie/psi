@@ -29,16 +29,20 @@ const (
 // requires a string copy, which the Go HTTP stack may retain. No credentials
 // are written or refreshed and no response details are retained.
 func FetchPlanUsage(ctx context.Context, providerID, key string, notBefore time.Time) QuotaUsageResult {
-	return fetchPlanUsage(ctx, providerID, key, notBefore, newQuotaHTTPClient(nil))
+	return fetchPlanUsage(ctx, providerID, key, notBefore, newQuotaHTTPClient(nil), readRejectedQuotaBody)
 }
 
 // FetchZaiUsage makes a one-shot plan lookup for the account panel. It uses
 // the HTTP/1-only usage transport so a refused HTTP/2 stream cannot retry it.
 func FetchZaiUsage(ctx context.Context, key string, notBefore time.Time) QuotaUsageResult {
-	return fetchPlanUsage(ctx, "zai", key, notBefore, newUsageHTTPClient(nil))
+	return fetchZaiUsage(ctx, key, notBefore, newUsageHTTPClient(nil))
 }
 
-func fetchPlanUsage(ctx context.Context, providerID, key string, notBefore time.Time, client *http.Client) QuotaUsageResult {
+func fetchZaiUsage(ctx context.Context, key string, notBefore time.Time, client *http.Client) QuotaUsageResult {
+	return fetchPlanUsage(ctx, "zai", key, notBefore, client, skipRejectedQuotaBody)
+}
+
+func fetchPlanUsage(ctx context.Context, providerID, key string, notBefore time.Time, client *http.Client, bodyPolicy quotaBodyPolicy) QuotaUsageResult {
 	endpoint, agent := "", "psi-quota"
 	switch providerID {
 	case "zai":
@@ -56,7 +60,7 @@ func fetchPlanUsage(ctx context.Context, providerID, key string, notBefore time.
 		return QuotaUsageResult{Outcome: QuotaUsageUnsupported}
 	}
 	headers := http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}, "User-Agent": {agent}}
-	return fetchQuotaWith(ctx, endpoint, headers, client, func(body []byte) quotaSample {
+	return fetchQuotaWith(ctx, endpoint, headers, client, bodyPolicy, func(body []byte) quotaSample {
 		return parsePlanSample(providerID, body)
 	})
 }

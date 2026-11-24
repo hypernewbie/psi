@@ -141,7 +141,7 @@ func TestPlanUsageRequest(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tc.body))}, nil
 			})
-			got := fetchPlanUsage(context.Background(), tc.provider, "synthetic-key", time.Time{}, newQuotaHTTPClient(transport))
+			got := fetchPlanUsage(context.Background(), tc.provider, "synthetic-key", time.Time{}, newQuotaHTTPClient(transport), readRejectedQuotaBody)
 			wantWindows := QuotaWindows{Rolling: tc.want[0], Weekly: tc.want[1], Monthly: tc.want[2]}
 			if !got.Sample || got.Windows != wantWindows || got.UsedPercent != tc.want[0] {
 				t.Fatalf("result = %+v", got)
@@ -161,14 +161,14 @@ func TestPlanUsageFailsClosed(t *testing.T) {
 	})
 	client := newQuotaHTTPClient(transport)
 	for _, key := range []string{"", "bad\nkey"} {
-		if got := fetchPlanUsage(context.Background(), "zai", key, time.Time{}, client); got.Outcome != QuotaUsageNoCredential {
+		if got := fetchPlanUsage(context.Background(), "zai", key, time.Time{}, client, readRejectedQuotaBody); got.Outcome != QuotaUsageNoCredential {
 			t.Fatalf("invalid key = %+v", got)
 		}
 	}
 	if calls != 0 {
 		t.Fatal("sent an invalid key")
 	}
-	got := fetchPlanUsage(context.Background(), "opencode-go", "synthetic", time.Time{}, client)
+	got := fetchPlanUsage(context.Background(), "opencode-go", "synthetic", time.Time{}, client, readRejectedQuotaBody)
 	if got.Sample || got.Status != 429 || got.RetryAt.Before(got.StartedAt.Add(120*time.Second)) {
 		t.Fatalf("rate limit = %+v", got)
 	}

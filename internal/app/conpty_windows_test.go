@@ -251,8 +251,18 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	write("/usage anthropic\r")
 	waitFor("unsupported account panel", func(text string) bool { return strings.Contains(text, "provider is not supported") })
 	write("\x1b") // Esc dismisses usage without ending the stream.
-	waitFor("editor after usage", func(text string) bool {
-		return !strings.Contains(text, "provider is not supported") && conptyEditorReady(screen)
+	waitFor("usage panel dismissed during stream", func(text string) bool {
+		return !strings.Contains(text, "provider is not supported") && conptyBusyVisible(text)
+	})
+	// The busy editor hides its cursor. Verify it accepts input instead.
+	const usageDraft = "draft after usage"
+	write(usageDraft)
+	waitFor("draft after usage", func(text string) bool {
+		return strings.Contains(text, usageDraft) && conptyBusyVisible(text)
+	})
+	write("\x15") // Ctrl+U clears the draft without interrupting the stream.
+	waitFor("cleared usage draft", func(text string) bool {
+		return !strings.Contains(text, usageDraft) && conptyBusyVisible(text)
 	})
 	close(releaseStream)
 	waitFor("stream completion", func(text string) bool { return strings.Contains(text, "STREAM_FINISHED") })

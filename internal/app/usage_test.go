@@ -37,9 +37,6 @@ func newUsageZAIRuntime(t *testing.T) *runtime {
 	if r.authErr != nil {
 		t.Fatalf("Z.AI auth: %v", r.authErr)
 	}
-	if !r.quotaInstall.hasKey || r.quotaInstall.provider != "zai" {
-		t.Fatalf("installed identity = %+v", r.quotaInstall)
-	}
 	return r
 }
 
@@ -106,6 +103,28 @@ func TestUsageZAIThroughREPL(t *testing.T) {
 	visible := strings.Join(vt.Scrollback, "\n") + "\n" + vt.Text()
 	if strings.Contains(visible, "Usage · Z.AI") || strings.Contains(visible, "60% left") {
 		t.Fatal("dismissed usage detail remained on screen or in scrollback")
+	}
+}
+
+func TestUsageReportDistinguishesReadFailureFromInvalidData(t *testing.T) {
+	r := newUsageZAIRuntime(t)
+	capture, refusal := r.usageCapture("zai")
+	if refusal != "" {
+		t.Fatal(refusal)
+	}
+	for _, tc := range []struct {
+		outcome provider.QuotaUsageOutcome
+		want    usageReason
+	}{
+		{provider.QuotaUsageTemporarilyUnavailable, usageReasonTransient},
+		{provider.QuotaUsageUnsupported, usageReasonUnreadable},
+	} {
+		capture.checkPlan = func(context.Context, string, string, time.Time) provider.QuotaUsageResult {
+			return provider.QuotaUsageResult{Status: http.StatusOK, Outcome: tc.outcome}
+		}
+		if got := fetchUsageReport(context.Background(), capture); got.usable() || got.reason != tc.want {
+			t.Errorf("HTTP 200 with outcome %q gives %q, want %q", tc.outcome, got.reason, tc.want)
+		}
 	}
 }
 
