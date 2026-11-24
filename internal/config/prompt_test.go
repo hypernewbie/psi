@@ -135,6 +135,9 @@ func TestNoToolsKeepsOnlyFixedRules(t *testing.T) {
 	if !strings.Contains(rendered, "- Be concise in your responses") || !strings.Contains(rendered, "- Show file paths clearly when working with files") || !strings.Contains(rendered, "- OpenAI ChatGPT and Codex sign-in are user-only: choose them from /login") || !strings.Contains(rendered, "Direct the user to /logout to remove a stored credential") {
 		t.Fatalf("fixed rules missing: %s", rendered)
 	}
+	if !strings.Contains(rendered, "Enter opens Accounts for eligible direct Z.AI and DeepSeek accounts without changing the active model") {
+		t.Fatal("missing provider usage guidance without tools")
+	}
 }
 
 func TestRenderSectionsGolden(t *testing.T) {

@@ -329,10 +329,15 @@ func (q *reviewPTY) wait(want string) {
 // draining PTY input, so state assertions synchronize on the content itself.
 func (q *reviewPTY) waitScreen(want string) {
 	q.t.Helper()
+	q.waitScreenMatch(want, func(text string) bool { return strings.Contains(text, want) })
+}
+
+func (q *reviewPTY) waitScreenMatch(want string, match func(string) bool) {
+	q.t.Helper()
 	timer := time.NewTimer(8 * time.Second)
 	defer timer.Stop()
 	for {
-		if strings.Contains(q.screen.Text(), want) {
+		if match(q.screen.Text()) {
 			return
 		}
 		select {

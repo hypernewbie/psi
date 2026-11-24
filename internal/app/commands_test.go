@@ -31,11 +31,18 @@ func TestCommandMetadataDescribesAuthenticationCommands(t *testing.T) {
 // The command table mirrors Pi's BUILTIN_SLASH_COMMANDS. Unknown commands
 // remain ordinary prompt text.
 func TestCommandTable(t *testing.T) {
-	cmds := []string{"settings", "model", "thinking", "name", "session", "hotkeys", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "mcp", "quit", "ac", "autocompact", "loop", "loop-stop"}
+	cmds := []string{"settings", "model", "thinking", "name", "session", "usage", "hotkeys", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "mcp", "quit", "ac", "autocompact", "loop", "loop-stop"}
 	for _, c := range cmds {
 		if _, ok := terminal.ParseCommand("/" + c); !ok {
 			t.Errorf("parser rejects /%s", c)
 		}
+	}
+	// /usage keeps the provider argument for the async report handler.
+	if cmd, ok := terminal.ParseCommand("/usage zai"); !ok || cmd.Name != "usage" || cmd.Arg != "zai" {
+		t.Errorf("/usage zai parse = %+v/%t", cmd, ok)
+	}
+	if cmd, ok := terminal.ParseCommand("/usage"); !ok || cmd.Name != "usage" || cmd.Arg != "" {
+		t.Errorf("/usage parse = %+v/%t", cmd, ok)
 	}
 	// Pi has no /help, /version, or /history command.
 	// Pi commands psi does not implement stay absent; psi keeps its minimal

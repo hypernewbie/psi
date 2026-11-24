@@ -4,6 +4,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -467,7 +468,8 @@ Session storage (Unix): new directories and missing parents use mode 0700. Exist
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 A bare quit or exit asks for confirmation; submit either word again to leave. Any other submission cancels. Use /quit to exit immediately or when the confirmation cannot fit.
-During a run, /session, /hotkeys, and /name work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
+During a run, /session, /hotkeys, /name, and /usage work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
+Interactive /usage [provider] checks the active or named direct Z.AI or DeepSeek account. In the detail view, Enter opens Accounts without changing the active model. Esc closes the panel.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 The optional powershell tool is off by default and available on Windows only; enable it with --tools or defaultTools (for example ["-bash", "+powershell"]).
@@ -755,15 +757,30 @@ type runtime struct {
 	quotaAuthOverride bool
 	// quotaCheck is the Codex test seam. Nil uses the read-only Codex
 	// credential and private HTTP path.
-	quotaCheck     quotaCheck
-	planQuotaCheck func(context.Context, string, string, time.Time) provider.QuotaUsageResult
+	quotaCheck        quotaCheck
+	planQuotaCheck    func(context.Context, string, string, time.Time) provider.QuotaUsageResult
+	usageBalanceCheck quotaCheck
 	// codexQuotaSuccessDelay and codexQuotaRendered are test seams for
 	// deterministic scheduling and footer observations. Nil keeps production
 	// behavior.
 	codexQuotaSuccessDelay func(float64) time.Duration
 	codexQuotaRendered     func(string)
+	// usageDeadline and usageObserved are manual-report seams. Nil uses the
+	// ten-second lookup timer; the observer sees every completed row and
+	// whether the REPL printed it.
+	usageDeadline func() <-chan time.Time
+	usageObserved func(usageReport, bool)
+	// usagePanel is the REPL-owned read-only view. It is drawn in the editor
+	// region and never written to the transcript or model context.
+	usagePanel     *usageView
+	usagePlanCheck func(context.Context, string, string, time.Time) provider.QuotaUsageResult
+	usageDiscover  func(context.Context, []usageCapture) ([]string, usageReason)
 	// quota is REPL-owned quota state. It is nil outside an active REPL.
-	quota                    *quotaOwner
+	quota *quotaOwner
+	// quotaInstall records the inference client that configure installed so
+	// usage requests can compare the current route and key fingerprint without
+	// retaining the key itself.
+	quotaInstall             quotaInstallation
 	generation               int64
 	state                    State
 	bridge                   *pibridge.Client
@@ -1115,6 +1132,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	}
 	var client provider.Provider
 	var authErr error
+	var installation quotaInstallation
 	// authHeader adds the resolved key as a bearer header, the way Pi composes
 	// a provider that declares authHeader.
 	applyAuthHeader := func(key string, credentialErr error) {
@@ -1147,6 +1165,17 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	case "openai-completions":
 		key, err := resolveAPIKey()
 		authErr = err
+		// Record the route and a fingerprint of the installed key only for
+		// accounts the usage panel can read. Never retain another key copy.
+		if usageSupported(ov.Provider) && key != "" {
+			installation = quotaInstallation{
+				provider: ov.Provider, model: ov.Model, api: meta.API,
+				base: strings.TrimRight(meta.BaseURL, "/"), keySHA: sha256.Sum256([]byte(key)), hasKey: true,
+			}
+			if ov.Provider == "deepseek" {
+				installation.configuredKeySHA = sha256.Sum256([]byte(keyInput.Value))
+			}
+		}
 		applyAuthHeader(key, err)
 		completions := provider.NewCompletionsClient(meta.BaseURL, key, r.settings.MaxRetries, idle)
 		completions.Headers = headers
@@ -1214,6 +1243,7 @@ func (r *runtime) configure(ov config.StartupOverrides) error {
 	}
 	r.ov, r.cfg, r.prov, r.authErr = ov, cfg, client, authErr
 	r.quotaAuthOverride = quotaAuthOverride
+	r.quotaInstall = installation
 	r.reg = tools.NewRegistry(r.store.Cwd())
 	r.reg.Bash.ShellPath = r.settings.ShellPath
 	r.reg.Bash.ShellPrefix = r.settings.ShellPrefix
@@ -1450,6 +1480,7 @@ func (r *runtime) adoptConfiguration(candidate *runtime) {
 	}
 	r.ov, r.cfg, r.prov, r.authErr, r.reg = candidate.ov, candidate.cfg, candidate.prov, candidate.authErr, candidate.reg
 	r.quotaAuthOverride = candidate.quotaAuthOverride
+	r.quotaInstall = candidate.quotaInstall
 }
 
 // publishLive stores the mutable request configuration that a running loop
@@ -1875,6 +1906,9 @@ func (r *runtime) refreshPickerRows(console *terminal.Console) {
 			mode = terminal.PickerSecret
 		}
 		console.SetPicker(login.panel.rows(width, budget, r.footerSnapshot.NoColor, r.footerSnapshot.Theme), mode)
+	} else if r.usagePanel != nil {
+		width, rows := console.PickerSize()
+		console.SetPickerChoiceRows(r.usagePanel.view(width, max(1, rows), r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else if r.settingsPicker != nil {
 		width, rows := console.PickerSize()
 		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
@@ -3057,8 +3091,133 @@ func (r *runtime) repl(console *terminal.Console) error {
 		quotaTimer.Reset(delay)
 		quotaTick = quotaTimer.C
 	}
+	// The manual /usage report has its own slot, context, and deadline. It
+	// never shares the background quota worker or alters the active run.
+	var usage *usageRequest
+	var usageDone <-chan usageJobResult
+	var usageDeadline <-chan time.Time
+	syncUsage := func() {
+		if usage == nil {
+			usageDone, usageDeadline = nil, nil
+			return
+		}
+		usageDone, usageDeadline = usage.done, usage.deadline
+	}
+	retireUsage := func() {
+		// A panel never outlives its request. The next draw clears the region.
+		r.usagePanel = nil
+		if usage != nil {
+			usage.retire()
+			syncUsage()
+		}
+	}
+	defer retireUsage()
+	startUsage := func(arg string, fromPicker bool) {
+		previous := r.usagePanel
+		view := &usageView{}
+		r.usagePanel = view
+		if usage != nil {
+			view.setDetail("", []usageRow{{text: "Usage request already in progress.", token: terminal.TokenWarning}, usageHintRow()})
+			r.draw(console)
+			return
+		}
+		capture, refusal := r.usageCapture(arg)
+		if refusal != "" {
+			view.setDetail("", []usageRow{{text: refusal, token: terminal.TokenError}, usageHintRow()})
+			r.draw(console)
+			return
+		}
+		work := func(ctx context.Context) usageJobResult {
+			return usageJobResult{report: fetchUsageReport(ctx, capture)}
+		}
+		if fromPicker && previous.providerID == capture.providerID && previous.report.usable() {
+			if !r.usageStillCurrent(previous.capture) {
+				view.showReport(capture, usageReport{providerID: capture.providerID, reason: usageReasonChangedConfig})
+				r.draw(console)
+				return
+			}
+			report := previous.report
+			work = func(ctx context.Context) usageJobResult {
+				return usageJobResult{report: recheckUsageDetail(ctx, capture, report)}
+			}
+		}
+		view.setDetail(capture.providerID, usageLoadingRows(capture.providerID))
+		r.draw(console)
+		usage = r.startUsageJob(capture, false, work)
+		syncUsage()
+	}
+	openUsageAccounts := func() {
+		if usage != nil || r.models == nil {
+			return
+		}
+		view := r.usagePanel
+		candidates := r.usageAccountCandidates(view.providerID)
+		discover := r.usageDiscover
+		if discover == nil {
+			discover = discoverUsageAccounts
+		}
+		view.showAccountStatus("Checking accounts…", terminal.TokenMuted)
+		r.draw(console)
+		usage = r.startUsageJob(usageCapture{}, true, func(ctx context.Context) usageJobResult {
+			accounts, reason := discover(ctx, candidates)
+			return usageJobResult{accounts: accounts, reason: reason}
+		})
+		syncUsage()
+	}
+	showUsageTimeout := func(request *usageRequest) {
+		if request.models != nil {
+			r.usagePanel.showAccountStatus("Accounts: request timed out.", terminal.TokenError)
+		} else {
+			id := request.capture.providerID
+			r.usagePanel.showReport(request.capture, usageReport{providerID: id, reason: usageReasonTimeout})
+		}
+		r.draw(console)
+	}
+	settleUsage := func(result usageJobResult) {
+		request := usage
+		request.stopDeadline()
+		usage = nil
+		syncUsage()
+		printable := !request.retired && !request.expired
+		timedOut := printable && !request.completedInTime(result)
+		stale := false
+		if printable && !timedOut {
+			if request.models != nil {
+				stale = r.models != request.models
+			} else if result.report.usable() || request.capture.models != nil {
+				stale = !r.usageStillCurrent(request.capture)
+			}
+		}
+		if r.usageObserved != nil {
+			r.usageObserved(result.report, printable && !timedOut && !stale)
+		}
+		if !printable {
+			return
+		}
+		if timedOut {
+			showUsageTimeout(request)
+			return
+		}
+		view := r.usagePanel
+		if stale {
+			if request.models != nil {
+				view.showAccountStatus("Accounts: model configuration changed.", terminal.TokenError)
+			} else {
+				view.showReport(request.capture, usageReport{providerID: request.capture.providerID, reason: usageReasonChangedConfig})
+			}
+		} else if request.models == nil {
+			view.showReport(request.capture, result.report)
+		} else if result.reason != "" {
+			view.showAccountStatus("Accounts: "+string(result.reason)+".", terminal.TokenError)
+		} else {
+			view.showAccounts(result.accounts)
+		}
+		r.draw(console)
+	}
 	suspend := func() error {
+		quota.pauseAccount()
 		stopQuotaTimer()
+		retireUsage()
 		if err := r.lifecycle.Suspend(); err != nil {
 			return err
 		}
@@ -3103,8 +3262,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 	// Stop terminal work before cancelling the run. Keep the REPL alive
 	// only to settle the worker and handle its events and bridge receipts.
 	releaseTerminal := func() {
+		quota.pauseAccount()
+		stopQuotaTimer()
 		released = true
 		suspendPending = false
+		retireUsage()
 		frameTimer.Stop()
 		resizeTimer.Stop()
 		frameTick, resizeTimeout, themeChanges = nil, nil, nil
@@ -3119,8 +3281,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	for {
 		lastInput.Release()
-		if quota.observe(r) {
+		accountVisible := quota.active.kind == "deepseek" && quota.displayValid
+		if (exiting || released || suspendPending) && (quota.active.kind == "deepseek" || r.ov.Provider == "deepseek") {
+			quota.pauseAccount()
 			stopQuotaTimer()
+			if accountVisible && !released && !exiting {
+				r.draw(console)
+			}
+		} else if quota.observe(r) {
+			stopQuotaTimer()
+			if accountVisible {
+				r.draw(console)
+			}
 		}
 		if exiting && !busy && login == nil {
 			if count := len(r.recovery); count > 0 {
@@ -3146,6 +3318,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		if exiting {
 			stopQuotaTimer()
+			retireUsage()
 		} else {
 			quota.pump(r)
 			armQuotaTimer()
@@ -3169,6 +3342,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 		select {
 		case <-quotaTick:
 			quotaTick = nil
+			if quota.expireAccount() {
+				r.draw(console)
+			}
 		case <-resizeTimeout:
 			resizeTimeout = nil
 			r.draw(console)
@@ -3216,9 +3392,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if isSuspend(sig) {
 				if busy {
 					suspendPending = true
+					retireUsage()
 					cancelActive()
 				} else if login != nil {
 					suspendPending = true
+					retireUsage()
 					cancelLogin()
 				} else if err := suspend(); err != nil {
 					return err
@@ -3288,8 +3466,27 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case result := <-loginDone:
 			settleLogin(result)
 		case result := <-quota.done:
+			if result.kind == "deepseek" {
+				stopQuotaTimer()
+			}
 			if quota.handleResult(result) {
 				r.draw(console)
+			}
+		case result := <-usageDone:
+			settleUsage(result)
+		case cutoff := <-usageDeadline:
+			// A buffered result wins only if it actually finished in time.
+			// A test can inject an earlier cutoff through the timer seam.
+			if !cutoff.IsZero() && cutoff.Before(usage.cutoff) {
+				usage.cutoff = cutoff
+			}
+			select {
+			case result := <-usage.done:
+				settleUsage(result)
+			default:
+				usage.expire()
+				syncUsage()
+				showUsageTimeout(usage)
 			}
 		case ev := <-events:
 			recordEventFrames(func() { applyEvent(ev) })
@@ -3728,9 +3925,57 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				continue
 			}
+			if r.usagePanel != nil {
+				// The panel owns navigation and never submits, queues, or
+				// steers. Ctrl+Z falls through to the shared suspend path.
+				if input.Paste || input.PasteStart || input.PasteEnd {
+					continue
+				}
+				switch string(input.Key) {
+				case "\x1b", "\x03", "\x04":
+					retireUsage()
+					console.RefreshCompletion()
+					r.draw(console)
+					continue
+				case "\r", "\n":
+					view := r.usagePanel
+					if view.picker == nil {
+						openUsageAccounts()
+					} else if _, ok := view.picker.SelectedOption(); ok {
+						startUsage(view.accounts[view.picker.Selected], true)
+					}
+					continue
+				case "\x1b[A", "\x1bOA":
+					r.usagePanel.move(-1)
+					r.draw(console)
+					continue
+				case "\x1b[B", "\x1bOB":
+					r.usagePanel.move(1)
+					r.draw(console)
+					continue
+				case "\x1b[5~", "\x1b[6~":
+					view := r.usagePanel
+					if view.picker == nil {
+						delta := view.limit
+						if string(input.Key) == "\x1b[5~" {
+							delta = -delta
+						}
+						view.move(delta)
+						r.draw(console)
+					}
+					continue
+				}
+				if len(input.Key) != 1 || input.Key[0] != 26 {
+					continue
+				}
+				retireUsage()
+				console.RefreshCompletion()
+				r.draw(console)
+			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
 				if busy {
 					suspendPending = true
+					retireUsage()
 					cancelActive()
 				} else if err := suspend(); err != nil {
 					return err
@@ -4110,6 +4355,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 					startInputMode(agent.UserInput{}, "", inputBump, true)
 				}
 				r.draw(console)
+				continue
+			}
+			// /usage is read-only and asynchronous: it never steers, stops, or
+			// consumes the active run, so it dispatches before the busy guard.
+			if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "usage" {
+				startUsage(cmd.Arg, false)
 				continue
 			}
 			if busy {

@@ -248,6 +248,12 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		beforeBytes := raw.Len()
 		waitFor("stream resize", func(text string) bool { return raw.Len() > beforeBytes && conptyBusyVisible(text) })
 	}
+	write("/usage anthropic\r")
+	waitFor("unsupported account panel", func(text string) bool { return strings.Contains(text, "provider is not supported") })
+	write("\x1b") // Esc dismisses usage without ending the stream.
+	waitFor("editor after usage", func(text string) bool {
+		return !strings.Contains(text, "provider is not supported") && conptyEditorReady(screen)
+	})
 	close(releaseStream)
 	waitFor("stream completion", func(text string) bool { return strings.Contains(text, "STREAM_FINISHED") })
 	waitFor("editor after stream", func(_ string) bool { return conptyEditorReady(screen) })

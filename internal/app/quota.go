@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -18,6 +19,8 @@ const (
 	codexQuotaBaseURL       = "https://chatgpt.com/backend-api"
 	quotaMinSpacing         = 60 * time.Second
 	quotaLocalRetry         = 5 * time.Minute
+	accountQuotaPoll        = 5 * time.Minute
+	accountQuotaTTL         = 6 * time.Minute
 	quotaSampleTTL          = 5 * time.Minute
 	quotaBackoffMaxFailures = 4
 	// Each full cell represents ten percentage points of quota left.
@@ -26,11 +29,26 @@ const (
 
 type quotaCheck func(context.Context, string, time.Time) provider.QuotaUsageResult
 
+// quotaInstallation records the inference client that configure installed: the
+// provider, model, API, endpoint, and a one-way fingerprint of the API key it
+// received. Account usage sources compare it so they never query an account
+// other than the installed client's. No field is rendered, logged, or stored.
+type quotaInstallation struct {
+	provider         string
+	model            string
+	api              string
+	base             string
+	keySHA           [sha256.Size]byte
+	configuredKeySHA [sha256.Size]byte
+	hasKey           bool
+}
+
 type quotaIdentity struct {
 	kind       string
 	client     *provider.CodexClient
 	planClient *provider.Client
 	authPath   string
+	install    quotaInstallation
 }
 
 type quotaSchedule struct {
@@ -62,6 +80,9 @@ type quotaOwner struct {
 	generation uint64
 
 	displayValid bool
+	accountText  string
+	accountToken terminal.ThemeToken
+	accountNext  time.Time // shared completion floor for balance sources
 	used         float64
 	windows      provider.QuotaWindows
 	deadline     time.Time
@@ -120,13 +141,15 @@ func quotaIdentityFor(r *runtime) (quotaIdentity, bool) {
 		}
 		return quotaIdentity{kind: kind, client: client, authPath: client.Auth.Path}, true
 	}
-	if kind != "zai" && kind != "opencode-go" {
+	if kind != "zai" && kind != "opencode-go" && kind != "deepseek" {
 		return quotaIdentity{}, false
 	}
 	var client *provider.Client
 	switch c := r.prov.(type) {
 	case *provider.CompletionsClient:
-		client = c.Client
+		if c != nil {
+			client = c.Client
+		}
 	case *provider.ResponsesClient:
 		client = c.Client
 	case *provider.GoogleClient:
@@ -143,14 +166,29 @@ func quotaIdentityFor(r *runtime) (quotaIdentity, bool) {
 		}
 	}
 	base := strings.TrimRight(client.BaseURL, "/")
+	install := r.quotaInstall
+	if kind == "deepseek" {
+		if _, _, ok := r.activeUsagePolicy(kind); !ok || r.cfg.Model.API != install.api ||
+			r.cfg.Model.ID != install.model || base != install.base || sha256.Sum256([]byte(client.APIKey)) != install.keySHA {
+			return quotaIdentity{}, false
+		}
+		// Do not send the inference client's key to the worker. It binds a
+		// fresh credential read to the installed fingerprint instead.
+		return quotaIdentity{kind: kind, install: install}, true
+	}
 	if kind == "zai" {
 		if r.cfg.Model.API != "openai-completions" || base != providerregistry.DefaultEndpoint(kind, r.cfg.Model.API) {
+			return quotaIdentity{}, false
+		}
+		// The Z.AI reading belongs to the plan account that the installed
+		// client uses. A client built for another route or key cannot read it.
+		if install.provider != kind || install.model != r.ov.Model || install.api != r.cfg.Model.API || install.base != base || !install.hasKey {
 			return quotaIdentity{}, false
 		}
 	} else if !providerregistry.TrustedCachedEndpoint(kind, r.cfg.Model.API, base) {
 		return quotaIdentity{}, false
 	}
-	return quotaIdentity{kind: kind, planClient: client}, true
+	return quotaIdentity{kind: kind, planClient: client, install: install}, true
 }
 
 // observe reacts only to an activation change. Each provider keeps its own
@@ -203,6 +241,7 @@ func (q *quotaOwner) invalidate() {
 	q.nextPoll = time.Time{}
 	q.stopped = false
 	q.displayValid = false
+	q.accountText, q.accountToken = "", ""
 	q.used = 0
 	q.windows = provider.QuotaWindows{}
 	q.deadline = time.Time{}
@@ -220,21 +259,54 @@ func (q *quotaOwner) close() {
 	q.running = false
 	q.nextPoll = time.Time{}
 	q.displayValid = false
+	q.accountText, q.accountToken = "", ""
 	q.used = 0
 	q.deadline = time.Time{}
 }
 
-// due reports the next time the REPL should wake for a check. Only a state
-// without an outstanding worker can be armed; a worker owns its result.
+// pauseAccount cancels account polling without freeing the outstanding slot.
+// Legacy sources keep their existing suspend behavior.
+func (q *quotaOwner) pauseAccount() {
+	if q.active.kind == "deepseek" && q.eligible {
+		q.invalidate()
+		q.eligible = false
+		q.active = quotaIdentity{}
+	}
+}
+
+func (q *quotaOwner) expireAccount() bool {
+	now := q.now()
+	if q.active.kind == "deepseek" && q.displayValid && !now.Before(q.deadline) {
+		return q.clearDisplay(now)
+	}
+	return false
+}
+
+// due reports the next poll or balance display expiry. Only a state without
+// a worker can start a poll, but expiry still wakes an idle terminal.
 func (q *quotaOwner) due() (time.Time, bool) {
-	if q == nil || q.check == nil || q.running || !q.eligible || q.stopped || q.disabled || q.nextPoll.IsZero() {
+	if q == nil {
 		return time.Time{}, false
 	}
+	var at time.Time
+	if q.check != nil && !q.running && q.eligible && !q.stopped && !q.disabled && !q.nextPoll.IsZero() {
+		at = q.pollDue()
+	}
+	if q.active.kind == "deepseek" && q.displayValid && (at.IsZero() || q.deadline.Before(at)) {
+		at = q.deadline
+	}
+	return at, !at.IsZero()
+}
+
+func (q *quotaOwner) pollDue() time.Time {
 	at := q.nextPoll
 	if q.nextStart.After(at) {
 		at = q.nextStart
 	}
-	return at, true
+	if q.active.kind == "deepseek" && q.accountNext.After(at) {
+		at = q.accountNext
+	}
+	return at
 }
 
 // pump starts at most one worker after rechecking the installed identity,
@@ -246,28 +318,51 @@ func (q *quotaOwner) pump(r *runtime) {
 		return
 	}
 	now := q.now()
-	if now.Before(q.nextStart) || now.Before(q.nextPoll) {
+	if now.Before(q.pollDue()) {
 		return
+	}
+	var capture usageCapture
+	notBefore := q.nextStart
+	if identity.kind == "deepseek" {
+		var ok bool
+		capture, _, ok = r.usageActiveCapture(identity.kind)
+		if !ok {
+			return
+		}
+		notBefore = q.pollDue()
 	}
 	q.nextPoll = time.Time{}
 	q.running = true
 	generation := q.generation
 	identity = q.active
-	notBefore := q.nextStart
-	ctx, cancel := context.WithCancel(context.Background())
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if identity.kind == "deepseek" {
+		ctx, cancel = context.WithTimeout(context.Background(), usageLookupTimeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
 	q.cancel = cancel
 	go func() {
+		defer cancel()
 		var usage provider.QuotaUsageResult
-		if identity.kind == "openai-codex" {
+		switch identity.kind {
+		case "openai-codex":
 			usage = q.check(ctx, identity.authPath, notBefore)
-		} else {
+		case "deepseek":
+			usage, _, _ = lookupUsage(ctx, capture, notBefore)
+		default:
 			usage = q.checkPlan(ctx, identity.kind, identity.planClient.APIKey, notBefore)
+		}
+		canceled := quotaCanceled(usage, ctx)
+		if identity.kind == "deepseek" && ctx.Err() == context.Canceled {
+			canceled = !quotaTransientStatus(usage.Status)
 		}
 		q.done <- quotaResult{
 			kind:        identity.kind,
 			generation:  generation,
 			usage:       usage,
-			canceled:    quotaCanceled(usage, ctx),
+			canceled:    canceled,
 			completedAt: q.now(),
 		}
 	}()
@@ -282,6 +377,13 @@ func (q *quotaOwner) handleResult(result quotaResult) bool {
 	}
 	q.running = false
 	q.cancel = nil
+	if result.kind == "deepseek" {
+		completed := result.completedAt
+		if completed.IsZero() {
+			completed = q.now()
+		}
+		q.accountNext = completed.Add(quotaMinSpacing)
+	}
 	if result.kind != "" && result.kind != q.policyKind {
 		q.recordOtherProviderResult(result)
 		return false
@@ -315,14 +417,19 @@ func (q *quotaOwner) handleResult(result quotaResult) bool {
 				if q.active.kind == "opencode-go" {
 					used = max(used, usage.Windows.Weekly, usage.Windows.Monthly)
 				}
-				q.scheduleSuccess(completed, used)
+				if q.active.kind == "deepseek" {
+					q.pushStart(completed.Add(accountQuotaPoll))
+					q.nextPoll = q.nextStart
+				} else {
+					q.scheduleSuccess(completed, used)
+				}
 			} else {
 				q.nextPoll = time.Time{}
 			}
 			return changed
 		}
 		if !q.disabled {
-			q.pushStart(q.ordinaryDue(completed))
+			q.pushStart(q.retiredSuccessDue(result.kind, completed))
 		}
 		return false
 	}
@@ -388,7 +495,7 @@ func (q *quotaOwner) recordOtherProviderResult(result quotaResult) {
 			due = q.ordinaryDue(completed)
 		}
 	case usage.Sample:
-		due = q.ordinaryDue(completed)
+		due = q.retiredSuccessDue(result.kind, completed)
 	case quotaGETFailure(usage):
 		state.failures = min(state.failures+1, quotaBackoffMaxFailures)
 		due = q.failureDueFor(completed, usage.RetryAt, state.failures)
@@ -401,15 +508,33 @@ func (q *quotaOwner) recordOtherProviderResult(result quotaResult) {
 	q.policies[result.kind] = state
 }
 
+func (q *quotaOwner) retiredSuccessDue(kind string, completed time.Time) time.Time {
+	if kind == "deepseek" {
+		return completed.Add(accountQuotaPoll)
+	}
+	return q.ordinaryDue(completed)
+}
+
 func (q *quotaOwner) publish(now time.Time, usage provider.QuotaUsageResult) bool {
 	deadline := usage.StartedAt.Add(quotaSampleTTL)
+	var text string
+	var token terminal.ThemeToken
+	if q.active.kind == "deepseek" {
+		deadline = usage.StartedAt.Add(accountQuotaTTL)
+		text, token = deepSeekQuotaSuffix(usage.Balance)
+		if text == "" {
+			return q.clearDisplay(now)
+		}
+	}
 	if !usage.ExpiresAt.IsZero() && usage.ExpiresAt.Before(deadline) {
 		deadline = usage.ExpiresAt
 	}
 	if !deadline.After(now) {
 		return q.clearDisplay(now)
 	}
-	changed := !q.displayValid || !now.Before(q.deadline) || q.used != usage.UsedPercent || q.windows != usage.Windows
+	changed := !q.displayValid || !now.Before(q.deadline) || q.used != usage.UsedPercent || q.windows != usage.Windows ||
+		q.accountText != text || q.accountToken != token || (text != "" && q.deadline != deadline)
+	q.accountText, q.accountToken = text, token
 	q.displayValid = true
 	q.used = usage.UsedPercent
 	q.windows = usage.Windows
@@ -421,7 +546,8 @@ func (q *quotaOwner) clearDisplay(now time.Time) bool {
 	if !q.displayValid {
 		return false
 	}
-	visible := now.Before(q.deadline)
+	visible := q.active.kind == "deepseek" || now.Before(q.deadline)
+	q.accountText, q.accountToken = "", ""
 	q.displayValid = false
 	q.used = 0
 	q.deadline = time.Time{}
@@ -505,10 +631,14 @@ func quotaGETFailure(usage provider.QuotaUsageResult) bool {
 		return false
 	}
 	switch usage.Status {
-	case 0, http.StatusOK, http.StatusRequestTimeout, http.StatusTooManyRequests:
+	case 0, http.StatusOK:
 		return true
 	}
-	return usage.Status >= 500
+	return quotaTransientStatus(usage.Status)
+}
+
+func quotaTransientStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500
 }
 
 func quotaBaseDelay(used float64) time.Duration {
@@ -546,13 +676,35 @@ func (q *quotaOwner) presentation(r *runtime) (string, terminal.ThemeToken, time
 		return "", "", time.Time{}
 	}
 	switch identity.kind {
+	case "deepseek":
+		return q.accountText, q.accountToken, q.deadline
 	case "zai":
-		return "GLM " + quotaRemaining(q.used), terminal.TokenMuted, q.deadline
+		return zaiQuotaSuffix(q.used), terminal.TokenMuted, q.deadline
 	case "opencode-go":
 		return "Go R" + quotaRemaining(q.windows.Rolling) + " W" + quotaRemaining(q.windows.Weekly) + " M" + quotaRemaining(q.windows.Monthly), terminal.TokenMuted, q.deadline
 	default:
 		return codexQuotaSuffix(q.used), terminal.TokenMuted, q.deadline
 	}
+}
+
+func deepSeekQuotaSuffix(balance *provider.DeepSeekBalance) (string, terminal.ThemeToken) {
+	if balance == nil {
+		return "", ""
+	}
+	if balance.Available != nil && !*balance.Available {
+		return "DeepSeek unavailable", terminal.TokenError
+	}
+	if len(balance.Balances) == 0 {
+		return "", ""
+	}
+	amount := balance.Balances[0]
+	for _, candidate := range balance.Balances {
+		if candidate.Currency == "USD" {
+			amount = candidate
+			break
+		}
+	}
+	return "DeepSeek " + amount.Currency + " " + amount.Total, usageMoneyToken(amount.Total)
 }
 
 func quotaRemaining(used float64) string {
@@ -581,4 +733,13 @@ func codexQuotaSuffix(used float64) string {
 	}
 	filled, empty := terminal.FooterBarCells(terminal.FooterBarEighths(remaining, codexQuotaTrackCells), codexQuotaTrackCells)
 	return "[" + filled + empty + "] Codex: " + label
+}
+
+// zaiQuotaSuffix matches the Codex track direction: the bar starts full and
+// drains as the five-hour plan quota is used, while the caption states what is
+// left. Z.AI reports used percentage, so the track receives the remainder.
+func zaiQuotaSuffix(used float64) string {
+	remaining := 100 - used
+	filled, empty := terminal.FooterBarCells(terminal.FooterBarEighths(remaining, codexQuotaTrackCells), codexQuotaTrackCells)
+	return "[" + filled + empty + "] GLM 5h " + quotaRemaining(used) + " Left"
 }

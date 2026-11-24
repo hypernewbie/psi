@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,23 @@ type QuotaWindows struct {
 	Monthly float64
 }
 
+// PlanWindows holds Z.AI's model credit readings. A nil window is missing,
+// ambiguous, or unusable; it is never zero. The panel keeps the two windows
+// independent, while the footer still needs a usable five-hour reading.
+type PlanWindows struct {
+	FiveHour *float64
+	Weekly   *float64
+}
+
+// quotaSample is one fetcher's decoded response. values keeps the legacy
+// percent triple used by the quota owner; plan carries windows the interactive
+// report shows but the footer does not use.
+type quotaSample struct {
+	values [3]float64
+	ok     bool
+	plan   *PlanWindows
+}
+
 // QuotaUsageResult carries used percentages and bounded timing data. A sample
 // is usable only when Sample is true. No raw body or error text is retained.
 type QuotaUsageResult struct {
@@ -45,6 +63,10 @@ type QuotaUsageResult struct {
 	Status      int
 	UsedPercent float64
 	Windows     QuotaWindows
+	// Plan is set only when a fetcher returns plan windows, including a
+	// weekly-only reading that is not a footer sample.
+	Plan        *PlanWindows
+	Balance     *DeepSeekBalance
 	Sample      bool
 	StartedAt   time.Time
 	ExpiresAt   time.Time
@@ -56,6 +78,16 @@ type QuotaUsageResult struct {
 // fetchQuota owns the bounded response buffer; the parser borrows it only for
 // the duration of the call. HTTP and JSON may retain their own copies.
 func fetchQuota(ctx context.Context, endpoint string, headers http.Header, client *http.Client, parse func([]byte) ([3]float64, bool)) QuotaUsageResult {
+	return fetchQuotaWith(ctx, endpoint, headers, client, func(body []byte) quotaSample {
+		values, ok := parse(body)
+		return quotaSample{values: values, ok: ok}
+	})
+}
+
+// fetchQuotaWith performs the bounded GET and lets one fetcher decode a typed
+// sample. The parser borrows the body only for the call; HTTP and JSON may keep
+// their own copies.
+func fetchQuotaWith(ctx context.Context, endpoint string, headers http.Header, client *http.Client, parse func([]byte) quotaSample) QuotaUsageResult {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, quotaTimeout)
 	defer cancel()
@@ -71,7 +103,7 @@ func fetchQuota(ctx context.Context, endpoint string, headers http.Header, clien
 	defer resp.Body.Close()
 	retryAt, stop := quotaRetry(resp.StatusCode, resp.Header.Values("Retry-After"), time.Now())
 	result := QuotaUsageResult{Status: resp.StatusCode, StartedAt: started, RetryAt: retryAt, StopPolling: stop}
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, quotaBodyLimit+1))
+	body, readErr := readQuotaBody(resp.Body)
 	defer secretmem.Wipe(body[:cap(body)])
 	if readErr != nil {
 		result.Outcome = QuotaUsageTemporarilyUnavailable
@@ -85,14 +117,20 @@ func fetchQuota(ctx context.Context, endpoint string, headers http.Header, clien
 		result.Outcome = quotaStatusOutcome(resp.StatusCode)
 		return result
 	}
-	values, ok := parse(body)
-	if !ok {
+	sample := parse(body)
+	result.Plan = sample.plan
+	if !sample.ok {
 		result.Outcome = QuotaUsageUnsupported
 		return result
 	}
-	result.Outcome, result.Sample, result.UsedPercent = QuotaUsageSupported, true, values[0]
-	result.Windows = QuotaWindows{Rolling: values[0], Weekly: values[1], Monthly: values[2]}
+	result.Outcome, result.Sample, result.UsedPercent = QuotaUsageSupported, true, sample.values[0]
+	result.Windows = QuotaWindows{Rolling: sample.values[0], Weekly: sample.values[1], Monthly: sample.values[2]}
 	return result
+}
+
+// readQuotaBody returns caller-owned bytes, including a possible overflow byte.
+func readQuotaBody(body io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(body, quotaBodyLimit+1))
 }
 
 func newQuotaHTTPClient(transport http.RoundTripper) *http.Client {
@@ -192,6 +230,27 @@ func quotaStatusOutcome(status int) QuotaUsageOutcome {
 		return QuotaUsageTemporarilyUnavailable
 	default:
 		return QuotaUsageUnsupported
+	}
+}
+
+// quotaBodyIsOneJSONValue rejects duplicate keys and trailing values. Scan
+// number syntax without converting to float64; each parser validates its own
+// fields, so an unusable numeric value cannot invalidate a sibling field.
+func quotaBodyIsOneJSONValue(body []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	duplicate, err := duplicateJSONObjectKeys(decoder)
+	if err != nil || duplicate {
+		return false
+	}
+	_, err = decoder.Token()
+	return err == io.EOF
+}
+
+// wipeQuotaRows releases the raw-message copies owned by the parser.
+func wipeQuotaRows(rows []json.RawMessage) {
+	for _, raw := range rows {
+		secretmem.Wipe(raw[:cap(raw)])
 	}
 }
 

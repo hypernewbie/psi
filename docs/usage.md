@@ -44,6 +44,31 @@ width-adaptive bar can sit between them.
 - Sizing uses only the terminal width. psi does not request provider data to
   draw the bar.
 
+## Check provider usage
+
+Enter `/usage` to check the active provider first. Enter again to open
+**Accounts**. Use Up/Down to highlight a provider and Enter to load it. You can
+also open an account directly with `/usage zai` or `/usage deepseek`.
+
+Accounts lists only Z.AI and DeepSeek with a usable local credential and a
+direct, official route. Opening the list and moving the highlight do not
+contact either provider. Choosing a different account does not switch the
+active model or footer. If no other account is available, the panel keeps
+showing the current detail.
+
+Z.AI shows the five-hour and weekly plan quota separately. DeepSeek shows
+account availability when reported, plus the total and any reported granted
+or topped-up amounts for each usable currency. The footer shows only Z.AI's
+five-hour reading or DeepSeek's USD balance (the first usable currency if
+there is no USD balance). It shows `DeepSeek unavailable` if the account is
+explicitly unavailable.
+
+The panel makes one bounded request when it loads an account and does not
+retry. Errors stay in the panel. In the detail view, use Up/Down or Page
+Up/Page Down to scroll. Esc closes either view and returns to the editor.
+Opening and closing the panel does not add a message to the session or
+interrupt a running reply.
+
 ## Enter a prompt
 
 Type a request and press `Enter`. An empty `Enter` retries an unfinished turn (failed, interrupted, or recovered from a crash) and is ignored otherwise. `/b` and `/bump` request another response from the current context, including after a completed or output-limited answer, without adding a prompt.

@@ -75,13 +75,20 @@ func startLoginTestREPL(t *testing.T, r *runtime) (*terminal.Console, *notifying
 
 func startLoginTestREPLWidth(t *testing.T, r *runtime, width int) (*terminal.Console, *notifyingBuffer, *os.File, chan error) {
 	t.Helper()
+	return startLoginTestREPLSize(t, r, width, 24)
+}
+
+// startLoginTestREPLSize sets an explicit terminal size before the REPL
+// starts, so panel row budgets are deterministic.
+func startLoginTestREPLSize(t *testing.T, r *runtime, width, height int) (*terminal.Console, *notifyingBuffer, *os.File, chan error) {
+	t.Helper()
 	input, inputWrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := &notifyingBuffer{notify: make(chan struct{}, 1)}
 	console := terminal.NewConsole(input, out)
-	console.SizeFunc = func() (int, int) { return width, 24 }
+	console.SizeFunc = func() (int, int) { return width, height }
 	result := make(chan error, 1)
 	finished := make(chan struct{})
 	go func() {

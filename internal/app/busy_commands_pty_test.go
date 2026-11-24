@@ -91,6 +91,12 @@ func TestActualAppBusyInformationalCommandsAndSlashSteering(t *testing.T) {
 	q.wait("Keys (fixed, no Kitty required):")
 	q.write("/name PR3-busy\r")
 	q.wait("Session name set: PR3-busy")
+	q.write("/usage anthropic\r")
+	q.waitScreen("provider is not supported")
+	q.write("\x1b") // Esc closes the panel, not the held inference stream.
+	q.waitScreenMatch("usage panel dismissed", func(text string) bool {
+		return !strings.Contains(text, "provider is not supported")
+	})
 	// Idle-only commands must not appear in provider context. Adding a
 	// character after submission proves the draft and its cursor survived,
 	// not just that the command was visible in a pre-submit frame.
@@ -118,6 +124,10 @@ func TestActualAppBusyInformationalCommandsAndSlashSteering(t *testing.T) {
 	second := busyWaitBody(t, bodies)
 	if !strings.Contains(string(second), "/not-a-command hello") {
 		t.Fatalf("steering text missing from the next request: %s", second)
+	}
+
+	if strings.Contains(string(second), "/usage anthropic") || strings.Contains(string(second), "provider is not supported") {
+		t.Fatal("the usage command or refusal reached inference context")
 	}
 
 	q.prompt()
