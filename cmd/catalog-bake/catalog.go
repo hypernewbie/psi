@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"sort"
 	"strings"
@@ -178,7 +179,7 @@ var requiredModelsDevSources = []string{
 // buildCatalog normalizes one complete catalog. When requireComplete is false
 // only the requested provider definitions are checked; the opt-in one-provider
 // live proof uses that mode and never publishes a partial public catalog.
-func buildCatalog(modelsDev modelsDevCatalog, openRouter openRouterListing, defs []*providerDef, requireComplete bool) (map[string][]*catalogModel, error) {
+func buildCatalog(modelsDev modelsDevCatalog, openRouter openRouterListing, defs []*providerDef, requireComplete bool, warnings io.Writer) (map[string][]*catalogModel, error) {
 	if requireComplete {
 		for _, source := range requiredModelsDevSources {
 			bucket, ok := modelsDev[source]
@@ -195,10 +196,10 @@ func buildCatalog(modelsDev modelsDevCatalog, openRouter openRouterListing, defs
 		return nil, fmt.Errorf("OpenRouter listing produced no tool-capable models")
 	}
 	ctx := &buildContext{modelsDev: modelsDev, openRouter: openRouterModels, chatCache: map[string][]*sourceModel{}}
-	return buildDefinitions(ctx, defs, requireComplete)
+	return buildDefinitions(ctx, defs, requireComplete, warnings)
 }
 
-func buildDefinitions(ctx *buildContext, defs []*providerDef, requireComplete bool) (map[string][]*catalogModel, error) {
+func buildDefinitions(ctx *buildContext, defs []*providerDef, requireComplete bool, warnings io.Writer) (map[string][]*catalogModel, error) {
 	rows := make(map[string][]*catalogModel, len(defs))
 	seenDefs := map[string]bool{}
 	for _, def := range defs {
@@ -212,6 +213,7 @@ func buildDefinitions(ctx *buildContext, defs []*providerDef, requireComplete bo
 		}
 		rows[def.id] = models
 	}
+	applyReviewedLimitOverrides(rows, requireComplete, warnings)
 	if err := validateCatalogRows(rows, requireComplete); err != nil {
 		return nil, err
 	}
@@ -230,7 +232,18 @@ func buildProvider(ctx *buildContext, def *providerDef, requireSource bool) ([]*
 	add := func(model *catalogModel, effort map[string]*string) error {
 		model.provider = def.id
 		if previous, ok := seen[model.ID]; ok {
-			if !reflect.DeepEqual(previous, model) || !reflect.DeepEqual(effortByID[model.ID], effort) {
+			// The final override replaces these two fields. Compare the reviewed
+			// pair first so source drift in limits is not a duplicate conflict.
+			previousForComparison, modelForComparison := previous, model
+			if override, reviewed := reviewedLimitOverrides[def.id][model.ID]; reviewed {
+				previousCopy, modelCopy := *previous, *model
+				previousCopy.ContextWindow = override.contextWindow
+				previousCopy.MaxTokens = override.maxTokens
+				modelCopy.ContextWindow = override.contextWindow
+				modelCopy.MaxTokens = override.maxTokens
+				previousForComparison, modelForComparison = &previousCopy, &modelCopy
+			}
+			if !reflect.DeepEqual(previousForComparison, modelForComparison) || !reflect.DeepEqual(effortByID[model.ID], effort) {
 				return fmt.Errorf("%s: conflicting duplicate model id %q", def.id, model.ID)
 			}
 			return nil
@@ -329,6 +342,15 @@ func buildProvider(ctx *buildContext, def *providerDef, requireSource bool) ([]*
 }
 
 func newCatalogModel(def *providerDef, source *sourceModel) *catalogModel {
+	// Only reviewed rows opt into the source input limit. Compare against the
+	// raw source context, not the default fallback, and ignore unusable input.
+	contextWindow := defaultLimit(source.ContextWindow)
+	if _, reviewed := reviewedLimitOverrides[def.id][source.ID]; reviewed {
+		var sourceInput int
+		if json.Unmarshal(source.LimitInput, &sourceInput) == nil && sourceInput > 0 && sourceInput < source.ContextWindow {
+			contextWindow = sourceInput
+		}
+	}
 	input := []string{"text"}
 	if source.ImageInput {
 		input = append(input, "image")
@@ -338,7 +360,7 @@ func newCatalogModel(def *providerDef, source *sourceModel) *catalogModel {
 		Name:          source.Name,
 		API:           def.api,
 		BaseURL:       def.baseURL,
-		ContextWindow: defaultLimit(source.ContextWindow),
+		ContextWindow: contextWindow,
 		MaxTokens:     defaultLimit(source.MaxTokens),
 		Reasoning:     source.Reasoning,
 		Input:         input,
@@ -770,7 +792,7 @@ func sha256Hex(body []byte) string {
 // assembleArtifacts decodes the exact input bytes, builds and validates the
 // catalog, and returns both published documents. Provenance values are passed
 // in so a replay with identical bytes and times is byte-identical.
-func assembleArtifacts(inputs fetchedInputs, defs []*providerDef, requireComplete bool, now func() time.Time) (catalogBytes, sourceBytes []byte, err error) {
+func assembleArtifacts(inputs fetchedInputs, defs []*providerDef, requireComplete bool, now func() time.Time, warnings io.Writer) (catalogBytes, sourceBytes []byte, err error) {
 	var modelsDev modelsDevCatalog
 	if err := json.Unmarshal(inputs.modelsDevBody, &modelsDev); err != nil {
 		return nil, nil, fmt.Errorf("models.dev input: %w", err)
@@ -779,7 +801,7 @@ func assembleArtifacts(inputs fetchedInputs, defs []*providerDef, requireComplet
 	if err := json.Unmarshal(inputs.openRouterBody, &openRouter); err != nil {
 		return nil, nil, fmt.Errorf("OpenRouter input: %w", err)
 	}
-	rows, err := buildCatalog(modelsDev, openRouter, defs, requireComplete)
+	rows, err := buildCatalog(modelsDev, openRouter, defs, requireComplete, warnings)
 	if err != nil {
 		return nil, nil, err
 	}

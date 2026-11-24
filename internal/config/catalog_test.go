@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/hypernewbie/psi/internal/modelmeta"
@@ -141,6 +143,91 @@ func TestModelAPIEndpointAndCompatPrecedence(t *testing.T) {
 	}
 	if _, hasValue, present := model.Compat.Bool("supportsStrictMode"); hasValue || !present || !model.Compat.IsNull("supportsStrictMode") {
 		t.Fatalf("explicit null was lost: hasValue=%t present=%t", hasValue, present)
+	}
+}
+
+func TestBundledCatalogMatchesManifest(t *testing.T) {
+	var manifest struct {
+		CatalogSHA256 string `json:"catalogSHA256"`
+	}
+	if err := json.Unmarshal(catalogSourceJSON, &manifest); err != nil {
+		t.Fatalf("decode embedded catalog manifest: %v", err)
+	}
+	if digest := fmt.Sprintf("%x", sha256.Sum256(catalogJSON)); digest != manifest.CatalogSHA256 {
+		t.Fatalf("embedded catalog SHA-256 = %s, manifest records %q", digest, manifest.CatalogSHA256)
+	}
+}
+
+func TestBundledOpenAIAndCodexContextLimits(t *testing.T) {
+	// Direct OpenAI 1.05M models expose 922K max input. psi stores one
+	// contextWindow value and uses it for threshold compaction, so the catalog
+	// uses the input limit. The 272K long-context price threshold is not a
+	// context limit.
+	for _, test := range []struct {
+		provider                 string
+		id                       string
+		contextWindow, maxTokens int
+	}{
+		{"openai", "gpt-5.4", 922000, 128000},
+		{"openai", "gpt-5.4-pro", 922000, 128000},
+		{"openai", "gpt-5.5", 922000, 128000},
+		{"openai", "gpt-5.5-pro", 922000, 128000},
+		{"openai", "gpt-5.6-luna", 922000, 128000},
+		{"openai", "gpt-5.6-sol", 922000, 128000},
+		{"openai", "gpt-5.6-terra", 922000, 128000},
+		{"openai", "gpt-6-astra", 922000, 128000},
+		{"openai", "gpt-6-cyber", 922000, 128000},
+		{"openai", "gpt-6-sol", 922000, 128000},
+		{"openai", "gpt-6-luna", 922000, 128000},
+		{"openai", "gpt-6.1-sol", 922000, 128000},
+		{"openai", "gpt-6.1-terra", 922000, 128000},
+		{"openai", "gpt-6.2-astra", 922000, 128000},
+		{"openai", "gpt-6.2-sol", 922000, 128000},
+		{"openai", "gpt-daybreak-blue-latest", 922000, 128000},
+		{"openai", "gpt-5-pro", 400000, 272000},
+		// Codex uses the bundled defaults from openai/codex, not the API limits.
+		{"openai-codex", "gpt-5.6-luna", 272000, 128000},
+		{"openai-codex", "gpt-5.6-sol", 272000, 128000},
+		{"openai-codex", "gpt-5.6-terra", 272000, 128000},
+		{"openai-codex", "gpt-6-astra", 272000, 128000},
+		{"openai-codex", "gpt-6-sol", 272000, 128000},
+		{"openai-codex", "gpt-6-luna", 272000, 128000},
+		{"openai-codex", "gpt-6.1-sol", 500000, 128000},
+		{"openai-codex", "gpt-6.1-terra", 500000, 128000},
+		{"openai-codex", "gpt-6.2-astra", 272000, 128000},
+		{"openai-codex", "gpt-6.2-sol", 500000, 128000},
+	} {
+		model, ok := bundledModel(test.provider, test.id)
+		if !ok {
+			t.Fatalf("bundled model %s/%s is missing", test.provider, test.id)
+		}
+		if model.ContextWindow != test.contextWindow || model.MaxTokens != test.maxTokens {
+			t.Errorf("%s/%s limits = %d/%d, want %d/%d", test.provider, test.id,
+				model.ContextWindow, model.MaxTokens, test.contextWindow, test.maxTokens)
+		}
+	}
+}
+
+func TestBundledOpenCodeGoContextLimits(t *testing.T) {
+	// OpenCode Go exposes full context windows but smaller max input limits on
+	// these models. psi uses one contextWindow value for threshold compaction,
+	// so the catalog uses the input limit and leaves room for the output budget.
+	for _, test := range []struct {
+		id                       string
+		contextWindow, maxTokens int
+	}{
+		{"hy3", 192000, 128000},
+		{"gpt-5.6-luna", 922000, 128000},
+		{"gpt-6-luna", 922000, 128000},
+	} {
+		model, ok := bundledModel("opencode-go", test.id)
+		if !ok {
+			t.Fatalf("bundled model opencode-go/%s is missing", test.id)
+		}
+		if model.ContextWindow != test.contextWindow || model.MaxTokens != test.maxTokens {
+			t.Errorf("opencode-go/%s limits = %d/%d, want %d/%d", test.id,
+				model.ContextWindow, model.MaxTokens, test.contextWindow, test.maxTokens)
+		}
 	}
 }
 

@@ -1,5 +1,5 @@
 {
-  "generator": "catalog-bake-go-v1",
+  "generator": "catalog-bake-go-v1+reviewed-limit-amendment",
   "catalogRuleRevision": "b9e94bb8d08d06c1028b0e3baab55bb1c5c51d53",
   "protocolReference": "c3cc91632d0a1950fb122605b190233f2aa0006e",
   "generatedAt": "2026-11-20T09:19:49.464853935Z",
@@ -36,5 +36,5 @@
     "xiaomi-token-plan-sgp": "models-dev",
     "zai": "models-dev"
   },
-  "catalogSHA256": "2789419950f3330ef5f2e2ba61759db87886d9958485121dc3f9ee48802ad6df"
+  "catalogSHA256": "a4e30e74c615e2389c03b1d03a4be07e9b47a574a48b890f1cc4d8ca3f85ca41"
 }

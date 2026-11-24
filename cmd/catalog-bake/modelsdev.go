@@ -51,8 +51,9 @@ type modelsDevReasoning struct {
 }
 
 type modelsDevLimits struct {
-	Context *int `json:"context"`
-	Output  *int `json:"output"`
+	Context *int            `json:"context"`
+	Output  *int            `json:"output"`
+	Input   json.RawMessage `json:"input,omitempty"`
 }
 
 type modelsDevAPI struct {
@@ -140,6 +141,7 @@ type sourceModel struct {
 	ImageInput       bool
 	ContextWindow    int // zero when upstream omitted or zeroed the limit
 	MaxTokens        int
+	LimitInput       json.RawMessage
 	Cost             modelCost
 	APIs             []sourceAPI
 }
@@ -211,6 +213,7 @@ func normalizeModelsDevModel(raw modelsDevModel) (*sourceModel, error) {
 		Reasoning:     raw.Capabilities.Reasoning.Supported,
 		ContextWindow: intValue(raw.Limit.Context),
 		MaxTokens:     intValue(raw.Limit.Output),
+		LimitInput:    raw.Limit.Input,
 	}
 	if model.Name == "" {
 		model.Name = model.ID

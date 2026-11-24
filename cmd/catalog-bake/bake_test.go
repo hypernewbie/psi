@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +70,10 @@ func withLimits(contextWindow, maxTokens int) mdOption {
 	}
 }
 
+func withInputLimit(value string) mdOption {
+	return func(row *modelsDevModel) { row.Limit.Input = json.RawMessage(value) }
+}
+
 func withAPIs(apis map[string]modelsDevAPI) mdOption {
 	return func(row *modelsDevModel) { row.API = apis }
 }
@@ -88,7 +94,7 @@ func catalogWith(provider string, rows ...modelsDevModel) modelsDevCatalog {
 
 func buildRows(t *testing.T, catalog modelsDevCatalog, defs []*providerDef) map[string][]*catalogModel {
 	t.Helper()
-	rows, err := buildCatalog(catalog, openRouterListing{}, defs, false)
+	rows, err := buildCatalog(catalog, openRouterListing{}, defs, false, nil)
 	if err != nil {
 		t.Fatalf("build failed: %v", err)
 	}
@@ -141,6 +147,7 @@ func TestOpenAIAndCodexRules(t *testing.T) {
 			})),
 		mdRow("gpt-5.6", withReasoning("low", "high"), withAPIs(responsesAPI)),
 		mdRow("gpt-5.6-sol", withReasoning("low", "high"), withAPIs(responsesAPI)),
+		mdRow("gpt-5-pro", withLimits(400000, 272000), withAPIs(responsesAPI)),
 		mdRow("gpt-4o-audio", withAPIs(map[string]modelsDevAPI{"chat-completions": {BaseURL: "https://api.openai.com/v1"}})),
 	)
 	rows := buildRows(t, openAI, []*providerDef{openAIProvider()})
@@ -149,8 +156,8 @@ func TestOpenAIAndCodexRules(t *testing.T) {
 	if direct == nil {
 		t.Fatal("direct gpt-6.1-sol is missing")
 	}
-	if direct.ContextWindow != 272000 || direct.MaxTokens != 128000 {
-		t.Fatalf("direct gpt-6.1-sol limits = %d/%d, want 272000/128000", direct.ContextWindow, direct.MaxTokens)
+	if direct.ContextWindow != 922000 || direct.MaxTokens != 128000 {
+		t.Fatalf("direct gpt-6.1-sol limits = %d/%d, want 922000/128000", direct.ContextWindow, direct.MaxTokens)
 	}
 	if value, present := direct.ThinkingLevelMap["off"]; !present || value != nil {
 		t.Fatalf("direct gpt-6.1-sol off = %v present=%v, want explicit null", value, present)
@@ -161,7 +168,7 @@ func TestOpenAIAndCodexRules(t *testing.T) {
 	gpt62 := catalogWith("openai", mdRow("gpt-6.2-sol", withReasoning("low", "medium", "high", "xhigh", "max"), withLimits(1050000, 128000), withAPIs(responsesAPI)))
 	gpt62Rows := buildRows(t, gpt62, []*providerDef{openAIProvider()})
 	direct62 := rowByID(gpt62Rows["openai"], "gpt-6.2-sol")
-	if direct62 == nil || direct62.ContextWindow != 272000 || direct62.MaxTokens != 128000 {
+	if direct62 == nil || direct62.ContextWindow != 922000 || direct62.MaxTokens != 128000 {
 		t.Fatalf("direct gpt-6.2-sol = %+v", direct62)
 	}
 	if value, present := direct62.ThinkingLevelMap["off"]; !present || value != nil {
@@ -177,6 +184,9 @@ func TestOpenAIAndCodexRules(t *testing.T) {
 	}
 	if rowByID(rows["openai"], "gpt-4o-audio") != nil {
 		t.Fatal("Chat Completions-only model was admitted to the Responses provider")
+	}
+	if pro := rowByID(rows["openai"], "gpt-5-pro"); pro == nil || pro.ContextWindow != 400000 || pro.MaxTokens != 272000 {
+		t.Fatalf("direct gpt-5-pro limits = %+v, want 400000/272000", pro)
 	}
 	if rowByID(rows["openai"], "gpt-5-chat-latest") == nil {
 		t.Fatal("authored gpt-5-chat-latest is missing")
@@ -213,6 +223,10 @@ func TestOpenAIAndCodexRules(t *testing.T) {
 	}
 	if enabled, present := compatBool(codex62, "supportsMidConvoEffort"); !present || !enabled {
 		t.Fatal("Codex gpt-6.2-astra lacks mid-conversation effort support")
+	}
+	codexSol := rowByID(codexRows["openai-codex"], "gpt-6.2-sol")
+	if codexSol == nil || codexSol.ContextWindow != 500000 || codexSol.MaxTokens != 128000 {
+		t.Fatalf("Codex gpt-6.2-sol = %+v", codexSol)
 	}
 }
 
@@ -315,7 +329,7 @@ func TestModelsDevCostOnlyAffectsConsumers(t *testing.T) {
 			if err := json.Unmarshal([]byte(`{"id":"fixture","type":"chat","capabilities":{"tools":{"supported":true}},"api":{"responses":{}},"cost":`+tc.cost+`}`), &model); err != nil {
 				t.Fatalf("decode catalog row: %v", err)
 			}
-			rows, err := buildCatalog(catalogWith(tc.provider, model), openRouterListing{}, []*providerDef{tc.def}, false)
+			rows, err := buildCatalog(catalogWith(tc.provider, model), openRouterListing{}, []*providerDef{tc.def}, false, nil)
 			if tc.wantError {
 				if err == nil || !strings.Contains(err.Error(), tc.provider+"/fixture") || !strings.Contains(err.Error(), "cost") {
 					t.Fatalf("invalid cost error = %v", err)
@@ -388,6 +402,9 @@ func TestOpenCodeGoRouting(t *testing.T) {
 	if native.API != "openai-responses" || native.BaseURL != "https://opencode.ai/inference/go/openai/v1" {
 		t.Fatalf("native precedence = %s %s", native.API, native.BaseURL)
 	}
+	if native.ContextWindow != 922000 {
+		t.Fatalf("gpt-5.6-luna context = %d, want 922000", native.ContextWindow)
+	}
 	if got, _ := compatString(native, "sessionAffinityFormat"); got != "openai-nosession" {
 		t.Fatalf("Responses route session affinity = %q", got)
 	}
@@ -409,7 +426,7 @@ func TestOpenCodeGoRouting(t *testing.T) {
 	unapproved := catalogWith("opencode-go", mdRow("bad-route", withAPIs(map[string]modelsDevAPI{
 		"messages": {BaseURL: "https://attacker.example/v1"},
 	})))
-	if _, err := buildCatalog(unapproved, openRouterListing{}, []*providerDef{opencodeGoProvider()}, false); err == nil ||
+	if _, err := buildCatalog(unapproved, openRouterListing{}, []*providerDef{opencodeGoProvider()}, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "outside the reviewed OpenCode allowlist") {
 		t.Fatalf("unapproved endpoint error = %v", err)
 	}
@@ -417,7 +434,7 @@ func TestOpenCodeGoRouting(t *testing.T) {
 	legacyMessages := catalogWith("opencode-go", mdRow("qwen3.6-plus", withAPIs(map[string]modelsDevAPI{
 		"messages": {BaseURL: "https://opencode.ai/inference/go/v1"},
 	})))
-	if _, err := buildCatalog(legacyMessages, openRouterListing{}, []*providerDef{opencodeGoProvider()}, false); err == nil ||
+	if _, err := buildCatalog(legacyMessages, openRouterListing{}, []*providerDef{opencodeGoProvider()}, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "outside the reviewed OpenCode allowlist") {
 		t.Fatalf("reroute accepted a Messages path without the /anthropic suffix: %v", err)
 	}
@@ -425,7 +442,7 @@ func TestOpenCodeGoRouting(t *testing.T) {
 	badCompat := catalogWith("opencode-go", mdRow("kimi-k2.6", withReasoningNoEffort(), withAPIs(map[string]modelsDevAPI{
 		"chat-completions": {BaseURL: "https://opencode.ai/inference/go/openai/v1"},
 	})))
-	if _, err := buildCatalog(badCompat, openRouterListing{}, []*providerDef{opencodeGoProvider()}, false); err == nil ||
+	if _, err := buildCatalog(badCompat, openRouterListing{}, []*providerDef{opencodeGoProvider()}, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "supportsLongCacheRetention") {
 		t.Fatalf("unsupported adapter field error = %v", err)
 	}
@@ -439,7 +456,7 @@ func TestOpenRouterSelection(t *testing.T) {
 		orRow("openai/gpt-4o", true),
 		orRow("no-tools/model", false),
 	}}
-	rows, err := buildCatalog(modelsDevCatalog{}, listing, []*providerDef{openRouterProvider()}, false)
+	rows, err := buildCatalog(modelsDevCatalog{}, listing, []*providerDef{openRouterProvider()}, false, nil)
 	if err != nil {
 		t.Fatalf("build failed: %v", err)
 	}
@@ -531,7 +548,7 @@ func TestBakeRejectsIncompleteOrConflictingInputs(t *testing.T) {
 		"anthropic": {Models: map[string]modelsDevModel{"row": mdRow("row")}},
 		"openai":    {Models: map[string]modelsDevModel{}},
 	}
-	if _, err := buildCatalog(partial, openRouterListing{}, providerDefinitions(), true); err == nil ||
+	if _, err := buildCatalog(partial, openRouterListing{}, providerDefinitions(), true, nil); err == nil ||
 		!strings.Contains(err.Error(), `models.dev source "openai"`) {
 		t.Fatalf("missing bucket error = %v", err)
 	}
@@ -542,7 +559,7 @@ func TestBakeRejectsIncompleteOrConflictingInputs(t *testing.T) {
 		partial[bucket] = catalogWith(bucket, mdRow("row"))[bucket]
 	}
 	listing := openRouterListing{Data: []openRouterModel{orRow("example/model", true)}}
-	if _, err := buildCatalog(partial, listing, providerDefinitions(), true); err == nil ||
+	if _, err := buildCatalog(partial, listing, providerDefinitions(), true, nil); err == nil ||
 		!strings.Contains(err.Error(), `models.dev source "openai" has no eligible models`) {
 		t.Fatalf("empty eligible OpenAI source error = %v", err)
 	}
@@ -551,14 +568,24 @@ func TestBakeRejectsIncompleteOrConflictingInputs(t *testing.T) {
 		"first":  mdRow("same-id", withName("First")),
 		"second": mdRow("same-id", withName("Second")),
 	}}}
-	if _, err := buildCatalog(duplicates, openRouterListing{}, []*providerDef{groqProvider()}, false); err == nil ||
+	if _, err := buildCatalog(duplicates, openRouterListing{}, []*providerDef{groqProvider()}, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "conflicting duplicate") {
 		t.Fatalf("conflicting duplicate error = %v", err)
 	}
 
+	openAIResponses := map[string]modelsDevAPI{"responses": {BaseURL: "https://api.openai.com/v1"}}
+	openAIDuplicates := modelsDevCatalog{"openai": {Models: map[string]modelsDevModel{
+		"first":  mdRow("gpt-6.1-sol", withName("First"), withLimits(1050000, 64000), withAPIs(openAIResponses)),
+		"second": mdRow("gpt-6.1-sol", withName("Second"), withLimits(1050000, 64000), withAPIs(openAIResponses)),
+	}}}
+	if _, err := buildCatalog(openAIDuplicates, openRouterListing{}, []*providerDef{openAIProvider()}, false, nil); err == nil ||
+		!strings.Contains(err.Error(), "conflicting duplicate") {
+		t.Fatalf("reviewed OpenAI duplicate with differing names error = %v", err)
+	}
+
 	duplicates["groq"].Models["first"] = mdRow("same-id", withReasoning("low"))
 	duplicates["groq"].Models["second"] = mdRow("same-id", withReasoning("high"))
-	if _, err := buildCatalog(duplicates, openRouterListing{}, []*providerDef{groqProvider()}, false); err == nil ||
+	if _, err := buildCatalog(duplicates, openRouterListing{}, []*providerDef{groqProvider()}, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "conflicting duplicate") {
 		t.Fatalf("conflicting duplicate effort error = %v", err)
 	}
@@ -567,7 +594,7 @@ func TestBakeRejectsIncompleteOrConflictingInputs(t *testing.T) {
 		"first":  mdRow("same-id", withReasoning("low", "high")),
 		"second": mdRow("same-id", withReasoning("high", "low")),
 	}}}
-	rows, err := buildCatalog(identical, openRouterListing{}, []*providerDef{groqProvider()}, false)
+	rows, err := buildCatalog(identical, openRouterListing{}, []*providerDef{groqProvider()}, false, nil)
 	if err != nil {
 		t.Fatalf("identical duplicates failed: %v", err)
 	}
@@ -580,10 +607,310 @@ func TestBakeRejectsIncompleteOrConflictingInputs(t *testing.T) {
 		row.Limit.Context = intPointer(-1)
 		return row
 	}())
-	if _, err := buildCatalog(negative, openRouterListing{}, []*providerDef{groqProvider()}, false); err == nil ||
+	if _, err := buildCatalog(negative, openRouterListing{}, []*providerDef{groqProvider()}, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "negative context limit") {
 		t.Fatalf("negative limit error = %v", err)
 	}
+}
+
+func reviewedProjectionModel(t *testing.T, providerID, modelID, contextLimit, inputValue string, includeInput bool) *catalogModel {
+	t.Helper()
+	var limitFields []string
+	if contextLimit != "" {
+		limitFields = append(limitFields, `"context":`+contextLimit)
+	}
+	if includeInput {
+		limitFields = append(limitFields, `"input":`+inputValue)
+	}
+	limitJSON := "{" + strings.Join(limitFields, ",") + "}"
+	body := []byte(fmt.Sprintf(
+		`{"%s":{"models":{"fixture":{"id":%q,"type":"chat","limit":%s,"capabilities":{"tools":{"supported":true}}}}}}`,
+		providerID, modelID, limitJSON,
+	))
+	if err := validateModelsDevJSON(body); err != nil {
+		t.Fatalf("validate source JSON: %v", err)
+	}
+	var catalog modelsDevCatalog
+	if err := json.Unmarshal(body, &catalog); err != nil {
+		t.Fatalf("decode source JSON: %v", err)
+	}
+	sources, err := modelsDevChatModels(catalog, providerID)
+	if err != nil {
+		t.Fatalf("normalize source row: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("normalized source rows = %d, want 1", len(sources))
+	}
+	var definition *providerDef
+	switch providerID {
+	case "openai":
+		definition = openAIProvider()
+	case "opencode-go":
+		definition = opencodeGoProvider()
+	default:
+		t.Fatalf("test provider %q has no projection definition", providerID)
+	}
+	return newCatalogModel(definition, sources[0])
+}
+
+func TestReviewedSourceInputProjection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		input        string
+		includeInput bool
+		want         int
+	}{
+		{name: "valid smaller input", input: "900000", includeInput: true, want: 900000},
+		{name: "absent", want: 1050000},
+		{name: "null", input: "null", includeInput: true, want: 1050000},
+		{name: "zero", input: "0", includeInput: true, want: 1050000},
+		{name: "negative", input: "-1", includeInput: true, want: 1050000},
+		{name: "wrong type", input: `"large"`, includeInput: true, want: 1050000},
+		{name: "fractional", input: "900000.5", includeInput: true, want: 1050000},
+		{name: "overflowing", input: "18446744073709551616", includeInput: true, want: 1050000},
+		{name: "greater than context", input: "1050001", includeInput: true, want: 1050000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := reviewedProjectionModel(t, "openai", "gpt-6.1-sol", "1050000", tc.input, tc.includeInput)
+			if model.ContextWindow != tc.want {
+				t.Fatalf("context = %d, want %d", model.ContextWindow, tc.want)
+			}
+		})
+	}
+
+	withoutContext := reviewedProjectionModel(t, "openai", "gpt-6.1-sol", "", "2048", true)
+	if withoutContext.ContextWindow != 4096 {
+		t.Fatalf("context without a source limit = %d, want existing default 4096", withoutContext.ContextWindow)
+	}
+
+	for _, tc := range []struct {
+		provider, model string
+		context         string
+		want            int
+	}{
+		{"openai", "gpt-5-pro", "400000", 400000},
+		{"openai", "gpt-5.3-codex-spark", "400000", 400000},
+		{"opencode-go", "hy4", "300000", 300000},
+		{"opencode-go", "hy4-flash-free", "300000", 300000},
+		{"opencode-go", "gpt-6.1-sol", "300000", 300000},
+	} {
+		t.Run(tc.provider+"/"+tc.model, func(t *testing.T) {
+			model := reviewedProjectionModel(t, tc.provider, tc.model, tc.context, "100000", true)
+			if model.ContextWindow != tc.want {
+				t.Fatalf("context = %d, want source context %d", model.ContextWindow, tc.want)
+			}
+		})
+	}
+
+	wrongTypeOnExcludedRow := reviewedProjectionModel(t, "openai", "gpt-5-pro", "400000", `"large"`, true)
+	if wrongTypeOnExcludedRow.ContextWindow != 400000 {
+		t.Fatalf("excluded row context = %d, want source context 400000", wrongTypeOnExcludedRow.ContextWindow)
+	}
+}
+
+func limitOverrideBakeDeps(t *testing.T) bakeDeps {
+	t.Helper()
+	modelsDev := make(modelsDevCatalog, len(requiredModelsDevSources))
+	for _, source := range requiredModelsDevSources {
+		modelsDev[source] = catalogWith(source, mdRow("row"))[source]
+	}
+
+	responsesAPI := map[string]modelsDevAPI{"responses": {BaseURL: "https://api.openai.com/v1"}}
+	modelsDev["openai"] = modelsDevProvider{Models: map[string]modelsDevModel{
+		"first":  mdRow("gpt-6.1-sol", withLimits(1050000, 64000), withInputLimit("900000"), withAPIs(responsesAPI)),
+		"second": mdRow("gpt-6.1-sol", withLimits(1000000, 96000), withInputLimit("880000"), withAPIs(responsesAPI)),
+	}}
+	openCodeAPI := map[string]modelsDevAPI{"chat-completions": {BaseURL: "https://opencode.ai/inference/go/openai/v1"}}
+	modelsDev["opencode-go"] = catalogWith("opencode-go",
+		mdRow("hy3", withLimits(256000, 64000), withAPIs(openCodeAPI)),
+		mdRow("gpt-6-luna", withStatus("deprecated"), withAPIs(map[string]modelsDevAPI{
+			"responses": {BaseURL: "https://opencode.ai/inference/go/openai/v1"},
+		})),
+	)["opencode-go"]
+	openRouter := openRouterListing{Data: []openRouterModel{orRow("example/model", true)}}
+
+	modelsDevBody, err := json.Marshal(modelsDev)
+	if err != nil {
+		t.Fatalf("marshal models.dev fixture: %v", err)
+	}
+	openRouterBody, err := json.Marshal(openRouter)
+	if err != nil {
+		t.Fatalf("marshal OpenRouter fixture: %v", err)
+	}
+	fetchedAt := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	return bakeDeps{
+		fetch: func(context.Context) (fetchedInputs, error) {
+			return fetchedInputs{
+				modelsDevBody:       modelsDevBody,
+				modelsDevFetchedAt:  fetchedAt,
+				openRouterBody:      openRouterBody,
+				openRouterFetchedAt: fetchedAt,
+			}, nil
+		},
+		now: func() time.Time { return fetchedAt.Add(time.Minute) },
+	}
+}
+
+func TestBakeLimitOverrides(t *testing.T) {
+	var warnings bytes.Buffer
+	deps := limitOverrideBakeDeps(t)
+	deps.warnings = &warnings
+	out := filepath.Join(t.TempDir(), "candidate")
+	if err := bake(t.Context(), out, deps); err != nil {
+		t.Fatalf("bake failed: %v", err)
+	}
+
+	catalogBytes, err := os.ReadFile(filepath.Join(out, "catalog.json"))
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	var rows map[string][]*catalogModel
+	if err := json.Unmarshal(catalogBytes, &rows); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	var openAIModel *catalogModel
+	openAICount := 0
+	for _, model := range rows["openai"] {
+		if model.ID == "gpt-6.1-sol" {
+			openAIModel = model
+			openAICount++
+		}
+	}
+	if openAICount != 1 || openAIModel == nil || openAIModel.ContextWindow != 922000 || openAIModel.MaxTokens != 128000 {
+		t.Fatalf("openai/gpt-6.1-sol rows=%d model=%+v, want one row at 922000/128000", openAICount, openAIModel)
+	}
+	hy3 := rowByID(rows["opencode-go"], "hy3")
+	if hy3 == nil || hy3.ContextWindow != 192000 || hy3.MaxTokens != 128000 {
+		t.Fatalf("opencode-go/hy3 = %+v, want 192000/128000", hy3)
+	}
+	if rowByID(rows["opencode-go"], "gpt-6-luna") != nil {
+		t.Fatal("deprecated opencode-go/gpt-6-luna was admitted")
+	}
+
+	sourceBytes, err := os.ReadFile(filepath.Join(out, "catalog-source.json"))
+	if err != nil {
+		t.Fatalf("read catalog provenance: %v", err)
+	}
+	var provenance catalogProvenance
+	if err := json.Unmarshal(sourceBytes, &provenance); err != nil {
+		t.Fatalf("decode catalog provenance: %v", err)
+	}
+	if provenance.CatalogSHA256 != sha256Hex(catalogBytes) {
+		t.Fatalf("catalog digest = %s, want %s", provenance.CatalogSHA256, sha256Hex(catalogBytes))
+	}
+
+	present := map[string]bool{"openai/gpt-6.1-sol": true, "opencode-go/hy3": true}
+	var expectedKeys []string
+	for providerID, models := range reviewedLimitOverrides {
+		for modelID := range models {
+			key := providerID + "/" + modelID
+			if !present[key] {
+				expectedKeys = append(expectedKeys, key)
+			}
+		}
+	}
+	sort.Strings(expectedKeys)
+	warningLines := strings.Split(strings.TrimSuffix(warnings.String(), "\n"), "\n")
+	if len(warningLines) != len(expectedKeys) {
+		t.Fatalf("warning lines=%d, expected %d missing-target warnings: %q", len(warningLines), len(expectedKeys), warnings.String())
+	}
+	for index, key := range expectedKeys {
+		want := "catalog-bake: warning: limit override skipped for " + key + ": model not in candidate catalog"
+		if warningLines[index] != want {
+			t.Errorf("warning[%d] = %q, want %q", index, warningLines[index], want)
+		}
+	}
+}
+
+func TestBakePublishesWithClosedStderr(t *testing.T) {
+	const childOutputEnv = "PSI_TEST_CATALOG_BAKE_CLOSED_STDERR_OUTPUT"
+	if out := os.Getenv(childOutputEnv); out != "" {
+		if err := bakeCLI(t.Context(), out, limitOverrideBakeDeps(t)); err != nil {
+			t.Fatalf("offline CLI bake: %v", err)
+		}
+		return
+	}
+
+	// Use a fresh process so stderr is file descriptor 2 and Go's default
+	// SIGPIPE handling applies. Close the read end before starting the child.
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "candidate")
+	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestBakePublishesWithClosedStderr$")
+	cmd.Env = append(os.Environ(), childOutputEnv+"="+out)
+	cmd.Stderr = writer
+	var testOutput bytes.Buffer
+	cmd.Stdout = &testOutput
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("offline CLI bake with closed stderr: %v\n%s", err, testOutput.Bytes())
+	}
+	for _, name := range []string{"catalog.json", "catalog-source.json"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Errorf("artifact was not published: %v", err)
+		}
+	}
+}
+
+func TestLimitOverrideAfterFinalizer(t *testing.T) {
+	definition := openAIProvider()
+	definition.finalizeAll = func(models []*catalogModel) {
+		for _, model := range models {
+			if model.ID == "gpt-6.1-sol" {
+				model.ContextWindow = 0
+				model.MaxTokens = 0
+			}
+		}
+	}
+	var warnings bytes.Buffer
+	rows, err := buildCatalog(catalogWith("openai", mdRow("gpt-6.1-sol", withAPIs(map[string]modelsDevAPI{
+		"responses": {BaseURL: "https://api.openai.com/v1"},
+	}))), openRouterListing{}, []*providerDef{definition}, false, &warnings)
+	if err != nil {
+		t.Fatalf("partial build failed: %v", err)
+	}
+	model := rowByID(rows["openai"], "gpt-6.1-sol")
+	if model == nil || model.ContextWindow != 922000 || model.MaxTokens != 128000 {
+		t.Fatalf("finalized openai/gpt-6.1-sol = %+v, want 922000/128000", model)
+	}
+	if warnings.Len() != 0 {
+		t.Fatalf("partial build emitted missing-target warnings: %q", warnings.String())
+	}
+}
+
+func TestCatalogLimitOverridesMatchBundle(t *testing.T) {
+	data, err := os.ReadFile("../../internal/config/data/catalog.json")
+	if err != nil {
+		t.Fatalf("read bundled catalog: %v", err)
+	}
+	var bundle map[string][]*catalogModel
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		t.Fatalf("decode bundled catalog: %v", err)
+	}
+	compared, tableSize := 0, 0
+	for providerID, overrides := range reviewedLimitOverrides {
+		tableSize += len(overrides)
+		for modelID, want := range overrides {
+			model := rowByID(bundle[providerID], modelID)
+			if model == nil {
+				continue
+			}
+			compared++
+			if model.ContextWindow != want.contextWindow || model.MaxTokens != want.maxTokens {
+				t.Errorf("bundled %s/%s limits = %d/%d, want %d/%d", providerID, modelID, model.ContextWindow, model.MaxTokens, want.contextWindow, want.maxTokens)
+			}
+		}
+	}
+	t.Logf("reviewed limit overrides compared: %d of %d", compared, tableSize)
 }
 
 func TestOpenRouterRejectsNegativeLimits(t *testing.T) {
@@ -594,7 +921,7 @@ func TestOpenRouterRejectsNegativeLimits(t *testing.T) {
 	} {
 		t.Run(field, func(t *testing.T) {
 			listing := openRouterListing{Data: []openRouterModel{orRow("moonshotai/kimi-k2.5", true, corrupt)}}
-			_, err := buildCatalog(nil, listing, []*providerDef{openRouterProvider()}, false)
+			_, err := buildCatalog(nil, listing, []*providerDef{openRouterProvider()}, false, nil)
 			if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "moonshotai/kimi-k2.5") {
 				t.Fatalf("negative OpenRouter limit error = %v", err)
 			}
@@ -609,11 +936,11 @@ func TestDecodeRejectsWrongShapeAndTrailingData(t *testing.T) {
 		openRouterBody:      []byte(`{"data":[]}`),
 		openRouterFetchedAt: time.Unix(1_700_000_000, 0),
 	}
-	if _, _, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return time.Unix(1_700_000_100, 0) }); err == nil {
+	if _, _, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return time.Unix(1_700_000_100, 0) }, nil); err == nil {
 		t.Fatal("wrong limit type was accepted")
 	}
 	inputs.modelsDevBody = []byte(`{"groq":{"models":{}}} {}`)
-	if _, _, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return time.Unix(1_700_000_100, 0) }); err == nil {
+	if _, _, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return time.Unix(1_700_000_100, 0) }, nil); err == nil {
 		t.Fatal("trailing JSON was accepted")
 	}
 }
@@ -635,11 +962,11 @@ func TestOfflineReplayIsByteIdentical(t *testing.T) {
 	}
 	generatedAt := fetchedAt.Add(time.Minute)
 	fixedNow := func() time.Time { return generatedAt }
-	firstCatalog, firstSource, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, fixedNow)
+	firstCatalog, firstSource, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, fixedNow, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondCatalog, secondSource, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, fixedNow)
+	secondCatalog, secondSource, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, fixedNow, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +987,7 @@ func TestOfflineReplayIsByteIdentical(t *testing.T) {
 		t.Fatalf("generatedAt = %s", provenance.GeneratedAt)
 	}
 	backward := fetchedAt.Add(-time.Minute)
-	if _, _, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return backward }); err == nil {
+	if _, _, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return backward }, nil); err == nil {
 		t.Fatal("generatedAt earlier than fetchedAt was accepted")
 	}
 }
