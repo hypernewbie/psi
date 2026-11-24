@@ -44,12 +44,12 @@ func TestRetainedCatalogBake(t *testing.T) {
 		openRouterFetchedAt: fetchedAt.Add(2 * time.Second),
 	}
 	fixedNow := func() time.Time { return generatedAt }
-	catalogBytes, sourceBytes, err := assembleArtifacts(inputs, providerDefinitions(), true, fixedNow)
+	catalogBytes, sourceBytes, err := assembleArtifacts(inputs, providerDefinitions(), true, fixedNow, nil)
 	if err != nil {
 		t.Fatalf("retained bake failed: %v", err)
 	}
 
-	replayedCatalog, replayedSource, err := assembleArtifacts(inputs, providerDefinitions(), true, fixedNow)
+	replayedCatalog, replayedSource, err := assembleArtifacts(inputs, providerDefinitions(), true, fixedNow, nil)
 	if err != nil {
 		t.Fatalf("retained replay failed: %v", err)
 	}

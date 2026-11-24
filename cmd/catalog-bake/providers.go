@@ -243,13 +243,7 @@ func anthropicProvider() *providerDef {
 
 var (
 	openAIUnsupportedModelIDs = map[string]bool{"gpt-5.6": true}
-	openAIShortContextCapped  = map[string]bool{
-		"gpt-5.4": true, "gpt-5.5": true, "gpt-5.6-sol": true, "gpt-5.6-terra": true,
-		"gpt-5.6-luna": true, "gpt-6-astra": true, "gpt-6-sol": true, "gpt-6-luna": true,
-		"gpt-6.1-sol": true, "gpt-6.1-terra": true,
-		"gpt-6.2-astra": true, "gpt-6.2-sol": true,
-	}
-	openAINoneReasoning = map[string]bool{
+	openAINoneReasoning       = map[string]bool{
 		"gpt-5.1": true, "gpt-5.2": true, "gpt-5.3-codex": true, "gpt-5.4": true,
 		"gpt-5.4-mini": true, "gpt-5.4-nano": true, "gpt-5.5": true, "gpt-5.6-sol": true,
 		"gpt-5.6-terra": true, "gpt-5.6-luna": true, "gpt-6-sol": true, "gpt-6-luna": true,
@@ -272,6 +266,11 @@ var (
 	}()
 )
 
+// Non-overridden context and output limits come from models.dev. Do not
+// substitute OpenAI's 272K long-context billing threshold for the model's
+// context window: the model still accepts its full window, but a prompt above
+// that threshold is billed at the long-context rate.
+//
 // Only the corrected base cache-write price affects this projection: a paid
 // write enables explicit cache mode. No OpenAI prices or tiers are emitted.
 var openAICacheWritePrices = map[string]float64{
@@ -281,16 +280,9 @@ var openAICacheWritePrices = map[string]float64{
 	"gpt-6.2-astra": 10, "gpt-6.2-sol": 2.5,
 }
 
-func correctOpenAIUpstream(model *catalogModel) {
-	if openAIShortContextCapped[model.ID] {
-		model.ContextWindow = 272000
-		model.MaxTokens = 128000
-	}
+func applyOpenAICacheWriteCorrection(model *catalogModel) {
 	if price, ok := openAICacheWritePrices[model.ID]; ok {
 		model.cost.CacheWrite = price
-	}
-	if model.ID == "gpt-5-pro" {
-		model.MaxTokens = 128000
 	}
 }
 
@@ -337,7 +329,7 @@ func openAIProvider() *providerDef {
 		recordReasoning: true,
 		include:         func(source *sourceModel) bool { return !openAIUnsupportedModelIDs[source.ID] },
 		mapModel: func(_ *buildContext, model *catalogModel, _ *sourceModel) (*catalogModel, error) {
-			correctOpenAIUpstream(model)
+			applyOpenAICacheWriteCorrection(model)
 			return model, nil
 		},
 		addMissing: func() []*catalogModel {

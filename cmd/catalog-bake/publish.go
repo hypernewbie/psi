@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -81,8 +82,9 @@ func publish(ctx context.Context, path string, files map[string][]byte) (err err
 }
 
 type bakeDeps struct {
-	fetch func(context.Context) (fetchedInputs, error)
-	now   func() time.Time
+	fetch    func(context.Context) (fetchedInputs, error)
+	now      func() time.Time
+	warnings io.Writer
 }
 
 // bake is the tested end-to-end entry point used by main and by the private
@@ -104,7 +106,7 @@ func bake(ctx context.Context, out string, deps bakeDeps) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	catalogBytes, sourceBytes, err := assembleArtifacts(inputs, providerDefinitions(), true, deps.now)
+	catalogBytes, sourceBytes, err := assembleArtifacts(inputs, providerDefinitions(), true, deps.now, deps.warnings)
 	if err != nil {
 		return err
 	}

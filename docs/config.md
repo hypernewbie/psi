@@ -149,6 +149,13 @@ The direct Go command remains available:
 go run ./cmd/catalog-bake <new-output-directory>
 ```
 
+Each bake applies reviewed token-limit overrides and warns when an override
+target is missing. A missing target does not block an otherwise valid
+candidate. On refresh, review missing keys. Compare reviewed context with usable
+source `limit.input`, not total `limit.context`, and compare reviewed output with
+`limit.output`. Record missing or unusable `limit.input` separately from a
+numeric disagreement.
+
 The command fetches two unauthenticated public inputs, in this order:
 `https://models.dev/experimental/v2.0/api.json` and
 `https://openrouter.ai/api/v1/models`. It sends no project content or
@@ -178,6 +185,18 @@ identical. A live run uses new timestamps.
 The command does not modify `internal/config/data/`. Replacing the embedded
 catalog is a separate reviewed change that checks the generated output,
 resolved defaults, and the tracked data diff.
+
+The embedded catalog includes a reviewed offline limit amendment on top of the
+source refresh in commit `9a404afefdc2d9952f283a8fd3693de4441ce2d1`. That
+source bake produced catalog digest
+`2789419950f3330ef5f2e2ba61759db87886d9958485121dc3f9ee48802ad6df`. The
+amendment changes only reviewed context windows and output limits. It sets the
+source manifest's generator to
+`catalog-bake-go-v1+reviewed-limit-amendment` and records the digest of the
+amended catalog bytes. The input URLs, hashes, fetch times, and `generatedAt`
+describe the original bake; the new digest describes the amended bundle. This
+amendment is not a live fetch and does not change the timestamp used for cache
+precedence.
 
 Existing `modelOverrides` apply without a duplicate `models[]` entry.
 

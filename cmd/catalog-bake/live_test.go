@@ -28,7 +28,7 @@ func TestLiveGroqBake(t *testing.T) {
 		t.Fatalf("live fetch failed: %v", err)
 	}
 	generatedAt := time.Now().UTC()
-	catalogBytes, sourceBytes, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return generatedAt })
+	catalogBytes, sourceBytes, err := assembleArtifacts(inputs, []*providerDef{groqProvider()}, false, func() time.Time { return generatedAt }, nil)
 	if err != nil {
 		t.Fatalf("bake failed: %v", err)
 	}
