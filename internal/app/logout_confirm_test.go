@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/psi/internal/provider"
 	"github.com/hypernewbie/psi/internal/terminal"
 )
 
@@ -138,6 +139,32 @@ func TestLogoutRequiresConfirmation(t *testing.T) {
 	}
 	send("/quit\r")
 	finish()
+}
+
+// TestLogoutDialogClearedWhenPickerReopens pins the invariant that a pending
+// logout dialog never outlives the picker that opened it. A stale dialog over
+// a different selector would render the wrong rows and answer the new
+// picker's keys as dialog keys.
+func TestLogoutDialogClearedWhenPickerReopens(t *testing.T) {
+	r := testRuntime(t)
+	writeAppFile(t, filepath.Join(r.agentDir, "auth.json"), `{"deepseek":{"type":"api_key","key":"synthetic-deepseek-key"}}`)
+	console := authCommandConsole(t)
+	r.lifecycle = &terminalLifecycle{console: console}
+	r.state = StateIdle
+	if err := r.logoutCommand("", console, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if r.selector == nil || r.selector.AuthMode != AuthLogout {
+		t.Fatalf("/logout did not open its picker: %+v", r.selector)
+	}
+	r.startLogoutConfirm(provider.StoredCredential{ProviderID: "deepseek", Kind: provider.CredentialAPIKey}, console)
+	if r.logoutConfirm == nil {
+		t.Fatal("selected provider did not open the confirmation dialog")
+	}
+	r.openAuthSelector(loginSelector(r), console)
+	if r.logoutConfirm != nil {
+		t.Fatal("replacing the picker kept the stale logout dialog")
+	}
 }
 
 func TestLogoutConfirmDialogFitsTerminal(t *testing.T) {

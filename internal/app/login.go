@@ -128,6 +128,7 @@ func (r *runtime) authCommandAvailable(console *terminal.Console, name string) e
 
 func (r *runtime) openAuthSelector(selector *Selector, console *terminal.Console) {
 	r.selector = selector
+	r.logoutConfirm = nil
 	r.selectorDraft, r.selectorCursor, r.selectorRestoreOnSuccess = "", 0, false
 	r.settingsPicker = nil
 	console.ClearPickerRows()
@@ -169,6 +170,7 @@ func (r *runtime) loginCommand(arg string, console *terminal.Console) error {
 
 func (r *runtime) startLogin(providerID, providerName string, console *terminal.Console) {
 	r.selector = nil
+	r.logoutConfirm = nil
 	r.selectorDraft, r.selectorCursor, r.selectorRestoreOnSuccess = "", 0, false
 	r.settingsPicker = nil
 	console.ClearPickerRows()
@@ -199,6 +201,7 @@ func (r *runtime) cancelLogin(console *terminal.Console) {
 	console.DiscardSecret()
 	console.Status("")
 	r.login = nil
+	r.logoutConfirm = nil
 	r.restoreAuthState()
 	r.draw(console)
 }

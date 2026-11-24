@@ -2155,6 +2155,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	openSelector := func(selector *Selector, draft string, cursor int, query string, restoreOnSuccess bool) {
 		r.selector = selector
+		r.logoutConfirm = nil
 		r.selectorDraft, r.selectorCursor = draft, cursor
 		r.selectorRestoreOnSuccess = restoreOnSuccess
 		selector.SetFilter(query)
