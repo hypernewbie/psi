@@ -167,6 +167,51 @@ func TestLogoutDialogClearedWhenPickerReopens(t *testing.T) {
 	}
 }
 
+func TestLogoutConfirmationRequiresRedrawAfterResize(t *testing.T) {
+	r := testRuntime(t)
+	authPath := filepath.Join(r.agentDir, "auth.json")
+	const baseline = `{"deepseek":{"type":"api_key","key":"synthetic-deepseek-key"}}`
+	writeAppFile(t, authPath, baseline)
+	var width atomic.Int32
+	width.Store(80)
+	_, out, input, result := startSizedLoginTestREPL(t, r, func() (int, int) {
+		return int(width.Load()), 24
+	})
+	send := func(text string) {
+		t.Helper()
+		if _, err := input.WriteString(text); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	waitAppOutputAfter(t, out, 0, "(anthropic) m")
+	send("/logout\r")
+	offset := waitAppOutputAfter(t, out, 0, "Stored credentials")
+	width.Store(17)
+	send("\r")
+	offset = waitAppOutputAfter(t, out, offset, "Resize terminal")
+
+	// The terminal dimensions can change before the REPL processes a resize
+	// notification. No confirmable prompt has been shown yet. The first y
+	// must refresh the dialog, not remove the key. Then cancel and quit.
+	width.Store(80)
+	send("yn\x03/quit\r")
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("REPL did not exit after the resize and key sequence")
+	}
+	if data, err := os.ReadFile(authPath); err != nil || string(data) != baseline {
+		t.Fatalf("y confirmed before the dialog was redrawn: err=%v", err)
+	}
+	if !strings.Contains(out.String()[offset:], "Y — Yes") {
+		t.Fatal("y did not redraw the confirmation at the new size")
+	}
+}
+
 func TestLogoutConfirmDialogFitsTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -178,12 +223,11 @@ func TestLogoutConfirmDialogFitsTerminal(t *testing.T) {
 		ok        bool
 		want      []string
 	}{
-		{"wide", "OpenAI", "openai", 80, 18, 2, true, []string{"Log out of OpenAI?", "Y — Yes", "N — No"}},
 		{"narrow two rows", "OpenAI", "openai", 20, 18, 2, true, []string{"Log out of OpenAI?", "Y — Yes", "N — No"}},
 		{"short terminal", "OpenAI", "openai", 80, 1, 1, true, []string{"Log out openai? y/n"}},
-		{"too short", "OpenAI", "openai", 80, 0, 1, false, []string{"Widen terminal"}},
-		{"long provider id", "Google Generative AI", "google", 20, 2, 1, true, []string{"Log out google? y/n"}},
-		{"too narrow", "Google Generative AI", "google", 17, 18, 1, false, []string{"Widen terminal"}},
+		{"too short", "OpenAI", "openai", 80, 0, 1, false, []string{"Resize terminal"}},
+		{"long provider name", "Google Generative AI", "google", 20, 2, 1, true, []string{"Log out google? y/n"}},
+		{"too narrow", "Google Generative AI", "google", 17, 18, 1, false, []string{"Resize terminal"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rows, ok := logoutConfirmDialog(tc.provider, tc.id, tc.width, tc.rowBudget)

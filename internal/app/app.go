@@ -1864,8 +1864,10 @@ func (r *runtime) refreshPickerRows(console *terminal.Console) {
 		console.SetPickerRows(r.settingsPicker.Rows(width, rows, r.footerSnapshot.NoColor, r.footerSnapshot.Theme))
 	} else if r.selector != nil {
 		width, rows := console.PickerSize()
-		if r.logoutConfirm != nil {
-			dialog, _ := logoutConfirmDialog(r.logoutConfirm.name, r.logoutConfirm.credential.ProviderID, width, rows)
+		if confirm := r.logoutConfirm; confirm != nil {
+			dialog, confirmable := logoutConfirmDialog(confirm.name, confirm.credential.ProviderID, width, rows)
+			confirm.layoutWidth, confirm.layoutRows = width, rows
+			confirm.confirmable = confirmable
 			for i, row := range dialog {
 				token, bold := terminal.TokenText, false
 				if i == 0 {
@@ -3074,8 +3076,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var resizeTimeout <-chan time.Time
 	requestResizeDraw := func() {
 		// A scheduled frame may draw before the resize timer fires. Prepare
-		// picker rows now so that frame uses the new width and row budget.
-		r.refreshPickerRows(console)
+		// ordinary picker rows now. For logout, update the layout used to
+		// authorize confirmation only when drawing the new dialog.
+		if r.logoutConfirm == nil {
+			r.refreshPickerRows(console)
+		}
 		console.RequestResizeDraw()
 		if !resizeTimer.Stop() {
 			select {
@@ -3791,21 +3796,24 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if r.selector != nil {
 				key := string(input.Key)
-				if r.logoutConfirm != nil {
+				if confirm := r.logoutConfirm; confirm != nil {
 					if input.Paste || fromPendingInput {
 						// A paste or queued input never answers a destructive prompt.
 						continue
 					}
-					width, rowBudget := console.PickerSize()
-					_, confirmable := logoutConfirmDialog(r.logoutConfirm.name, r.logoutConfirm.credential.ProviderID, width, rowBudget)
 					switch key {
 					case "y", "Y":
-						if !confirmable {
+						width, rows := console.PickerSize()
+						if width != confirm.layoutWidth || rows != confirm.layoutRows {
+							// The resize event or its redraw may still be pending.
+							// Show the current dialog and require a new keypress.
+							console.RequestResizeDraw()
+							r.draw(console)
 							continue
 						}
-						selected := r.logoutConfirm.credential
-						r.logoutConfirm = nil
-						r.finishLogout(selected, console, out)
+						if confirm.confirmable {
+							r.finishLogout(confirm.credential, console, out)
+						}
 						continue
 					case "n", "N", "\x1b", "\x03":
 						r.logoutConfirm = nil

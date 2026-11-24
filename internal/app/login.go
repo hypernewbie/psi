@@ -305,6 +305,10 @@ func (r *runtime) finishLogin(console *terminal.Console, out io.Writer) {
 type logoutConfirmation struct {
 	credential provider.StoredCredential
 	name       string
+
+	// Confirmation must use the layout installed for the last draw.
+	layoutWidth, layoutRows int
+	confirmable             bool
 }
 
 func (r *runtime) startLogoutConfirm(selected provider.StoredCredential, console *terminal.Console) {
@@ -332,7 +336,7 @@ func logoutConfirmDialog(name, providerID string, width, rowBudget int) ([]strin
 			return []string{oneLine}, true
 		}
 	}
-	return []string{"Widen terminal to confirm"}, false
+	return []string{"Resize terminal to confirm"}, false
 }
 
 func (r *runtime) logoutCommand(arg string, console *terminal.Console, out io.Writer) error {

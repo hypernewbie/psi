@@ -75,13 +75,18 @@ func startLoginTestREPL(t *testing.T, r *runtime) (*terminal.Console, *notifying
 
 func startLoginTestREPLWidth(t *testing.T, r *runtime, width int) (*terminal.Console, *notifyingBuffer, *os.File, chan error) {
 	t.Helper()
+	return startSizedLoginTestREPL(t, r, func() (int, int) { return width, 24 })
+}
+
+func startSizedLoginTestREPL(t *testing.T, r *runtime, size func() (int, int)) (*terminal.Console, *notifyingBuffer, *os.File, chan error) {
+	t.Helper()
 	input, inputWrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := &notifyingBuffer{notify: make(chan struct{}, 1)}
 	console := terminal.NewConsole(input, out)
-	console.SizeFunc = func() (int, int) { return width, 24 }
+	console.SizeFunc = size
 	result := make(chan error, 1)
 	finished := make(chan struct{})
 	go func() {
