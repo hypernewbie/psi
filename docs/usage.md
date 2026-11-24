@@ -82,10 +82,11 @@ saved answers in the transcript.
 Bump is available only while psi is idle, with no run, picker, or compaction
 active. It keeps the normal auth, storage, and continuation checks. Empty
 `Enter` works only for an unfinished turn; explicit commands bypass that gate
-but keep all safety checks. All admission refusals stay silent, and refused
-busy commands are discarded without a queue entry or restored draft. Once a
-run starts, failures, cancellation, partial output, and unsaved output use the
-normal message behavior.
+but keep all safety checks. While a shell command is running, psi refuses an
+explicit bump and restores it to the draft. Other admission refusals stay
+silent and do not queue or restore the command. Once a run starts, failures,
+cancellation, partial output, and unsaved output use the normal message
+behavior.
 
 Visible partial output from the failed stream stays in the transcript. The
 saved failure record is hidden and omitted from ordinary continuation
@@ -198,8 +199,9 @@ cancellation, or truncation marker. There are no live chunks. Esc/Ctrl+C, quit,
 EOF, suspend, and terminal failure cancel and join the owned process before psi
 returns. A second shell, a model run, bridge preparation, or a session mutation
 is refused while the shell is unsettled; a refused submission restores the
-draft. Output is bounded to the last 50 KiB or 2000 lines, and a capture file
-is advertised only when it exists.
+draft, including `/b` and `/bump` submissions. psi keeps up to the last 50 KiB
+and 2000 lines of sanitized output without cutting a UTF-8 character. A capture
+file is advertised only when it exists.
 
 The command runs with the psi process environment and permissions. It can
 modify files before cancellation or a storage error; psi cannot roll it back

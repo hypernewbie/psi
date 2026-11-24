@@ -265,10 +265,13 @@ func TestBangShellMVPLifecycle(t *testing.T) {
 		if _, err := input.WriteString("\x10\x0c\x1b[Z"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := input.WriteString("/model other\r"); err != nil {
+		if _, err := input.WriteString("/bump\r"); err != nil {
 			t.Fatal(err)
 		}
-		out.waitContains(t, "Finish or cancel the shell command")
+		const refusal = "Finish or cancel the shell command"
+		out.waitContains(t, refusal)
+		refusalEnd := strings.Index(out.String(), refusal) + len(refusal)
+		out.waitContainsFrom(t, "/bump", refusalEnd)
 		if r.selector != nil || r.ov.Model != model || r.ov.Thinking != thinking {
 			t.Fatalf("shell-owned hotkey mutated state: selector=%v model=%q thinking=%q", r.selector, r.ov.Model, r.ov.Thinking)
 		}

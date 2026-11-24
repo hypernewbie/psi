@@ -4263,17 +4263,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if strings.TrimSpace(text) == "" {
 				// An empty Enter is silent unless it starts a real bump. Admission
 				// refusals (busy, picker, auth, storage, ineligible) stay invisible.
-				if err := r.checkBump(busy || compacting || exiting, true); err == nil {
-					startInputMode(agent.UserInput{}, "", inputBump, true)
-				}
-				r.draw(console)
-				continue
-			}
-			if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "b" || cmd.Name == "bump") {
-				// Explicit bumps are silent on admission refusal. A refused
-				// command is discarded without a notice, queue entry, or
-				// restored draft. Started runs keep normal failure reports.
-				if err := r.checkBump(busy || compacting || exiting, false); err == nil {
+				if err := r.checkBump(operationActive() || compacting || exiting, true); err == nil {
 					startInputMode(agent.UserInput{}, "", inputBump, true)
 				}
 				r.draw(console)
@@ -4297,6 +4287,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 				notice(terminal.NoticeInfo, "Finish or cancel the shell command before changing the session.")
 				console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 				console.RefreshCompletion()
+				r.draw(console)
+				continue
+			}
+			if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "b" || cmd.Name == "bump") {
+				// Outside a shell operation, explicit bumps are silent on
+				// admission refusal. Started runs keep normal failure reports.
+				if err := r.checkBump(busy || compacting || exiting, false); err == nil {
+					startInputMode(agent.UserInput{}, "", inputBump, true)
+				}
 				r.draw(console)
 				continue
 			}

@@ -62,8 +62,9 @@ func (t *BashTool) resolveShell() (shellutil.Config, error) {
 const idleDrainGrace = 100 * time.Millisecond
 
 // Run executes one verbatim command with the shared shell selection and
-// returns raw accepted output. The output callback runs synchronously after
-// each accepted capture write and never receives an unwritten suffix.
+// returns raw accepted output. The output reader invokes onOutput serially
+// after each accepted capture write and joins before Run returns. The
+// callback borrows the accepted bytes only for the duration of the call.
 func (t *BashTool) Run(ctx context.Context, command string, timeout time.Duration, onOutput func([]byte)) BashRunResult {
 	if t.ShellPrefix != "" {
 		command = t.ShellPrefix + "\n" + command
@@ -286,10 +287,7 @@ func runShell(
 	result.ExitedAt = exited.at
 	result.Output = capture.tailString()
 	result.TotalBytes = capture.total
-	result.Truncated = int64(len(result.Output)) < capture.total
-	if len(strings.Split(result.Output, "\n")) > DefaultMaxLines {
-		result.Truncated = true
-	}
+	result.Truncated = int64(len(result.Output)) < capture.total || strings.Count(result.Output, "\n") >= DefaultMaxLines
 	if exited.err != nil {
 		result.ExitText = exited.err.Error()
 		code := exitCode(exited.err)
@@ -329,12 +327,12 @@ func runShell(
 func formatShellResult(shellName string, run BashRunResult) Result {
 	output := run.Output
 	details := map[string]any{}
+	if lines := strings.Split(output, "\n"); len(lines) > DefaultMaxLines {
+		output = strings.Join(lines[len(lines)-DefaultMaxLines:], "\n")
+	}
 	if run.FullOutputPath != "" {
 		output += fmt.Sprintf("\n\n[Output truncated. Full output: %s]", run.FullOutputPath)
 		details["fullOutputPath"] = run.FullOutputPath
-	}
-	if lines := strings.Split(output, "\n"); len(lines) > DefaultMaxLines {
-		output = strings.Join(lines[len(lines)-DefaultMaxLines:], "\n")
 	}
 	if run.InfraErr != nil {
 		return Result{Content: []Block{{Type: "text", Text: run.InfraErr.Error()}}, IsError: true, Details: details}
