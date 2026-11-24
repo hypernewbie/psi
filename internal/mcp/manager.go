@@ -1430,10 +1430,10 @@ func (c *connection) closeAsyncLocked() {
 	c.manager.pending++
 	go func() {
 		defer c.manager.workerDone()
+		_ = c.session.Close()
 		if c.closeIdleConnections != nil {
 			c.closeIdleConnections()
 		}
-		_ = c.session.Close()
 	}()
 }
 

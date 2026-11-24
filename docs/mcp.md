@@ -163,8 +163,9 @@ the result says so and does not show a false path.
 Limits:
 
 - Incoming stdio frame: 16 MiB.
-- HTTP body and SSE event: 16 MiB. A non-SSE body exactly at the cap is valid;
-  one byte over fails explicitly.
+- HTTP response body or individual SSE event: 16 MiB. Error responses use the
+  body limit regardless of media type. A body at the limit is valid; one byte
+  over fails explicitly.
 - Complete tool catalog: 16 MiB and at most 128 pages.
 - Setup concurrency: four servers.
 - Active MCP calls: eight per session, four per server.
@@ -274,6 +275,10 @@ fill the pipe or grow retained diagnostics without bound.
 
 ## Process cleanup
 
+When an HTTP connection is retired, psi cancels ordinary requests and withdraws
+its tools without waiting for the server. For a stateful session, psi attempts
+`DELETE` in the background with the SDK's five-second request deadline.
+
 On Unix, psi starts a stdio server in its own process group and signals the
 owned group. When the launcher exits, psi kills remaining group members,
 including when the launcher exits during graceful shutdown. Children that
@@ -335,10 +340,10 @@ and warning clearance. Result checks preserve embedded-resource omission
 notices beside other text and read the complete saved output with `read`.
 A gated SDK check retires a connection before callers consume
 their completed replies. A separate check requires Stop to release an unfinished
-call while its handler ignores cancellation. HTTP checks use request-entry events
-for cancellation and stalled DELETE.
-They require terminal failure after the finite allowance for invalid SSE streams.
-SSE ping replies prove that the size cap applies per event, not per connection.
+call while its handler ignores cancellation. HTTP checks verify that routes are
+withdrawn while a stateful session's `DELETE` is in flight. Invalid SSE streams
+fail after a finite allowance. SSE ping replies verify that the size limit
+applies per event, not per connection.
 
 The tagged acceptance suite covers a mid-call crash, a handler that ignores
 cancellation, and a server that exits immediately after its complete reply.

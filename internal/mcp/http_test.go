@@ -174,32 +174,41 @@ func TestManagerHTTPRejectsRedirect(t *testing.T) {
 	t.Fatalf("redirecting endpoint did not fail: %+v", manager.Snapshot().Servers)
 }
 
-func TestManagerHTTPBodyCap(t *testing.T) {
-	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(make([]byte, maxHTTPBody+1))
-	}))
-	t.Cleanup(big.Close)
-	dir := t.TempDir()
-	path := writeHTTPConfig(t, dir, big.URL, nil)
-	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
-	manager.Start()
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
-	})
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		snapshot := manager.Snapshot()
-		for _, status := range snapshot.Servers {
-			if status.State == serverStateFailed {
-				return
+func TestHTTPNonStreamResponsesEnforceBodyCap(t *testing.T) {
+	body := strings.Repeat("x", maxHTTPBody+1)
+	for _, tc := range []struct {
+		name, method, contentType string
+		status                    int
+	}{
+		{"POST error", http.MethodPost, "text/event-stream", http.StatusBadRequest},
+		{"GET error", http.MethodGet, "text/event-stream", http.StatusNotImplemented},
+		{"invalid media type", http.MethodPost, "text/event-stream-extra", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &connection{ctx: t.Context(), listenerChecked: make(chan struct{})}
+			conn.errClass.Store("")
+			transport := &headerRoundTripper{conn: conn, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: tc.status,
+					Header:     http.Header{"Content-Type": {tc.contentType}},
+					Body:       io.NopCloser(strings.NewReader(body)),
+				}, nil
+			})}
+			req, err := http.NewRequestWithContext(t.Context(), tc.method, "http://fixture.test/mcp", nil)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		waitForHTTPSnapshotChange(t, manager, deadline)
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			read, err := io.Copy(io.Discard, resp.Body)
+			if read != maxHTTPBody || ErrorClass(err) != "limit" {
+				t.Fatalf("body read = %d bytes, %v; want %d and a limit error", read, err, maxHTTPBody)
+			}
+		})
 	}
-	t.Fatalf("oversize response did not fail: %+v", manager.Snapshot().Servers)
 }
 
 func TestManagerHTTPSessionLossReconnectsWithoutReplay(t *testing.T) {
@@ -907,63 +916,58 @@ func TestManagerHTTPJSONAndSSECallResponses(t *testing.T) {
 	}
 }
 
-func TestManagerHTTPStalledDeleteDoesNotBlockStatus(t *testing.T) {
-	deleteEntered := make(chan struct{})
-	var deleteOnce sync.Once
+func TestManagerHTTPReloadWithdrawsRoutesBeforeSessionDeleteCompletes(t *testing.T) {
+	deleteEntered := make(chan string, 1)
+	allowDelete := make(chan struct{})
+	deleteFinished := make(chan bool, 1)
 	server := httpFixture(t)
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
-			deleteOnce.Do(func() { close(deleteEntered) })
-			<-r.Context().Done()
-			return
+			deleteEntered <- r.Header.Get("Mcp-Session-Id")
+			select {
+			case <-allowDelete:
+			case <-r.Context().Done():
+				deleteFinished <- false
+				return
+			}
 		}
 		mcpHandler.ServeHTTP(w, r)
+		if r.Method == http.MethodDelete {
+			deleteFinished <- true
+		}
 	})
 	httpServer := httptest.NewServer(handler)
 	t.Cleanup(httpServer.Close)
 	dir := t.TempDir()
 	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
-	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
+	input := Input{UserPath: path, Cwd: dir}
+	manager := NewManager(Options{Input: input})
 	manager.Start()
 	t.Cleanup(func() { manager.Stop(); manager.Wait() })
 	waitHTTPServerState(t, manager, "http-fixture", serverStateReady)
-	manager.mu.Lock()
-	session := manager.servers["http-fixture"].conn.session
-	manager.mu.Unlock()
-	// Start graceful SDK shutdown before Stop cancels connection I/O. This
-	// proves DELETE really entered the server rather than failing locally.
-	sessionClosed := make(chan struct{})
-	go func() { _ = session.Close(); close(sessionClosed) }()
+	writeHTTPConfigEnabled(t, dir, httpServer.URL, nil, false)
+	manager.Reload(input)
 	select {
-	case <-deleteEntered:
+	case id := <-deleteEntered:
+		if id == "" {
+			t.Fatal("DELETE did not identify the retired session")
+		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("session shutdown never reached DELETE")
+		t.Fatal("manager retirement did not send DELETE")
 	}
-	stopped := make(chan struct{})
-	go func() { manager.Stop(); close(stopped) }()
+	snapshot := waitHTTPServerState(t, manager, "http-fixture", serverStateDisabled)
+	if len(snapshot.Tools) != 0 {
+		t.Fatalf("retired tool routes remain published: %+v", snapshot.Tools)
+	}
+	close(allowDelete)
 	select {
-	case <-stopped:
+	case completed := <-deleteFinished:
+		if !completed {
+			t.Fatal("retirement canceled the DELETE request before cleanup completed")
+		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("Stop waited for the remote DELETE response")
-	}
-	if snapshot := manager.Snapshot(); len(snapshot.Tools) != 0 || len(snapshot.Servers) != 0 {
-		t.Fatalf("Stop retained the catalog: %+v", snapshot)
-	}
-	done := make(chan struct{})
-	go func() {
-		manager.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("background cleanup did not finish after a stalled DELETE")
-	}
-	select {
-	case <-sessionClosed:
-	case <-time.After(10 * time.Second):
-		t.Fatal("SDK shutdown did not return after Stop cancelled DELETE")
+		t.Fatal("server cleanup did not finish after releasing DELETE")
 	}
 }
 

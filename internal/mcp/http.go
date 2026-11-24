@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -215,6 +216,13 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		}
 		clone.Header.Set(name, value)
 	}
+	// The SDK sends a single stateful DELETE during Close with its own
+	// deadline. Retiring the connection cancels normal I/O, not that request.
+	if req.Method == http.MethodDelete && clone.Header.Get("Mcp-Session-Id") != "" {
+		if _, bounded := clone.Context().Deadline(); bounded {
+			return t.base.RoundTrip(clone)
+		}
+	}
 	ctx, cancel := context.WithCancel(clone.Context())
 	stopConn := context.AfterFunc(t.conn.ctx, cancel)
 	// AfterFunc runs asynchronously. A request starting after retirement
@@ -243,8 +251,8 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		stopConn()
 		cancel()
 	}
-	lower := strings.ToLower(resp.Header.Get("Content-Type"))
-	isSSE := strings.HasPrefix(lower, "text/event-stream")
+	mediaType, _, mediaTypeErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	isSSE := mediaTypeErr == nil && mediaType == "text/event-stream"
 	if req.Method == http.MethodPost && baseObs != nil {
 		if claimObs != nil {
 			status := classifyHTTPStatus(resp.StatusCode, req.Method, req.Header.Get("Mcp-Session-Id"), isSSE)
@@ -253,7 +261,11 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	} else {
 		t.recordConnectionResponse(req, resp, isSSE)
 	}
-	if !isSSE {
+	// The SDK can read an error body as a whole before checking its media
+	// type. Only successful responses delivered as SSE use the event limit.
+	streaming := isSSE && (req.Method == http.MethodGet && resp.StatusCode == http.StatusOK ||
+		req.Method == http.MethodPost && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices)
+	if !streaming {
 		resp.Body = &boundedReadCloser{body: resp.Body, remaining: maxHTTPBody, onOverflow: func() {
 			if baseObs != nil && req.Method == http.MethodPost {
 				if claimObs != nil {
