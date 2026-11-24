@@ -239,7 +239,7 @@ func TestActualAppContextUsageSettingsReload(t *testing.T) {
 	waitScreenState(q, "percent caption after reload", func(screen *testutil.VTModel) bool {
 		text := screen.Text()
 		return strings.Contains(text, "40.0%/200k") &&
-			strings.Contains(text, "Reloaded keybindings") && semanticEditorReady(screen)
+			strings.Contains(text, "Reloaded themes, display settings") && semanticEditorReady(screen)
 	})
 
 	f.writeSettings(t, "bogus")

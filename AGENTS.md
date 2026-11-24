@@ -65,6 +65,10 @@ For each tool or capability that you add, change, rename, or remove, complete th
 Before you report completion, check that the documentation and prompt guidance match the implementation.
 If documentation or prompt changes are unnecessary, explain why in the change summary.
 
+## Development procedures
+
+Contributor procedures that are not `psi --docs` topics are indexed in [docs/development/README.md](docs/development/README.md).
+
 ## Psionic architecture
 
 - Keep all Psionic-specific Go code, including tests, under `cmd/psionic/`. Do not place Psionic-specific Go files in Psi directories or Psi Go files in the Psionic tree.

@@ -43,7 +43,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "b", Description: "Request another response without a new prompt"},
 	{Name: "bump", Description: "Request another response without a new prompt"},
 	{Name: "resume", Description: "Resume another session"},
-	{Name: "reload", Description: "Reload keybindings, extensions, skills, prompts, themes, and context files"},
+	{Name: "reload", Description: "Reload themes, display settings, prompt inputs, skills, queue modes, and the local model catalog"},
 	{Name: "quit", Description: "Quit " + AppName},
 	// Embedded extensions requested for psi: adaptive compaction and the loop.
 	{Name: "ac", Description: "adaptive automatic compaction controls"},

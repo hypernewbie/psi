@@ -20,6 +20,7 @@ import (
 	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/provider"
 	"github.com/hypernewbie/psi/internal/session"
+	"github.com/hypernewbie/psi/internal/terminal"
 )
 
 // A command line reference to a provider from models.json resolves after the
@@ -95,15 +96,24 @@ func TestConfiguredProviderAppearsInModelListAndPicker(t *testing.T) {
 
 // The reload reads models.json again, and a malformed file keeps the current
 // model configuration.
-func TestReloadReadsModelsJSONAgain(t *testing.T) {
+func TestReloadCommandReportsModelCatalogResult(t *testing.T) {
 	r := testRuntime(t)
 	modelsPath := filepath.Join(r.agentDir, "models.json")
 	raw := `{"providers":{"local-openai":{"api":"openai-completions","baseUrl":"https://provider.example/v1","apiKey":"synthetic-local-key","models":[{"id":"qwen2.5-coder"}]}}}`
 	if err := os.WriteFile(modelsPath, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.reloadModels(); err != nil {
-		t.Fatal(err)
+	var out bytes.Buffer
+	cmd := &terminal.Command{Name: "reload"}
+	providerBefore, modelBefore := r.ov.Provider, r.ov.Model
+	if quit, err := r.command(cmd, &out); quit || err != nil {
+		t.Fatalf("/reload: quit=%v, err=%v", quit, err)
+	}
+	if !strings.Contains(out.String(), "refreshed model catalog") {
+		t.Fatalf("successful /reload did not report the catalog refresh: %q", out.String())
+	}
+	if r.ov.Provider != providerBefore || r.ov.Model != modelBefore {
+		t.Fatalf("/reload changed the selected model to %s/%s", r.ov.Provider, r.ov.Model)
 	}
 	if _, err := r.models.SelectModel("local-openai", "qwen2.5-coder"); err != nil {
 		t.Fatalf("the reloaded models.json was not installed: %v", err)
@@ -111,8 +121,13 @@ func TestReloadReadsModelsJSONAgain(t *testing.T) {
 	if err := os.WriteFile(modelsPath, []byte(`{"providers":`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.reloadModels(); err == nil {
-		t.Fatal("a malformed models.json was accepted")
+	out.Reset()
+	if quit, err := r.command(cmd, &out); quit || err != nil {
+		t.Fatalf("/reload with malformed models.json: quit=%v, err=%v", quit, err)
+	}
+	if status := out.String(); !strings.Contains(status, "models.json error:") ||
+		!strings.Contains(status, "Reloaded themes, display settings") || strings.Contains(status, "refreshed model catalog") {
+		t.Fatalf("/reload did not distinguish a failed catalog refresh from the other reloads: %q", status)
 	}
 	if _, err := r.models.SelectModel("local-openai", "qwen2.5-coder"); err != nil {
 		t.Fatalf("a malformed models.json replaced the working configuration: %v", err)

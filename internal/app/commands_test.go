@@ -356,7 +356,7 @@ func TestRuntimeCommandsDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	quit, err = r.command(&terminal.Command{Name: "reload"}, &out)
-	if err != nil || quit || !strings.Contains(out.String(), "Reloaded keybindings, extensions, skills, prompts, themes, and context files") {
+	if err != nil || quit || !strings.Contains(out.String(), "Reloaded themes, display settings") {
 		t.Errorf("/reload valid settings failed: quit=%v, err=%v, out=%q", quit, err, out.String())
 	}
 	out.Reset()

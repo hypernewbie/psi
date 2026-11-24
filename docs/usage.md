@@ -130,9 +130,12 @@ submission cancels the confirmation and follows its normal path.
   A later model change applies `modelThinkingLevels[provider/modelId]` first,
   then `defaultThinkingLevel`, then the carried level. An unadvertised level
   is clamped to the nearest supported level.
-- `/reload` re-reads instructions, skills, theme/display settings, and
-  `steeringMode`/`followUpMode` and resources; new queue modes apply to the
-  next run. Model, tool, shell, and network settings are not reloaded.
+- `/reload` re-reads themes, display settings, prompt inputs (including
+  context files), skills, and `steeringMode`/`followUpMode`. New queue modes
+  apply to the next run. It refreshes the local model catalog, including
+  `models.json`, without changing the selected model. If `models.json` is
+  malformed or unreadable, psi warns and keeps the previous catalog. It does
+  not change keybindings or reload tool, shell, or network settings.
 
 Startup selection uses `--provider`, `--model`, and `--thinking`; see
 [Command line](cli.md). Model IDs come from the bundled catalog and Pi's local
