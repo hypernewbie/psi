@@ -1031,17 +1031,17 @@ func (c *Console) renderExitHintRows(width, height int) []string {
 // cannot be drawn is discarded, so a later resize cannot reveal a confirmation
 // that was never armed.
 func (c *Console) SetExitHint(text string) bool {
-	hint := strings.TrimSpace(SanitizeStatusRow(text))
-	if hint == "" {
-		c.exitHint = ""
-		c.Draw()
+	if c.closed || c.released {
 		return false
 	}
-	c.exitHint = hint
-	width, height := c.size()
+	c.exitHint = strings.TrimSpace(SanitizeStatusRow(text))
 	c.Draw()
-	shown := c.err == nil && !c.closed && !c.released && !c.deferDraw && c.frameDepth == 0 &&
-		c.lastW == width && c.lastH == height && c.exitHintFits(width, height)
+	if c.exitHint == "" {
+		return false
+	}
+	// Use the geometry of the emitted frame; a separate size query can
+	// disagree with the draw when the terminal is resizing.
+	shown := c.err == nil && !c.deferDraw && c.frameDepth == 0 && c.exitHintFits(c.lastW, c.lastH)
 	if !shown {
 		c.exitHint = ""
 		c.dirty = true
