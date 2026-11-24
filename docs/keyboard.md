@@ -41,7 +41,7 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 - `/clone` — duplicate the session at the current position
 - `/new` — start a session (keeps scrollback, resets recall)
 - `/compact [focus]` — cancel an active run once, wait for durable settlement, then create a cancellable compact summary; idle compact uses the same operation
-- `/b`, `/bump` — request another response without adding a prompt. Available only while idle, outside pickers, runs, and compaction. Explicit commands bypass the unfinished-turn gate but keep storage, auth, and continuation checks. Empty `Enter` retries unfinished turns only. All admission refusals stay silent; started runs report failures, cancellation, partial output, and unsaved output normally.
+- `/b`, `/bump` — request another response without adding a prompt. Available only while idle, outside pickers, runs, and compaction. Explicit commands bypass the unfinished-turn gate but keep storage, auth, and continuation checks. Empty `Enter` retries unfinished turns only. An explicit bump refused during a shell command returns to the draft. Other refusals stay silent; started runs report failures, cancellation, partial output, and unsaved output normally.
 - `/resume` — search workspace sessions; same-session selection is a no-op
 - `/reload` — reload keybindings, extensions, skills, prompts, themes, and context files
 - `/quit` — release the terminal first, then settle and exit

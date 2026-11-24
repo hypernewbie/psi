@@ -461,7 +461,7 @@ Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT si
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
-Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
+Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. An explicit bump refused during a shell command returns to the draft. Other bump refusals stay silent; started runs report failures normally.
 During a run, /session, /hotkeys, and /name work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.

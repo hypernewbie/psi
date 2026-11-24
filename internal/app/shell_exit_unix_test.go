@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const shellShutdownSignal = syscall.SIGTERM
+
 // shellSuspendCase is Unix-only because Windows has no SIGTSTP.
 var shellSuspendCase = &shellExitCase{
 	name: "suspend",
