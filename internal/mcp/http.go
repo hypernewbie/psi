@@ -267,13 +267,14 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		req.Method == http.MethodPost && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices)
 	if !streaming {
 		resp.Body = &boundedReadCloser{body: resp.Body, remaining: maxHTTPBody, onOverflow: func() {
-			if baseObs != nil && req.Method == http.MethodPost {
-				if claimObs != nil {
-					claimObs.latch("limit")
-				}
-				return
+			// On a successful JSON response the SDK treats a body read error as
+			// session failure and loses the typed cause. Preserve it before Read returns.
+			if baseObs == nil || resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+				t.conn.latchClass("limit")
 			}
-			t.conn.latchClass("limit")
+			if req.Method == http.MethodPost && claimObs != nil {
+				claimObs.latch("limit")
+			}
 		}}
 	}
 	return resp, nil
@@ -289,7 +290,7 @@ func classifyHTTPStatus(status int, method, sessionID string, sse bool) httpStat
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return httpStatusClass{class: "auth"}
-	case method == http.MethodPost && status == http.StatusNotFound && sessionID != "":
+	case status == http.StatusNotFound && sessionID != "" && (method == http.MethodPost || method == http.MethodGet):
 		return httpStatusClass{class: "session-lost"}
 	case method == http.MethodGet && status == http.StatusMethodNotAllowed:
 		return httpStatusClass{listenerUnavailable: true}
@@ -297,11 +298,10 @@ func classifyHTTPStatus(status int, method, sessionID string, sse bool) httpStat
 		return httpStatusClass{listenerUnavailable: true}
 	case method == http.MethodGet && status == http.StatusOK:
 		return httpStatusClass{}
-	case method == http.MethodGet && status == http.StatusTooManyRequests:
-		return httpStatusClass{class: "rate-limit"}
-	case method == http.MethodGet && status >= 500:
-		return httpStatusClass{class: "server"}
 	case method == http.MethodGet:
+		if class := observedClass(status, ""); class != "" {
+			return httpStatusClass{class: class, transient: true}
+		}
 		return httpStatusClass{class: "listener"}
 	case status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500:
 		return httpStatusClass{transient: true}
@@ -327,13 +327,13 @@ func observedClass(status int, class string) string {
 }
 
 func (t *headerRoundTripper) recordConnectionResponse(req *http.Request, resp *http.Response, isSSE bool) {
-	t.conn.recordRetryAfter(resp.Header.Values("Retry-After"))
 	status := classifyHTTPStatus(resp.StatusCode, req.Method, req.Header.Get("Mcp-Session-Id"), isSSE)
+	if status.transient {
+		t.conn.recordRetryAfter(resp.Header.Values("Retry-After"))
+		t.conn.transient.Store(true)
+	}
 	if status.class != "" {
 		t.conn.latchClass(status.class)
-	}
-	if status.transient {
-		t.conn.transient.Store(true)
 	}
 	if status.listenerUnavailable {
 		t.conn.listenerUnavailable.Store(true)
@@ -454,6 +454,11 @@ func (c *connection) latchClass(class string) {
 	if class == "" {
 		return
 	}
+	if class == "limit" {
+		// A known size violation takes precedence over the HTTP status.
+		c.errClass.Store(class)
+		return
+	}
 	c.errClass.CompareAndSwap("", class)
 }
 
@@ -468,7 +473,7 @@ func (c *connection) markListenerChecked() {
 
 func (c *connection) terminalClass() string {
 	switch c.latchedClass() {
-	case "auth", "certificate", "rate-limit", "server", "limit", "session-lost", "listener":
+	case "auth", "certificate", "timeout", "rate-limit", "server", "limit", "session-lost", "listener":
 		return c.latchedClass()
 	}
 	return ""

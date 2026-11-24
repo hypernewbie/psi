@@ -743,7 +743,7 @@ func TestManagerPublicationUsesReloadedExposure(t *testing.T) {
 				reloaded.Exposure = policy.after
 				manager.acceptConfigLocked(&Config{Servers: []Server{reloaded}}, Input{}, nil)
 				manager.mu.Unlock()
-				manager.publishConnection(state, tool.Epoch, conn)
+				manager.publishConnection(t.Context(), state, tool.Epoch, conn)
 				synctest.Wait()
 				_, declared := manager.Snapshot().Find(tool.Name)
 				wantDeclared := policy.after == ExposureDirect

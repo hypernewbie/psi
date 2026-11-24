@@ -577,19 +577,14 @@ func (m *Manager) runSetup(state *serverState, epoch uint64, parent context.Cont
 		}
 		m.mu.Unlock()
 	}
-	var session *sdk.ClientSession
 	var conn *connection
 	var err error
 	for attempt := 0; attempt < maxDiscoveryTries; attempt++ {
-		session, conn, err = m.connect(ctx, state, epoch, resolved, input)
+		_, conn, err = m.connect(ctx, state, epoch, resolved, input)
 		if err == nil {
 			break
 		}
-		if ctx.Err() != nil || !retryableSetup(err) {
-			break
-		}
-		delay, ok := m.discoveryRetryDelay(conn, attempt)
-		if !ok || !m.opts.sleep(ctx, delay) {
+		if !m.waitDiscoveryRetry(ctx, conn, attempt, err) {
 			break
 		}
 	}
@@ -597,23 +592,26 @@ func (m *Manager) runSetup(state *serverState, epoch uint64, parent context.Cont
 		m.setupFailed(state, epoch, err)
 		return
 	}
-	m.publishConnection(state, epoch, conn)
-	_ = session
+	m.publishConnection(ctx, state, epoch, conn)
 }
 
-func (m *Manager) discoveryRetryDelay(conn *connection, attempt int) (time.Duration, bool) {
+func (m *Manager) waitDiscoveryRetry(ctx context.Context, conn *connection, attempt int, err error) bool {
+	if attempt+1 >= maxDiscoveryTries || ctx.Err() != nil || !retryableSetup(err) {
+		return false
+	}
 	delay := discoveryBackoff(attempt + 1)
-	if conn == nil {
-		return delay, true
+	if conn != nil {
+		advice, ok := conn.retryAdvice()
+		if !ok {
+			return false
+		}
+		delay = max(delay, advice)
 	}
-	advice, ok := conn.retryAdvice()
-	if !ok {
-		return 0, false
+	// Do not spend the rest of the budget sleeping for a retry we cannot make.
+	if deadline, ok := ctx.Deadline(); ok && delay >= time.Until(deadline) {
+		return false
 	}
-	if advice > delay {
-		delay = advice
-	}
-	return delay, true
+	return m.opts.sleep(ctx, delay)
 }
 
 func discoveryBackoff(attempt int) time.Duration {
@@ -675,12 +673,6 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 	var transport sdk.Transport
 	if server.Transport == TransportHTTP {
 		transport = m.newHTTPTransport(server, conn)
-		// Failed attempts never reach the published connection's cleanup worker.
-		defer func() {
-			if connCtx.Err() != nil && conn.closeIdleConnections != nil {
-				conn.closeIdleConnections()
-			}
-		}()
 	} else {
 		transport = newStdioTransport(server, input.Cwd)
 	}
@@ -691,84 +683,76 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 		// the setup budget armed until publication disarms it.
 		disarm = context.AfterFunc(ctx, conn.cancel)
 	}
-	stopDisarm := func() {
+	var session *sdk.ClientSession
+	keepSession := false
+	defer func() {
+		if keepSession {
+			return
+		}
 		if disarm != nil {
 			disarm()
-			disarm = nil
 		}
-	}
+		// The SDK waits for in-flight handlers before closing the transport.
+		// Cancel replies and listeners first; the bounded DELETE can still run.
+		conn.cancel()
+		if session != nil {
+			_ = session.Close()
+		}
+		if conn.closeIdleConnections != nil {
+			conn.closeIdleConnections()
+		}
+	}()
 	session, err := client.Connect(ctx, transport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
 	if err != nil {
-		stopDisarm()
 		if class := conn.latchedClass(); class != "" {
 			err = configErr(class, "MCP connection failed: %s", class)
 		} else if conn.transient.Load() {
 			err = &transientError{err: err}
 		}
-		conn.cancel()
 		return nil, conn, err
 	}
 	if class := conn.terminalClass(); class != "" {
-		stopDisarm()
-		_ = session.Close()
-		conn.cancel()
 		return nil, conn, configErr(class, "MCP connection failed: %s", class)
 	}
 	init := session.InitializeResult()
 	if init != nil && protocolTooNew(init.ProtocolVersion) {
-		stopDisarm()
-		_ = session.Close()
-		conn.cancel()
 		return nil, conn, configErr("unsupported", "server selected an unsupported protocol version")
 	}
 	conn.clearRetryAdvice()
 	raw, err := listAllTools(ctx, session)
 	if err != nil {
-		stopDisarm()
 		if class := conn.latchedClass(); class != "" {
 			err = configErr(class, "MCP discovery failed: %s", class)
 		} else if conn.transient.Load() {
 			err = &transientError{err: err}
 		}
-		_ = session.Close()
-		conn.cancel()
 		return nil, conn, err
 	}
 	if server.Transport == TransportHTTP {
 		select {
 		case <-conn.listenerChecked:
 		case <-ctx.Done():
-			stopDisarm()
-			_ = session.Close()
-			conn.cancel()
 			return nil, conn, ctx.Err()
 		}
 	}
 	if class := conn.terminalClass(); class != "" {
-		stopDisarm()
-		_ = session.Close()
-		conn.cancel()
 		return nil, conn, configErr(class, "MCP discovery failed: %s", class)
 	}
 	catalog, err := buildCatalog(server, epoch, raw)
 	if err != nil {
-		stopDisarm()
-		_ = session.Close()
-		conn.cancel()
 		return nil, conn, err
 	}
-	conn.session = session
-	conn.catalog = catalog
-	conn.setupDisarm = disarm
 	m.mu.Lock()
 	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch {
 		m.mu.Unlock()
-		_ = session.Close()
-		conn.cancel()
 		return nil, conn, context.Canceled
 	}
 	conn.lastList = m.opts.now()
 	m.mu.Unlock()
+	conn.session = session
+	conn.catalog = catalog
+	conn.setupDisarm = disarm
+	keepSession = true
 	return session, conn, nil
 }
 
@@ -824,7 +808,7 @@ func (m *Manager) policyAllows(server Server) bool {
 	return policyAllowsInput(m.input, server)
 }
 
-func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *connection) {
+func (m *Manager) publishConnection(setupCtx context.Context, state *serverState, epoch uint64, conn *connection) {
 	m.mu.Lock()
 	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || !state.cfg.Enabled {
 		conn.closeAsyncLocked()
@@ -840,12 +824,19 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 		m.mu.Unlock()
 		return
 	}
-	if state.conn != nil && state.conn != conn {
-		state.conn.closeAsyncLocked()
-	}
 	if conn.setupDisarm != nil {
 		conn.setupDisarm()
 		conn.setupDisarm = nil
+	}
+	// The setup budget can expire between the last HTTP response and publication.
+	if err := setupCtx.Err(); err != nil {
+		conn.closeAsyncLocked()
+		m.mu.Unlock()
+		m.setupFailed(state, epoch, err)
+		return
+	}
+	if state.conn != nil && state.conn != conn {
+		state.conn.closeAsyncLocked()
 	}
 	state.conn = conn
 	state.status = serverStateReady
@@ -871,10 +862,9 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 func (m *Manager) setupFailed(state *serverState, epoch uint64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch {
+	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || state.conn != nil {
 		return
 	}
-	state.conn = nil
 	state.catalog = nil
 	state.refreshWarning = ""
 	state.listenerUnavailable = false
@@ -936,11 +926,16 @@ func (m *Manager) connectionLost(conn *connection, err error) {
 	state.catalog = nil
 	state.refreshWarning = ""
 	state.listenerUnavailable = false
+	// The SDK can turn a body-limit failure into an opaque session error.
+	// Only an explicit reload should retry a server that crossed the limit.
+	limitExceeded := conn.latchedClass() == "limit"
 	class := ErrorClass(err)
-	if class == "" {
+	if limitExceeded {
+		class = "limit"
+	} else if class == "" {
 		class = "connection"
 	}
-	if state.reconnects >= maxReconnects {
+	if limitExceeded || state.reconnects >= maxReconnects {
 		state.status = serverStateFailed
 		state.errClass = class
 		m.publishLocked()
@@ -999,7 +994,7 @@ func (c *connection) refreshCatalog() error {
 	c.lastList = c.manager.opts.now()
 	ctx, cancel := context.WithTimeout(c.ctx, c.manager.serverTimeout(c.server))
 	defer cancel()
-	raw, err := listWithRetry(ctx, c.session, c)
+	raw, err := c.listWithRetry(ctx)
 	if err != nil {
 		c.manager.markRefreshWarning(c, err)
 		return err
@@ -1024,26 +1019,23 @@ func (c *connection) refreshCatalog() error {
 	return nil
 }
 
-func listWithRetry(ctx context.Context, session *sdk.ClientSession, conn *connection) ([]*sdk.Tool, error) {
+func (c *connection) listWithRetry(ctx context.Context) ([]*sdk.Tool, error) {
 	var err error
 	for attempt := 0; attempt < maxDiscoveryTries; attempt++ {
-		if conn != nil {
-			conn.clearRetryAdvice()
-			conn.transient.Store(false)
-		}
+		c.clearRetryAdvice()
+		c.transient.Store(false)
 		var tools []*sdk.Tool
-		tools, err = listAllTools(ctx, session)
+		tools, err = listAllTools(ctx, c.session)
 		if err == nil {
 			return tools, nil
 		}
-		if conn != nil && conn.transient.Load() {
+		if c.latchedClass() == "limit" {
+			return nil, errLimit("HTTP response body")
+		}
+		if c.transient.Load() {
 			err = &transientError{err: err}
 		}
-		if ctx.Err() != nil || !retryableSetup(err) {
-			break
-		}
-		delay, ok := conn.manager.discoveryRetryDelay(conn, attempt)
-		if !ok || !conn.manager.opts.sleep(ctx, delay) {
+		if !c.manager.waitDiscoveryRetry(ctx, c, attempt, err) {
 			break
 		}
 	}
@@ -1455,7 +1447,12 @@ func retryableSetup(err error) bool {
 	}
 	var ce *ConfigError
 	if errors.As(err, &ce) {
-		return ce.Class == "timeout"
+		switch ce.Class {
+		case "timeout", "rate-limit", "server", "session-lost":
+			return true
+		default:
+			return false
+		}
 	}
 	var le *limitError
 	if errors.As(err, &le) {

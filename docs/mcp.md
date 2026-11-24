@@ -175,6 +175,11 @@ Limits:
 HTTP supports only absolute `http` and `https` URLs with a host. If specified,
 the port must be between 1 and 65535. User information and fragments are
 rejected. Redirects fail, and TLS certificate verification cannot be disabled.
+HTTP dialing and TLS negotiation each have a five-second limit. After psi sends
+a request, it waits up to ten seconds for response headers, even if `timeout`
+is longer.
+HTTP uses the process proxy settings. Use `https` when sending credentials or
+sensitive tool data outside a trusted local connection.
 Invalid or duplicate header names and values containing CR, LF, or NUL are
 rejected. These headers are reserved: `Host`, `Content-Length`,
 `Transfer-Encoding`, `Content-Type`, `Accept`, `Mcp-Session-Id`,
@@ -200,6 +205,13 @@ later successful refresh publishes the updated catalog and clears the warning.
 Changes to connection identity replace a session. Exposure and call timeout
 changes can take effect without replacing the connection. If policy blocks
 publication of a new connection, a reload that restores permission retries setup.
+
+HTTP discovery can retry a temporary HTTP failure, including on its initial
+SSE listener request, up to twice within the original setup budget. A retryable
+HTTP response can request a delay with `Retry-After`. If the requested delay
+is invalid, exceeds five seconds, or does not fit the remaining budget, discovery
+stops. psi does not replay a tool call. If a body-limit error closes a live HTTP
+session, psi withdraws its tools and waits for an explicit reload.
 
 The call timeout is an idle limit. A finite progress update for that call
 starts a new idle interval only if its value advances. Progress does not

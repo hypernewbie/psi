@@ -616,6 +616,61 @@ func rpcMethod(r *http.Request) string {
 	return probe.Method
 }
 
+func TestManagerHTTPFailedDiscoveryCancelsPendingReply(t *testing.T) {
+	replyStarted := make(chan struct{})
+	replyCanceled := make(chan struct{})
+	releaseReply := make(chan struct{})
+	defer close(releaseReply) // Let the fixture stop even if the regression fails.
+	server := httpFixture(t)
+	pingCtx, stopPing := context.WithCancel(t.Context())
+	defer stopPing()
+	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			switch rpcMethod(r) {
+			case "tools/list":
+				for session := range server.Sessions() {
+					go func() { _ = session.Ping(pingCtx, nil) }()
+				}
+				select {
+				case <-replyStarted:
+					stopPing() // The fixture's own Ping must not hold up DELETE.
+					http.Error(w, "discovery failed", http.StatusBadRequest)
+				case <-r.Context().Done():
+				}
+				return
+			case "": // The client's JSON-RPC response to the ping.
+				w.WriteHeader(http.StatusBadRequest)
+				w.(http.Flusher).Flush()
+				close(replyStarted)
+				select {
+				case <-r.Context().Done():
+					close(replyCanceled)
+				case <-releaseReply:
+				}
+				return
+			}
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(httpServer.Close)
+	dir := t.TempDir()
+	manager := NewManager(Options{Input: Input{UserPath: writeHTTPConfig(t, dir, httpServer.URL, nil), Cwd: dir}})
+	manager.Start()
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
+	select {
+	case <-replyStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("client did not reply to the ping during discovery")
+	}
+	waitHTTPServerState(t, manager, "http-fixture", serverStateFailed)
+	select {
+	case <-replyCanceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("discovery failure left the reply POST in flight")
+	}
+}
+
 func TestManagerHTTPInitialListenerBudget(t *testing.T) {
 	server := httpFixture(t)
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
@@ -817,40 +872,72 @@ func TestManagerHTTPTrustedTLSAndHostnameMismatch(t *testing.T) {
 	t.Fatalf("hostname mismatch did not fail: %+v", mismatch.Snapshot().Servers)
 }
 
-func TestManagerHTTPStandaloneRateLimit(t *testing.T) {
-	server := httpFixture(t)
-	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "slow down", http.StatusTooManyRequests)
-			return
-		}
-		mcpHandler.ServeHTTP(w, r)
-	})
-	httpServer := httptest.NewServer(handler)
-	t.Cleanup(httpServer.Close)
-	dir := t.TempDir()
-	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
-	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}, sleep: func(context.Context, time.Duration) bool { return true }})
-	manager.Start()
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
-	})
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, status := range manager.Snapshot().Servers {
-			if status.State == serverStateFailed {
-				if status.ErrorClass != "rate-limit" {
-					t.Fatalf("rate-limit failure class = %q", status.ErrorClass)
+func TestManagerHTTPStandaloneDiscoveryRetries(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		failures  int32
+		wantDelay time.Duration
+		wantState string
+		wantClass string
+	}{
+		{"rate limit recovers", http.StatusTooManyRequests, 1, 2 * time.Second, serverStateReady, ""},
+		{"server error recovers", http.StatusServiceUnavailable, 1, 2 * time.Second, serverStateReady, ""},
+		{"expired session recovers", http.StatusNotFound, 1, 250 * time.Millisecond, serverStateReady, ""},
+		{"rate limit exhausts retries", http.StatusTooManyRequests, maxDiscoveryTries, 2 * time.Second, serverStateFailed, "rate-limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httpFixture(t)
+			handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+			var gets atomic.Int32
+			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && gets.Add(1) <= tc.failures {
+					if tc.status != http.StatusNotFound {
+						w.Header().Set("Retry-After", "2")
+					}
+					http.Error(w, "try later", tc.status)
+					return
 				}
-				return
+				if r.Method == http.MethodPost && rpcMethod(r) == "notifications/initialized" {
+					// A successful notification must not replace the listener's advice.
+					w.Header().Set("Retry-After", "0")
+				}
+				handler.ServeHTTP(w, r)
+			}))
+			t.Cleanup(httpServer.Close)
+			dir := t.TempDir()
+			path := writeHTTPConfig(t, dir, httpServer.URL, nil)
+			var delays []time.Duration
+			manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir}, sleep: func(_ context.Context, delay time.Duration) bool {
+				delays = append(delays, delay)
+				return true
+			}})
+			manager.Start()
+			t.Cleanup(func() { manager.Stop(); manager.Wait() })
+			snapshot := waitHTTPServerState(t, manager, "http-fixture", tc.wantState)
+			wantGets := tc.failures
+			if tc.wantState == serverStateReady {
+				wantGets++
+				if _, ok := snapshot.Find("mcp__http_fixture__echo"); !ok {
+					t.Fatal("listener recovered without publishing the tools")
+				}
 			}
-		}
-		waitForHTTPSnapshotChange(t, manager, deadline)
+			if got := gets.Load(); got != wantGets {
+				t.Fatalf("listener attempts = %d, want %d", got, wantGets)
+			}
+			if got := snapshot.Servers[0].ErrorClass; got != tc.wantClass {
+				t.Fatalf("error class = %q, want %q", got, tc.wantClass)
+			}
+			if len(delays) != int(wantGets)-1 {
+				t.Fatalf("retry delays = %v, want one per retry", delays)
+			}
+			for _, delay := range delays {
+				if delay != tc.wantDelay {
+					t.Fatalf("retry delay = %v, want %v", delay, tc.wantDelay)
+				}
+			}
+		})
 	}
-	t.Fatalf("GET 429 did not fail setup: %+v", manager.Snapshot().Servers)
 }
 
 func TestManagerHTTPBodyStallCancelsSetup(t *testing.T) {
@@ -1330,32 +1417,18 @@ func TestManagerHTTPRetryAfterBudgetStops(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	dir := t.TempDir()
-	data, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"http-fixture": map[string]any{"url": server.URL, "timeout": 0.2, "exposure": "direct"}}})
-	path := filepath.Join(dir, "mcp.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}})
+	path := writeHTTPConfig(t, dir, server.URL, nil) // 5s setup, so a 5s delay cannot leave time for a retry.
+	slept := false
+	manager := NewManager(Options{Input: Input{UserPath: path, Cwd: dir, ReadAvailable: true}, sleep: func(context.Context, time.Duration) bool {
+		slept = true
+		return true
+	}})
 	manager.Start()
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
-	})
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, status := range manager.Snapshot().Servers {
-			if status.State == serverStateFailed {
-				// A loaded host can exhaust setup before its first request.
-				// The invariant is that the expired budget permits no retry.
-				if attempts.Load() > 1 {
-					t.Fatalf("attempts = %d, want at most 1", attempts.Load())
-				}
-				return
-			}
-		}
-		waitForHTTPSnapshotChange(t, manager, deadline)
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
+	waitHTTPServerState(t, manager, "http-fixture", serverStateFailed)
+	if attempts.Load() != 1 || slept {
+		t.Fatalf("retry without enough budget: %d requests, waited: %v", attempts.Load(), slept)
 	}
-	t.Fatalf("budget did not stop retries: %+v", manager.Snapshot().Servers)
 }
 
 func TestManagerHTTPRejectsPermanentRedirect(t *testing.T) {
@@ -1453,14 +1526,28 @@ func jsonID(value any) string {
 
 func TestManagerHTTPConcurrentCancellationDoesNotCorruptSuccess(t *testing.T) {
 	entered := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	defer close(releaseRequest)
+	var heldFirstCall atomic.Bool
 	server := httpFixture(t)
-	server.AddTool(sdkTool("refresh", "Wait for cancellation", map[string]any{"type": "object"}), func(ctx context.Context, _ *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-		close(entered)
-		<-ctx.Done()
-		return nil, ctx.Err()
-	})
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
-	httpServer := httptest.NewServer(mcpHandler)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Hold the first HTTP call outside the SDK server's serial handler queue.
+		// The test must not rely on best-effort MCP cancellation to let echo run.
+		if r.Method == http.MethodPost && rpcMethod(r) == "tools/call" && !heldFirstCall.Swap(true) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.(http.Flusher).Flush()
+			close(entered)
+			select {
+			case <-r.Context().Done():
+				close(requestCanceled)
+			case <-releaseRequest:
+			}
+			return
+		}
+		mcpHandler.ServeHTTP(w, r)
+	}))
 	t.Cleanup(httpServer.Close)
 	dir := t.TempDir()
 	path := writeHTTPConfig(t, dir, httpServer.URL, nil)
@@ -1495,9 +1582,18 @@ func TestManagerHTTPConcurrentCancellationDoesNotCorruptSuccess(t *testing.T) {
 	if result.IsError || result.Content[0].Text == "" {
 		t.Fatalf("successful call was corrupted by cancellation: %+v", result)
 	}
-	cancelled := <-done
-	if !cancelled.IsError || len(cancelled.Content) != 1 || !strings.Contains(cancelled.Content[0].Text, "was cancelled") {
-		t.Fatalf("cancelled HTTP call = %+v", cancelled)
+	select {
+	case cancelled := <-done:
+		if !cancelled.IsError || len(cancelled.Content) != 1 || !strings.Contains(cancelled.Content[0].Text, "was cancelled") {
+			t.Fatalf("cancelled HTTP call = %+v", cancelled)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled tool call did not return")
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled tool call left its HTTP response open")
 	}
 }
 
@@ -1544,6 +1640,52 @@ func TestManagerHTTPDiscoveryOverflowLatchesBeforeSDKFailure(t *testing.T) {
 		waitForHTTPSnapshotChange(t, manager, deadline)
 	}
 	t.Fatalf("overflow did not fail as a limit: %+v", manager.Snapshot().Servers)
+}
+
+func TestManagerHTTPLiveBodyOverflowDoesNotReconnect(t *testing.T) {
+	server := httpFixture(t)
+	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	var initializes atomic.Int32
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch rpcMethod(r) {
+		case "initialize":
+			initializes.Add(1)
+		case "tools/call":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(bytes.Repeat([]byte(" "), maxHTTPBody+1))
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(httpServer.Close)
+	dir := t.TempDir()
+	manager := NewManager(Options{Input: Input{UserPath: writeHTTPConfig(t, dir, httpServer.URL, nil), Cwd: dir}})
+	manager.Start()
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
+	snapshot := waitHTTPServerState(t, manager, "http-fixture", serverStateReady)
+	tool, ok := snapshot.Find("mcp__http_fixture__echo")
+	if !ok {
+		t.Fatal("echo tool missing")
+	}
+	result := manager.Call(t.Context(), tool, tools.Invocation{Name: tool.Name})
+	if !result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, "limit") {
+		t.Fatalf("oversize response did not produce a limit error: %+v", result)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snapshot = manager.Snapshot()
+		status := snapshot.Servers[0]
+		if status.State == serverStateFailed {
+			if status.ErrorClass != "limit" || len(snapshot.Tools) != 0 {
+				t.Fatalf("oversize response did not withdraw the tools as a limit failure: %+v", status)
+			}
+			return
+		}
+		if status.State == serverStateReconnecting || initializes.Load() != 1 {
+			t.Fatalf("body overflow triggered reconnection: %+v", status)
+		}
+		waitForHTTPSnapshotChange(t, manager, deadline)
+	}
 }
 
 func TestManagerHTTPOversizeSSEEventIsBounded(t *testing.T) {
@@ -1936,7 +2078,7 @@ func TestManagerHTTPRejectsInvalidListenerStatus(t *testing.T) {
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			http.Error(w, "not found", http.StatusNotFound)
+			http.Error(w, "bad listener request", http.StatusBadRequest)
 			return
 		}
 		mcpHandler.ServeHTTP(w, r)
@@ -2133,7 +2275,7 @@ func TestHeaderRoundTripperClassifiesListenerBeforeSignaling(t *testing.T) {
 	conn.errClass.Store("")
 	base := roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
-			StatusCode: http.StatusUnauthorized,
+			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{"Retry-After": {now.Add(time.Second).Format(http.TimeFormat)}},
 			Body:       http.NoBody,
 		}, nil
@@ -2168,8 +2310,8 @@ func TestHeaderRoundTripperClassifiesListenerBeforeSignaling(t *testing.T) {
 	}
 	select {
 	case <-conn.listenerChecked:
-		if class := conn.terminalClass(); class != "auth" {
-			t.Fatalf("listener class = %q, want auth", class)
+		if class := conn.terminalClass(); class != "rate-limit" {
+			t.Fatalf("listener class = %q, want rate-limit", class)
 		}
 	default:
 		t.Fatal("listener did not signal after classifying the response")

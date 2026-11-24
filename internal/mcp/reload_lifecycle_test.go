@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -173,7 +174,7 @@ func TestManagerRetriesSetupAfterTrustReturns(t *testing.T) {
 	untrusted := trusted
 	untrusted.ProjectTrusted = false
 	manager.Reload(untrusted)
-	manager.publishConnection(state, epoch, conn)
+	manager.publishConnection(t.Context(), state, epoch, conn)
 	snapshot := manager.Snapshot()
 	if len(snapshot.Tools) != 0 || len(snapshot.Servers) != 1 || snapshot.Servers[0].ErrorClass != "permission" {
 		t.Fatalf("setup at trust loss did not withdraw the connection as a permission failure: %+v", snapshot)
@@ -194,6 +195,30 @@ func TestManagerRetriesSetupAfterTrustReturns(t *testing.T) {
 	result := manager.Call(t.Context(), tool, tools.Invocation{Name: tool.Name, Arguments: map[string]any{"text": "restored"}})
 	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "restored" {
 		t.Fatalf("echo after trust returned = %+v", result)
+	}
+}
+
+func TestManagerHTTPDoesNotPublishCancelledSetup(t *testing.T) {
+	server := httpFixture(t)
+	endpoint := httptest.NewServer(sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil))
+	t.Cleanup(endpoint.Close)
+	manager := NewManager(Options{})
+	t.Cleanup(func() { manager.Stop(); manager.Wait() })
+	config := Server{Name: "fixture", Transport: TransportHTTP, URL: endpoint.URL, Enabled: true, Exposure: ExposureDirect}
+	state := &serverState{cfg: config, epoch: 1, status: serverStateConnecting, setupActive: true}
+	manager.servers[config.Name] = state
+	manager.order = []string{config.Name}
+	setupCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, conn, err := manager.connect(setupCtx, state, state.epoch, config, Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	manager.publishConnection(setupCtx, state, state.epoch, conn)
+	snapshot := manager.Snapshot()
+	if len(snapshot.Tools) != 0 || len(snapshot.Servers) != 1 || snapshot.Servers[0].State != serverStateFailed || snapshot.Servers[0].ErrorClass != "cancelled" {
+		t.Fatalf("cancelled setup was not rejected: %+v", snapshot)
 	}
 }
 
