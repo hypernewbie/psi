@@ -61,6 +61,43 @@ func TestDiscoverDeterministic(t *testing.T) {
 	}
 }
 
+func TestRepoAddSlashCommandSkill(t *testing.T) {
+	setSyntheticHome(t)
+	relPath := filepath.Join(".agents", "skills", "add-slash-command", "SKILL.md")
+	body, err := os.ReadFile(filepath.Join("..", "..", relPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	dstPath := filepath.Join(workspace, relPath)
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dstPath, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, diags := Discover(workspace, t.TempDir(), nil, true)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics: %+v", diags)
+	}
+	if len(got) != 1 {
+		t.Fatalf("discovered %d skills, want 1: %+v", len(got), got)
+	}
+	if got[0].Name != "add-slash-command" {
+		t.Fatalf("skill name = %q, want add-slash-command", got[0].Name)
+	}
+	if got[0].FilePath != dstPath {
+		t.Fatalf("skill path = %q, want %q", got[0].FilePath, dstPath)
+	}
+	if prompt := FormatForPrompt(got); prompt != "" {
+		t.Fatalf("explicit-only skill was advertised in the prompt: %q", prompt)
+	}
+	if _, err := Invoke(got, "add-slash-command", ""); err != nil {
+		t.Fatalf("invoke add-slash-command: %v", err)
+	}
+}
+
 func TestMalformedAndCollision(t *testing.T) {
 	setSyntheticHome(t)
 	agent := t.TempDir()
