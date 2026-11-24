@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -308,7 +307,7 @@ func TestBangShellMVPLifecycle(t *testing.T) {
 				}
 			}},
 			{name: "shutdown", action: func(t *testing.T, _ *os.File, signals chan os.Signal, _ *shellWriter) {
-				signals <- syscall.SIGTERM
+				signals <- shellShutdownSignal
 			}},
 			{name: "terminal write failure", action: func(t *testing.T, input *os.File, _ chan os.Signal, output *shellWriter) {
 				output.Fail()

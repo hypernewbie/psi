@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -213,13 +212,14 @@ func (r resolver) resolveExplicit(selector string) (string, error) {
 			return r.findExecutableChecked(selector)
 		}
 	}
-	if strings.ContainsRune(selector, os.PathSeparator) {
+	// This branch resolves Unix selectors, even when a test runs it on Windows.
+	if strings.ContainsRune(selector, '/') {
 		path := selector
-		if !filepath.IsAbs(path) {
+		if !strings.HasPrefix(path, "/") {
 			if r.cwd == "" {
 				return "", errors.New("a relative shell path requires a working directory")
 			}
-			path = r.cwd + string(os.PathSeparator) + selector
+			path = r.cwd + "/" + selector
 		}
 		if !r.pathExists(path) {
 			return "", fmt.Errorf("%s does not exist", path)
