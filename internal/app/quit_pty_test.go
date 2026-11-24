@@ -152,18 +152,27 @@ func TestActualAppQuitReleasesTTYAndPersistsPartial(t *testing.T) {
 	f.assertSettled(t, q.drainOutputAfterExit(), 1)
 }
 
-// TestActualAppExitKeywordsBusy proves the first keyword does not interrupt a
-// live run and the second keyword exits through the busy /quit path.
+// TestActualAppExitKeywordsBusy proves a normal prompt disarms confirmation,
+// a keyword does not interrupt a live run, and a second keyword exits through
+// the busy /quit path.
 func TestActualAppExitKeywordsBusy(t *testing.T) {
 	f, gate := newGatedQuitFixture(t)
 	defer gate.open()
 	q := startReviewPTY(t, f.home, f.work, f.agentDir, "--deny-project", "--no-tools")
 	q.prompt()
+	q.write("quit\r")
+	q.waitScreen(terminal.ExitHintText)
 	q.write("quit now\r")
 	body := busyWaitBody(t, gate.bodies)
 	if !strings.Contains(string(body), "quit now") {
 		t.Fatalf("first request missing the original prompt: %s", body)
 	}
+	q.waitScreen("› quit now")
+	if strings.Contains(q.screen.Text(), terminal.ExitHintText) {
+		t.Fatalf("confirmation stayed visible after a normal prompt: %q", q.screen.Text())
+	}
+
+	// This quit must show a fresh hint, not confirm the one before the prompt.
 	q.write("quit\r")
 	q.waitScreen(terminal.ExitHintText)
 	if screen := q.screen.Text(); strings.Contains(screen, "Steering: quit") || strings.Contains(screen, "Follow-up: quit") {
