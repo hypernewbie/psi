@@ -46,15 +46,15 @@ width-adaptive bar can sit between them.
 
 ## Check provider usage
 
-Enter `/usage` to check the active provider first. Enter again to open
-**Accounts**. Use Up/Down to highlight a provider and Enter to load it. You can
-also open an account directly with `/usage zai` or `/usage deepseek`.
+Enter `/usage` to load the active provider's detail. **Accounts** appears below
+it as soon as local credential checks finish. Use Up/Down to highlight an
+account and Enter to load it in the same panel. You can also open an account
+directly with `/usage zai` or `/usage deepseek`.
 
 Accounts lists only Z.AI and DeepSeek with a usable local credential and a
-direct, official route. Opening the list and moving the highlight do not
+direct, official route. Finding accounts and moving the highlight do not
 contact either provider. Choosing a different account does not switch the
-active model or footer. If no other account is available, the panel keeps
-showing the current detail.
+active model or footer.
 
 Z.AI shows the five-hour and weekly plan quota separately. DeepSeek shows
 account availability when reported, plus the total and any reported granted
@@ -63,11 +63,13 @@ five-hour reading or DeepSeek's USD balance (the first usable currency if
 there is no USD balance). It shows `DeepSeek unavailable` if the account is
 explicitly unavailable.
 
-The panel makes one bounded request when it loads an account and does not
-retry. Errors stay in the panel. In the detail view, use Up/Down or Page
-Up/Page Down to scroll. Esc closes either view and returns to the editor.
-Opening and closing the panel does not add a message to the session or
-interrupt a running reply.
+The panel makes one bounded request each time it loads an account. It does not
+retry or queue another load while a request is in progress. Errors stay in the
+panel. Page Up/Page Down scroll the detail. If only one row fits, Up/Down
+shows the choices and Enter loads and shows the detail for the visible choice.
+Use Page Up/Page Down to move between detail rows. Esc closes the panel. Opening
+or closing the panel does not add a message to the session or interrupt a
+running reply.
 
 ## Enter a prompt
 

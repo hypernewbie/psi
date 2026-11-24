@@ -234,25 +234,40 @@ func TestUsageZAIRefusesRouteAndCredential(t *testing.T) {
 	}
 }
 
-// A short terminal shows only part of the panel; the existing navigation keys
-// reach the rows below the viewport.
+// With one body row, report paging and account navigation take turns using it.
 func TestUsagePanelReachesLastRowAtShortHeight(t *testing.T) {
 	r := newUsageZAIRuntime(t)
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("DEEPSEEK_API_KEY", deepSeekUsageKey)
 	r.planQuotaCheck = func(context.Context, string, string, time.Time) provider.QuotaUsageResult {
 		return zaiPlanSample(27.5, 40)
 	}
-	_, out, inputWrite, _ := startLoginTestREPLSize(t, r, 80, 8)
-	if _, err := inputWrite.Write([]byte("/usage\r")); err != nil {
-		t.Fatal(err)
+	r.usageBalanceCheck = func(context.Context, string, time.Time) provider.QuotaUsageResult {
+		return deepSeekBalanceSample(time.Now())
 	}
+	visible := make(chan usageReport, 1)
+	r.usageObserved = func(report usageReport, presented bool) {
+		if presented {
+			visible <- report
+		}
+	}
+	_, out, input, _ := startLoginTestREPLSize(t, r, 80, 7)
+	writeUsageKeys(t, input, "/usage\r")
+	waitAppOutput(t, out, "→ ✓ Z.AI")
+	waitUsageLookup(t, visible)
+	writeUsageKeys(t, input, "\x1b[6~")
 	waitAppOutput(t, out, "5 hour")
-	if strings.Contains(out.String(), "Weekly") {
-		t.Fatalf("short panel already showed the clipped row: %q", out.String())
-	}
-	if _, err := inputWrite.Write([]byte("\x1b[B")); err != nil {
-		t.Fatal(err)
-	}
+	writeUsageKeys(t, input, "\x1b[6~")
 	waitAppOutput(t, out, "Weekly")
+	writeUsageKeys(t, input, "\x1b[B")
+	waitAppOutput(t, out, "→   DeepSeek")
+	writeUsageKeys(t, input, "\r")
+	if report := waitUsageLookup(t, visible); report.providerID != "deepseek" || !report.usable() {
+		t.Fatalf("visible choice did not load DeepSeek: %+v", report)
+	}
+	waitAppOutput(t, out, "Usage · DeepSeek")
+	writeUsageKeys(t, input, "\x1b[6~")
+	waitAppOutput(t, out, "Balance: CNY 0.00")
 }
 
 func TestUsageCompletionCutoff(t *testing.T) {

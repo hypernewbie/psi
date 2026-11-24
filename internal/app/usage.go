@@ -89,7 +89,6 @@ type usageReport struct {
 	providerID string
 	plan       *provider.PlanWindows
 	balance    *provider.DeepSeekBalance
-	keySHA     [sha256.Size]byte // proof for reusing detail without another GET
 	reason     usageReason
 }
 
@@ -103,7 +102,7 @@ func (report usageReport) usable() bool {
 func (report usageReport) panelRows() []usageRow {
 	title := usageRow{text: "Usage · " + usageProviderName(report.providerID), token: terminal.TokenAccent, bold: true}
 	if !report.usable() {
-		return []usageRow{title, {text: string(report.reason) + ".", token: terminal.TokenError}, usageHintRow()}
+		return []usageRow{title, {text: string(report.reason) + ".", token: terminal.TokenError}}
 	}
 	rows := []usageRow{title}
 	switch report.providerID {
@@ -114,7 +113,7 @@ func (report usageReport) panelRows() []usageRow {
 	default:
 		rows = append(rows, usageRow{text: string(usageReasonUnsupported) + ".", token: terminal.TokenError})
 	}
-	return append(rows, usageHintRow())
+	return rows
 }
 
 func deepSeekBalanceRows(balance *provider.DeepSeekBalance) []usageRow {
@@ -154,16 +153,11 @@ func usageWindowRow(label string, used *float64) usageRow {
 	return usageRow{text: fmt.Sprintf("%-8s %s left", label, quotaRemaining(*used)), token: terminal.TokenText}
 }
 
-func usageHintRow() usageRow {
-	return usageRow{text: "Enter accounts · Esc close", token: terminal.TokenMuted}
-}
-
 // usageLoadingRows shows the provider being queried before its reply arrives.
 func usageLoadingRows(providerID string) []usageRow {
 	return []usageRow{
 		{text: "Usage · " + usageProviderName(providerID), token: terminal.TokenAccent, bold: true},
 		{text: "Loading…", token: terminal.TokenMuted},
-		usageHintRow(),
 	}
 }
 
@@ -188,11 +182,15 @@ func (p *usagePanel) view(width, budget int, noColor bool, palette *theme.Theme)
 	end := min(len(p.rows), p.off+budget)
 	rows := make([]string, 0, end-p.off)
 	for _, row := range p.rows[p.off:end] {
-		rows = append(rows, terminal.FormatStyledRow(terminal.StyledRow{
-			Spans: []terminal.StyledSpan{{Text: " " + row.text, Token: row.token, Bold: row.bold}},
-		}, width, noColor, palette))
+		rows = append(rows, formatUsageRow(row, width, noColor, palette))
 	}
 	return rows
+}
+
+func formatUsageRow(row usageRow, width int, noColor bool, palette *theme.Theme) string {
+	return terminal.FormatStyledRow(terminal.StyledRow{
+		Spans: []terminal.StyledSpan{{Text: " " + row.text, Token: row.token, Bold: row.bold}},
+	}, width, noColor, palette)
 }
 
 // move scrolls by delta rows inside the last drawn viewport.
@@ -204,11 +202,15 @@ func (p *usagePanel) move(delta int) {
 	p.off = min(max(p.off+delta, 0), maxOff)
 }
 
-// usageJobResult carries either one lookup or the locally eligible account IDs.
+// The opening job can publish locally eligible accounts before its GET ends.
+type usageAccountsResult struct {
+	ids         []string
+	reason      usageReason
+	completedAt time.Time
+}
+
 type usageJobResult struct {
 	report      usageReport
-	accounts    []string
-	reason      usageReason
 	completedAt time.Time // after the last credential check, before publication
 }
 
@@ -216,7 +218,8 @@ type usageJobResult struct {
 // slot until its worker sends one result, which the REPL then discards.
 type usageRequest struct {
 	capture  usageCapture
-	models   *config.ModelsFile // non-nil only for Accounts discovery
+	models   *config.ModelsFile // catalog used for the initial account list
+	accounts <-chan usageAccountsResult
 	cancel   context.CancelFunc
 	done     chan usageJobResult
 	timer    *time.Timer
@@ -226,13 +229,10 @@ type usageRequest struct {
 	retired  bool
 }
 
-func (r *runtime) startUsageJob(capture usageCapture, discover bool, work func(context.Context) usageJobResult) *usageRequest {
+func (r *runtime) startUsageJob(capture usageCapture, work func(context.Context) usageReport) *usageRequest {
 	ctx, cancel := context.WithTimeout(context.Background(), usageLookupTimeout)
 	cutoff, _ := ctx.Deadline()
 	request := &usageRequest{capture: capture, cancel: cancel, done: make(chan usageJobResult, 1), cutoff: cutoff}
-	if discover {
-		request.models = r.models
-	}
 	if r.usageDeadline != nil {
 		request.deadline = r.usageDeadline()
 	} else {
@@ -241,9 +241,8 @@ func (r *runtime) startUsageJob(capture usageCapture, discover bool, work func(c
 	}
 	go func() {
 		defer cancel()
-		result := work(ctx)
-		result.completedAt = time.Now()
-		request.done <- result
+		report := work(ctx)
+		request.done <- usageJobResult{report: report, completedAt: time.Now()}
 	}()
 	return request
 }
@@ -420,12 +419,12 @@ func usageAuthHeader(headers map[string]string) bool {
 // rechecks the key before returning a usable sample. Active lookups also bind
 // the key to the installed client's fingerprint.
 func fetchUsageReport(ctx context.Context, capture usageCapture) usageReport {
-	result, keySHA, reason := lookupUsage(ctx, capture, time.Time{})
+	result, reason := lookupUsage(ctx, capture, time.Time{})
 	if reason != "" {
 		return usageReport{providerID: capture.providerID, reason: reason}
 	}
 	if capture.providerID == "deepseek" {
-		return usageReport{providerID: capture.providerID, balance: result.Balance, keySHA: keySHA}
+		return usageReport{providerID: capture.providerID, balance: result.Balance}
 	}
 	sample := result.Plan
 	if sample == nil && result.Sample {
@@ -434,15 +433,15 @@ func fetchUsageReport(ctx context.Context, capture usageCapture) usageReport {
 		used := result.UsedPercent
 		sample = &provider.PlanWindows{FiveHour: &used}
 	}
-	return usageReport{providerID: capture.providerID, plan: sample, keySHA: keySHA}
+	return usageReport{providerID: capture.providerID, plan: sample}
 }
 
 // lookupUsage shares the credential checks between manual reports and
 // account balance polls. Rejected samples keep bounded HTTP metadata.
-func lookupUsage(ctx context.Context, capture usageCapture, notBefore time.Time) (provider.QuotaUsageResult, [sha256.Size]byte, usageReason) {
+func lookupUsage(ctx context.Context, capture usageCapture, notBefore time.Time) (provider.QuotaUsageResult, usageReason) {
 	key, keySHA, reason := checkedUsageKey(ctx, capture)
 	if reason != "" {
-		return provider.QuotaUsageResult{Outcome: provider.QuotaUsageNoCredential}, keySHA, reason
+		return provider.QuotaUsageResult{Outcome: provider.QuotaUsageNoCredential}, reason
 	}
 	var result provider.QuotaUsageResult
 	if capture.providerID == "deepseek" {
@@ -457,7 +456,7 @@ func lookupUsage(ctx context.Context, capture usageCapture, notBefore time.Time)
 		result = provider.FetchZaiUsage(ctx, key, notBefore)
 	}
 	if !result.Sample && result.Balance == nil && (result.Plan == nil || result.Plan.FiveHour == nil && result.Plan.Weekly == nil) {
-		return result, keySHA, usageFailureReason(result, ctx)
+		return result, usageFailureReason(result, ctx)
 	}
 	_, currentSHA, reason := checkedUsageKey(ctx, capture)
 	if reason == "" && currentSHA != keySHA {
@@ -466,9 +465,9 @@ func lookupUsage(ctx context.Context, capture usageCapture, notBefore time.Time)
 	if reason != "" {
 		result.Sample, result.Plan, result.Balance = false, nil, nil
 		result.Outcome = provider.QuotaUsageNoCredential
-		return result, keySHA, reason
+		return result, reason
 	}
-	return result, keySHA, ""
+	return result, ""
 }
 
 // checkedUsageKey resolves current auth without storing the key in the job.

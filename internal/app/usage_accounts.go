@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/hypernewbie/psi/internal/config"
@@ -96,71 +97,95 @@ func discoverUsageAccounts(ctx context.Context, candidates []usageCapture) ([]st
 	return accounts, ""
 }
 
-// usageView holds the last detail while Accounts discovery owns the slot.
-// Both the detail rows and choices reuse the same editor region.
+// usageView keeps the report and account choices in the same editor region.
 type usageView struct {
 	usagePanel
-	providerID string
-	detail     []usageRow
-	report     usageReport
-	capture    usageCapture
-	picker     *terminal.ChoicePicker
-	accounts   []string
+	providerID       string
+	picker           *terminal.ChoicePicker
+	accounts         []string
+	accountRow       usageRow
+	oneRowDetail     bool // Give detail the row after paging or confirming a choice.
+	selectionVisible bool // Only a choice rendered in the last frame can be confirmed.
 }
 
 func (v *usageView) setDetail(id string, rows []usageRow) {
-	*v = usageView{providerID: id, detail: rows, usagePanel: usagePanel{rows: rows}}
+	v.providerID = id
+	v.usagePanel = usagePanel{rows: rows}
+	if v.picker != nil {
+		for i, account := range v.accounts {
+			v.picker.Options[i].Current = account == id
+		}
+	}
 }
 
-func (v *usageView) showReport(capture usageCapture, report usageReport) {
-	v.setDetail(capture.providerID, report.panelRows())
-	if report.usable() {
-		v.report, v.capture = report, capture
-	}
+func (v *usageView) showReport(report usageReport) {
+	v.setDetail(report.providerID, report.panelRows())
 }
 
 func (v *usageView) showAccountStatus(text string, token terminal.ThemeToken) {
-	v.accounts, v.picker = nil, nil
-	// Insert the status below the title so it is visible even in a short
-	// editor, while leaving the previous detail available to scroll.
-	v.rows = append([]usageRow{v.detail[0], {text: text, token: token}}, v.detail[1:]...)
-	v.off = 0
+	v.accountRow = usageRow{text: "Accounts: " + text, token: token}
 }
 
 func (v *usageView) showAccounts(ids []string) {
-	if len(ids) == 0 || (len(ids) == 1 && ids[0] == v.providerID) {
-		v.showAccountStatus("No other accounts available.", terminal.TokenMuted)
+	v.accounts, v.picker = ids, nil
+	if len(ids) == 0 {
+		v.showAccountStatus("no eligible accounts · Esc close", terminal.TokenMuted)
 		return
 	}
-	v.accounts = ids
-	v.picker = &terminal.ChoicePicker{Title: "Accounts", Hint: "↑↓ navigate · Enter select · Esc close"}
-	for _, id := range ids {
-		v.picker.Options = append(v.picker.Options, terminal.ChoiceOption{Label: usageProviderName(id), Current: id == v.providerID})
+	v.picker = &terminal.ChoicePicker{Title: "Accounts", Hint: "↑↓ highlight · Enter load · PgUp/PgDn scroll · Esc close"}
+	for i, id := range ids {
+		current := id == v.providerID
+		if current {
+			v.picker.Selected = i
+		}
+		v.picker.Options = append(v.picker.Options, terminal.ChoiceOption{Label: usageProviderName(id), Current: current})
 	}
 }
 
+func (v *usageView) removeAccount(id string) {
+	if i := slices.Index(v.accounts, id); i >= 0 {
+		v.showAccounts(slices.Delete(v.accounts, i, i+1))
+	}
+}
+
+func (v *usageView) selectedAccount() string {
+	if !v.selectionVisible {
+		return ""
+	}
+	if _, ok := v.picker.SelectedOption(); ok {
+		return v.accounts[v.picker.Selected]
+	}
+	return ""
+}
+
 func (v *usageView) view(width, budget int, noColor bool, palette *theme.Theme) []string {
+	v.selectionVisible = false
 	if v.picker != nil {
-		return v.picker.BoundedRows(width, budget, noColor, palette)
+		if budget == 1 && v.oneRowDetail {
+			return v.usagePanel.view(width, 1, noColor, palette)
+		}
+		v.selectionVisible = true
+		// Keep up to two detail rows before investing in more choice rows.
+		// BoundedRows always keeps the selection in the remaining space.
+		choices := v.picker.BoundedRows(width, max(1, budget-2), noColor, palette)
+		if len(choices) >= budget {
+			return choices
+		}
+		return append(v.usagePanel.view(width, budget-len(choices), noColor, palette), choices...)
+	}
+	if v.accountRow.text != "" && budget > 1 {
+		detail := v.usagePanel.view(width, budget-1, noColor, palette)
+		return append(detail, formatUsageRow(v.accountRow, width, noColor, palette))
 	}
 	return v.usagePanel.view(width, budget, noColor, palette)
 }
 
-func (v *usageView) move(delta int) {
-	if v.picker != nil {
-		v.picker.Move(delta)
-	} else {
-		v.usagePanel.move(delta)
-	}
+func (v *usageView) moveAccount(delta int) {
+	v.oneRowDetail = false
+	v.picker.Move(delta)
 }
 
-func recheckUsageDetail(ctx context.Context, capture usageCapture, report usageReport) usageReport {
-	_, keySHA, reason := checkedUsageKey(ctx, capture)
-	if reason == "" && keySHA != report.keySHA {
-		reason = usageReasonChangedKey
-	}
-	if reason != "" {
-		return usageReport{providerID: capture.providerID, reason: reason}
-	}
-	return report
+func (v *usageView) pageDetail(direction int) {
+	v.oneRowDetail = true
+	v.usagePanel.move(direction * max(1, v.limit))
 }

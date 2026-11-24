@@ -36,7 +36,7 @@ Commands (bounded inline completion and searchable editor pickers; no fullscreen
 - `/thinking [level]` — open the supported-level picker or set a level directly; `Ctrl+S` saves the highlighted level as the global default
 - `/name [name]` — show or set the session display name
 - `/session` — show session information and statistics
-- `/usage [provider]` — show account usage for direct Z.AI or DeepSeek. Enter opens Accounts; Up/Down highlight, and Enter selects. In the detail view, Up/Down or Page Up/Page Down scroll. Esc closes either view.
+- `/usage [provider]` — show account usage for direct Z.AI or DeepSeek, with Accounts below the detail. Up/Down highlight, Enter loads the highlighted account, Page Up/Page Down scroll the detail, and Esc closes the panel.
 - `/hotkeys` — show keyboard shortcuts
 - `/clone` — duplicate the session at the current position
 - `/new` — start a session (keeps scrollback, resets recall)

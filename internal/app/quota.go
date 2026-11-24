@@ -350,7 +350,7 @@ func (q *quotaOwner) pump(r *runtime) {
 		case "openai-codex":
 			usage = q.check(ctx, identity.authPath, notBefore)
 		case "deepseek":
-			usage, _, _ = lookupUsage(ctx, capture, notBefore)
+			usage, _ = lookupUsage(ctx, capture, notBefore)
 		default:
 			usage = q.checkPlan(ctx, identity.kind, identity.planClient.APIKey, notBefore)
 		}

@@ -469,7 +469,7 @@ Positional messages are sent in order after the terminal starts. Options can app
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 A bare quit or exit asks for confirmation; submit either word again to leave. Any other submission cancels. Use /quit to exit immediately or when the confirmation cannot fit.
 During a run, /session, /hotkeys, /name, and /usage work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
-Interactive /usage [provider] checks the active or named direct Z.AI or DeepSeek account. In the detail view, Enter opens Accounts without changing the active model. Esc closes the panel.
+Interactive /usage [provider] checks the active or named direct Z.AI or DeepSeek account. Accounts appears below the detail: Up/Down highlights, Enter loads, Page Up/Page Down scrolls the detail, and Esc closes the panel. The active model does not change.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 The optional powershell tool is off by default and available on Windows only; enable it with --tools or defaultTools (for example ["-bash", "+powershell"]).
@@ -3096,12 +3096,17 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var usage *usageRequest
 	var usageDone <-chan usageJobResult
 	var usageDeadline <-chan time.Time
+	var usageAccounts <-chan usageAccountsResult
 	syncUsage := func() {
 		if usage == nil {
-			usageDone, usageDeadline = nil, nil
+			usageDone, usageDeadline, usageAccounts = nil, nil, nil
 			return
 		}
 		usageDone, usageDeadline = usage.done, usage.deadline
+		usageAccounts = nil
+		if !usage.retired && !usage.expired {
+			usageAccounts = usage.accounts
+		}
 	}
 	retireUsage := func() {
 		// A panel never outlives its request. The next draw clears the region.
@@ -3113,81 +3118,99 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	defer retireUsage()
 	startUsage := func(arg string, fromPicker bool) {
-		previous := r.usagePanel
-		view := &usageView{}
-		r.usagePanel = view
+		view := r.usagePanel
+		if !fromPicker {
+			view = &usageView{}
+			r.usagePanel = view
+		}
 		if usage != nil {
-			view.setDetail("", []usageRow{{text: "Usage request already in progress.", token: terminal.TokenWarning}, usageHintRow()})
-			r.draw(console)
+			if !fromPicker {
+				view.setDetail("", []usageRow{{text: "Usage request already in progress.", token: terminal.TokenWarning}})
+				r.draw(console)
+			}
 			return
+		}
+		if fromPicker {
+			view.oneRowDetail = true
 		}
 		capture, refusal := r.usageCapture(arg)
 		if refusal != "" {
-			view.setDetail("", []usageRow{{text: refusal, token: terminal.TokenError}, usageHintRow()})
-			r.draw(console)
+			view.setDetail("", []usageRow{{text: refusal, token: terminal.TokenError}})
+			if fromPicker {
+				view.removeAccount(arg)
+			}
+		} else {
+			view.setDetail(capture.providerID, usageLoadingRows(capture.providerID))
+		}
+		var accounts chan usageAccountsResult
+		var candidates []usageCapture
+		discover := r.usageDiscover
+		if !fromPicker && r.models != nil {
+			accounts = make(chan usageAccountsResult, 1)
+			candidates = r.usageAccountCandidates(view.providerID)
+			if discover == nil {
+				discover = discoverUsageAccounts
+			}
+			view.showAccountStatus("checking local credentials…", terminal.TokenMuted)
+		}
+		r.draw(console)
+		if accounts == nil && refusal != "" {
 			return
 		}
-		work := func(ctx context.Context) usageJobResult {
-			return usageJobResult{report: fetchUsageReport(ctx, capture)}
-		}
-		if fromPicker && previous.providerID == capture.providerID && previous.report.usable() {
-			if !r.usageStillCurrent(previous.capture) {
-				view.showReport(capture, usageReport{providerID: capture.providerID, reason: usageReasonChangedConfig})
-				r.draw(console)
-				return
+		usage = r.startUsageJob(capture, func(ctx context.Context) usageReport {
+			if accounts != nil {
+				ids, reason := discover(ctx, candidates)
+				accounts <- usageAccountsResult{ids: ids, reason: reason, completedAt: time.Now()}
 			}
-			report := previous.report
-			work = func(ctx context.Context) usageJobResult {
-				return usageJobResult{report: recheckUsageDetail(ctx, capture, report)}
+			if refusal != "" {
+				return usageReport{}
 			}
-		}
-		view.setDetail(capture.providerID, usageLoadingRows(capture.providerID))
-		r.draw(console)
-		usage = r.startUsageJob(capture, false, work)
+			return fetchUsageReport(ctx, capture)
+		})
+		usage.accounts, usage.models = accounts, r.models
 		syncUsage()
 	}
-	openUsageAccounts := func() {
-		if usage != nil || r.models == nil {
-			return
-		}
-		view := r.usagePanel
-		candidates := r.usageAccountCandidates(view.providerID)
-		discover := r.usageDiscover
-		if discover == nil {
-			discover = discoverUsageAccounts
-		}
-		view.showAccountStatus("Checking accounts…", terminal.TokenMuted)
-		r.draw(console)
-		usage = r.startUsageJob(usageCapture{}, true, func(ctx context.Context) usageJobResult {
-			accounts, reason := discover(ctx, candidates)
-			return usageJobResult{accounts: accounts, reason: reason}
-		})
+	publishUsageAccounts := func(result usageAccountsResult) {
+		usage.accounts = nil
 		syncUsage()
+		view := r.usagePanel
+		switch {
+		case result.completedAt.After(usage.cutoff):
+			view.showAccountStatus("request timed out.", terminal.TokenError)
+		case r.models != usage.models:
+			view.showAccountStatus("model configuration changed.", terminal.TokenError)
+		case result.reason != "":
+			view.showAccountStatus(string(result.reason)+".", terminal.TokenError)
+		default:
+			view.showAccounts(result.ids)
+		}
 	}
 	showUsageTimeout := func(request *usageRequest) {
-		if request.models != nil {
-			r.usagePanel.showAccountStatus("Accounts: request timed out.", terminal.TokenError)
-		} else {
-			id := request.capture.providerID
-			r.usagePanel.showReport(request.capture, usageReport{providerID: id, reason: usageReasonTimeout})
+		if request.accounts != nil {
+			r.usagePanel.showAccountStatus("request timed out.", terminal.TokenError)
+		}
+		if id := request.capture.providerID; id != "" {
+			r.usagePanel.showReport(usageReport{providerID: id, reason: usageReasonTimeout})
 		}
 		r.draw(console)
 	}
 	settleUsage := func(result usageJobResult) {
 		request := usage
 		request.stopDeadline()
-		usage = nil
-		syncUsage()
 		printable := !request.retired && !request.expired
 		timedOut := printable && !request.completedInTime(result)
-		stale := false
+		stale := printable && !timedOut && (result.report.usable() || request.capture.models != nil) && !r.usageStillCurrent(request.capture)
 		if printable && !timedOut {
-			if request.models != nil {
-				stale = r.models != request.models
-			} else if result.report.usable() || request.capture.models != nil {
-				stale = !r.usageStillCurrent(request.capture)
+			// The worker sends the list before completion. Preserve it even
+			// when select observes the final report first.
+			select {
+			case accounts := <-request.accounts:
+				publishUsageAccounts(accounts)
+			default:
 			}
 		}
+		usage = nil
+		syncUsage()
 		if r.usageObserved != nil {
 			r.usageObserved(result.report, printable && !timedOut && !stale)
 		}
@@ -3198,19 +3221,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 			showUsageTimeout(request)
 			return
 		}
-		view := r.usagePanel
 		if stale {
-			if request.models != nil {
-				view.showAccountStatus("Accounts: model configuration changed.", terminal.TokenError)
-			} else {
-				view.showReport(request.capture, usageReport{providerID: request.capture.providerID, reason: usageReasonChangedConfig})
+			id := request.capture.providerID
+			r.usagePanel.showReport(usageReport{providerID: id, reason: usageReasonChangedConfig})
+			r.usagePanel.removeAccount(id)
+		} else if result.report.providerID != "" {
+			r.usagePanel.showReport(result.report)
+			if result.report.reason == usageReasonNoCredential || result.report.reason == usageReasonChangedKey {
+				r.usagePanel.removeAccount(result.report.providerID)
 			}
-		} else if request.models == nil {
-			view.showReport(request.capture, result.report)
-		} else if result.reason != "" {
-			view.showAccountStatus("Accounts: "+string(result.reason)+".", terminal.TokenError)
-		} else {
-			view.showAccounts(result.accounts)
 		}
 		r.draw(console)
 	}
@@ -3472,6 +3491,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if quota.handleResult(result) {
 				r.draw(console)
 			}
+		case result := <-usageAccounts:
+			publishUsageAccounts(result)
+			r.draw(console)
 		case result := <-usageDone:
 			settleUsage(result)
 		case cutoff := <-usageDeadline:
@@ -3938,31 +3960,25 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.draw(console)
 					continue
 				case "\r", "\n":
-					view := r.usagePanel
-					if view.picker == nil {
-						openUsageAccounts()
-					} else if _, ok := view.picker.SelectedOption(); ok {
-						startUsage(view.accounts[view.picker.Selected], true)
+					if id := r.usagePanel.selectedAccount(); id != "" {
+						startUsage(id, true)
 					}
 					continue
 				case "\x1b[A", "\x1bOA":
-					r.usagePanel.move(-1)
+					r.usagePanel.moveAccount(-1)
 					r.draw(console)
 					continue
 				case "\x1b[B", "\x1bOB":
-					r.usagePanel.move(1)
+					r.usagePanel.moveAccount(1)
 					r.draw(console)
 					continue
-				case "\x1b[5~", "\x1b[6~":
-					view := r.usagePanel
-					if view.picker == nil {
-						delta := view.limit
-						if string(input.Key) == "\x1b[5~" {
-							delta = -delta
-						}
-						view.move(delta)
-						r.draw(console)
-					}
+				case "\x1b[5~":
+					r.usagePanel.pageDetail(-1)
+					r.draw(console)
+					continue
+				case "\x1b[6~":
+					r.usagePanel.pageDetail(1)
+					r.draw(console)
 					continue
 				}
 				if len(input.Key) != 1 || input.Key[0] != 26 {

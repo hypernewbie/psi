@@ -33,7 +33,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "thinking", Description: "Set thinking level", ArgumentHint: "<level>"},
 	{Name: "name", Description: "Set session display name"},
 	{Name: "session", Description: "Show session info and stats"},
-	{Name: "usage", Description: "Show account usage and switch between eligible accounts", ArgumentHint: "[provider]"},
+	{Name: "usage", Description: "Show provider usage with account choices", ArgumentHint: "[provider]"},
 	{Name: "hotkeys", Description: "Show all keyboard shortcuts"},
 	{Name: "clone", Description: "Duplicate the current session at the current position"},
 	{Name: "trust", Description: "Save project trust decision for future sessions"},

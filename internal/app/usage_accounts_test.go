@@ -15,6 +15,7 @@ import (
 
 	"github.com/hypernewbie/psi/internal/config"
 	"github.com/hypernewbie/psi/internal/provider"
+	"github.com/hypernewbie/psi/internal/testutil"
 )
 
 func TestUsageAccountPicker(t *testing.T) {
@@ -26,9 +27,15 @@ func TestUsageAccountPicker(t *testing.T) {
 		r.planQuotaCheck = func(context.Context, string, string, time.Time) provider.QuotaUsageResult {
 			return zaiPlanSample(27.5, 40)
 		}
-		r.usagePlanCheck = func(context.Context, string, string, time.Time) provider.QuotaUsageResult {
+		initialReply := make(chan struct{})
+		r.usagePlanCheck = func(ctx context.Context, _ string, _ string, _ time.Time) provider.QuotaUsageResult {
 			zaiCalls.Add(1)
-			return zaiPlanSample(27.5, 40)
+			select {
+			case <-initialReply:
+				return zaiPlanSample(27.5, 40)
+			case <-ctx.Done():
+				return provider.QuotaUsageResult{}
+			}
 		}
 		r.usageBalanceCheck = func(_ context.Context, key string, _ time.Time) provider.QuotaUsageResult {
 			if key != deepSeekUsageKey {
@@ -49,36 +56,35 @@ func TestUsageAccountPicker(t *testing.T) {
 				lookups <- report
 			}
 		}
-		// One body row: the second choice is only visible after navigating to it.
-		_, out, input, _ := startLoginTestREPLSize(t, r, 160, 7)
+		_, out, input, _ := startLoginTestREPLWidth(t, r, 160)
 		waitAppOutput(t, out, "GLM 5h 72% Left")
 		writeUsageKeys(t, input, "/usage\r")
+		// The list is available without Enter or a completed provider request.
+		waitAppOutput(t, out, "→ ✓ Z.AI")
+		writeUsageKeys(t, input, "\x1b[B")
+		waitAppOutput(t, out, "→   DeepSeek")
+		close(initialReply)
 		if report := waitUsageLookup(t, lookups); report.providerID != "zai" || !report.usable() {
 			t.Fatalf("bare /usage did not load the active provider: %+v", report)
 		}
-		writeUsageKeys(t, input, "\x1b[B")
-		waitAppOutput(t, out, "5 hour")
-		writeUsageKeys(t, input, "\r")
-		waitAppOutput(t, out, "→ ✓ Z.AI")
-		writeUsageKeys(t, input, "\r") // reselecting the current account is local
-		if report := waitUsageLookup(t, lookups); report.providerID != "zai" || !report.usable() {
-			t.Fatalf("current choice did not restore its detail: %+v", report)
+		waitAppOutput(t, out, "72% left")
+		vt := testutil.NewVTModel(160, 24)
+		vt.Feed([]byte(out.String()))
+		visible := vt.Text()
+		detail, accounts := strings.Index(visible, "72% left"), strings.Index(visible, "Accounts")
+		if detail < 0 || accounts <= detail || !strings.Contains(visible[accounts:], "→   DeepSeek") {
+			t.Fatalf("expected Z.AI detail above Accounts with DeepSeek highlighted: %q", visible)
 		}
-		writeUsageKeys(t, input, "\r")
-		waitAppOutputCount(t, out, "→ ✓ Z.AI", 2)
-		writeUsageKeys(t, input, "\x1b[B")
-		waitAppOutput(t, out, "→   DeepSeek")
 		if zaiCalls.Load() != 1 || deepSeekCalls.Load() != 0 {
-			t.Fatal("opening/navigating Accounts or choosing the current account sent a GET")
+			t.Fatal("opening or navigating Accounts sent an extra GET")
 		}
 		footerBefore := strings.Count(out.String(), "GLM 5h 72% Left")
 		writeUsageKeys(t, input, "\r")
 		if report := waitUsageLookup(t, lookups); report.providerID != "deepseek" || !report.usable() {
 			t.Fatalf("selection did not load DeepSeek: %+v", report)
 		}
-		waitAppOutput(t, out, "Usage · DeepSeek")
-		writeUsageKeys(t, input, "\x1b[B\x1b[B")
 		waitAppOutput(t, out, "Balance: USD 1.23")
+		waitAppOutput(t, out, "→ ✓ DeepSeek")
 		if zaiCalls.Load() != 1 || deepSeekCalls.Load() != 1 {
 			t.Fatal("selection did not make exactly one DeepSeek lookup")
 		}
@@ -108,6 +114,7 @@ func TestUsageAccountPicker(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newUsageZAIRuntime(t)
 			r.models.Providers["deepseek"] = tc.config
+			t.Setenv("NO_COLOR", "1")
 			t.Setenv("DEEPSEEK_API_KEY", tc.key)
 			t.Setenv("ANTHROPIC_API_KEY", "synthetic-unsupported")
 			r.planQuotaCheck = func(context.Context, string, string, time.Time) provider.QuotaUsageResult {
@@ -117,15 +124,12 @@ func TestUsageAccountPicker(t *testing.T) {
 				t.Error("discovery sent a balance request")
 				return provider.QuotaUsageResult{}
 			}
-			_, out, input, _ := startLoginTestREPLSize(t, r, 110, 8)
+			_, out, input, _ := startLoginTestREPLWidth(t, r, 110)
 			writeUsageKeys(t, input, "/usage\r")
 			waitAppOutput(t, out, "72% left")
-			writeUsageKeys(t, input, "\r")
-			waitAppOutput(t, out, "No other accounts available.")
-			writeUsageKeys(t, input, "\x1b[6~")
-			waitAppOutput(t, out, "Weekly")
-			if text := out.String(); strings.Contains(text, "→ ✓ Z.AI") || strings.Contains(text, "→   DeepSeek") {
-				t.Fatal("empty discovery opened a picker")
+			waitAppOutput(t, out, "→ ✓ Z.AI")
+			if strings.Contains(out.String(), "DeepSeek") {
+				t.Fatal("ineligible alternate was listed in Accounts")
 			}
 		})
 	}
@@ -138,6 +142,10 @@ func TestUsageAccountPicker(t *testing.T) {
 		}
 		r.usageBalanceCheck = func(context.Context, string, time.Time) provider.QuotaUsageResult {
 			t.Error("discovery sent a balance request")
+			return provider.QuotaUsageResult{}
+		}
+		r.usagePlanCheck = func(context.Context, string, string, time.Time) provider.QuotaUsageResult {
+			t.Error("initial lookup sent a request after discovery timed out")
 			return provider.QuotaUsageResult{}
 		}
 		trigger := make(chan time.Time, 1)
@@ -161,17 +169,10 @@ func TestUsageAccountPicker(t *testing.T) {
 		}
 		_, out, input, _ := startLoginTestREPLSize(t, r, 110, 8)
 		writeUsageKeys(t, input, "/usage\r")
-		waitAppOutput(t, out, "72% left")
-		if !<-observed {
-			t.Fatal("initial lookup did not display")
-		}
-		writeUsageKeys(t, input, "\r")
 		waitBalanceStart(t, started)
 		trigger <- time.Now()
 		waitAppOutput(t, out, "Accounts: request timed out.")
-		writeUsageKeys(t, input, "\x1b[6~")
-		waitAppOutput(t, out, "Weekly")
-		writeUsageKeys(t, input, "\r\x03/usage\r")
+		writeUsageKeys(t, input, "\x03/usage\r")
 		waitAppOutput(t, out, "Usage request already in progress.")
 		returnList <- struct{}{}
 		if <-observed || calls.Load() != 1 {
@@ -181,6 +182,26 @@ func TestUsageAccountPicker(t *testing.T) {
 			t.Fatal("late discovery reopened Accounts")
 		}
 	})
+}
+
+func TestUsageEnterRequiresVisibleAccountChoice(t *testing.T) {
+	view := &usageView{}
+	view.showReport(usageReport{providerID: "zai", plan: zaiPlanSample(27.5, 40).Plan})
+	view.showAccounts([]string{"zai", "deepseek"})
+	view.moveAccount(1)
+	view.view(80, 1, true, nil)
+	if got := view.selectedAccount(); got != "deepseek" {
+		t.Fatalf("visible choice = %q, want deepseek", got)
+	}
+	view.pageDetail(1)
+	view.view(80, 1, true, nil)
+	if got := view.selectedAccount(); got != "" {
+		t.Errorf("Enter would load hidden choice %q", got)
+	}
+	view.view(80, 12, true, nil)
+	if got := view.selectedAccount(); got != "deepseek" {
+		t.Errorf("choice after resizing = %q, want deepseek", got)
+	}
 }
 
 func TestUsageSelectedProviderGuard(t *testing.T) {
@@ -198,7 +219,6 @@ func TestUsageSelectedProviderGuard(t *testing.T) {
 		_, out, input, _ := startLoginTestREPLWidth(t, r, 110)
 		writeUsageKeys(t, input, "/usage\r")
 		waitAppOutput(t, out, "Weekly")
-		writeUsageKeys(t, input, "\r")
 		waitAppOutput(t, out, "→ ✓ Z.AI")
 		writeUsageKeys(t, input, "\x1b[B")
 		waitAppOutput(t, out, "→   DeepSeek")
@@ -206,8 +226,12 @@ func TestUsageSelectedProviderGuard(t *testing.T) {
 		writeUsageKeys(t, input, "\r")
 		waitAppOutput(t, out, "Usage · DeepSeek")
 		waitAppOutput(t, out, "no usable credential.")
-		writeUsageKeys(t, input, "\r")
-		waitAppOutput(t, out, "→   Z.AI")
+		vt := testutil.NewVTModel(110, 24)
+		vt.Feed([]byte(out.String()))
+		_, accounts, found := strings.Cut(vt.Text(), "Accounts")
+		if !found || !strings.Contains(accounts, "→   Z.AI") || strings.Contains(accounts, "DeepSeek") {
+			t.Fatalf("stale account remained selectable: %q", accounts)
+		}
 	})
 
 	t.Run("catalog replacement and route refusals", func(t *testing.T) {
