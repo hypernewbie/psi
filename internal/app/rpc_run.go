@@ -216,19 +216,24 @@ func runRPC(o Options, version string) error {
 	var signalled atomic.Bool
 	shutdown := func() {
 		shutdownOnce.Do(func() {
+			// Closing the channel under the runner lock makes the admission
+			// checks atomic with the close: a command that passed its check
+			// registered its worker before the close, so waitWorkers below
+			// cannot miss it.
+			s.mu.Lock()
 			close(s.shutdown)
+			s.mu.Unlock()
 			s.cancelActive()
 			s.cancelShells()
 			// Wake the scanner without closing the original stdin object.
 			transport.InterruptInput()
 			s.waitWorkers()
-			// Release the scanner goroutine from its stdin read. The
-			// shutdown channel already stopped intake; this only ends
-			// the blocked read so no goroutine outlives the session.
-			_ = os.Stdin.Close()
-			// Restore endpoint flags and release wrappers only after every
-			// worker has settled its terminal frame.
+			// Restore endpoint flags while the process still owns the original
+			// descriptors, then release the wrappers and the original stdin
+			// object. Restoring after closing stdin could retune a recycled
+			// descriptor number.
 			_ = transport.Close()
+			_ = os.Stdin.Close()
 			cleanupAll()
 		})
 	}

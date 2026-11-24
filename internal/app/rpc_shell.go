@@ -186,25 +186,26 @@ func (s *rpcRunner) runBash(ctx context.Context, worker *rpcShellWorker, tool *t
 	}
 
 	s.shellStateMu.Lock()
-	s.shellQueue = append(s.shellQueue, completion)
 	s.mu.Lock()
 	modelOwned := s.running || s.reservation != nil
 	s.mu.Unlock()
+	// responseSent is published under shellStateMu together with the queue
+	// entry and never written after. A boundary flush on the reader goroutine
+	// then reads it through the same lock order without a data race.
+	completion.responseSent = modelOwned
+	s.shellQueue = append(s.shellQueue, completion)
 	var failures []*rpcShellCompletion
 	if !modelOwned {
 		failures = s.drainShellQueueLocked()
 	}
 	s.shellStateMu.Unlock()
 
+	// An execution result is not a durability acknowledgement. A result that
+	// completed inside a model run answers now and waits for the append
+	// decision at the model boundary.
+	s.emitBashExecution(completion)
 	if modelOwned {
-		// An execution result is not a durability acknowledgement. Send it
-		// now, then wait for the model-boundary append decision.
-		completion.responseSent = true
-		s.emitBashExecution(completion)
 		<-completion.appended
-	} else {
-		s.emitBashExecution(completion)
-		completion.responseSent = true
 	}
 	for _, failed := range failures {
 		if failed == completion {

@@ -386,3 +386,37 @@ func waitRPCMessages(t *testing.T, store *session.Store, want int) {
 	}
 	t.Fatalf("timed out waiting for %d shell messages", want)
 }
+
+// TestRPCShutdownRefusesAdmission pins the invariant the shutdown close is
+// atomic with: once shutdown begins, every admitting command refuses and
+// registers no worker, so waitWorkers can never miss late admission.
+func TestRPCShutdownRefusesAdmission(t *testing.T) {
+	s, _, _ := newRPCTestRunner(t, nil, nil)
+	var shells, prompts int
+	s.shellRun = func(context.Context, *tools.BashTool, string, func([]byte)) tools.BashRunResult {
+		shells++
+		return tools.BashRunResult{}
+	}
+	s.shutdown = make(chan struct{})
+	close(s.shutdown)
+
+	if resp := s.handle(rpcBashCommand("late-1", "echo late", nil)); resp == nil || resp.Success || resp.Error != "Server is shutting down." {
+		t.Fatalf("bash admission after shutdown = %+v", resp)
+	}
+	if resp := s.handle(rpcCommand{ID: nil, Type: "prompt", Message: "late prompt"}); resp == nil || resp.Success || resp.Error != "Server is shutting down." {
+		t.Fatalf("prompt admission after shutdown = %+v", resp)
+	}
+	if resp := s.handle(rpcCommand{Type: "compact"}); resp == nil || resp.Success || resp.Error != "Server is shutting down." {
+		t.Fatalf("compact admission after shutdown = %+v", resp)
+	}
+	if shells != 0 || prompts != 0 {
+		t.Fatalf("shutdown admitted work: shells=%d prompts=%d", shells, prompts)
+	}
+	s.mu.Lock()
+	workers := len(s.shells)
+	run := s.run
+	s.mu.Unlock()
+	if workers != 0 || run != nil {
+		t.Fatalf("shutdown registered workers: shells=%d run=%v", workers, run != nil)
+	}
+}

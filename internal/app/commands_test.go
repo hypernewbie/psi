@@ -726,3 +726,20 @@ func TestHotkeysDescribeExpansionScope(t *testing.T) {
 		t.Fatalf("/hotkeys is missing the web and skill expansion key: %q", text)
 	}
 }
+
+// TestHotkeysTextKeepsResumedTranscriptVisible pins the /hotkeys wrapped-row
+// budget. A 40-row terminal shows a resumed session's last user row above two
+// consecutive /hotkeys outputs only while the block stays within this budget;
+// one extra wrapped row scrolls that row off-screen. The transcript writer
+// hard-wraps at the terminal width, so a line costs ceil(len/width) rows, and
+// counting bytes instead of cells only ever overcounts, which fails safe.
+func TestHotkeysTextKeepsResumedTranscriptVisible(t *testing.T) {
+	const width, budget = 80, 15
+	rows := 0
+	for _, line := range strings.Split(terminal.HotkeysText(), "\n") {
+		rows += (len(line) + width - 1) / width
+	}
+	if rows > budget {
+		t.Fatalf("/hotkeys renders %d rows at width %d, over the %d-row budget; shorten the text so a resumed transcript stays visible", rows, width, budget)
+	}
+}
