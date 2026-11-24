@@ -573,10 +573,11 @@ func Run(args []string, version string) error {
 	userTheme, _, _ := resolveThemeSnapshot(userCatalog, selectedThemeSetting(userSettings.Settings, o), colorAppearance, pitheme.TerminalColors{}, 0, themeMode)
 	_, noColor := os.LookupEnv("NO_COLOR")
 	console.SetPresentation(terminal.PresentationSnapshot{WorkingDirectory: cwd, HomeDirectory: os.Getenv("HOME"), Theme: userTheme, NoColor: noColor, Display: presentationDisplay(userSettings.Settings)})
-	consent, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, console, lifecycle)
+	trust, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, console, lifecycle)
 	if err != nil {
 		return err
 	}
+	consent := trust.allowsResources()
 	loaded := userSettings
 	if consent {
 		if loaded, err = config.LoadProjectSettings(userSettings, projectPath); err != nil {
@@ -612,7 +613,7 @@ func Run(args []string, version string) error {
 		live:         newLiveConfig(),
 		themeCatalog: themeCatalog, theme: activeTheme, themeSetting: themeSetting, themeName: activeThemeName,
 		themeMode: themeMode, themeColors: pitheme.TerminalColors{}, themeAppearance: colorAppearance,
-		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrusted: consent,
+		themeFallback: themeFallback, themeDiagnostics: themeCatalog.Diagnostics(), projectTrust: trust,
 		loops: loop.NewController(store),
 		ac:    ac.NewController(),
 	}
@@ -814,7 +815,7 @@ type runtime struct {
 	themeAppearance     string
 	themeFallback       string
 	themeDiagnostics    []pitheme.Diagnostic
-	projectTrusted      bool
+	projectTrust        projectTrustDecision
 	mcpAccount          *mcpAccount
 	mcpEnabled          bool
 	loops               *loop.Controller
@@ -2230,7 +2231,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		}
 		currentText := "untrusted"
-		if r.projectTrusted {
+		if r.projectTrust == projectTrusted {
 			currentText = "trusted"
 		}
 		trustOptions := projectTrustOptions(cwd)
@@ -4598,7 +4599,7 @@ func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
 // renderProjectTrustWarningIfNeeded shows Pi's warning when the project is
 // not trusted and holds trust-requiring resources.
 func (r *runtime) renderProjectTrustWarningIfNeeded(console *terminal.Console) {
-	if r.projectTrusted || !hasTrustRequiringProjectResources(r.store.Cwd()) {
+	if r.projectTrust == projectTrusted || !hasTrustRequiringProjectResources(r.store.Cwd()) {
 		return
 	}
 	// Pi renders warning-colored chat text without the showWarning prefix.

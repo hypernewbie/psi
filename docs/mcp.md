@@ -12,7 +12,9 @@ psi reads two files:
 - `<agentDir>/mcp.json` for user servers. `agentDir` is normally
   `~/.pi/agent`.
 - `<sessionCwd>/.pi/mcp.json` for project servers. psi reads this file only
-  when the project is trusted.
+  when the project is trusted. If startup skipped the trust prompt because
+  there were no protected resources, `/reload` does not activate new project
+  MCP entries. Approve the project and restart psi to use them.
 
 Both files use the same `mcpServers` shape:
 

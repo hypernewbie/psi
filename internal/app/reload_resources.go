@@ -13,21 +13,22 @@ import (
 // and the old queue modes.
 func (r *runtime) reloadResources() error {
 	cwd := r.store.Cwd()
-	loaded, err := config.LoadSettings(filepath.Join(r.agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json"), r.projectTrusted)
+	consent := r.projectTrust.allowsResources()
+	loaded, err := config.LoadSettings(filepath.Join(r.agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json"), consent)
 	if err != nil {
 		return err
 	}
 	var instructions []config.InstructionFile
 	if !r.options.NoContextFiles {
 		var err error
-		instructions, err = config.DiscoverInstructions(cwd, r.agentDir, r.projectTrusted)
+		instructions, err = config.DiscoverInstructions(cwd, r.agentDir, consent)
 		if err != nil {
 			return err
 		}
 	}
 	var sk []skills.Skill
 	if !r.options.NoSkills {
-		sk, _ = skills.Discover(cwd, r.agentDir, loaded.Settings.Skills, r.projectTrusted)
+		sk, _ = skills.Discover(cwd, r.agentDir, loaded.Settings.Skills, consent)
 	}
 	var appendPrompts []string
 	for _, source := range r.options.AppendSystemPrompts {

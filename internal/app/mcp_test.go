@@ -2,8 +2,10 @@ package app
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hypernewbie/psi/internal/config"
@@ -92,6 +94,58 @@ func TestSessionReplacementOwnsFreshMCPManager(t *testing.T) {
 	r.stopMCP()
 	waitManager(t, fresh, 5*time.Second)
 	waitManager(t, old, 5*time.Second)
+}
+
+func TestMCPReloadOfFirstProjectConfigRequiresTrust(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		defaultTrust string
+		wantProject  bool
+	}{
+		{name: "undecided", defaultTrust: "ask"},
+		{name: "never trust", defaultTrust: "never"},
+		{name: "always trust", defaultTrust: "always", wantProject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			work := t.TempDir()
+			options := Options{NoSkills: true, NoContextFiles: true}
+			agentDir := t.TempDir()
+			trust, err := resolveProjectTrust(options, work, agentDir, tc.defaultTrust, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := session.New(session.OpenOptions{Cwd: work, AgentDir: agentDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			synctest.Test(t, func(t *testing.T) {
+				r := &runtime{store: store, agentDir: agentDir, options: options, projectTrust: trust}
+				r.startMCP()
+				manager := r.mcpManager()
+				defer func() { r.stopMCP(); manager.Wait() }()
+				synctest.Wait()
+				before := manager.Snapshot().Revision
+				// Disabled entries show which configs were accepted without starting a launcher.
+				writeAppFile(t, filepath.Join(work, ".pi", "mcp.json"),
+					`{"mcpServers":{"project":{"command":"fixture","enabled":false}}}`)
+				writeAppFile(t, filepath.Join(agentDir, "mcp.json"),
+					`{"mcpServers":{"user":{"command":"fixture","enabled":false}}}`)
+				if err := r.reloadResources(); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				after := manager.Snapshot()
+				var user, project bool
+				for _, server := range after.Servers {
+					user = user || server.Name == "user"
+					project = project || server.Name == "project"
+				}
+				if after.Revision <= before || !user || project != tc.wantProject {
+					t.Fatalf("reloaded MCP servers = %+v, want user=true, project=%t", after.Servers, tc.wantProject)
+				}
+			})
+		})
+	}
 }
 
 func waitManager(t *testing.T, manager *mcp.Manager, budget time.Duration) {

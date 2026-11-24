@@ -314,33 +314,47 @@ func projectTrustOptions(cwd string) []projectTrustOption {
 	return options
 }
 
-// resolveProjectTrust decides whether project resources may be loaded. It
-// mirrors pi's resolveProjectTrusted: an explicit override wins, then the
-// stored decision, then the defaultProjectTrust setting, then the prompt.
-func resolveProjectTrust(o Options, cwd, agentDir, defaultTrust string, console *terminal.Console, lifecycle *terminalLifecycle) (bool, error) {
+type projectTrustDecision uint8
+
+const (
+	projectUntrusted projectTrustDecision = iota
+	// A project with no protected resources need not prompt at startup.
+	// Skipping that prompt does not approve MCP servers discovered later.
+	projectPromptSkipped
+	projectTrusted
+)
+
+func (d projectTrustDecision) allowsResources() bool { return d != projectUntrusted }
+
+// resolveProjectTrust checks the explicit override, stored decision, and
+// defaultProjectTrust setting before considering an interactive prompt.
+func resolveProjectTrust(o Options, cwd, agentDir, defaultTrust string, console *terminal.Console, lifecycle *terminalLifecycle) (projectTrustDecision, error) {
 	if o.DenyProj {
-		return false, nil
+		return projectUntrusted, nil
 	}
 	if o.AllowProj {
-		return true, nil
+		return projectTrusted, nil
 	}
 	store := newProjectTrustStore(agentDir)
-	if decision, ok := store.get(cwd); ok {
-		return decision, nil
+	if trusted, ok := store.get(cwd); ok {
+		if trusted {
+			return projectTrusted, nil
+		}
+		return projectUntrusted, nil
+	}
+	if defaultTrust == "always" {
+		return projectTrusted, nil
 	}
 	if !hasTrustRequiringProjectResources(cwd) {
-		return true, nil
+		return projectPromptSkipped, nil
 	}
-	switch defaultTrust {
-	case "always":
-		return true, nil
-	case "never":
-		return false, nil
+	if defaultTrust == "never" {
+		return projectUntrusted, nil
 	}
 	// Pi has no UI outside the interactive mode, so the resources stay
 	// untrusted instead of asking.
 	if console == nil || lifecycle == nil {
-		return false, nil
+		return projectUntrusted, nil
 	}
 	options := projectTrustOptions(cwd)
 	choices := make([]terminal.ChoiceOption, 0, len(options))
@@ -350,24 +364,27 @@ func resolveProjectTrust(o Options, cwd, agentDir, defaultTrust string, console 
 	picker := &terminal.ChoicePicker{
 		Title: "Trust project folder?",
 		Context: cwd + "\n\nThis allows psi to load .pi settings and resources, install missing project packages, " +
-			"and execute project extensions.",
+			"execute project extensions, and start project MCP servers.",
 		Options:  choices,
 		Selected: 0,
 	}
 	selected, cancelled, err := runChoicePicker(console, lifecycle, picker)
 	if err != nil {
-		return false, err
+		return projectUntrusted, err
 	}
 	if cancelled || selected < 0 || selected >= len(options) {
-		return false, nil
+		return projectUntrusted, nil
 	}
 	option := options[selected]
 	if len(option.updates) > 0 {
 		if err := store.setMany(option.updates); err != nil {
-			return false, err
+			return projectUntrusted, err
 		}
 	}
-	return option.trusted, nil
+	if option.trusted {
+		return projectTrusted, nil
+	}
+	return projectUntrusted, nil
 }
 
 // stripTrustBOM removes a leading byte order mark.

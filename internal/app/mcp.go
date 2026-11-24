@@ -93,7 +93,7 @@ func (r *runtime) mcpInput() mcp.Input {
 	return mcp.Input{
 		UserPath:             filepath.Join(r.agentDir, "mcp.json"),
 		ProjectPath:          filepath.Join(r.store.Cwd(), ".pi", "mcp.json"),
-		ProjectTrusted:       r.projectTrusted,
+		ProjectTrusted:       r.projectTrust == projectTrusted,
 		AllowProjectCommands: r.settings.MCPAllowProjectCommands,
 		Cwd:                  r.store.Cwd(),
 		ReadAvailable:        readAvailable,

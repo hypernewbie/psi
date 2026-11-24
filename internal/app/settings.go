@@ -574,7 +574,7 @@ func (r *runtime) applyThemeSetting(console *terminal.Console, setting string) e
 
 func (r *runtime) applyColorMode(console *terminal.Console, setting string) error {
 	mode := pitheme.DetectColorMode(setting, envMap(), goruntime.GOOS)
-	options := themeCatalogOptions(r.settings, r.options, r.agentDir, r.store.Cwd(), r.projectTrusted, mode)
+	options := themeCatalogOptions(r.settings, r.options, r.agentDir, r.store.Cwd(), r.projectTrust.allowsResources(), mode)
 	catalog := pitheme.LoadCatalog(options)
 	display := selectedThemeSetting(r.settings, r.options)
 	if err := r.installThemeSnapshot(catalog, mode, display); err != nil {

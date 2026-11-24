@@ -125,10 +125,11 @@ func runRPC(o Options, version string) error {
 	// Headless trust follows pi: an explicit override wins, then the stored
 	// decision, then the global defaultProjectTrust setting. There is no UI,
 	// so an undecided folder stays untrusted.
-	consent, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, nil, nil)
+	trust, err := resolveProjectTrust(o, cwd, agentDir, userSettings.Settings.DefaultProjectTrust, nil, nil)
 	if err != nil {
 		return err
 	}
+	consent := trust.allowsResources()
 	loaded := userSettings
 	if consent {
 		if loaded, err = config.LoadProjectSettings(userSettings, projectPath); err != nil {
@@ -157,7 +158,7 @@ func runRPC(o Options, version string) error {
 	r := &runtime{
 		store: store, version: version, options: o, settings: st, web: web,
 		models: models, skills: sk, prompt: prompt, sections: sections, agentDir: agentDir,
-		projectTrusted: consent,
+		projectTrust: trust,
 	}
 	cleanup := func() {
 		if r.web != nil {
