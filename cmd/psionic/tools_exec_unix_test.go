@@ -5,82 +5,117 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
-// TestRunExecCancellationKillsTheProcessGroup proves that a cancelled run
-// leaves no child behind. The command starts a background child, publishes its
-// process id, and waits for the child. The child is in the process group before
-// the test cancels, so the cancellation must kill an already populated group.
 func TestRunExecCancellationKillsTheProcessGroup(t *testing.T) {
+	const watchdog = 10 * time.Second
 	workspace := t.TempDir()
-	pidFile := filepath.Join(workspace, "pid")
-	// The shell creates and truncates a redirection target before it writes the
-	// number. Write the process id to a staging file and rename it into place,
-	// so the watched path appears only after the complete value is published.
-	stagingFile := pidFile + ".tmp"
-	command := "sleep 30 & echo $$ > " + stagingFile + " && mv " + stagingFile + " " + pidFile + "; wait"
+	ready, readyGuard := openExecTestFIFO(t, filepath.Join(workspace, "ready"))
+	_, release := openExecTestFIFO(t, filepath.Join(workspace, "release"))
 
+	// The background child opens both pipes, signals readiness, then waits for
+	// cleanup to release it. Canceling only the outer shell cannot close the
+	// child's write end of ready.
+	const command = `(printf R && IFS= read -r line) < release > ready & wait "$!"`
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := make(chan execResult, 1)
+	var result execResult
+	done := make(chan struct{})
 	go func() {
-		done <- runExec(ctx, workspace, command, resolveExecLimits(&execSettings{TimeoutMs: ptr(int64(60000))}))
+		defer close(done)
+		result = runExec(ctx, workspace, command, resolveExecLimits(&execSettings{TimeoutMs: ptr(int64(60000))}))
 	}()
+	t.Cleanup(func() {
+		cancel()
+		// Keep the release pipe open and queue a line even if the child has not
+		// opened it yet. A failed group kill must not leave the fixture running.
+		if _, err := release.WriteString("\n"); err != nil {
+			t.Errorf("release background child: %v", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(watchdog):
+			t.Error("exec did not return during cleanup")
+		}
+	})
 
-	waitForPath(t, pidFile)
-	pid, err := readPID(t, pidFile)
+	signal, err := readExecTestFIFO(ready, watchdog)
+	if err != nil {
+		t.Fatalf("wait for background child: %v", err)
+	}
+	if signal != 'R' {
+		t.Fatalf("unexpected readiness signal: %q", signal)
+	}
+	if err := readyGuard.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+	if signal, err := readExecTestFIFO(ready, watchdog); err != io.EOF {
+		t.Fatalf("expected EOF from the background child on cancellation, got byte %q, error %v", signal, err)
+	}
+	select {
+	case <-done:
+	case <-time.After(watchdog):
+		t.Fatal("exec did not return after cancellation")
+	}
+	if !errors.Is(result.err, context.Canceled) || result.status != "cancelled" {
+		t.Fatalf("expected cancellation, got status %q, error %v", result.status, result.err)
+	}
+}
+
+// Open a temporary nonblocking reader so opening the writer cannot block.
+// The writer then lets us open a blocking reader and prevents EOF until the
+// subprocess opens its write end of the pipe.
+func openExecTestFIFO(t *testing.T, path string) (reader, writer *os.File) {
+	t.Helper()
+	if err := unix.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cancel()
-
-	result := <-done
-	if !errors.Is(result.err, context.Canceled) {
-		t.Fatalf("expected cancellation, got %+v", result)
+	defer guard.Close()
+	writer, err = os.OpenFile(path, os.O_WRONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if result.status != "cancelled" {
-		t.Fatalf("status = %q", result.status)
+	reader, err = os.Open(path)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
 	}
-	if err := syscall.Kill(pid, 0); err == nil {
-		t.Fatalf("process %d survived the cancellation", pid)
-	} else if !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("process check failed: %v", err)
-	}
+	t.Cleanup(func() {
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+	return reader, writer
 }
 
-// waitForPath waits until the child has published its process id. The command
-// renames the file into place, so an existing path holds the complete value.
-// The wait is a synchronization point with the child, not a performance
-// budget: the deadline only bounds a failing test.
-func waitForPath(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+// Named pipes do not support Go file deadlines on all platforms. Cleanup
+// releases the child and closes the guard writer to unblock an outstanding read.
+func readExecTestFIFO(reader *os.File, watchdog time.Duration) (byte, error) {
+	type readResult struct {
+		signal byte
+		err    error
 	}
-	t.Fatalf("the command never published %s", filepath.Base(path))
-}
-
-func readPID(t *testing.T, path string) (int, error) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
+	done := make(chan readResult, 1)
+	go func() {
+		var signal [1]byte
+		_, err := io.ReadFull(reader, signal[:])
+		done <- readResult{signal[0], err}
+	}()
+	select {
+	case result := <-done:
+		return result.signal, result.err
+	case <-time.After(watchdog):
+		return 0, os.ErrDeadlineExceeded
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, err
-	}
-	return pid, nil
 }
