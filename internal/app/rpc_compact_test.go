@@ -5,7 +5,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -98,9 +97,7 @@ func TestRPCTerminalFrameOrdersOwnershipRelease(t *testing.T) {
 	s, store, _ := newRPCTestRunner(t, &provider.Fake{}, nil)
 	s.shutdown = make(chan struct{})
 	writer := &blockingJSONWriter{entered: make(chan struct{}), release: make(chan struct{})}
-	enc := json.NewEncoder(writer)
-	enc.SetEscapeHTML(false)
-	s.out = enc
+	s.encoder = newRPCEncoder(writer, nil)
 
 	if resp := s.handle(rpcCommand{ID: strptr("c1"), Type: "compact"}); resp != nil {
 		t.Fatalf("compact admission must be asynchronous, got %+v", resp)

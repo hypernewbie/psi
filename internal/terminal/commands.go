@@ -122,7 +122,6 @@ func ParseShellCommand(line string) (ShellCommand, bool) {
 		return ShellCommand{Command: command}, true
 	}
 	return ShellCommand{}, false
->>>>>>> 1b3e825 (feat(editor): add interactive bang shell)
 }
 
 // ParseCommand splits "/name arg". An unknown /command is ordinary user
@@ -178,9 +177,9 @@ func HotkeysText() string {
 		"  quit or exit alone asks for confirmation; submit either again to exit; any other submission cancels; /quit exits immediately",
 		"  Ctrl+P cycle model · Ctrl+L select model · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
 		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
-		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+O expand/collapse skill blocks and web cards (not saved) · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+O expand/collapse shell output, skill blocks, and web cards (not saved) · Ctrl+C cancels run (idle: clear draft, empty exits)",
 		"  In /thinking: Ctrl+S saves the highlighted level as the global default",
-		"  !command runs locally · !!command also excludes its saved command/output from model context",
+		"  !command runs locally with live output · !!command also excludes its saved command/output from model context · Esc cancels a running shell",
 		"  Ctrl+D delete/exit · paste literal, no submit",
 	}, "\n")
 }

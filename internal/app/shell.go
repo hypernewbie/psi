@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/hypernewbie/psi/internal/session"
@@ -15,6 +16,10 @@ import (
 const (
 	shellOutputBytes = 50 * 1024
 	shellOutputLines = 2000
+	// maxShellSlots bounds running plus settled-but-unappended direct shells.
+	// The editor admits one running shell at a time; completed results may
+	// wait for the model boundary up to this process-wide bound.
+	maxShellSlots = 8
 )
 
 // shellCollector streams normalized, sanitized output into a bounded tail.
@@ -26,6 +31,17 @@ type shellCollector struct {
 	tail      string
 	newlines  int
 	truncated bool
+
+	// observe receives each sanitized chunk before it is retained in the
+	// bounded tail. RPC uses it for streamed updates; the editor leaves it nil.
+	observe func(string)
+
+	// snapshot is a bounded immutable copy for the live preview. Feed runs on
+	// the runner reader goroutine; the REPL only takes this small mutex to
+	// copy the latest revision, never while doing terminal work.
+	snapshotMu sync.Mutex
+	snapshot   string
+	revision   uint64
 }
 
 func (c *shellCollector) Feed(p []byte) {
@@ -40,7 +56,12 @@ func (c *shellCollector) Feed(p []byte) {
 	}
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
-	c.appendSafe(c.sanitizer.Feed(text))
+	safe := c.sanitizer.Feed(text)
+	if safe != "" && c.observe != nil {
+		c.observe(safe)
+	}
+	c.appendSafe(safe)
+	c.publish()
 }
 
 func (c *shellCollector) appendSafe(text string) {
@@ -61,6 +82,23 @@ func (c *shellCollector) appendSafe(text string) {
 		c.tail = c.tail[cut:]
 		c.truncated = true
 	}
+}
+
+// publish copies the current bounded tail for the frame timer. The string
+// header is immutable after publication, so the reader can format it after
+// releasing the lock.
+func (c *shellCollector) publish() {
+	c.snapshotMu.Lock()
+	c.snapshot = c.tail
+	c.revision++
+	c.snapshotMu.Unlock()
+}
+
+// Snapshot returns the latest published preview and its revision.
+func (c *shellCollector) Snapshot() (string, uint64) {
+	c.snapshotMu.Lock()
+	defer c.snapshotMu.Unlock()
+	return c.snapshot, c.revision
 }
 
 // finish flushes a held carriage return and drops incomplete UTF-8 or escape
@@ -98,6 +136,7 @@ type shellLifetime struct {
 	callID     string
 	generation int64
 	store      *session.Store
+	collector  *shellCollector
 }
 
 type shellResult struct {
@@ -109,6 +148,61 @@ type shellResult struct {
 	infraErr       error
 }
 
+// pendingShell is a completed command whose durable append waits for the
+// model boundary. The result is final and must never be re-run.
+type pendingShell struct {
+	lifetime *shellLifetime
+	result   shellResult
+}
+
+// shellOutcome is the command outcome used by display and status rendering.
+// A storage failure is a separate persistence state and must not turn a
+// successful command into an exit-code failure.
+func shellOutcome(res shellResult) string {
+	switch {
+	case res.cancelled:
+		return "cancelled"
+	case res.infraErr != nil:
+		return "failed"
+	case res.exitCode == nil:
+		return "interrupted"
+	case *res.exitCode != 0:
+		return "failed"
+	default:
+		return "done"
+	}
+}
+
+// bashExecutionMessage builds the one durable shell entry shared by the
+// editor and RPC. Callers append it once, in their owning phase.
+func bashExecutionMessage(command string, res shellResult, exclude bool) session.AgentMessage {
+	var fullPath *string
+	if res.fullOutputPath != "" {
+		path := res.fullOutputPath
+		fullPath = &path
+	}
+	return session.AgentMessage{Role: "bashExecution", BashExecution: &session.BashExecutionMessage{
+		Role:               "bashExecution",
+		Command:            command,
+		Output:             res.output,
+		ExitCode:           res.exitCode,
+		Cancelled:          res.cancelled,
+		Truncated:          res.truncated,
+		FullOutputPath:     fullPath,
+		Timestamp:          time.Now().UnixMilli(),
+		ExcludeFromContext: &exclude,
+	}}
+}
+
+func shellDocumentBlock(command string, res shellResult, exclude, expanded bool) terminal.DocumentBlock {
+	return terminal.DocumentBlock{Kind: terminal.DocumentShell, Shell: &terminal.ShellDisplay{
+		Command: command, Output: res.output, State: shellOutcome(res),
+		ExitCode: res.exitCode, Excluded: exclude,
+		Truncated: res.truncated, FullOutputPath: res.fullOutputPath,
+		Expanded: expanded,
+	}}
+}
+
 func (l *shellLifetime) cancelRun() {
 	if l == nil {
 		return
@@ -118,6 +212,7 @@ func (l *shellLifetime) cancelRun() {
 
 func startShellLifetime(parent context.Context, run shellRunFunc, tool *tools.BashTool, command string, exclude bool, callID string, generation int64, store *session.Store) *shellLifetime {
 	ctx, cancel := context.WithCancel(parent)
+	collector := &shellCollector{}
 	lifetime := &shellLifetime{
 		cancel:     cancel,
 		results:    make(chan shellResult, 1),
@@ -126,10 +221,10 @@ func startShellLifetime(parent context.Context, run shellRunFunc, tool *tools.Ba
 		callID:     callID,
 		generation: generation,
 		store:      store,
+		collector:  collector,
 	}
 	go func() {
 		defer cancel()
-		var collector shellCollector
 		runResult := run(ctx, tool, command, collector.Feed)
 		diagnostic := ""
 		if runResult.InfraErr != nil {

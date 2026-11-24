@@ -19,6 +19,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hypernewbie/psi/internal/agent"
@@ -37,14 +38,16 @@ const rpcScannerBuffer = 10 * 1024 * 1024
 // rpcCommand is one stdin line. Only implemented fields are decoded; the
 // rest of pi's command surface falls through to the unknown-command error.
 type rpcCommand struct {
-	ID                 *string `json:"id"`
-	Type               string  `json:"type"`
-	Message            string  `json:"message"`
-	StreamingBehavior  string  `json:"streamingBehavior"`
-	Provider           string  `json:"provider"`
-	ModelID            string  `json:"modelId"`
-	Level              string  `json:"level"`
-	CustomInstructions string  `json:"customInstructions"`
+	ID                 *string         `json:"id"`
+	Type               string          `json:"type"`
+	Message            string          `json:"message"`
+	StreamingBehavior  string          `json:"streamingBehavior"`
+	Provider           string          `json:"provider"`
+	ModelID            string          `json:"modelId"`
+	Command            json.RawMessage `json:"command"`
+	ExcludeFromContext json.RawMessage `json:"excludeFromContext"`
+	Level              string          `json:"level"`
+	CustomInstructions string          `json:"customInstructions"`
 }
 
 // rpcResponse is one stdout answer. The id echoes the command's when present;
@@ -92,8 +95,16 @@ type rpcRunner struct {
 	loop *agent.Loop
 
 	mu            sync.Mutex
-	out           *json.Encoder
+	encoder       *rpcEncoder
+	transport     *rpcTransport
+	outputFailed  atomic.Bool
+	outputErr     error
 	run           *rpcRunWorker
+	shells        map[uint64]*rpcShellWorker
+	shellQueue    []*rpcShellCompletion
+	shellStateMu  sync.Mutex
+	shellSeq      uint64
+	shellRun      rpcShellRunFunc
 	reservation   *rpcCompactReservation
 	running       bool
 	compactActive bool
@@ -129,9 +140,35 @@ type rpcCompactReservation struct {
 }
 
 func (s *rpcRunner) emit(v any) {
+	if s.encoder == nil {
+		return
+	}
+	_ = s.encoder.Encode(v)
+}
+
+// failTransport records a fatal stdout failure, stops intake, and cancels
+// owned work. It never waits for a worker: the encoder may call it from the
+// goroutine that would have to settle.
+func (s *rpcRunner) failTransport(err error) {
+	if err == nil {
+		return
+	}
+	s.outputFailed.Store(true)
+	s.mu.Lock()
+	if s.outputErr == nil {
+		s.outputErr = err
+	}
+	s.mu.Unlock()
+	if s.transport != nil {
+		s.transport.InterruptInput()
+	}
+	s.cancelActive()
+}
+
+func (s *rpcRunner) transportError() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_ = s.out.Encode(v)
+	return s.outputErr
 }
 
 // runConfig copies the live configuration for one agent run. Dynamic content
@@ -397,6 +434,10 @@ func (s *rpcRunner) handle(cmd rpcCommand) *rpcResponse {
 	switch cmd.Type {
 	case "prompt":
 		return s.prompt(cmd)
+	case "bash":
+		return s.bash(cmd)
+	case "abort_bash":
+		return s.abortBash(cmd)
 	case "abort":
 		s.cancelActive()
 		out := rpcOK(cmd.ID, "abort", nil)
@@ -478,10 +519,22 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := s.runConfig()
 	worker := &rpcRunWorker{done: make(chan struct{}), cancel: cancel}
+	s.shellStateMu.Lock()
+	failures := s.drainShellQueueLocked()
+	if writeErr := s.r.store.WriteError(); writeErr != nil {
+		s.shellStateMu.Unlock()
+		for _, failed := range failures {
+			s.emitBashAppendFailure(failed)
+		}
+		cancel()
+		out := rpcErr(cmd.ID, "prompt", writeErr.Error())
+		return &out
+	}
 	s.mu.Lock()
 	select {
 	case <-s.shutdown:
 		s.mu.Unlock()
+		s.shellStateMu.Unlock()
 		cancel()
 		out := rpcErr(cmd.ID, "prompt", "Server is shutting down.")
 		return &out
@@ -490,6 +543,10 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 	s.run, s.running = worker, true
 	s.mu.Unlock()
 	s.userMessage(text)
+	s.shellStateMu.Unlock()
+	for _, failed := range failures {
+		s.emitBashAppendFailure(failed)
+	}
 	go func() {
 		err := s.loop.Submit(ctx, text, cfg)
 		s.sweepDurable()
@@ -506,6 +563,9 @@ func (s *rpcRunner) prompt(cmd rpcCommand) *rpcResponse {
 		}
 		s.streamOpen, s.toolIndex = false, 0
 		s.mu.Unlock()
+		// The model boundary is the earliest safe append point for a shell
+		// result completed during this run.
+		s.flushShellQueue()
 		close(worker.done)
 		cancel()
 	}()
@@ -575,6 +635,12 @@ func rpcAvailableModels(r *runtime) []rpcModel {
 // setModel switches the provider configuration synchronously: the command
 // loop is already serialized, so no preparation worker is needed.
 func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
+	s.shellStateMu.Lock()
+	defer s.shellStateMu.Unlock()
+	if s.shellActive() {
+		out := rpcErr(cmd.ID, "set_model", "Cannot change model while a shell command is unsettled.")
+		return &out
+	}
 	if s.isRunning() || s.isCompacting() || s.pendingCount() > 0 {
 		out := rpcErr(cmd.ID, "set_model", "Cannot change model while a run is active or queued")
 		return &out
@@ -624,6 +690,12 @@ func (s *rpcRunner) setModel(cmd rpcCommand) *rpcResponse {
 // setThinking changes the level for the live model. Thinking is per-request
 // state, so no provider rebuild is needed.
 func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
+	s.shellStateMu.Lock()
+	defer s.shellStateMu.Unlock()
+	if s.shellActive() {
+		out := rpcErr(cmd.ID, "set_thinking_level", "Cannot change thinking level while a shell command is unsettled.")
+		return &out
+	}
 	if s.isRunning() || s.isCompacting() {
 		out := rpcErr(cmd.ID, "set_thinking_level", "Cannot change thinking level while a run is active")
 		return &out
@@ -659,6 +731,12 @@ func (s *rpcRunner) setThinking(cmd rpcCommand) *rpcResponse {
 // before it. A compact admitted mid-run cancels that run first and the
 // worker waits for it; the interrupted prompt is not replayed.
 func (s *rpcRunner) compact(cmd rpcCommand) *rpcResponse {
+	s.shellStateMu.Lock()
+	defer s.shellStateMu.Unlock()
+	if s.shellActive() {
+		out := rpcErr(cmd.ID, "compact", "Cannot compact while a shell command is unsettled.")
+		return &out
+	}
 	// Capture the response ID and the starting configuration before the
 	// worker launches; the command value does not outlive admission.
 	var id *string
@@ -777,7 +855,7 @@ func (s *rpcRunner) sessionStats(cmd rpcCommand) *rpcResponse {
 
 // runRPCLoop reads commands until stdin ends. Commands run sequentially;
 // malformed input answers pi's parse error and never kills the session.
-func (s *rpcRunner) runLoop(stdin io.Reader) {
+func (s *rpcRunner) runLoop(stdin io.Reader) error {
 	sc := bufio.NewScanner(stdin)
 	sc.Buffer(make([]byte, 64*1024), rpcScannerBuffer)
 	split := func(data []byte, atEOF bool) (int, []byte, error) {
@@ -801,6 +879,9 @@ func (s *rpcRunner) runLoop(stdin io.Reader) {
 	}
 	sc.Split(split)
 	for sc.Scan() {
+		if s.outputFailed.Load() {
+			return nil
+		}
 		line := sc.Bytes()
 		if len(bytesTrimSpace(line)) == 0 {
 			continue
@@ -814,6 +895,10 @@ func (s *rpcRunner) runLoop(stdin io.Reader) {
 			s.emit(resp)
 		}
 	}
+	if err := sc.Err(); err != nil && !s.outputFailed.Load() {
+		return err
+	}
+	return nil
 }
 
 func bytesTrimSpace(b []byte) []byte {

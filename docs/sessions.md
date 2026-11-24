@@ -52,9 +52,11 @@ Interactive `!command` saves one Pi v3 `bashExecution` entry with the command,
 sanitized bounded output, exit or cancellation state, and truncation metadata.
 It creates no user message and makes no provider request. `!!command` sets
 `excludeFromContext`, so later ordinary and compaction requests omit it; the
-entry stays in the local file and its output stays visible. Reopen is
-storage-level: richer terminal replay and shell-history recall are not
-implemented.
+entry stays in the local file and its output stays visible. A shell that
+completes during a model run is appended at the model boundary. Reopen renders
+the retained shell block through the same formatter, collapsed or expanded with
+`Ctrl+O`; shell recall restores normalized `! ` and `!! ` prefixes. RPC `bash`
+uses the same entry format and defers a result completed during a model run.
 
 ## Resume
 

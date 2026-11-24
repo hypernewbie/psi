@@ -165,6 +165,23 @@ type shellExitCase struct {
 	suspendErr bool
 }
 
+func waitShellMessages(t *testing.T, store *session.Store, want int) []*session.BashExecutionMessage {
+	t.Helper()
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
+	for {
+		messages := shellMessages(store)
+		if len(messages) >= want {
+			return messages
+		}
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline.C:
+			t.Fatalf("timeout waiting for %d shell messages; got %d", want, len(messages))
+		}
+	}
+}
+
 func TestBangShellMVPLifecycle(t *testing.T) {
 	t.Run("immediate fake runner saves once without provider", func(t *testing.T) {
 		r := testRuntime(t)
@@ -196,42 +213,6 @@ func TestBangShellMVPLifecycle(t *testing.T) {
 		}
 		if messages[0].Command != "printf M1_MARKER" || messages[0].Output != "M1_MARKER\n" || messages[0].ExitCode == nil || *messages[0].ExitCode != 0 {
 			t.Fatalf("saved message = %+v", messages[0])
-		}
-	})
-
-	t.Run("refuses while a model run owns the runtime and restores the draft", func(t *testing.T) {
-		r := testRuntime(t)
-		blocking := &shellBlockingProvider{started: make(chan struct{})}
-		r.prov = blocking
-		r.authErr = nil
-		var starts atomic.Int32
-		r.shellRunner = func(_ context.Context, _ *tools.BashTool, _ string, _ func([]byte)) tools.BashRunResult {
-			starts.Add(1)
-			return tools.BashRunResult{ExitCode: intPtr(0)}
-		}
-		input, out, _, finished := startShellTestREPL(t, r)
-		if _, err := input.WriteString("hold the run\r"); err != nil {
-			t.Fatal(err)
-		}
-		waitShellSignal(t, blocking.started, "provider start")
-		draftStart := out.Len()
-		if _, err := input.WriteString("!echo refused\r"); err != nil {
-			t.Fatal(err)
-		}
-		out.waitContains(t, "Finish or cancel the current operation")
-		out.waitContainsFrom(t, "!echo refused", draftStart)
-		if starts.Load() != 0 || len(shellMessages(r.store)) != 0 {
-			t.Fatal("refused shell started or saved")
-		}
-		if _, err := input.WriteString("\x1b"); err != nil {
-			t.Fatal(err)
-		}
-		out.waitContains(t, "Request cancelled")
-		if _, err := input.WriteString("\x03/quit\r"); err != nil {
-			t.Fatal(err)
-		}
-		if err := waitShellRepl(t, finished); err != nil {
-			t.Fatal(err)
 		}
 	})
 
@@ -470,3 +451,209 @@ func (w *shellWriter) Write(p []byte) (int, error) {
 }
 
 func (w *shellWriter) Fail() { w.fail.Store(true) }
+
+func TestBangShellModelConcurrency(t *testing.T) {
+	t.Run("overlaps a model run and saves once at the boundary", func(t *testing.T) {
+		r := testRuntime(t)
+		blocking := &shellBlockingProvider{started: make(chan struct{})}
+		r.prov = blocking
+		r.authErr = nil
+		var starts atomic.Int32
+		r.shellRunner = func(_ context.Context, _ *tools.BashTool, _ string, onOutput func([]byte)) tools.BashRunResult {
+			starts.Add(1)
+			onOutput([]byte("OVERLAP_MARKER\n"))
+			return tools.BashRunResult{Output: "OVERLAP_MARKER\n", ExitCode: intPtr(0)}
+		}
+		input, out, _, finished := startShellTestREPL(t, r)
+		if _, err := input.WriteString("hold the run\r"); err != nil {
+			t.Fatal(err)
+		}
+		waitShellSignal(t, blocking.started, "provider start")
+		if _, err := input.WriteString("!printf OVERLAP_MARKER\r"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "OVERLAP_MARKER")
+		if starts.Load() != 1 {
+			t.Fatalf("shell starts = %d, want 1", starts.Load())
+		}
+		if messages := shellMessages(r.store); len(messages) != 0 {
+			t.Fatalf("shell was appended inside the model run: %+v", messages[0])
+		}
+		if _, err := input.WriteString("\x1b"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "Request cancelled")
+		waitShellMessages(t, r.store, 1)
+		if _, err := input.WriteString("/quit\r"); err != nil {
+			t.Fatal(err)
+		}
+		if err := waitShellRepl(t, finished); err != nil {
+			t.Fatal(err)
+		}
+		messages := shellMessages(r.store)
+		if len(messages) != 1 || messages[0].Command != "printf OVERLAP_MARKER" || messages[0].Output != "OVERLAP_MARKER\n" {
+			t.Fatalf("saved shell messages = %+v", messages)
+		}
+		if userMessages(r.store) != 1 {
+			t.Fatalf("user messages = %d, want 1", userMessages(r.store))
+		}
+	})
+
+	t.Run("shell start and model finish order keeps progress separate", func(t *testing.T) {
+		r := testRuntime(t)
+		blocking := &shellBlockingProvider{started: make(chan struct{})}
+		r.prov = blocking
+		r.authErr = nil
+		shellStarted, releaseShell := make(chan struct{}, 1), make(chan struct{})
+		r.shellRunner = func(ctx context.Context, _ *tools.BashTool, _ string, onOutput func([]byte)) tools.BashRunResult {
+			shellStarted <- struct{}{}
+			<-releaseShell
+			onOutput([]byte("SHELL_FIRST\n"))
+			return tools.BashRunResult{Output: "SHELL_FIRST\n", ExitCode: intPtr(0)}
+		}
+		input, out, _, finished := startShellTestREPL(t, r)
+		if _, err := input.WriteString("!sleep 30\r"); err != nil {
+			t.Fatal(err)
+		}
+		waitShellSignal(t, shellStarted, "shell start")
+		if _, err := input.WriteString("model while shell\r"); err != nil {
+			t.Fatal(err)
+		}
+		waitShellSignal(t, blocking.started, "provider start")
+		close(releaseShell)
+		out.waitContains(t, "SHELL_FIRST")
+		if messages := shellMessages(r.store); len(messages) != 0 {
+			t.Fatalf("shell was appended before the model boundary: %+v", messages[0])
+		}
+		if _, err := input.WriteString("\x1b"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "Request cancelled")
+		waitShellMessages(t, r.store, 1)
+		if _, err := input.WriteString("/quit\r"); err != nil {
+			t.Fatal(err)
+		}
+		if err := waitShellRepl(t, finished); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a second active shell is refused with its draft restored", func(t *testing.T) {
+		r := testRuntime(t)
+		r.authErr = nil
+		started := make(chan struct{}, 1)
+		var starts atomic.Int32
+		r.shellRunner = func(ctx context.Context, _ *tools.BashTool, _ string, _ func([]byte)) tools.BashRunResult {
+			starts.Add(1)
+			started <- struct{}{}
+			<-ctx.Done()
+			return tools.BashRunResult{Cancelled: true}
+		}
+		input, out, _, finished := startShellTestREPL(t, r)
+		if _, err := input.WriteString("!first\r"); err != nil {
+			t.Fatal(err)
+		}
+		waitShellSignal(t, started, "first shell start")
+		if _, err := input.WriteString("!second\r"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "Finish or cancel the running shell command")
+		out.waitContains(t, "!second")
+		if starts.Load() != 1 {
+			t.Fatalf("second active shell started: %d starts", starts.Load())
+		}
+		if _, err := input.WriteString("\x15\x1b"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "(cancelled)")
+		if _, err := input.WriteString("/quit\r"); err != nil {
+			t.Fatal(err)
+		}
+		if err := waitShellRepl(t, finished); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("pending append failure blocks later shells", func(t *testing.T) {
+		r := testRuntime(t)
+		blocking := &shellBlockingProvider{started: make(chan struct{})}
+		r.prov = blocking
+		r.authErr = nil
+		var starts atomic.Int32
+		r.shellRunner = func(_ context.Context, _ *tools.BashTool, _ string, onOutput func([]byte)) tools.BashRunResult {
+			starts.Add(1)
+			onOutput([]byte("PENDING_FAIL\n"))
+			return tools.BashRunResult{Output: "PENDING_FAIL\n", ExitCode: intPtr(0)}
+		}
+		input, out, _, finished := startShellTestREPL(t, r)
+		if _, err := input.WriteString("hold the run\r"); err != nil {
+			t.Fatal(err)
+		}
+		waitShellSignal(t, blocking.started, "provider start")
+		if _, err := input.WriteString("!printf PENDING_FAIL\r"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "PENDING_FAIL")
+		r.store.FailWritesForTest(errors.New("blocked pending append"))
+		if _, err := input.WriteString("\x1b"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "UNSAVED shell output")
+		if len(shellMessages(r.store)) != 0 || r.store.WriteError() == nil {
+			t.Fatal("failed pending append left a false durable shell entry")
+		}
+		if _, err := input.WriteString("!printf later\r"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "Finish or cancel the current operation")
+		if starts.Load() != 1 {
+			t.Fatalf("later shell started after a storage failure: %d", starts.Load())
+		}
+		if _, err := input.WriteString("\x15/quit\r"); err != nil {
+			t.Fatal(err)
+		}
+		if err := waitShellRepl(t, finished); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("escape cancels the model while the shell keeps running", func(t *testing.T) {
+		r := testRuntime(t)
+		blocking := &shellBlockingProvider{started: make(chan struct{})}
+		r.prov = blocking
+		r.authErr = nil
+		shellStarted, shellCancelled := make(chan struct{}, 1), make(chan struct{}, 1)
+		r.shellRunner = func(ctx context.Context, _ *tools.BashTool, _ string, _ func([]byte)) tools.BashRunResult {
+			shellStarted <- struct{}{}
+			<-ctx.Done()
+			shellCancelled <- struct{}{}
+			return tools.BashRunResult{Cancelled: true}
+		}
+		input, out, _, finished := startShellTestREPL(t, r)
+		if _, err := input.WriteString("hold the run\r"); err != nil {
+			t.Fatal(err)
+		}
+		waitShellSignal(t, blocking.started, "provider start")
+		if _, err := input.WriteString("!sleep 30\r"); err != nil {
+			t.Fatal(err)
+		}
+		waitShellSignal(t, shellStarted, "shell start")
+		if _, err := input.WriteString("\x1b"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "Request cancelled")
+		select {
+		case <-shellCancelled:
+			t.Fatal("escape cancelled the shell instead of the model")
+		default:
+		}
+		if _, err := input.WriteString("/quit\r"); err != nil {
+			t.Fatal(err)
+		}
+		out.waitContains(t, "(cancelled)")
+		if err := waitShellRepl(t, finished); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+}

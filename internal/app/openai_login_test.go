@@ -357,7 +357,7 @@ func TestOpenAILoginDuringRunRestored(t *testing.T) {
 	if _, err := inputWrite.Write([]byte("/login openai\r\x0f")); err != nil {
 		t.Fatal(err)
 	}
-	waitAppOutput(t, out, "Skill and web cards:")
+	waitAppOutput(t, out, "Shell, skill and web output:")
 	finishRun()
 	waitAppOutput(t, out, "busy-reply")
 	if err := inputWrite.Close(); err != nil {

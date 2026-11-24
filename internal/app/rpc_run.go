@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -187,14 +186,19 @@ func runRPC(o Options, version string) error {
 			return fmt.Errorf("set session name: %w", err)
 		}
 	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
-	s := &rpcRunner{r: r, out: enc, shutdown: make(chan struct{})}
+	transport, err := openRPCTransport()
+	if err != nil {
+		cleanup()
+		return err
+	}
+	s := &rpcRunner{r: r, transport: transport, shutdown: make(chan struct{})}
+	s.encoder = newRPCEncoder(transport.out, s.failTransport)
 	// External clients hydrate resumed sessions separately. Never replay
 	// their old messages as new live events after the next prompt.
 	if proj, err := store.Projection(); err == nil {
 		s.emitted = len(proj.Flat)
 	} else {
+		_ = transport.Close()
 		cleanupAll()
 		return err
 	}
@@ -214,31 +218,51 @@ func runRPC(o Options, version string) error {
 		shutdownOnce.Do(func() {
 			close(s.shutdown)
 			s.cancelActive()
+			s.cancelShells()
+			// Wake the scanner without closing the original stdin object.
+			transport.InterruptInput()
 			s.waitWorkers()
 			// Release the scanner goroutine from its stdin read. The
 			// shutdown channel already stopped intake; this only ends
 			// the blocked read so no goroutine outlives the session.
 			_ = os.Stdin.Close()
+			// Restore endpoint flags and release wrappers only after every
+			// worker has settled its terminal frame.
+			_ = transport.Close()
 			cleanupAll()
 		})
 	}
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
+	signalDone := make(chan struct{})
+	signalFinished := make(chan struct{})
 	go func() {
-		<-sigs
-		signalled.Store(true)
-		shutdown()
-		// A blocked stdin read is not guaranteed to wake on Close across
-		// platforms. The workers and store are already settled, so exit
-		// from the signal path instead of waiting for the scanner.
-		os.Exit(143)
+		defer close(signalFinished)
+		select {
+		case <-sigs:
+			signalled.Store(true)
+			shutdown()
+			// A blocked stdin read is not guaranteed to wake on Close across
+			// platforms. The workers and store are already settled, so exit
+			// from the signal path instead of waiting for the scanner.
+			os.Exit(143)
+		case <-signalDone:
+		}
 	}()
 
-	s.runLoop(os.Stdin)
+	loopErr := s.runLoop(transport.in)
+	close(signalDone)
 	shutdown()
+	<-signalFinished
 	if signalled.Load() {
 		os.Exit(143)
+	}
+	if err := s.transportError(); err != nil {
+		return err
+	}
+	if loopErr != nil {
+		return loopErr
 	}
 	return nil
 }
@@ -271,6 +295,9 @@ func (s *rpcRunner) waitWorkers() {
 	}
 	if s.reservation != nil {
 		waits = append(waits, s.reservation.done)
+	}
+	for _, worker := range s.shells {
+		waits = append(waits, worker.done)
 	}
 	s.mu.Unlock()
 	for _, wait := range waits {

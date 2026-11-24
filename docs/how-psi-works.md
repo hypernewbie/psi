@@ -27,7 +27,7 @@ file either way.
 A `/skill:<name> [args]` submission becomes Pi's `<skill …>` block in the user
 message. The transcript keeps it collapsed as `[skill] name (ctrl+o to
 expand)` and shows the arguments as a separate user row. `Ctrl+O` expands or
-collapses skill blocks in memory; it is not saved.
+collapses shell output, skill blocks, and web cards in memory; it is not saved.
 
 Tool calls in one assistant response run concurrently. `write` and `edit` share
 one per-file queue so mutations serialize; `read`, `bash`, and `powershell` do not queue.
@@ -120,10 +120,11 @@ interactive `!command` path inherit its environment. Context files such as
 
 ## Shell execution
 
-The interactive `!command` path runs locally and makes no provider request. It
-is serial with model work: psi refuses a shell while a model run or bridge
-preparation is active, and refuses model or session mutation while a shell is
-unsettled. `!!command` excludes its saved command and output from model context
-but leaves them in the local session file. Output is final-only; there is no
-live chunk stream, transcript replay format, or shell-history recall. The
-shared shell resolver is described in [Environment](env.md).
+The interactive `!command` path runs locally and makes no provider request. A
+running shell can overlap one ordinary model run. Completed results wait for
+the model boundary, so an unsettled tool exchange never contains a shell entry.
+`!!command` excludes its saved command and output from model context but leaves
+them in the local session file. Output streams live; settled and replayed blocks
+use the same formatter, keep the last 20 logical lines, and expand with
+`Ctrl+O`. Shell recall restores normalized `! ` and `!! ` prefixes. The shared
+shell resolver is described in [Environment](env.md).

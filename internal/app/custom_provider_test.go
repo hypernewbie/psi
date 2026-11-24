@@ -283,9 +283,8 @@ func TestConfiguredProviderRunsThroughTheCompletionsClient(t *testing.T) {
 func optionalKeyRPCRunner(t *testing.T, r *runtime) (*rpcRunner, *rpcLog) {
 	t.Helper()
 	log := &rpcLog{}
-	enc := json.NewEncoder(log)
-	enc.SetEscapeHTML(false)
-	s := &rpcRunner{r: r, out: enc}
+	s := &rpcRunner{r: r}
+	s.encoder = newRPCEncoder(log, nil)
 	s.loop = r.newLoop(s.sink)
 	t.Cleanup(func() {
 		s.cancelActive()

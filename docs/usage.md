@@ -193,21 +193,45 @@ requests. The output is still visible in the terminal. The JSONL session file
 is not secret storage.
 
 An admitted command runs once, makes no provider request, and does not need
-provider credentials or model-tool allowlists. psi shows the command row, a
-running state, then final sanitized output and an explicit no-output, exit,
-cancellation, or truncation marker. There are no live chunks. Esc/Ctrl+C, quit,
-EOF, suspend, and terminal failure cancel and join the owned process before psi
-returns. A second shell, a model run, bridge preparation, or a session mutation
-is refused while the shell is unsettled; a refused submission restores the
-draft, including `/b` and `/bump` submissions. psi keeps up to the last 50 KiB
-and 2000 lines of sanitized output without cutting a UTF-8 character. A capture
-file is advertised only when it exists.
+provider credentials or model-tool allowlists. The command row and output stream
+live while the command runs. Settled and replayed output starts with the last 20
+logical lines, capped at 20 wrapped rows. `Ctrl+O` expands the retained tail
+(up to the last 50 KiB and 2000 lines). `!!` dims the header and body and uses a
+plain `!!` cue when color is off. The command row and output stay visible
+locally. Esc/Ctrl+C, quit, EOF, suspend, and terminal failure cancel and join the
+owned process before psi returns.
+
+A running shell may overlap one ordinary model run. A completed result waits
+for the model boundary before psi appends it, so a tool exchange never contains
+a shell entry. The editor admits one running shell at a time and up to eight
+running plus pending shell results. A second running shell, a bridge admission,
+an explicit compaction, a model/settings mutation, or `/b`/`/bump` is refused
+while the shell work is unsettled; an ordinary prompt and native skills remain
+available. A refused submission restores the draft. psi keeps up to the last 50
+KiB and 2000 lines of sanitized output without cutting a UTF-8 character. A
+capture file is advertised only when it exists.
 
 The command runs with the psi process environment and permissions. It can
 modify files before cancellation or a storage error; psi cannot roll it back
 and never retries it automatically. If the first durable append fails, psi
 reports `UNSAVED`, keeps the committed leaf unchanged, and blocks later
-mutations.
+mutations. Shell recall restores normalized `! ` and `!! ` prefixes from saved
+entries; malformed imported commands that editor normalization would change are
+not recalled.
+
+RPC mode exposes one explicit `bash` command and `abort_bash`. `bash` accepts
+`command` (a string, including an empty string) and optional
+`excludeFromContext` (a boolean). It streams nonempty sanitized
+`bash_execution_update` frames with the request ID, then returns one `response`
+with `output`, optional `exitCode`, `cancelled`, `truncated`, and a retained
+`fullOutputPath` when truncated. A nonzero exit or cancellation is a normal
+outcome. RPC admits up to eight outstanding shells and allows them to overlap a
+model run. A shell that completes during a model run returns its execution
+result first; psi appends the entry at the model boundary and reports a deferred
+append failure as an `extension_error`. `abort_bash` cancels every active direct
+shell without cancelling the model. `abort` remains model-only. Successful
+storage settlement before an immediate response is required; infrastructure
+and append failures return an error in place of success.
 
 The `bash` tool uses the same shell selection and runs in the workspace. It
 returns the last 2000 lines or 50 KiB. If a timeout occurs after the shell has
@@ -215,8 +239,9 @@ exited while a background process keeps writing output, the timeout message
 includes the shell's exit code and elapsed time. See [Environment](env.md) for
 the exact shell precedence.
 
-RPC `bash`, streamed terminal chunks, replay formatting, shell-history recall,
-and model/shell concurrency are not implemented.
+Streamed RPC updates are not a terminal preview. The local capture can hold raw
+bytes, unlike Pi's sanitized spill, so psi never displays the capture file
+automatically.
 
 ## Web access
 

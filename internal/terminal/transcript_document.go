@@ -29,6 +29,8 @@ const (
 	// DocumentAccent is Pi's accent-colored chat text, such as the /new
 	// confirmation.
 	DocumentAccent DocumentKind = "accent"
+	// DocumentShell is one direct shell block with its own header and outcome.
+	DocumentShell DocumentKind = "shell"
 )
 
 // DocumentBlock stores display source, not provider context. Each value is one
@@ -44,6 +46,7 @@ type DocumentBlock struct {
 	Historical bool
 	NoticeKind NoticeKind
 	Streaming  bool
+	Shell      *ShellDisplay
 }
 
 // FormatDocumentBlock lays out one retained block at the current terminal width.
@@ -92,6 +95,13 @@ func FormatDocumentBlock(block DocumentBlock, width int, presentation Presentati
 		return formatColoredMessage(block.Text, TokenWarning, width, noColor, theme)
 	case DocumentAccent:
 		return formatColoredMessage(block.Text, TokenAccent, width, noColor, theme)
+	case DocumentShell:
+		if block.Shell == nil {
+			return nil
+		}
+		shell := *block.Shell
+		shell.Expanded = display.ExpandShell
+		return FormatShellBlock(shell, width, noColor, theme)
 	case DocumentRaw:
 		return formatRawDocument(block.Text, width, display)
 	default:

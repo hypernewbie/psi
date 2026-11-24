@@ -23,6 +23,9 @@ const (
 	KindSystemMarker    TranscriptKind = "system_marker"
 	KindHistoryBoundary TranscriptKind = "history_boundary"
 	KindNotice          TranscriptKind = "notice"
+	// KindShell is one direct editor shell execution. It stays distinct from
+	// model tool calls so replay can render the command and its outcome.
+	KindShell TranscriptKind = "shell"
 )
 
 // TranscriptItem contains visible content and provenance, never hidden tool data.
@@ -36,6 +39,14 @@ type TranscriptItem struct {
 	BlockIDs    []string
 	Historical  bool
 	Note        string
+	// Shell executions carry display-safe command and outcome data. Text is
+	// the retained output; none of these fields enter provider context.
+	Command        string
+	Excluded       bool
+	ExitCode       *int
+	Cancelled      bool
+	Truncated      bool
+	FullOutputPath string
 }
 
 func CurrentView(path []*Entry) []TranscriptItem {
@@ -299,17 +310,17 @@ func timelineEntry(e *Entry, tools map[string]*displayTool, inputs map[string]st
 			} else if *b.ExitCode != 0 {
 				state = "failed"
 			}
-			summary, ok := e.toolSummaries[e.ID()]
-			if ok {
-				summary = toolsummary.RebaseSummaryPath(summary, "", "")
-			} else {
-				summary = toolsummary.SummarizeArguments("bash", map[string]any{"command": b.Command}, "", "")
+			excluded := b.ExcludeFromContext != nil && *b.ExcludeFromContext
+			fullPath := ""
+			if b.FullOutputPath != nil {
+				fullPath = *b.FullOutputPath
 			}
-			if b.ExitCode != nil {
-				code := *b.ExitCode
-				summary.ExitCode = &code
-			}
-			out = append(out, TranscriptItem{Kind: KindTool, Text: "bash: " + bashOutcome(b), ToolName: "bash", ToolState: state, ToolSummary: summary, SourceID: e.ID(), Historical: historical})
+			out = append(out, TranscriptItem{
+				Kind: KindShell, Text: b.Output, ToolName: "bash", ToolState: state,
+				SourceID: e.ID(), Historical: historical, Command: b.Command,
+				Excluded: excluded, ExitCode: b.ExitCode, Cancelled: b.Cancelled,
+				Truncated: b.Truncated, FullOutputPath: fullPath,
+			})
 		}
 	case "compaction":
 		// Pi renders every compaction entry as a collapsed summary box with the
@@ -368,12 +379,18 @@ func PromptRecall(path []*Entry) []string {
 	inputs := inputProvenance(path)
 	var out []string
 	for _, e := range path {
-		if e.Kind != "message" || e.Message.Message.User == nil {
+		if e.Kind != "message" || e.Message == nil {
 			continue
 		}
-		text := timelineUserText(e.Message.Message.User.Content, nil)
-		if invocation, ok := inputs[e.ID()]; ok {
-			text = invocation
+		text := ""
+		switch {
+		case e.Message.Message.User != nil:
+			text = timelineUserText(e.Message.Message.User.Content, nil)
+			if invocation, ok := inputs[e.ID()]; ok {
+				text = invocation
+			}
+		case e.Message.Message.BashExecution != nil:
+			text = shellRecallText(e.Message.Message.BashExecution)
 		}
 		if strings.TrimSpace(text) == "" {
 			continue
@@ -384,6 +401,20 @@ func PromptRecall(path []*Entry) []string {
 		out = out[len(out)-200:]
 	}
 	return out
+}
+
+// shellRecallText restores the submitted bang prefix. Only already-normalized
+// commands are eligible: a leading or trailing space or a carriage return
+// would become a different command after editor insertion normalization.
+func shellRecallText(message *BashExecutionMessage) string {
+	if message == nil || message.Command == "" || strings.TrimSpace(message.Command) != message.Command || strings.ContainsRune(message.Command, '\r') {
+		return ""
+	}
+	prefix := "! "
+	if message.ExcludeFromContext != nil && *message.ExcludeFromContext {
+		prefix = "!! "
+	}
+	return prefix + message.Command
 }
 
 func timelineUserText(content any, raw []byte) string {

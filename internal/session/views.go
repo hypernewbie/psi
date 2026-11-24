@@ -138,26 +138,34 @@ func (s *Store) Recall() ([]string, error) {
 	bytes := 0
 	for i := len(path) - 1; i >= 0 && len(out) < 200; i-- {
 		e := path[i]
-		if e.Message == nil || e.Message.Message.User == nil {
+		if e.Message == nil {
 			continue
 		}
-		text := ""
-		if p := provenance[e.ID()]; p != nil {
-			text = inputProvenance([]*Entry{p})[e.ID()]
-		}
-		if text == "" {
-			text = timelineUserText(e.Message.Message.User.Content, nil)
+		text, shell := "", false
+		switch {
+		case e.Message.Message.User != nil:
+			if p := provenance[e.ID()]; p != nil {
+				text = inputProvenance([]*Entry{p})[e.ID()]
+			}
+			if text == "" {
+				text = timelineUserText(e.Message.Message.User.Content, nil)
+			}
+		case e.Message.Message.BashExecution != nil:
+			text, shell = shellRecallText(e.Message.Message.BashExecution), true
+		default:
+			continue
 		}
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
 		// Imported prompts can exceed the editor budget. Keep the latest usable
-		// prompts without retaining unbounded image or envelope payloads.
+		// prompts without retaining unbounded image or envelope payloads. A
+		// shell command is never truncated: recall it whole or skip it.
 		if len(text) > 4*1024*1024-bytes {
-			if len(out) > 0 {
-				break
+			if shell || len(out) == 0 {
+				continue
 			}
-			continue
+			break
 		}
 		out = append(out, strings.Clone(text))
 		bytes += len(text)

@@ -249,6 +249,17 @@ func runShell(
 				return
 			default:
 			}
+			if capture.observerActive.Load() {
+				select {
+				case <-copyDone:
+					return
+				case <-runCtx.Done():
+					killGroup()
+					return
+				case <-tick.C:
+				}
+				continue
+			}
 			if capture.nowTime().Sub(capture.lastWrite()) > idleDrainGrace {
 				// Quiet pipe: release with the leader status preserved.
 				killGroup()
@@ -392,7 +403,10 @@ type tailCapture struct {
 	cancel  context.CancelFunc
 	onWrite func([]byte)
 	last    atomic.Int64 // nanos of the most recent chunk (idle drain clock)
-	now     func() time.Time
+	// observerActive prevents the idle drain from releasing the process while
+	// a slow observer still owns an accepted chunk.
+	observerActive atomic.Bool
+	now            func() time.Time
 }
 
 // nowTime reports the drain clock instant. A nil clock means the wall clock.
@@ -434,7 +448,11 @@ func (c *tailCapture) Write(p []byte) (int, error) {
 			c.tail = append(c.tail, p[:n]...)
 		}
 		if c.onWrite != nil {
+			c.observerActive.Store(true)
 			c.onWrite(p[:n])
+			// Restart the idle grace after observer delivery returns.
+			c.touch()
+			c.observerActive.Store(false)
 		}
 	}
 	if err != nil {

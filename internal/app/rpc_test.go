@@ -146,9 +146,8 @@ func newRPCTestRunner(t *testing.T, prov provider.Provider, skillList []skills.S
 		ov: ov, cfg: cfg, prov: prov, reg: tools.NewRegistry(ws),
 	}
 	log := &rpcLog{}
-	enc := json.NewEncoder(log)
-	enc.SetEscapeHTML(false)
-	s := &rpcRunner{r: r, out: enc}
+	s := &rpcRunner{r: r}
+	s.encoder = newRPCEncoder(log, nil)
 	s.loop = r.newLoop(s.sink)
 	t.Cleanup(func() { closeRPCTestRunner(s, prov) })
 	return s, store, log

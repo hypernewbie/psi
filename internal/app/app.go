@@ -480,7 +480,8 @@ OpenAI uses /login openai (ChatGPT subscription sign-in in psi), a stored API ke
 A custom provider using openai-completions, openai-responses, or anthropic-messages may omit the API key; built-in openai and anthropic may omit it only on an explicit non-default baseUrl override. An omitted key sends no generated auth header. authHeader: true still requires a key; explicit headers still apply.
 Eligible built-in openai-codex, zai and opencode-go models show remaining quota in unused footer space. Codex shows primary ChatGPT quota; Go shows rolling (R), weekly (W), and monthly (M) percentages. Reads are best effort and back off after failures.
 MCP tools appear from $PI_AGENT_DIR/mcp.json and trusted .pi/mcp.json; this layer supports stdio and streamable HTTP. --no-mcp disables MCP.
-Interactive editor: !command runs a local shell command; !!command also excludes its saved command and output from model context.
+Interactive editor: !command runs a local shell command with live output and shell recall; !!command also excludes its saved command and output from model context. Ctrl+O expands retained output. A running shell may overlap one ordinary model run; completed results append at the model boundary.
+RPC mode: bash streams bash_execution_update frames and returns one bounded result; abort_bash cancels active direct shells; abort stays model-only. Up to eight direct shells may be outstanding.
 Not supported: --print/-p, JSON modes, fullscreen mode, @file, --api-key, --models, --fork, --export, extensions, and prompt templates.
 `, version, config.DefaultToolsCSV())
 }
@@ -1620,6 +1621,7 @@ func (r *runtime) refreshPresentation(console *terminal.Console) {
 		display := presentationDisplay(r.settings)
 		display.ExpandSkills = r.skillExpanded
 		display.ExpandWeb = r.skillExpanded
+		display.ExpandShell = r.skillExpanded
 		snapshot := terminal.PresentationSnapshot{
 			Display:          display,
 			WorkingDirectory: r.store.Cwd(), HomeDirectory: home, SessionName: sessionName, GitBranch: branch,
@@ -1990,7 +1992,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var suppressPaste bool
 	var shell *shellLifetime
 	var shellResults <-chan shellResult
-	var outputErr error
+	var pendingShells []pendingShell
+	var lastShellRevision uint64
+	var shellPreviewDirty bool
 	var runOutcome string
 	var visibleRunText bool
 	// retryFailure is Pi's "Retry failed after N attempts" report. It is set
@@ -2043,7 +2047,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	spinnerIndex := 0
 	activityText := ""
 	lastSpinner := time.Time{}
-	operationActive := func() bool { return busy || shell != nil }
+	operationActive := func() bool { return busy || shell != nil || len(pendingShells) > 0 }
 	activityFrame := func() string {
 		if activityText == "" {
 			return ""
@@ -2074,19 +2078,131 @@ func (r *runtime) repl(console *terminal.Console) error {
 		cancel()
 	}
 	cancelActive := func() {
+		// A pending manual compaction is cancelled before an older run settles,
+		// otherwise the reservation would start a summary the user cancelled.
+		if manualCompact != nil && !manualCompact.started {
+			manualCompact.cancelled = true
+			if busy {
+				cancelRun()
+			}
+			return
+		}
+		// Escape targets the model while it owns the run; a shell that
+		// overlaps the run keeps executing. In the shell-only case it targets
+		// the running shell, preserving M1's cancellation behavior.
+		if busy {
+			cancelRun()
+			return
+		}
 		if shell != nil {
 			r.state = StateCancelling
 			console.SetThinking(false)
 			shell.cancelRun()
 			return
 		}
-		if manualCompact != nil && !manualCompact.started {
-			// The outgoing run has already been cancelled. Keep its owner
-			// until settlement so undelivered input is still recovered.
-			manualCompact.cancelled = true
+		cancelRun()
+	}
+	cancelAll := func() {
+		cancelRun()
+		if shell != nil {
+			shell.cancelRun()
+		}
+	}
+	buildShellPreview := func() {
+		rows := []string{}
+		for i, pending := range pendingShells {
+			if i > 0 {
+				rows = append(rows, "")
+			}
+			rows = append(rows, terminal.FormatShellBlock(terminal.ShellDisplay{
+				Command: pending.lifetime.command, Output: pending.result.output,
+				State: shellOutcome(pending.result), ExitCode: pending.result.exitCode,
+				Excluded: pending.lifetime.exclude, Truncated: pending.result.truncated,
+				FullOutputPath: pending.result.fullOutputPath, Expanded: r.skillExpanded,
+			}, console.StatusWidth(), noColorEnvironment(), r.theme)...)
+		}
+		if shell != nil {
+			text, revision := shell.collector.Snapshot()
+			lastShellRevision = revision
+			if len(rows) > 0 {
+				rows = append(rows, "")
+			}
+			rows = append(rows, terminal.FormatShellBlock(terminal.ShellDisplay{
+				Command: shell.command, Output: text, State: "running",
+				Excluded: shell.exclude, Expanded: r.skillExpanded,
+			}, console.StatusWidth(), noColorEnvironment(), r.theme)...)
+		}
+		shellPreviewDirty = false
+		if len(rows) == 0 {
+			console.ClearShellPreview()
 			return
 		}
-		cancelRun()
+		console.SetShellPreview(rows)
+	}
+	settleCompletedShell := func(pending pendingShell) bool {
+		lifetime, result := pending.lifetime, pending.result
+		appendErr := error(nil)
+		if lifetime == nil || lifetime.generation != r.generation || lifetime.store != r.store {
+			appendErr = fmt.Errorf("the session changed before the shell result could be saved")
+		} else if _, err := lifetime.store.AppendMessage(bashExecutionMessage(lifetime.command, result, lifetime.exclude)); err != nil {
+			appendErr = err
+		}
+		state := shellOutcome(result)
+		if appendErr != nil {
+			state = "failed"
+			if lifetime != nil && lifetime.store == r.store {
+				r.state = StateStorageBlocked
+			}
+		}
+		if !busy && shell == nil {
+			console.ClearToolRow()
+			if appendErr == nil && len(pendingShells) == 0 && !compacting && manualCompact == nil && !exiting {
+				r.state = StateIdle
+				if r.authErr != nil {
+					r.state = StateOffline
+				}
+				if lifetime != nil && lifetime.store.WriteError() != nil {
+					r.state = StateStorageBlocked
+				}
+				setActivity("")
+			}
+		}
+		if lifetime != nil {
+			summary := tools.SummarizeArguments("bash", map[string]any{"command": lifetime.command}, lifetime.store.Cwd(), "")
+			status.UpdateSummary("bash", lifetime.callID, summary, state, presentationDisplay(r.settings), r.theme, noColorEnvironment())
+		}
+		_ = out.AppendDocumentBlock(shellDocumentBlock(lifetime.command, result, lifetime.exclude, r.skillExpanded))
+		if appendErr != nil {
+			notice(terminal.NoticeError, "UNSAVED shell output. Storage is blocked; do not continue this session. "+appendErr.Error())
+		} else if !lifetime.exclude {
+			r.bumpContextRev()
+		}
+		r.syncBridge()
+		return appendErr == nil
+	}
+	flushPendingShells := func() bool {
+		if busy || compacting || manualCompact != nil || len(pendingShells) == 0 {
+			return true
+		}
+		for len(pendingShells) > 0 {
+			pending := pendingShells[0]
+			pendingShells = pendingShells[1:]
+			if !settleCompletedShell(pending) {
+				if len(pendingShells) > 0 {
+					notice(terminal.NoticeError, "The remaining shell results are UNSAVED and will not be retried.")
+					for _, unsaved := range pendingShells {
+						_ = out.AppendDocumentBlock(shellDocumentBlock(unsaved.lifetime.command, unsaved.result, unsaved.lifetime.exclude, r.skillExpanded))
+					}
+					pendingShells = nil
+				}
+				r.shellActive = shell != nil
+				buildShellPreview()
+				return false
+			}
+		}
+		r.shellActive = shell != nil
+		buildShellPreview()
+		return true
 	}
 	finishManualCompact := func(err error) {
 		bridge.resolveCompactRun(err)
@@ -2623,7 +2739,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var compactionCountAtStart uint64
 	var activeConfig agent.Config
 	startInputMode := func(input agent.UserInput, focus string, mode inputMode, silent bool) (bool, string) {
-		if r.shellActive {
+		// A running shell may overlap an ordinary model run. A completed shell
+		// still awaiting the model boundary must be saved first. Bumps,
+		// compaction, and end-turn automation remain blocked while any shell
+		// work owns the session.
+		if r.shellActive && mode != inputPrompt {
+			return false, "shell"
+		}
+		if mode == inputPrompt && !flushPendingShells() {
 			return false, "shell"
 		}
 		if login != nil {
@@ -3036,7 +3159,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		startInputMode(agent.UserInput{}, "", inputCompactEndTurn, false)
 	}
 	endTurnReady := func() bool {
-		if busy || shell != nil || exiting || r.state != StateIdle || r.selector != nil {
+		if busy || r.shellActive || exiting || r.state != StateIdle || r.selector != nil {
 			return false
 		}
 		proj, err := r.store.Projection()
@@ -3179,6 +3302,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	for {
 		lastInput.Release()
+		if !busy && !compacting && manualCompact == nil && len(pendingShells) > 0 {
+			flushPendingShells()
+		}
 		if quota.observe(r) {
 			stopQuotaTimer()
 		}
@@ -3198,8 +3324,8 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !operationActive() && login == nil {
 				return err
 			}
-			outputErr, exiting = err, true
-			cancelActive()
+			exiting = true
+			cancelAll()
 			cancelLogin()
 		}
 		if exiting {
@@ -3216,7 +3342,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			close(queued)
 			inputSource = queued
 		}
-		if !released && frameTick == nil && (stream.Pending() || console.NeedsDraw() || (operationActive() && activityText != "")) {
+		if !released && frameTick == nil && (stream.Pending() || console.NeedsDraw() || shell != nil || (operationActive() && activityText != "")) {
 			delay := time.Second / 30
 			if operationActive() && !stream.Pending() && !console.NeedsDraw() {
 				delay = 80 * time.Millisecond
@@ -3252,6 +3378,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 			frameTick = nil
 			_, beforeFrames, _, _ := console.FrameStats()
 			console.BeginFrame()
+			if shell != nil || len(pendingShells) > 0 {
+				needsPreview := shellPreviewDirty
+				if !needsPreview && shell != nil {
+					_, revision := shell.collector.Snapshot()
+					needsPreview = revision != lastShellRevision
+				}
+				if needsPreview {
+					buildShellPreview()
+				}
+			}
 			thinkingStream.Flush()
 			stream.Flush()
 			if retryCountdown != nil {
@@ -3280,7 +3416,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if isSuspend(sig) {
 				if operationActive() {
 					suspendPending = true
-					cancelActive()
+					cancelAll()
 				} else if login != nil {
 					suspendPending = true
 					cancelLogin()
@@ -3300,7 +3436,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				exiting = true
 			}
 			if operationActive() {
-				cancelActive()
+				cancelAll()
 			} else if login != nil {
 				cancelLogin()
 			} else {
@@ -3357,93 +3493,34 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 		case res := <-shellResults:
 			settled := shell
-			shell = nil
-			shellResults = nil
-			r.shellActive = false
+			shell, shellResults = nil, nil
 			if settled == nil {
 				continue
 			}
-			exclude := settled.exclude
-			var fullPath *string
-			if res.fullOutputPath != "" {
-				path := res.fullOutputPath
-				fullPath = &path
-			}
-			message := session.AgentMessage{Role: "bashExecution", BashExecution: &session.BashExecutionMessage{
-				Role:               "bashExecution",
-				Command:            settled.command,
-				Output:             res.output,
-				ExitCode:           res.exitCode,
-				Cancelled:          res.cancelled,
-				Truncated:          res.truncated,
-				FullOutputPath:     fullPath,
-				Timestamp:          time.Now().UnixMilli(),
-				ExcludeFromContext: &exclude,
-			}}
-			_, appendErr := settled.store.AppendMessage(message)
-			state := "done"
-			switch {
-			case res.cancelled:
-				state = "cancelled"
-			case res.infraErr != nil || appendErr != nil:
-				state = "failed"
-			case res.exitCode == nil:
-				state = "interrupted"
-			case *res.exitCode != 0:
-				state = "failed"
-			}
-			console.ClearToolRow()
-			setActivity("")
-			summary := tools.SummarizeArguments("bash", map[string]any{"command": settled.command}, settled.store.Cwd(), "")
-			status.UpdateSummary("bash", settled.callID, summary, state, presentationDisplay(r.settings), r.theme, noColorEnvironment())
-			if visible := strings.TrimRight(res.output, "\n"); visible != "" {
-				print(visible)
-			} else if !res.cancelled && res.infraErr == nil && res.exitCode != nil && *res.exitCode == 0 && appendErr == nil {
-				print("(no output)")
-			}
-			if res.cancelled {
-				print("(cancelled)")
-			}
-			if res.exitCode != nil && *res.exitCode != 0 {
-				print(fmt.Sprintf("(exit %d)", *res.exitCode))
-			}
-			if res.truncated {
-				if res.fullOutputPath != "" {
-					print("[Output truncated. Full output: " + res.fullOutputPath + "]")
-				} else {
-					print("[Output truncated]")
+			pending := pendingShell{lifetime: settled, result: res}
+			if busy || compacting || manualCompact != nil {
+				// A completed command waits for the model boundary. It is never
+				// appended inside an unsettled tool exchange or compaction.
+				pendingShells = append(pendingShells, pending)
+				r.shellActive = true
+				shellPreviewDirty = true
+				buildShellPreview()
+				r.syncBridge()
+				if !exiting {
+					r.draw(console)
 				}
+				continue
 			}
-			if appendErr != nil {
-				r.state = StateStorageBlocked
-				notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. "+appendErr.Error())
-			} else {
-				if !settled.exclude {
-					r.bumpContextRev()
-				}
-				r.state = StateIdle
-				if r.authErr != nil {
-					r.state = StateOffline
-				}
-				if settled.store.WriteError() != nil {
-					r.state = StateStorageBlocked
-				}
-			}
-			r.syncBridge()
-			if exiting {
-				return outputErr
-			}
-			if suspendPending {
-				suspendPending = false
-				if err := suspend(); err != nil {
-					return err
-				}
-			} else {
+			settleCompletedShell(pending)
+			r.shellActive = shell != nil || len(pendingShells) > 0
+			shellPreviewDirty = true
+			buildShellPreview()
+			if !busy {
 				console.Status("")
 				r.refreshPresentation(console)
-				r.draw(console)
 			}
-			if r.state == StateIdle && len(initialMessages) > 0 {
+			r.draw(console)
+			if !exiting && r.state == StateIdle && shell == nil && len(pendingShells) == 0 && len(initialMessages) > 0 {
 				message := initialMessages[0]
 				initialMessages = initialMessages[1:]
 				start(message, message, "", "", "", false)
@@ -3472,6 +3549,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			busy = false
 			bridge.runStarting = false
 			bridge.runCancelling = false
+			pendingFlushOK := flushPendingShells()
 			compactionCommitted := r.ac.Snapshot().CompactionCount > compactionCountAtStart
 			outgoingManual := manualCompact != nil && !manualCompact.started
 			acManual := manualCompact != nil && manualCompact.started && manualCompact.resumeUnfinished
@@ -3496,7 +3574,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if activeLoop != nil {
 				pendingSteering := activeLoop.PendingSteering()
 				pendingFollowUp := activeLoop.PendingFollowUp()
-				if err == nil && !exiting && !outgoingManual && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
+				if err == nil && !exiting && !outgoingManual && pendingFlushOK && (len(pendingSteering) > 0 || len(pendingFollowUp) > 0) {
 					lateQueueLoop = activeLoop
 				} else {
 					undelivered = append(r.takeSteering(activeLoop), activeLoop.ClearFollowUp()...)
@@ -3619,9 +3697,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 					// pre-start failure exactly once and never dispatch.
 					finishManualCompact(context.Canceled)
 				}
+				// A running shell still owns a worker. Only the combined loop gate
+				// may return; it also restores the terminal before exit.
 				_, doneFramesAfter, _, _ := console.FrameStats()
 				r.eventFrames += doneFramesAfter - doneFramesBefore
-				return outputErr
+				continue
 			}
 			settledState := r.pickerCloseState(false, runOutcome, r.state)
 			r.state = settledState
@@ -3630,14 +3710,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// do not strand work already accepted by this run.
 				r.state = StateSelecting
 			}
-			if suspendPending {
-				suspendPending = false
-				if err := suspend(); err != nil {
-					_, doneFramesAfter, _, _ := console.FrameStats()
-					r.eventFrames += doneFramesAfter - doneFramesBefore
-					return err
-				}
-			} else {
+			if !suspendPending {
 				console.Status("")
 				r.refreshPresentation(console)
 				r.draw(console)
@@ -3708,7 +3781,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				if operationActive() {
 					exiting = true
-					cancelActive()
+					cancelAll()
 					continue
 				}
 				if login != nil {
@@ -3898,7 +3971,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 26 {
 				if operationActive() {
 					suspendPending = true
-					cancelActive()
+					cancelAll()
 				} else if err := suspend(); err != nil {
 					return err
 				}
@@ -4209,18 +4282,19 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if !input.Paste && len(input.Key) == 1 && input.Key[0] == 15 {
-				// Ctrl+O expands or collapses skill blocks and web cards, like
-				// Pi's app.tools.expand. The flag stays in memory and is never
-				// saved.
+				// Ctrl+O expands or collapses shell output, skill blocks, and web
+				// cards, like Pi's app.tools.expand. The flag stays in memory and
+				// is never saved.
 				r.skillExpanded = !r.skillExpanded
 				r.footerKey = ""
+				shellPreviewDirty = true
 				console.RequestFullRedraw()
 				r.draw(console)
 				state := "collapsed"
 				if r.skillExpanded {
 					state = "expanded"
 				}
-				console.Status("Skill and web cards: " + state)
+				console.Status("Shell, skill and web output: " + state)
 				continue
 			}
 			if !operationActive() && !input.Paste && string(input.Key) == "\x1b[Z" {
@@ -4238,7 +4312,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if quit {
 				if operationActive() {
 					exiting = true
-					cancelActive()
+					cancelAll()
 					continue
 				}
 				return nil
@@ -4269,12 +4343,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 				r.draw(console)
 				continue
 			}
-			if shell != nil {
-				if cmd, ok := terminal.ParseCommand(text); ok {
+			if r.shellActive && strings.HasPrefix(strings.TrimSpace(text), "/") {
+				cmd, known := terminal.ParseCommand(text)
+				if known {
 					switch cmd.Name {
 					case "quit":
 						exiting = true
-						cancelActive()
+						cancelAll()
 						continue
 					case "session", "hotkeys":
 						if _, err := r.command(cmd, out); err != nil {
@@ -4284,11 +4359,15 @@ func (r *runtime) repl(console *terminal.Console) error {
 						continue
 					}
 				}
-				notice(terminal.NoticeInfo, "Finish or cancel the shell command before changing the session.")
-				console.Editor.RestoreDraft(submittedDraft, submittedCursor)
-				console.RefreshCompletion()
-				r.draw(console)
-				continue
+				// Native skills are ordinary prompt input and stay available while
+				// a shell runs. Mutating slash commands wait for settlement.
+				if !known || !strings.HasPrefix(cmd.Name, "skill:") {
+					notice(terminal.NoticeInfo, "Finish or cancel the shell command before changing the session.")
+					console.Editor.RestoreDraft(submittedDraft, submittedCursor)
+					console.RefreshCompletion()
+					r.draw(console)
+					continue
+				}
 			}
 			if cmd, ok := terminal.ParseCommand(text); ok && (cmd.Name == "b" || cmd.Name == "bump") {
 				// Outside a shell operation, explicit bumps are silent on
@@ -4300,11 +4379,24 @@ func (r *runtime) repl(console *terminal.Console) error {
 				continue
 			}
 			if parsedShell, ok := terminal.ParseShellCommand(text); ok {
-				if busy || bridge.busy() || r.reloadPending || r.store.WriteError() != nil || (r.state != StateIdle && r.state != StateOffline) {
-					notice(terminal.NoticeInfo, "Finish or cancel the current operation before running a shell command.")
+				refuseShell := func(message string) {
+					notice(terminal.NoticeInfo, message)
 					console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 					console.RefreshCompletion()
 					r.draw(console)
+				}
+				if shell != nil {
+					refuseShell("Finish or cancel the running shell command before starting another.")
+					continue
+				}
+				if len(pendingShells) >= maxShellSlots {
+					refuseShell("Wait for the pending shell results to settle before running another shell command.")
+					continue
+				}
+				if compacting || manualCompact != nil || login != nil || exiting || r.state == StateCancelling ||
+					bridge.busy() || r.reloadPending || r.store.WriteError() != nil || r.selector != nil || r.settingsPicker != nil ||
+					(!busy && r.state != StateIdle && r.state != StateOffline) {
+					refuseShell("Finish or cancel the current operation before running a shell command.")
 					continue
 				}
 				cancelACEndTurn()
@@ -4314,9 +4406,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 				shell = startShellLifetime(context.Background(), shellRun, tool, parsedShell.Command, parsedShell.Exclude, callID, r.generation, r.store)
 				shellResults = shell.results
 				r.shellActive = true
-				r.state = StateRunningTool
-				console.SetToolRow("$ " + terminal.SanitizeStatusRow(parsedShell.Command))
-				setActivity("Running shell")
+				if !busy {
+					r.state = StateRunningTool
+					console.ClearToolRow()
+					setActivity("Running shell")
+				}
+				lastShellRevision = 0
+				shellPreviewDirty = true
+				buildShellPreview()
 				r.syncBridge()
 				r.draw(console)
 				continue
@@ -4336,7 +4433,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "quit" {
 						releaseTerminal()
 						exiting = true
-						cancelActive()
+						cancelAll()
 						continue
 					}
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {

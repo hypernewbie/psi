@@ -73,7 +73,8 @@ sensitive, not as secret stores.
 
 The interactive shell has no per-command approval. It runs with process
 permissions and can change files before cancellation or a storage error; psi
-cannot roll those changes back and does not retry the command. A configured
+cannot roll those changes back and does not retry the command. RPC `bash` uses
+the same environment, permissions, capture bound, and no-retry rule. A configured
 `shellPath`, `shellCommandPrefix`, or `PSI_SHELL` selects executable code; a
 project-provided value requires project consent.
 

@@ -98,6 +98,7 @@ type Console struct {
 	picker              *pickerRegion
 	toolRow             string
 	toolCard            *ConsoleToolCard
+	shellRows           []string
 	steeringRows        []string
 	steeringTexts       []string
 	followUpTexts       []string
@@ -1117,6 +1118,22 @@ func (c *Console) ClearToolRow() {
 	c.toolCard = nil
 }
 
+// SetShellPreview installs the active direct-shell rows. The state is separate
+// from the model tool row so a running shell never impersonates a tool call.
+func (c *Console) SetShellPreview(rows []string) {
+	c.shellRows = append(c.shellRows[:0], rows...)
+	c.dirty = true
+}
+
+// ClearShellPreview removes the live shell rows before the settled block is
+// appended, so one frame cannot show the output twice.
+func (c *Console) ClearShellPreview() {
+	if c.shellRows != nil {
+		c.shellRows = nil
+		c.dirty = true
+	}
+}
+
 func (c *Console) Draw() {
 	c.dirty = false
 	_ = c.emitComposed("")
@@ -1394,10 +1411,18 @@ func (c *Console) emitComposed(appendText string) error {
 	buf, pos := editor.DisplayBuffer(), editor.DisplayPos()
 	switch {
 	case c.picker != nil:
+		// A raw-fragment fallback must never replace the live shell rows; they
+		// are the only visible progress while output is still arriving.
+		if len(c.shellRows) > 0 {
+			fragmentRows = append(append([]string(nil), fragmentRows...), c.shellRows...)
+		}
 		view = ComposeConsoleViewPicker(width, height, buf, pos, c.presentation, c.activity, fragmentRows, c.picker.rows, c.picker.mode)
 	default:
 		if !hasStream && len(c.streamFragment) > 0 && width > 3 {
 			fragmentRows = wrapAssistantFragment(string(c.streamFragment), width)
+		}
+		if len(c.shellRows) > 0 {
+			fragmentRows = append(append([]string(nil), fragmentRows...), c.shellRows...)
 		}
 		if hintRows := c.renderExitHintRows(width, height); len(hintRows) > 0 {
 			fragmentRows = append(append([]string(nil), fragmentRows...), hintRows...)

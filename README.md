@@ -1,6 +1,6 @@
 # psi
 
-Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`, plus native web access: `web_search`, `fetch_content`, and `get_search_content`. MCP tools over stdio and streamable HTTP come from `mcp.json`. In the editor, `!command` runs a local shell command and `!!command` also excludes its saved command and output from model context. See [Web access](docs/web.md), [MCP servers](docs/mcp.md), [Providers](docs/providers.md), and [Sessions](docs/sessions.md). Sessions use Pi-compatible v3 JSONL.
+Go coding agent with an inline terminal. Four file/shell tools: `read`, `write`, `edit`, `bash`, plus native web access: `web_search`, `fetch_content`, and `get_search_content`. MCP tools over stdio and streamable HTTP come from `mcp.json`. In the editor, `!command` runs a local shell command with live output and `!!command` also excludes its saved command and output from model context. `Ctrl+O` expands retained output. RPC mode provides `bash` and `abort_bash`. See [Web access](docs/web.md), [MCP servers](docs/mcp.md), [Providers](docs/providers.md), and [Sessions](docs/sessions.md). Sessions use Pi-compatible v3 JSONL.
 
 ## Install
 

@@ -709,9 +709,18 @@ func TestAppProcess(t *testing.T) {
 // developer credentials, Pi directories, proxies, or live-test opt-in flags.
 func appTestEnv(home, agentDir string) []string {
 	tmp := filepath.Join(home, "tmp")
-	return []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + home, "PI_CODING_AGENT_DIR=" + agentDir,
+	env := []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + home, "PI_CODING_AGENT_DIR=" + agentDir,
 		"PI_CODING_AGENT_SESSION_DIR=", "TERM=xterm", "LANG=C.UTF-8", "PSI_APP_TEST_PROCESS=1",
 		"TMPDIR=" + tmp, "TMP=" + tmp, "TEMP=" + tmp}
+	// Windows shell discovery uses these standard system locations. They are
+	// not credentials or developer state; an allowlist that drops them hides
+	// the installed Git Bash from actual-binary tests.
+	for _, name := range []string{"SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "PATHEXT"} {
+		if value := os.Getenv(name); value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
 }
 
 func TestAppSubprocessEnvironmentIsIsolated(t *testing.T) {
@@ -958,12 +967,12 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	}
 	callsBeforeToggle := providerCalls.Load()
 	write("\x0f")
-	view = waitScreen("Skill and web cards: expanded", "SKILL_BODY", "References are relative to")
+	view = waitScreen("Shell, skill and web output: expanded", "SKILL_BODY", "References are relative to")
 	if !strings.Contains(view, "draft-keep") {
 		t.Fatalf("expanding skill blocks lost the draft: %q", view)
 	}
 	write("\x0f")
-	view = waitScreen("Skill and web cards: collapsed", "[skill] doer (ctrl+o to expand)")
+	view = waitScreen("Shell, skill and web output: collapsed", "[skill] doer (ctrl+o to expand)")
 	if strings.Contains(view, "SKILL_BODY") {
 		t.Fatalf("collapsing skill blocks left the body visible: %q", view)
 	}
@@ -1039,7 +1048,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	write("\x0f")
 	// Confirmations are output events: a later spinner frame can replace them
 	// within one PTY read. Check retained screen state separately.
-	waitForAppOutput(t, chunks, screen, &pending, "Skill and web cards: expanded")
+	waitForAppOutput(t, chunks, screen, &pending, "Shell, skill and web output: expanded")
 	view = screenView()
 	if !strings.Contains(view, "SLOW_PART") || !strings.Contains(view, "draft-during-stream") || screen.CursorVisible {
 		t.Fatalf("Ctrl+O during a run disturbed output/draft/cursor: cursor=%v %q", screen.CursorVisible, view)
@@ -1071,7 +1080,7 @@ func TestActualAppPTYWorkflow(t *testing.T) {
 	waitForAppOutput(t, chunks, screen, &pending, "Thinking blocks: visible")
 	assertThinkingSetting(false)
 	write("\x0f")
-	waitForAppOutput(t, chunks, screen, &pending, "Skill and web cards: collapsed")
+	waitForAppOutput(t, chunks, screen, &pending, "Shell, skill and web output: collapsed")
 	if !strings.Contains(screenView(), "draft-during-stream") {
 		t.Fatalf("busy skill toggles lost the draft: %q", screen.Text())
 	}
