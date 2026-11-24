@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/hypernewbie/psi/internal/modelmeta"
@@ -141,6 +143,18 @@ func TestModelAPIEndpointAndCompatPrecedence(t *testing.T) {
 	}
 	if _, hasValue, present := model.Compat.Bool("supportsStrictMode"); hasValue || !present || !model.Compat.IsNull("supportsStrictMode") {
 		t.Fatalf("explicit null was lost: hasValue=%t present=%t", hasValue, present)
+	}
+}
+
+func TestBundledCatalogMatchesManifest(t *testing.T) {
+	var manifest struct {
+		CatalogSHA256 string `json:"catalogSHA256"`
+	}
+	if err := json.Unmarshal(catalogSourceJSON, &manifest); err != nil {
+		t.Fatalf("decode embedded catalog manifest: %v", err)
+	}
+	if digest := fmt.Sprintf("%x", sha256.Sum256(catalogJSON)); digest != manifest.CatalogSHA256 {
+		t.Fatalf("embedded catalog SHA-256 = %s, manifest records %q", digest, manifest.CatalogSHA256)
 	}
 }
 

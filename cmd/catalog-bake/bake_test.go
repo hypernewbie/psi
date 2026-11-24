@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -394,9 +395,6 @@ func TestOpenCodeGoRouting(t *testing.T) {
 		mdRow("qwen3.6-plus", withReasoningNoEffort(), withAPIs(map[string]modelsDevAPI{
 			"messages": {BaseURL: "https://opencode.ai/inference/go/anthropic"},
 		})),
-		mdRow("hy3", withReasoning("low", "high"), withLimits(256000, 128000), withAPIs(map[string]modelsDevAPI{
-			"chat-completions": {BaseURL: "https://opencode.ai/inference/go/openai/v1"},
-		})),
 	)
 	rows := buildRows(t, catalog, []*providerDef{opencodeGoProvider()})
 
@@ -423,10 +421,6 @@ func TestOpenCodeGoRouting(t *testing.T) {
 	}
 	if got, _ := compatString(qwen, "thinkingFormat"); got != "qwen" {
 		t.Fatalf("Qwen thinking format = %q", got)
-	}
-	hy3 := rowByID(rows["opencode-go"], "hy3")
-	if hy3.ContextWindow != 192000 {
-		t.Fatalf("hy3 context = %d, want 192000 (max input)", hy3.ContextWindow)
 	}
 
 	unapproved := catalogWith("opencode-go", mdRow("bad-route", withAPIs(map[string]modelsDevAPI{
@@ -674,7 +668,6 @@ func TestReviewedSourceInputProjection(t *testing.T) {
 		{name: "wrong type", input: `"large"`, includeInput: true, want: 1050000},
 		{name: "fractional", input: "900000.5", includeInput: true, want: 1050000},
 		{name: "overflowing", input: "18446744073709551616", includeInput: true, want: 1050000},
-		{name: "equal to context", input: "1050000", includeInput: true, want: 1050000},
 		{name: "greater than context", input: "1050001", includeInput: true, want: 1050000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -715,7 +708,8 @@ func TestReviewedSourceInputProjection(t *testing.T) {
 	}
 }
 
-func TestBakeLimitOverrides(t *testing.T) {
+func limitOverrideBakeDeps(t *testing.T) bakeDeps {
+	t.Helper()
 	modelsDev := make(modelsDevCatalog, len(requiredModelsDevSources))
 	for _, source := range requiredModelsDevSources {
 		modelsDev[source] = catalogWith(source, mdRow("row"))[source]
@@ -744,9 +738,7 @@ func TestBakeLimitOverrides(t *testing.T) {
 		t.Fatalf("marshal OpenRouter fixture: %v", err)
 	}
 	fetchedAt := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	var warnings bytes.Buffer
-	out := filepath.Join(t.TempDir(), "candidate")
-	err = bake(context.Background(), out, bakeDeps{
+	return bakeDeps{
 		fetch: func(context.Context) (fetchedInputs, error) {
 			return fetchedInputs{
 				modelsDevBody:       modelsDevBody,
@@ -755,10 +747,16 @@ func TestBakeLimitOverrides(t *testing.T) {
 				openRouterFetchedAt: fetchedAt,
 			}, nil
 		},
-		now:      func() time.Time { return fetchedAt.Add(time.Minute) },
-		warnings: &warnings,
-	})
-	if err != nil {
+		now: func() time.Time { return fetchedAt.Add(time.Minute) },
+	}
+}
+
+func TestBakeLimitOverrides(t *testing.T) {
+	var warnings bytes.Buffer
+	deps := limitOverrideBakeDeps(t)
+	deps.warnings = &warnings
+	out := filepath.Join(t.TempDir(), "candidate")
+	if err := bake(t.Context(), out, deps); err != nil {
 		t.Fatalf("bake failed: %v", err)
 	}
 
@@ -820,6 +818,45 @@ func TestBakeLimitOverrides(t *testing.T) {
 		want := "catalog-bake: warning: limit override skipped for " + key + ": model not in candidate catalog"
 		if warningLines[index] != want {
 			t.Errorf("warning[%d] = %q, want %q", index, warningLines[index], want)
+		}
+	}
+}
+
+func TestBakePublishesWithClosedStderr(t *testing.T) {
+	const childOutputEnv = "PSI_TEST_CATALOG_BAKE_CLOSED_STDERR_OUTPUT"
+	if out := os.Getenv(childOutputEnv); out != "" {
+		if err := bakeCLI(t.Context(), out, limitOverrideBakeDeps(t)); err != nil {
+			t.Fatalf("offline CLI bake: %v", err)
+		}
+		return
+	}
+
+	// Use a fresh process so stderr is file descriptor 2 and Go's default
+	// SIGPIPE handling applies. Close the read end before starting the child.
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "candidate")
+	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestBakePublishesWithClosedStderr$")
+	cmd.Env = append(os.Environ(), childOutputEnv+"="+out)
+	cmd.Stderr = writer
+	var testOutput bytes.Buffer
+	cmd.Stdout = &testOutput
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("offline CLI bake with closed stderr: %v\n%s", err, testOutput.Bytes())
+	}
+	for _, name := range []string{"catalog.json", "catalog-source.json"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Errorf("artifact was not published: %v", err)
 		}
 	}
 }

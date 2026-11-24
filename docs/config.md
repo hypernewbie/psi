@@ -150,11 +150,11 @@ go run ./cmd/catalog-bake <new-output-directory>
 ```
 
 Each bake applies reviewed token-limit overrides and warns when an override
-target is missing. A missing target does not block an otherwise valid
-candidate. On refresh, review missing keys. Compare reviewed context with usable
-source `limit.input`, not total `limit.context`, and compare reviewed output with
-`limit.output`. Record missing or unusable `limit.input` separately from a
-numeric disagreement.
+target is missing. A missing target or a warning write failure does not block
+an otherwise valid candidate. On refresh, review missing keys. Compare reviewed
+context with usable source `limit.input`, not total `limit.context`, and compare
+reviewed output with `limit.output`. Record missing or unusable `limit.input`
+separately from a numeric disagreement.
 
 The command fetches two unauthenticated public inputs, in this order:
 `https://models.dev/experimental/v2.0/api.json` and
