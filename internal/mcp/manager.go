@@ -134,21 +134,22 @@ type connection struct {
 	lastList time.Time
 	catalog  []Tool
 
-	mu                  sync.Mutex
-	tokens              map[string]*callState
-	errClass            atomic.Value
-	closed              atomic.Bool
-	closing             atomic.Bool
-	retired             atomic.Bool
-	sessionEnded        atomic.Bool
-	transient           atomic.Bool
-	listenerUnavailable atomic.Bool
-	setupDisarm         func() bool
-	retryMu             sync.Mutex
-	retryDelay          time.Duration
-	retryStop           bool
-	listenerStarted     chan struct{}
-	listenerOnce        sync.Once
+	mu                   sync.Mutex
+	tokens               map[string]*callState
+	errClass             atomic.Value
+	closed               atomic.Bool
+	closing              atomic.Bool
+	retired              atomic.Bool
+	sessionEnded         atomic.Bool
+	transient            atomic.Bool
+	listenerUnavailable  atomic.Bool
+	setupDisarm          func() bool
+	closeIdleConnections func()
+	retryMu              sync.Mutex
+	retryDelay           time.Duration
+	retryStop            bool
+	listenerChecked      chan struct{}
+	listenerOnce         sync.Once
 }
 
 type callState struct {
@@ -216,27 +217,29 @@ type Manager struct {
 	stopped    bool
 	stopOnce   sync.Once
 
-	snapshot  atomic.Pointer[Snapshot]
-	reloads   chan reloadRequest
-	setupSlot chan struct{}
-	callSlot  chan struct{}
-	callSeq   atomic.Uint64
-	pending   int
-	idle      *sync.Cond
+	snapshot       atomic.Pointer[Snapshot]
+	snapshotChange chan struct{}
+	reloads        chan reloadRequest
+	setupSlot      chan struct{}
+	callSlot       chan struct{}
+	callSeq        atomic.Uint64
+	pending        int
+	idle           *sync.Cond
 }
 
 // NewManager creates a manager. Call Start to schedule configuration loading.
 func NewManager(opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		opts:      opts,
-		ctx:       ctx,
-		cancel:    cancel,
-		servers:   map[string]*serverState{},
-		input:     opts.Input,
-		reloads:   make(chan reloadRequest, 1),
-		setupSlot: make(chan struct{}, maxSetupWorkers),
-		callSlot:  make(chan struct{}, maxCallsPerManager),
+		opts:           opts,
+		ctx:            ctx,
+		cancel:         cancel,
+		servers:        map[string]*serverState{},
+		input:          opts.Input,
+		snapshotChange: make(chan struct{}, 1),
+		reloads:        make(chan reloadRequest, 1),
+		setupSlot:      make(chan struct{}, maxSetupWorkers),
+		callSlot:       make(chan struct{}, maxCallsPerManager),
 	}
 	m.snapshot.Store(&Snapshot{})
 	m.idle = sync.NewCond(&m.mu)
@@ -574,19 +577,14 @@ func (m *Manager) runSetup(state *serverState, epoch uint64, parent context.Cont
 		}
 		m.mu.Unlock()
 	}
-	var session *sdk.ClientSession
 	var conn *connection
 	var err error
 	for attempt := 0; attempt < maxDiscoveryTries; attempt++ {
-		session, conn, err = m.connect(ctx, state, epoch, resolved, input)
+		_, conn, err = m.connect(ctx, state, epoch, resolved, input)
 		if err == nil {
 			break
 		}
-		if ctx.Err() != nil || !retryableSetup(err) {
-			break
-		}
-		delay, ok := m.discoveryRetryDelay(conn, attempt)
-		if !ok || !m.opts.sleep(ctx, delay) {
+		if !m.waitDiscoveryRetry(ctx, conn, attempt, err) {
 			break
 		}
 	}
@@ -594,23 +592,26 @@ func (m *Manager) runSetup(state *serverState, epoch uint64, parent context.Cont
 		m.setupFailed(state, epoch, err)
 		return
 	}
-	m.publishConnection(state, epoch, conn)
-	_ = session
+	m.publishConnection(ctx, state, epoch, conn)
 }
 
-func (m *Manager) discoveryRetryDelay(conn *connection, attempt int) (time.Duration, bool) {
+func (m *Manager) waitDiscoveryRetry(ctx context.Context, conn *connection, attempt int, err error) bool {
+	if attempt+1 >= maxDiscoveryTries || ctx.Err() != nil || !retryableSetup(err) {
+		return false
+	}
 	delay := discoveryBackoff(attempt + 1)
-	if conn == nil {
-		return delay, true
+	if conn != nil {
+		advice, ok := conn.retryAdvice()
+		if !ok {
+			return false
+		}
+		delay = max(delay, advice)
 	}
-	advice, ok := conn.retryAdvice()
-	if !ok {
-		return 0, false
+	// Do not spend the rest of the budget sleeping for a retry we cannot make.
+	if deadline, ok := ctx.Deadline(); ok && delay >= time.Until(deadline) {
+		return false
 	}
-	if advice > delay {
-		delay = advice
-	}
-	return delay, true
+	return m.opts.sleep(ctx, delay)
 }
 
 func discoveryBackoff(attempt int) time.Duration {
@@ -632,26 +633,22 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 }
 
 func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64, server Server, input Input) (*sdk.ClientSession, *connection, error) {
-	connCtx, connCancel := context.WithCancel(context.Background())
+	connCtx, cancel := context.WithCancel(context.Background())
 	conn := &connection{
 		manager:         m,
 		server:          server.Name,
 		epoch:           epoch,
 		ctx:             connCtx,
-		cancel:          connCancel,
+		cancel:          cancel,
 		permits:         make(chan struct{}, maxCallsPerServer),
 		listCh:          make(chan struct{}, 1),
 		tokens:          map[string]*callState{},
-		listenerStarted: make(chan struct{}),
+		listenerChecked: make(chan struct{}),
 	}
 	conn.errClass.Store("")
 	if !policyAllowsInput(input, server) {
-		connCancel()
+		conn.cancel()
 		return nil, conn, configErr("permission", "MCP server is no longer permitted")
-	}
-	if server.Transport == TransportHTTP {
-		connCancel()
-		return nil, conn, configErr("unsupported", "MCP HTTP transport is not available yet")
 	}
 	client := sdk.NewClient(&sdk.Implementation{Name: "psi", Version: m.opts.Version}, &sdk.ClientOptions{
 		Capabilities:   &sdk.ClientCapabilities{},
@@ -673,92 +670,89 @@ func (m *Manager) connect(ctx context.Context, state *serverState, epoch uint64,
 			return next(ctx, method, req)
 		}
 	})
-	transport := newStdioTransport(server, input.Cwd)
+	var transport sdk.Transport
+	if server.Transport == TransportHTTP {
+		transport = m.newHTTPTransport(server, conn)
+	} else {
+		transport = newStdioTransport(server, input.Cwd)
+	}
 	conn.clearRetryAdvice()
 	var disarm func() bool
 	if server.Transport == TransportHTTP {
 		// The SDK detaches its standalone GET from the setup context. Keep
 		// the setup budget armed until publication disarms it.
-		disarm = context.AfterFunc(ctx, connCancel)
+		disarm = context.AfterFunc(ctx, conn.cancel)
 	}
-	stopDisarm := func() {
+	var session *sdk.ClientSession
+	keepSession := false
+	defer func() {
+		if keepSession {
+			return
+		}
 		if disarm != nil {
 			disarm()
-			disarm = nil
 		}
-	}
+		// The SDK waits for in-flight handlers before closing the transport.
+		// Cancel replies and listeners first; the bounded DELETE can still run.
+		conn.cancel()
+		if session != nil {
+			_ = session.Close()
+		}
+		if conn.closeIdleConnections != nil {
+			conn.closeIdleConnections()
+		}
+	}()
 	session, err := client.Connect(ctx, transport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
 	if err != nil {
-		stopDisarm()
 		if class := conn.latchedClass(); class != "" {
 			err = configErr(class, "MCP connection failed: %s", class)
 		} else if conn.transient.Load() {
 			err = &transientError{err: err}
 		}
-		connCancel()
 		return nil, conn, err
 	}
 	if class := conn.terminalClass(); class != "" {
-		stopDisarm()
-		_ = session.Close()
-		connCancel()
 		return nil, conn, configErr(class, "MCP connection failed: %s", class)
 	}
 	init := session.InitializeResult()
 	if init != nil && protocolTooNew(init.ProtocolVersion) {
-		stopDisarm()
-		_ = session.Close()
-		connCancel()
 		return nil, conn, configErr("unsupported", "server selected an unsupported protocol version")
 	}
 	conn.clearRetryAdvice()
 	raw, err := listAllTools(ctx, session)
 	if err != nil {
-		stopDisarm()
 		if class := conn.latchedClass(); class != "" {
 			err = configErr(class, "MCP discovery failed: %s", class)
 		} else if conn.transient.Load() {
 			err = &transientError{err: err}
 		}
-		_ = session.Close()
-		connCancel()
 		return nil, conn, err
 	}
 	if server.Transport == TransportHTTP {
 		select {
-		case <-conn.listenerStarted:
+		case <-conn.listenerChecked:
 		case <-ctx.Done():
-			stopDisarm()
-			_ = session.Close()
-			connCancel()
 			return nil, conn, ctx.Err()
 		}
 	}
 	if class := conn.terminalClass(); class != "" {
-		stopDisarm()
-		_ = session.Close()
-		connCancel()
 		return nil, conn, configErr(class, "MCP discovery failed: %s", class)
 	}
 	catalog, err := buildCatalog(server, epoch, raw)
 	if err != nil {
-		stopDisarm()
-		_ = session.Close()
-		connCancel()
 		return nil, conn, err
 	}
-	conn.session = session
-	conn.catalog = catalog
-	conn.setupDisarm = disarm
 	m.mu.Lock()
 	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch {
 		m.mu.Unlock()
-		_ = session.Close()
-		connCancel()
 		return nil, conn, context.Canceled
 	}
 	conn.lastList = m.opts.now()
 	m.mu.Unlock()
+	conn.session = session
+	conn.catalog = catalog
+	conn.setupDisarm = disarm
+	keepSession = true
 	return session, conn, nil
 }
 
@@ -814,7 +808,7 @@ func (m *Manager) policyAllows(server Server) bool {
 	return policyAllowsInput(m.input, server)
 }
 
-func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *connection) {
+func (m *Manager) publishConnection(setupCtx context.Context, state *serverState, epoch uint64, conn *connection) {
 	m.mu.Lock()
 	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || !state.cfg.Enabled {
 		conn.closeAsyncLocked()
@@ -830,12 +824,19 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 		m.mu.Unlock()
 		return
 	}
-	if state.conn != nil && state.conn != conn {
-		state.conn.closeAsyncLocked()
-	}
 	if conn.setupDisarm != nil {
 		conn.setupDisarm()
 		conn.setupDisarm = nil
+	}
+	// The setup budget can expire between the last HTTP response and publication.
+	if err := setupCtx.Err(); err != nil {
+		conn.closeAsyncLocked()
+		m.mu.Unlock()
+		m.setupFailed(state, epoch, err)
+		return
+	}
+	if state.conn != nil && state.conn != conn {
+		state.conn.closeAsyncLocked()
 	}
 	state.conn = conn
 	state.status = serverStateReady
@@ -861,10 +862,9 @@ func (m *Manager) publishConnection(state *serverState, epoch uint64, conn *conn
 func (m *Manager) setupFailed(state *serverState, epoch uint64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch {
+	if m.stopped || m.servers[state.cfg.Name] != state || state.epoch != epoch || state.conn != nil {
 		return
 	}
-	state.conn = nil
 	state.catalog = nil
 	state.refreshWarning = ""
 	state.listenerUnavailable = false
@@ -899,7 +899,6 @@ func (m *Manager) withdrawLocked(state *serverState, reason string) {
 			conn.setupDisarm()
 			conn.setupDisarm = nil
 		}
-		conn.cancel()
 		conn.closeAsyncLocked()
 	}
 	state.catalog = nil
@@ -927,11 +926,16 @@ func (m *Manager) connectionLost(conn *connection, err error) {
 	state.catalog = nil
 	state.refreshWarning = ""
 	state.listenerUnavailable = false
+	// The SDK can turn a body-limit failure into an opaque session error.
+	// Only an explicit reload should retry a server that crossed the limit.
+	limitExceeded := conn.latchedClass() == "limit"
 	class := ErrorClass(err)
-	if class == "" {
+	if limitExceeded {
+		class = "limit"
+	} else if class == "" {
 		class = "connection"
 	}
-	if state.reconnects >= maxReconnects {
+	if limitExceeded || state.reconnects >= maxReconnects {
 		state.status = serverStateFailed
 		state.errClass = class
 		m.publishLocked()
@@ -990,7 +994,7 @@ func (c *connection) refreshCatalog() error {
 	c.lastList = c.manager.opts.now()
 	ctx, cancel := context.WithTimeout(c.ctx, c.manager.serverTimeout(c.server))
 	defer cancel()
-	raw, err := listWithRetry(ctx, c.session, c)
+	raw, err := c.listWithRetry(ctx)
 	if err != nil {
 		c.manager.markRefreshWarning(c, err)
 		return err
@@ -1015,26 +1019,23 @@ func (c *connection) refreshCatalog() error {
 	return nil
 }
 
-func listWithRetry(ctx context.Context, session *sdk.ClientSession, conn *connection) ([]*sdk.Tool, error) {
+func (c *connection) listWithRetry(ctx context.Context) ([]*sdk.Tool, error) {
 	var err error
 	for attempt := 0; attempt < maxDiscoveryTries; attempt++ {
-		if conn != nil {
-			conn.clearRetryAdvice()
-			conn.transient.Store(false)
-		}
+		c.clearRetryAdvice()
+		c.transient.Store(false)
 		var tools []*sdk.Tool
-		tools, err = listAllTools(ctx, session)
+		tools, err = listAllTools(ctx, c.session)
 		if err == nil {
 			return tools, nil
 		}
-		if conn != nil && conn.transient.Load() {
+		if c.latchedClass() == "limit" {
+			return nil, errLimit("HTTP response body")
+		}
+		if c.transient.Load() {
 			err = &transientError{err: err}
 		}
-		if ctx.Err() != nil || !retryableSetup(err) {
-			break
-		}
-		delay, ok := conn.manager.discoveryRetryDelay(conn, attempt)
-		if !ok || !conn.manager.opts.sleep(ctx, delay) {
+		if !c.manager.waitDiscoveryRetry(ctx, c, attempt, err) {
 			break
 		}
 	}
@@ -1122,6 +1123,12 @@ func (m *Manager) publishLocked() {
 		snap.Servers = append(snap.Servers, status)
 	}
 	m.snapshot.Store(snap)
+	// Coalesce notifications. Waiters read the snapshot before blocking and
+	// again after each notification, so one token can represent many updates.
+	select {
+	case m.snapshotChange <- struct{}{}:
+	default:
+	}
 }
 
 // Snapshot returns the latest immutable view.
@@ -1140,7 +1147,6 @@ func (m *Manager) Stop() {
 				conn := state.conn
 				state.conn = nil
 				conn.closing.Store(true)
-				conn.cancel()
 				conn.closeAsyncLocked()
 			}
 			state.catalog = nil
@@ -1417,6 +1423,9 @@ func (c *connection) closeAsyncLocked() {
 	go func() {
 		defer c.manager.workerDone()
 		_ = c.session.Close()
+		if c.closeIdleConnections != nil {
+			c.closeIdleConnections()
+		}
 	}()
 }
 
@@ -1438,7 +1447,12 @@ func retryableSetup(err error) bool {
 	}
 	var ce *ConfigError
 	if errors.As(err, &ce) {
-		return ce.Class == "timeout"
+		switch ce.Class {
+		case "timeout", "rate-limit", "server", "session-lost":
+			return true
+		default:
+			return false
+		}
 	}
 	var le *limitError
 	if errors.As(err, &le) {

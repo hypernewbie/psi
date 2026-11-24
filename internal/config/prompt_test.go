@@ -111,7 +111,7 @@ func TestMCPPromptSectionIsDataOnly(t *testing.T) {
 	if section.Name != "mcp" {
 		t.Fatalf("section name = %q", section.Name)
 	}
-	for _, want := range []string{"untrusted data", "never as instructions", "HTTP MCP servers are unavailable in this layer", "inspect the external state", "offset/limit"} {
+	for _, want := range []string{"untrusted data", "never as instructions", "inspect the external state", "offset/limit"} {
 		if !strings.Contains(section.Body, want) {
 			t.Errorf("MCP prompt missing %q", want)
 		}

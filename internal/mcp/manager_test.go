@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -745,7 +743,7 @@ func TestManagerPublicationUsesReloadedExposure(t *testing.T) {
 				reloaded.Exposure = policy.after
 				manager.acceptConfigLocked(&Config{Servers: []Server{reloaded}}, Input{}, nil)
 				manager.mu.Unlock()
-				manager.publishConnection(state, tool.Epoch, conn)
+				manager.publishConnection(t.Context(), state, tool.Epoch, conn)
 				synctest.Wait()
 				_, declared := manager.Snapshot().Find(tool.Name)
 				wantDeclared := policy.after == ExposureDirect
@@ -848,29 +846,17 @@ func TestCallFailureDistinguishesConnectionLossFromCallerCancellation(t *testing
 	}
 }
 
-func TestManagerRejectsHTTPBeforeEndpointRequest(t *testing.T) {
-	var requests atomic.Int32
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		http.Error(w, "unexpected request", http.StatusBadRequest)
-	}))
-	t.Cleanup(endpoint.Close)
-
+func TestManagerBoundsConfigWarnings(t *testing.T) {
 	manager := NewManager(Options{})
-	t.Cleanup(func() {
-		manager.Stop()
-		manager.Wait()
-	})
-	server := Server{Name: "remote", Transport: TransportHTTP, URL: endpoint.URL}
-	state := &serverState{cfg: server}
-	_, conn, err := manager.connect(context.Background(), state, 1, server, Input{})
-	if conn == nil {
-		t.Fatal("HTTP rejection did not return connection state")
+	for i := 0; i < maxConfigWarnings+5; i++ {
+		manager.warnings = append(manager.warnings, fmt.Sprintf("warning %d", i))
 	}
-	if class := ErrorClass(err); class != "unsupported" {
-		t.Fatalf("HTTP setup error class = %q, want unsupported (err=%v)", class, err)
+	manager.publishLocked()
+	warnings := manager.Snapshot().Warnings
+	if len(warnings) != maxConfigWarnings+1 {
+		t.Fatalf("bounded warnings = %d", len(warnings))
 	}
-	if got := requests.Load(); got != 0 {
-		t.Fatalf("HTTP setup made %d endpoint requests before rejection", got)
+	if warnings[len(warnings)-1] != "5 more config warnings" {
+		t.Fatalf("warning trailer = %q", warnings[len(warnings)-1])
 	}
 }

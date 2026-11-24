@@ -39,18 +39,15 @@ untrusted or unattended work.
 
 ## MCP servers
 
-MCP servers are separate stdio programs in this layer. psi does not sandbox
+MCP servers are separate programs or network endpoints. psi does not sandbox
 them. A stdio server receives only its resolved configured `env` values; it
 does not inherit psi's environment. On Windows, Go may add psi's `SYSTEMROOT`
 when the configured environment omits it. A trusted project can still start a
 server that reads any files available to the psi process.
 
 The separate `!command` interpolation shell keeps its normal parent environment.
-Only its resolved output is used as the configured value. HTTP MCP
-entries are unavailable and make no endpoint request. However, the manager
-resolves configured header values before it rejects an enabled HTTP entry. An
-allowed `!command` in `headers` can therefore still run. Do not use HTTP entries
-or header commands in this layer; see [MCP servers](mcp.md).
+Only its resolved output is used as the configured value. This policy
+intentionally differs from Pi's inherited stdio environment behavior.
 
 Project MCP command interpolation (`!command` in `env` or `headers`) stays
 disabled unless the user settings file sets `mcp.allowProjectCommands` to

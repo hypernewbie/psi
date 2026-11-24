@@ -7,7 +7,7 @@ content, search the web, fetch pages, and work through multi-step tasks.
 psi speaks Pi's session and settings formats, uses Pi's model catalog, and
 renders an inline terminal interface. It is not a Pi extension host: there is
 no TypeScript runtime and no print mode. It includes a small MCP tool-call
-client for stdio servers. Streamable HTTP is unavailable in this layer.
+client for stdio and streamable HTTP servers.
 
 ## Start using psi
 

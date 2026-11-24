@@ -1,9 +1,9 @@
 # MCP servers
 
-psi can use tools from Model Context Protocol (MCP) servers over stdio.
-Streamable HTTP is not available in this layer. This is a tool-call client, not
-a full MCP host. It does not run MCP Apps, JavaScript, codemode, prompts,
-resources, sampling, elicitation, roots, tasks, or OAuth.
+psi can use tools from Model Context Protocol (MCP) servers over stdio or
+streamable HTTP. This is a tool-call client, not a full MCP host. It does not
+run MCP Apps, JavaScript, codemode, prompts, resources, sampling, elicitation,
+roots, tasks, or OAuth.
 
 ## Configure servers
 
@@ -50,12 +50,7 @@ Root rules:
 Entry rules:
 
 - `command` selects stdio. `args`, `cwd`, and `env` apply to stdio.
-- `url` selects streamable HTTP. `headers` apply to HTTP. Enabled HTTP entries
-  are unavailable in this layer. If config validation and interpolation
-  succeed, setup reports `unsupported` before any endpoint request. Setup
-  resolves header values first, so an allowed whole-value `!command` can still
-  run; an interpolation failure is reported instead. Do not configure HTTP
-  servers until HTTP support is available.
+- `url` selects streamable HTTP. `headers` apply to HTTP.
 - `type` is optional. Use `stdio`, `http`, or `streamable-http` and match the
   selected connection fields. `sse` is not supported.
 - `enabled` defaults to `true`. A disabled entry stays visible in `/mcp` but
@@ -124,9 +119,9 @@ psi does not merge its process environment. Configure any values the server need
 ambient `PATH`, `HOME`, proxy settings, and credentials are not passed through.
 
 On Windows, Go's process launcher also adds psi's `SYSTEMROOT` when the configured
-environment does not set it. This variable identifies the Windows installation
-directory. It is a Windows-specific exception, not a general environment merge.
-The `!command` interpolation shell remains separate and keeps its existing parent
+environment omits it. This variable identifies the Windows installation directory.
+It is a Windows-specific exception, not a general environment merge. The
+`!command` interpolation shell remains separate and keeps its existing parent
 environment.
 
 ## Tool names and schemas
@@ -168,20 +163,27 @@ the result says so and does not show a false path.
 Limits:
 
 - Incoming stdio frame: 16 MiB.
+- HTTP response body or individual SSE event: 16 MiB. Error responses use the
+  body limit regardless of media type. A body at the limit is valid; one byte
+  over fails explicitly.
 - Complete tool catalog: 16 MiB and at most 128 pages.
 - Setup concurrency: four servers.
 - Active MCP calls: eight per session, four per server.
 - `!command`: 10 seconds, 64 KiB stdout, 64 KiB retained stderr.
 - Model-facing text: 20 KiB plus a bounded notice.
 
-The config parser still validates HTTP URLs and headers. URLs must be absolute
-`http` or `https` URLs with a host and cannot contain user information or a
-fragment. If specified, the port must be between 1 and 65535. Invalid or duplicate header names, values that contain a carriage
-return, line feed, or NUL, and these transport-reserved headers are rejected:
-`Host`, `Content-Length`, `Transfer-Encoding`, `Content-Type`, `Accept`,
-`Mcp-Session-Id`, `MCP-Protocol-Version`, `Last-Event-ID`, `Idempotency-Key`,
-and `X-Idempotency-Key`. These checks do not provide an HTTP transport.
-Redirect, TLS, body, and SSE behavior are unavailable in this layer.
+HTTP supports only absolute `http` and `https` URLs with a host. If specified,
+the port must be between 1 and 65535. User information and fragments are
+rejected. Redirects fail, and TLS certificate verification cannot be disabled.
+HTTP dialing and TLS negotiation each have a five-second limit. After psi sends
+a request, it waits up to ten seconds for response headers, even if `timeout`
+is longer.
+HTTP uses the process proxy settings. Use `https` when sending credentials or
+sensitive tool data outside a trusted local connection.
+Invalid or duplicate header names and values containing CR, LF, or NUL are
+rejected. These headers are reserved: `Host`, `Content-Length`,
+`Transfer-Encoding`, `Content-Type`, `Accept`, `Mcp-Session-Id`,
+`MCP-Protocol-Version`, `Last-Event-ID`, `Idempotency-Key`, and `X-Idempotency-Key`.
 
 ## Manager and routing
 
@@ -204,13 +206,16 @@ Changes to connection identity replace a session. Exposure and call timeout
 changes can take effect without replacing the connection. If policy blocks
 publication of a new connection, a reload that restores permission retries setup.
 
+HTTP discovery can retry a temporary HTTP failure, including on its initial
+SSE listener request, up to twice within the original setup budget. A retryable
+HTTP response can request a delay with `Retry-After`. If the requested delay
+is invalid, exceeds five seconds, or does not fit the remaining budget, discovery
+stops. psi does not replay a tool call. If a body-limit error closes a live HTTP
+session, psi withdraws its tools and waits for an explicit reload.
+
 The call timeout is an idle limit. A finite progress update for that call
 starts a new idle interval only if its value advances. Progress does not
 extend the hard deadline, which is ten times the call timeout.
-
-A configured HTTP server is rejected with the `unsupported` error class before
-the manager makes any request to its endpoint. The manager does not fall back
-to stdio. HTTP transport is added in a later layer.
 
 ## Startup and status
 
@@ -218,7 +223,8 @@ MCP work never blocks the terminal loop. psi starts servers in background
 workers. The first model request can proceed without MCP tools; new tools
 appear at a later request boundary. `/mcp` reads a snapshot and shows server
 name, transport, state, discovered and exposed counts, and a safe error class.
-It also shows bounded config warnings. It never shows URLs, headers,
+It reports when a server rejects the standalone listener and cannot push
+tool-list updates, plus bounded config warnings. It never shows URLs, headers,
 environment values, arguments, or raw stderr.
 
 `--no-mcp` skips MCP config reads, interpolation, process start, network
@@ -263,9 +269,9 @@ Only its resolved output is used as the configured value. This policy
 intentionally differs from Pi's inherited stdio environment behavior.
 
 psi does not write an MCP log. It keeps a bounded in-memory stderr tail.
-MCP servers do not inherit provider credentials from psi's process
-environment. A configured `${NAME}` reference or `!command` can still pass
-a secret explicitly. Config redaction is not a data-loss-prevention guarantee.
+MCP servers do not inherit provider credentials from psi's process environment.
+A configured `${NAME}` reference or `!command` can still pass a secret
+explicitly. Config redaction is not a data-loss-prevention guarantee.
 
 The stdio launcher can download packages when the configured command does so,
 for example `npx -y`. Use a pinned version when reproducibility matters.
@@ -280,6 +286,10 @@ stderr continuously and retains only its last 64 KiB, so stderr output cannot
 fill the pipe or grow retained diagnostics without bound.
 
 ## Process cleanup
+
+When an HTTP connection is retired, psi cancels ordinary requests and withdraws
+its tools without waiting for the server. For a stateful session, psi attempts
+`DELETE` in the background with the SDK's five-second request deadline.
 
 On Unix, psi starts a stdio server in its own process group and signals the
 owned group. When the launcher exits, psi kills remaining group members,
@@ -335,13 +345,17 @@ re-enabled tools to work on the same connection, and pending setup to publish
 the latest policy. Cross-server name-collision checks require ambiguous routes
 to disappear, captured and queued calls to send no request, healthy tools to
 remain usable, and resolved routes to recover without reconnecting. Reload
-checks distinguish environment values from configured HTTP-header values.
-Fake-time SDK checks cover coalesced notifications after failed refreshes,
-retained catalogs, and warning clearance. Result checks preserve embedded-resource omission
+checks distinguish environment values from HTTP headers. Real HTTP/SSE checks
+preserve notifications that arrive before discovery completes. Fake-time SDK
+checks cover coalesced notifications after failed refreshes, retained catalogs,
+and warning clearance. Result checks preserve embedded-resource omission
 notices beside other text and read the complete saved output with `read`.
 A gated SDK check retires a connection before callers consume
 their completed replies. A separate check requires Stop to release an unfinished
-call while its handler ignores cancellation.
+call while its handler ignores cancellation. HTTP checks verify that routes are
+withdrawn while a stateful session's `DELETE` is in flight. Invalid SSE streams
+fail after a finite allowance. SSE ping replies verify that the size limit
+applies per event, not per connection.
 
 The tagged acceptance suite covers a mid-call crash, a handler that ignores
 cancellation, and a server that exits immediately after its complete reply.
