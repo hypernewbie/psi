@@ -513,19 +513,6 @@
       ]
     },
     {
-      "id": "gemini-2.5-computer-use-preview-10-2025",
-      "api": "google-generative-ai",
-      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
-      "name": "Gemini 2.5 Computer Use Preview 10-2025",
-      "contextWindow": 128000,
-      "maxTokens": 64000,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ]
-    },
-    {
       "id": "gemini-2.5-flash",
       "api": "google-generative-ai",
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
@@ -591,28 +578,6 @@
       "api": "google-generative-ai",
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
       "name": "Gemini 3.1 Flash Lite",
-      "contextWindow": 1048576,
-      "maxTokens": 65536,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": "minimal",
-        "off": null,
-        "xhigh": null
-      }
-    },
-    {
-      "id": "gemini-3.1-flash-lite-preview",
-      "api": "google-generative-ai",
-      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
-      "name": "Gemini 3.1 Flash Lite Preview",
       "contextWindow": 1048576,
       "maxTokens": 65536,
       "reasoning": true,
@@ -1459,42 +1424,6 @@
       }
     },
     {
-      "id": "devstral-2512",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Devstral 2",
-      "contextWindow": 262144,
-      "maxTokens": 262144,
-      "reasoning": false,
-      "input": [
-        "text"
-      ]
-    },
-    {
-      "id": "devstral-latest",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Devstral 2",
-      "contextWindow": 262144,
-      "maxTokens": 262144,
-      "reasoning": false,
-      "input": [
-        "text"
-      ]
-    },
-    {
-      "id": "devstral-medium-latest",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Devstral 2 (latest)",
-      "contextWindow": 262144,
-      "maxTokens": 262144,
-      "reasoning": false,
-      "input": [
-        "text"
-      ]
-    },
-    {
       "id": "glm-5-2",
       "api": "mistral-conversations",
       "baseUrl": "https://api.mistral.ai",
@@ -1516,47 +1445,12 @@
       }
     },
     {
-      "id": "labs-devstral-small-2512",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Devstral Small 2",
-      "contextWindow": 256000,
-      "maxTokens": 256000,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ]
-    },
-    {
-      "id": "labs-leanstral-1-5-1",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Leanstral 1.5",
-      "contextWindow": 262144,
-      "maxTokens": 128000,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": null,
-        "max": null,
-        "medium": null,
-        "minimal": null,
-        "off": "none",
-        "xhigh": null
-      }
-    },
-    {
       "id": "magistral-medium-latest",
       "api": "mistral-conversations",
       "baseUrl": "https://api.mistral.ai",
       "name": "Magistral Medium (latest)",
       "contextWindow": 262144,
-      "maxTokens": 16384,
+      "maxTokens": 262144,
       "reasoning": true,
       "input": [
         "text",
@@ -1586,6 +1480,19 @@
       ]
     },
     {
+      "id": "ministral-14b-latest",
+      "api": "mistral-conversations",
+      "baseUrl": "https://api.mistral.ai",
+      "name": "Ministral 3 14B (latest)",
+      "contextWindow": 262144,
+      "maxTokens": 262144,
+      "reasoning": false,
+      "input": [
+        "text",
+        "image"
+      ]
+    },
+    {
       "id": "ministral-3b-2512",
       "api": "mistral-conversations",
       "baseUrl": "https://api.mistral.ai",
@@ -1602,9 +1509,9 @@
       "id": "ministral-3b-latest",
       "api": "mistral-conversations",
       "baseUrl": "https://api.mistral.ai",
-      "name": "Ministral 3B (latest)",
+      "name": "Ministral 3 3B (latest)",
       "contextWindow": 131072,
-      "maxTokens": 128000,
+      "maxTokens": 131072,
       "reasoning": false,
       "input": [
         "text",
@@ -1628,9 +1535,9 @@
       "id": "ministral-8b-latest",
       "api": "mistral-conversations",
       "baseUrl": "https://api.mistral.ai",
-      "name": "Ministral 8B (latest)",
+      "name": "Ministral 3 8B (latest)",
       "contextWindow": 262144,
-      "maxTokens": 128000,
+      "maxTokens": 262144,
       "reasoning": false,
       "input": [
         "text",
@@ -1673,28 +1580,6 @@
       }
     },
     {
-      "id": "mistral-large-4-0-8",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Mistral Large 4.0.8",
-      "contextWindow": 1048576,
-      "maxTokens": 262144,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
-        "xhigh": null
-      }
-    },
-    {
       "id": "mistral-large-latest",
       "api": "mistral-conversations",
       "baseUrl": "https://api.mistral.ai",
@@ -1715,32 +1600,6 @@
         "off": null,
         "xhigh": null
       }
-    },
-    {
-      "id": "mistral-medium-2505",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Mistral Medium 3",
-      "contextWindow": 131072,
-      "maxTokens": 131072,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ]
-    },
-    {
-      "id": "mistral-medium-2508",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Mistral Medium 3.1",
-      "contextWindow": 262144,
-      "maxTokens": 262144,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ]
     },
     {
       "id": "mistral-medium-2604",
@@ -1809,19 +1668,6 @@
       }
     },
     {
-      "id": "mistral-small-2506",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Mistral Small 3.2",
-      "contextWindow": 128000,
-      "maxTokens": 16384,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ]
-    },
-    {
       "id": "mistral-small-2603",
       "api": "mistral-conversations",
       "baseUrl": "https://api.mistral.ai",
@@ -1864,31 +1710,6 @@
         "off": "none",
         "xhigh": null
       }
-    },
-    {
-      "id": "open-mistral-nemo",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Open Mistral Nemo",
-      "contextWindow": 128000,
-      "maxTokens": 128000,
-      "reasoning": false,
-      "input": [
-        "text"
-      ]
-    },
-    {
-      "id": "pixtral-12b",
-      "api": "mistral-conversations",
-      "baseUrl": "https://api.mistral.ai",
-      "name": "Pixtral 12B",
-      "contextWindow": 128000,
-      "maxTokens": 128000,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ]
     },
     {
       "id": "voxtral-small-2507",
@@ -2170,37 +1991,6 @@
       }
     },
     {
-      "id": "gpt-4",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "GPT-4",
-      "contextWindow": 8192,
-      "maxTokens": 8192,
-      "reasoning": false,
-      "input": [
-        "text"
-      ],
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
-      "id": "gpt-4-turbo",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "GPT-4 Turbo",
-      "contextWindow": 128000,
-      "maxTokens": 4096,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ],
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
       "id": "gpt-4.1",
       "api": "openai-responses",
       "baseUrl": "https://api.openai.com/v1",
@@ -2233,44 +2023,12 @@
       }
     },
     {
-      "id": "gpt-4.1-nano",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "GPT-4.1 nano",
-      "contextWindow": 1047576,
-      "maxTokens": 32768,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ],
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
       "id": "gpt-4o",
       "api": "openai-responses",
       "baseUrl": "https://api.openai.com/v1",
       "name": "GPT-4o",
       "contextWindow": 128000,
       "maxTokens": 16384,
-      "reasoning": false,
-      "input": [
-        "text",
-        "image"
-      ],
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
-      "id": "gpt-4o-2024-05-13",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "GPT-4o (2024-05-13)",
-      "contextWindow": 128000,
-      "maxTokens": 4096,
       "reasoning": false,
       "input": [
         "text",
@@ -2549,32 +2307,6 @@
         "medium": "medium",
         "minimal": null,
         "off": "none",
-        "xhigh": "xhigh"
-      },
-      "compat": {
-        "supportsOpenAIGrammarTools": true,
-        "supportsStrictMode": true
-      }
-    },
-    {
-      "id": "gpt-5.3-codex-spark",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "GPT-5.3 Codex Spark",
-      "contextWindow": 128000,
-      "maxTokens": 32000,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
         "xhigh": "xhigh"
       },
       "compat": {
@@ -3156,56 +2888,6 @@
       }
     },
     {
-      "id": "o1",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "o1",
-      "contextWindow": 200000,
-      "maxTokens": 100000,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
-        "xhigh": null
-      },
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
-      "id": "o1-pro",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "o1-pro",
-      "contextWindow": 200000,
-      "maxTokens": 100000,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
-        "xhigh": null
-      },
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
       "id": "o3",
       "api": "openai-responses",
       "baseUrl": "https://api.openai.com/v1",
@@ -3231,59 +2913,10 @@
       }
     },
     {
-      "id": "o3-mini",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "o3-mini",
-      "contextWindow": 200000,
-      "maxTokens": 100000,
-      "reasoning": true,
-      "input": [
-        "text"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
-        "xhigh": null
-      },
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
       "id": "o3-pro",
       "api": "openai-responses",
       "baseUrl": "https://api.openai.com/v1",
       "name": "o3-pro",
-      "contextWindow": 200000,
-      "maxTokens": 100000,
-      "reasoning": true,
-      "input": [
-        "text",
-        "image"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
-        "xhigh": null
-      },
-      "compat": {
-        "supportsStrictMode": true
-      }
-    },
-    {
-      "id": "o4-mini",
-      "api": "openai-responses",
-      "baseUrl": "https://api.openai.com/v1",
-      "name": "o4-mini",
       "contextWindow": 200000,
       "maxTokens": 100000,
       "reasoning": true,
@@ -3846,6 +3479,25 @@
       }
     },
     {
+      "id": "hungerg-free",
+      "api": "openai-completions",
+      "baseUrl": "https://opencode.ai/inference/go/openai/v1",
+      "name": "HungerG Free",
+      "contextWindow": 1000000,
+      "maxTokens": 65536,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "compat": {
+        "maxTokensField": "max_tokens",
+        "supportsDeveloperRole": false,
+        "supportsStore": false,
+        "supportsStrictMode": true
+      }
+    },
+    {
       "id": "hy3",
       "api": "openai-completions",
       "baseUrl": "https://opencode.ai/inference/go/openai/v1",
@@ -4053,28 +3705,10 @@
       }
     },
     {
-      "id": "longcat-2.0",
+      "id": "longcat-2.5",
       "api": "openai-completions",
       "baseUrl": "https://opencode.ai/inference/go/openai/v1",
-      "name": "LongCat-2.0",
-      "contextWindow": 1000000,
-      "maxTokens": 131072,
-      "reasoning": true,
-      "input": [
-        "text"
-      ],
-      "compat": {
-        "maxTokensField": "max_tokens",
-        "supportsDeveloperRole": false,
-        "supportsStore": false,
-        "supportsStrictMode": true
-      }
-    },
-    {
-      "id": "longcat-2.5-free",
-      "api": "openai-completions",
-      "baseUrl": "https://opencode.ai/inference/go/openai/v1",
-      "name": "LongCat 2.5 Free",
+      "name": "LongCat-2.5",
       "contextWindow": 1000000,
       "maxTokens": 262144,
       "reasoning": true,
@@ -5225,8 +4859,8 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "DeepSeek: DeepSeek V3 0324",
-      "contextWindow": 128000,
-      "maxTokens": 115200,
+      "contextWindow": 163840,
+      "maxTokens": 147456,
       "reasoning": false,
       "input": [
         "text"
@@ -5420,8 +5054,8 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "DeepSeek: DeepSeek V4 Flash Vision Exp",
-      "contextWindow": 1048575,
-      "maxTokens": 943717,
+      "contextWindow": 1048576,
+      "maxTokens": 262144,
       "reasoning": true,
       "input": [
         "text",
@@ -5506,7 +5140,7 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "DeepSeek: DeepSeek V4.1 Flash",
       "contextWindow": 1048576,
-      "maxTokens": 943718,
+      "maxTokens": 393216,
       "reasoning": true,
       "input": [
         "text",
@@ -6743,7 +6377,7 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "inclusionAI: Ling 3.1 Flash",
-      "contextWindow": 1000000,
+      "contextWindow": 1048576,
       "maxTokens": 262144,
       "reasoning": true,
       "input": [
@@ -6857,24 +6491,6 @@
       }
     },
     {
-      "id": "meituan/longcat-2.0",
-      "api": "openai-completions",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "name": "Meituan: LongCat 2.0",
-      "contextWindow": 1048756,
-      "maxTokens": 262144,
-      "reasoning": true,
-      "input": [
-        "text"
-      ],
-      "compat": {
-        "sendSessionAffinityHeaders": true,
-        "supportsDeveloperRole": false,
-        "supportsStrictMode": true,
-        "thinkingFormat": "openrouter"
-      }
-    },
-    {
       "id": "meta-llama/llama-3.1-70b-instruct",
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
@@ -6898,7 +6514,7 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "Meta: Llama 3.1 8B Instruct",
       "contextWindow": 131072,
-      "maxTokens": 16384,
+      "maxTokens": 117964,
       "reasoning": false,
       "input": [
         "text"
@@ -7251,8 +6867,8 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "MiniMax: MiniMax M2.5",
-      "contextWindow": 196608,
-      "maxTokens": 176947,
+      "contextWindow": 198000,
+      "maxTokens": 32768,
       "reasoning": true,
       "input": [
         "text"
@@ -7273,7 +6889,7 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "MiniMax: MiniMax M2.7",
       "contextWindow": 196608,
-      "maxTokens": 176947,
+      "maxTokens": 131072,
       "reasoning": true,
       "input": [
         "text"
@@ -7763,63 +7379,6 @@
       }
     },
     {
-      "id": "moonshotai/kimi-k2",
-      "api": "openai-completions",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "name": "MoonshotAI: Kimi K2 0711",
-      "contextWindow": 131072,
-      "maxTokens": 98304,
-      "reasoning": false,
-      "input": [
-        "text"
-      ],
-      "compat": {
-        "sendSessionAffinityHeaders": true,
-        "supportsDeveloperRole": false,
-        "supportsStrictMode": true,
-        "thinkingFormat": "openrouter"
-      }
-    },
-    {
-      "id": "moonshotai/kimi-k2-0905",
-      "api": "openai-completions",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "name": "MoonshotAI: Kimi K2 0905",
-      "contextWindow": 262144,
-      "maxTokens": 98304,
-      "reasoning": false,
-      "input": [
-        "text"
-      ],
-      "compat": {
-        "sendSessionAffinityHeaders": true,
-        "supportsDeveloperRole": false,
-        "supportsStrictMode": true,
-        "thinkingFormat": "openrouter"
-      }
-    },
-    {
-      "id": "moonshotai/kimi-k2-thinking",
-      "api": "openai-completions",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "name": "MoonshotAI: Kimi K2 Thinking",
-      "contextWindow": 262144,
-      "maxTokens": 98304,
-      "reasoning": true,
-      "input": [
-        "text"
-      ],
-      "thinkingLevelMap": {
-        "off": null
-      },
-      "compat": {
-        "sendSessionAffinityHeaders": true,
-        "supportsDeveloperRole": false,
-        "supportsStrictMode": true,
-        "thinkingFormat": "openrouter"
-      }
-    },
-    {
       "id": "moonshotai/kimi-k2.5",
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
@@ -8225,8 +7784,8 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "NVIDIA: Nemotron 3.5 Super VL",
-      "contextWindow": 262144,
-      "maxTokens": 235929,
+      "contextWindow": 1048576,
+      "maxTokens": 943718,
       "reasoning": true,
       "input": [
         "text",
@@ -11656,8 +11215,8 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "Qwen: Qwen3.8 2.4T A95B",
-      "contextWindow": 1000000,
-      "maxTokens": 131072,
+      "contextWindow": 262144,
+      "maxTokens": 65536,
       "reasoning": true,
       "input": [
         "text"
@@ -11684,7 +11243,7 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "Qwen: Qwen3.8 27B",
       "contextWindow": 262144,
-      "maxTokens": 235929,
+      "maxTokens": 131072,
       "reasoning": true,
       "input": [
         "text",
@@ -11873,6 +11432,34 @@
         "low": "low",
         "max": null,
         "medium": null,
+        "minimal": null,
+        "off": "none",
+        "xhigh": "xhigh"
+      },
+      "compat": {
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false,
+        "supportsStrictMode": true,
+        "thinkingFormat": "openrouter"
+      }
+    },
+    {
+      "id": "radixark/daisyrose-27b",
+      "api": "openai-completions",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "name": "RadixArk: DaisyRose 27B",
+      "contextWindow": 262144,
+      "maxTokens": 235929,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "high": null,
+        "low": "low",
+        "max": null,
+        "medium": "medium",
         "minimal": null,
         "off": "none",
         "xhigh": "xhigh"
@@ -12183,33 +11770,6 @@
       }
     },
     {
-      "id": "tencent/hy3-preview",
-      "api": "openai-completions",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "name": "Tencent: Hy3 preview",
-      "contextWindow": 262144,
-      "maxTokens": 235929,
-      "reasoning": true,
-      "input": [
-        "text"
-      ],
-      "thinkingLevelMap": {
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": null,
-        "minimal": null,
-        "off": "none",
-        "xhigh": null
-      },
-      "compat": {
-        "sendSessionAffinityHeaders": true,
-        "supportsDeveloperRole": false,
-        "supportsStrictMode": true,
-        "thinkingFormat": "openrouter"
-      }
-    },
-    {
       "id": "tencent/hy4",
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
@@ -12290,6 +11850,34 @@
       "name": "Thinking Machines: Inkling",
       "contextWindow": 524288,
       "maxTokens": 471859,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "thinkingLevelMap": {
+        "high": "high",
+        "low": "low",
+        "max": "max",
+        "medium": "medium",
+        "minimal": "minimal",
+        "off": "none",
+        "xhigh": null
+      },
+      "compat": {
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false,
+        "supportsStrictMode": true,
+        "thinkingFormat": "openrouter"
+      }
+    },
+    {
+      "id": "thinkingmachines/inkling-2-mini",
+      "api": "openai-completions",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "name": "Thinking Machines: Inkling 2 Mini",
+      "contextWindow": 1048576,
+      "maxTokens": 65536,
       "reasoning": true,
       "input": [
         "text",
@@ -12760,24 +12348,6 @@
       }
     },
     {
-      "id": "xiaomi/mimo-v2.5-pro",
-      "api": "openai-completions",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "name": "Xiaomi: MiMo-V2.5-Pro",
-      "contextWindow": 262144,
-      "maxTokens": 235929,
-      "reasoning": true,
-      "input": [
-        "text"
-      ],
-      "compat": {
-        "sendSessionAffinityHeaders": true,
-        "supportsDeveloperRole": false,
-        "supportsStrictMode": true,
-        "thinkingFormat": "openrouter"
-      }
-    },
-    {
       "id": "xiaomi/mimo-v2.6-flash",
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
@@ -12931,7 +12501,7 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "Z.ai: GLM 4.7",
-      "contextWindow": 202752,
+      "contextWindow": 204800,
       "maxTokens": 131072,
       "reasoning": true,
       "input": [
@@ -13003,7 +12573,7 @@
       "api": "openai-completions",
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "Z.ai: GLM 5.1",
-      "contextWindow": 204800,
+      "contextWindow": 202752,
       "maxTokens": 131072,
       "reasoning": true,
       "input": [
@@ -13103,7 +12673,7 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "Z.ai: GLM 5.3 Flash",
       "contextWindow": 1048576,
-      "maxTokens": 131072,
+      "maxTokens": 943718,
       "reasoning": true,
       "input": [
         "text",
@@ -13288,7 +12858,7 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "name": "DeepSeek: DeepSeek Flash Latest",
       "contextWindow": 1048576,
-      "maxTokens": 943718,
+      "maxTokens": 393216,
       "reasoning": true,
       "input": [
         "text",
@@ -14727,6 +14297,37 @@
       "reasoning": true,
       "input": [
         "text"
+      ],
+      "thinkingLevelMap": {
+        "high": "high",
+        "low": "low",
+        "max": "max",
+        "medium": null,
+        "minimal": null,
+        "off": null,
+        "xhigh": null
+      },
+      "compat": {
+        "maxTokensField": "max_tokens",
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": true,
+        "supportsStore": false,
+        "supportsStrictMode": true,
+        "thinkingFormat": "zai",
+        "zaiToolStream": true
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "api": "openai-completions",
+      "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+      "name": "GLM-5.4",
+      "contextWindow": 1000000,
+      "maxTokens": 131072,
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
       ],
       "thinkingLevelMap": {
         "high": "high",

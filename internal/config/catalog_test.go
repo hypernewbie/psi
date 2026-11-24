@@ -77,12 +77,8 @@ func TestP6BundledCatalogUsesPiProviderAPIsAndMetadata(t *testing.T) {
 	}
 }
 
-func TestEveryBuiltinAPIKeyProviderHasABundledDefault(t *testing.T) {
+func TestEveryBuiltinProviderHasABundledDefault(t *testing.T) {
 	for _, providerID := range providerregistry.IDs() {
-		spec, ok := providerregistry.Lookup(providerID)
-		if !ok || spec.Auth != providerregistry.AuthAPIKey {
-			continue
-		}
 		model, err := (&ModelsFile{}).SelectModel(providerID, "")
 		if err != nil {
 			t.Errorf("%s has no default model: %v", providerID, err)
@@ -91,6 +87,82 @@ func TestEveryBuiltinAPIKeyProviderHasABundledDefault(t *testing.T) {
 		if _, ok := bundledModel(providerID, model.ID); !ok {
 			t.Errorf("%s default model %q is not in its bundled catalog", providerID, model.ID)
 		}
+		if providerID == "mistral" && model.ID != "mistral-large-4" {
+			t.Errorf("mistral default model = %q, want mistral-large-4", model.ID)
+		}
+	}
+}
+
+// TestBundledGLM54ResolvesOnCodingPlan pins the refreshed Z.ai row to the
+// existing Coding Plan route. A listed model stays distinct from account
+// access: selection must not need credentials or user configuration here.
+func TestBundledGLM54ResolvesOnCodingPlan(t *testing.T) {
+	model, err := (&ModelsFile{}).SelectModel("zai", "glm-5.4")
+	if err != nil {
+		t.Fatalf("glm-5.4 did not resolve: %v", err)
+	}
+	if model.ID != "glm-5.4" {
+		t.Errorf("model ID = %q, want %q", model.ID, "glm-5.4")
+	}
+	if model.API != "openai-completions" {
+		t.Errorf("model API = %q, want %q", model.API, "openai-completions")
+	}
+	if model.BaseURL != "https://api.z.ai/api/coding/paas/v4" {
+		t.Errorf("model base URL = %q, want the Z.ai Coding Plan route", model.BaseURL)
+	}
+	if !containsString(model.Input, "text") || !model.InputImage {
+		t.Errorf("model input = %v (image enabled: %t), want text and image", model.Input, model.InputImage)
+	}
+	for _, level := range []string{"low", "high", "max"} {
+		mapped := model.ThinkingLevelMap[level]
+		if mapped == nil {
+			t.Errorf("thinking level %q is not enabled", level)
+		} else if *mapped != level {
+			t.Errorf("thinking level %q maps to %q, want itself", level, *mapped)
+		}
+	}
+}
+
+func TestBundledGLM54OverridesDoNotChangeLaterSelections(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		override string
+		wantErr  bool
+	}{
+		{"applied", `{"input":["image"],"thinkingLevelMap":{"low":null},"compat":{"supportsReasoningEffort":false}}`, false},
+		{"rejected", `{"input":["image"],"thinkingLevelMap":{"low":null},"compat":{"supportsReasoningEffort":false},"contextWindow":"invalid"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = "glm-5.4"
+			profile := &ModelsFile{Providers: map[string]ProviderMeta{
+				"zai": {ModelOverrides: map[string]json.RawMessage{id: json.RawMessage(tc.override)}},
+			}}
+			model, err := profile.SelectModel("zai", id)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("invalid override was accepted")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				low, present := model.ThinkingLevelMap["low"]
+				effort, hasEffort, _ := model.Compat.Bool("supportsReasoningEffort")
+				if !present || low != nil || !hasEffort || effort || containsString(model.Input, "text") {
+					t.Fatalf("override did not apply: %+v", model)
+				}
+			}
+
+			bundled, err := (&ModelsFile{}).SelectModel("zai", id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			low := bundled.ThinkingLevelMap["low"]
+			effort, _, _ := bundled.Compat.Bool("supportsReasoningEffort")
+			if low == nil || *low != "low" || !effort || !containsString(bundled.Input, "text") {
+				t.Fatalf("override changed the model in an unconfigured profile: %+v", bundled)
+			}
+		})
 	}
 }
 

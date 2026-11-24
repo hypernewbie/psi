@@ -33,6 +33,11 @@ pair is rejected at startup, not retried against another endpoint. Z.AI's
 code-1308 plan-limit response keeps its provider message visible, including the
 reset time, and is not retried.
 
+`zai/glm-5.4` is selectable on the existing Z.AI Coding Plan route. Listing it
+does not establish account access. Z.AI's
+[usage policy](https://docs.z.ai/devpack/usage-policy.md) limits Coding Plan use
+to officially supported tools; Z.AI does not list psi as one.
+
 ## Credentials
 
 psi resolves a credential in this order:

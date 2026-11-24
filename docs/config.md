@@ -116,8 +116,10 @@ An unsupported stored auth type stops key selection instead of silently changing
 the billing path. Codex uses its OAuth entry and never falls back to an API key.
 
 With no saved provider/model, the default is Anthropic `claude-sonnet-4-5`.
-The public snapshot contains provenance-tracked model metadata for every registered provider. It includes API, endpoint, input, thinking, and supported compatibility data from `@earendil-works/pi-ai` version `1.5.2`.
-Source hashes are in `internal/config/data/catalog-source.json`.
+The bundled catalog contains model metadata from [models.dev](https://models.dev),
+OpenRouter, and entries authored in the baker. `internal/config/data/catalog-source.json`
+records the source hashes and each provider's source kind. Its `protocolReference`
+identifies the session protocol revision, not a model data source.
 The snapshot contains capabilities, not credentials, private endpoints, or user defaults.
 Psi also reads newer model data from Pi's `models-store.json` cache.
 Pi updates this cache. Psi does not fetch model catalogs from the network.
@@ -129,7 +131,11 @@ It lists only models the session can use: a provider without a usable credential
 The bridge `pi.models.v1` list and the RPC `get_available_models` command apply the same rule.
 `--list-models` reports every catalog entry that passes activation, including models whose provider is not logged in; unlike `/model`, it does not apply the request-construction filter. It does not promise that a listed model can make a request.
 
-Provider model lists change over time. Use `/model` to select a model in the local catalog. Do not assume that an example model ID is present or available. OpenCode Go models select their own registered API and catalog endpoint.
+Provider model lists change over time. A catalog refresh can remove a saved
+model ID. Use `--list-models` to find a replacement if the saved ID no longer
+resolves, or define the model explicitly in `models.json` if your provider still
+serves it. Use `/model` to select a model in an active session. OpenCode Go
+models select their own registered API and catalog endpoint.
 
 ### Catalog bake (developer)
 
@@ -182,21 +188,14 @@ URLs and SHA-256 digests, each provider's source kind, and the catalog digest.
 The two files are byte-identical when the input bytes and provenance values are
 identical. A live run uses new timestamps.
 
+The bake records only each input's URL, SHA-256 digest, and fetch time. It does
+not keep the input bodies. To compare reviewed limits with the source later, keep
+the exact snapshot whose digest the manifest records. Do not substitute a newer
+fetch for that snapshot.
+
 The command does not modify `internal/config/data/`. Replacing the embedded
 catalog is a separate reviewed change that checks the generated output,
 resolved defaults, and the tracked data diff.
-
-The embedded catalog includes a reviewed offline limit amendment on top of the
-source refresh in commit `9a404afefdc2d9952f283a8fd3693de4441ce2d1`. That
-source bake produced catalog digest
-`2789419950f3330ef5f2e2ba61759db87886d9958485121dc3f9ee48802ad6df`. The
-amendment changes only reviewed context windows and output limits. It sets the
-source manifest's generator to
-`catalog-bake-go-v1+reviewed-limit-amendment` and records the digest of the
-amended catalog bytes. The input URLs, hashes, fetch times, and `generatedAt`
-describe the original bake; the new digest describes the amended bundle. This
-amendment is not a live fetch and does not change the timestamp used for cache
-precedence.
 
 Existing `modelOverrides` apply without a duplicate `models[]` entry.
 

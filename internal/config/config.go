@@ -12,6 +12,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -1107,7 +1108,7 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 		case "groq":
 			id = "openai/gpt-oss-120b"
 		case "mistral":
-			id = "devstral-medium-latest"
+			id = "mistral-large-4"
 		default:
 			return ModelMeta{}, fmt.Errorf("provider %q needs an explicit model selection", providerID)
 		}
@@ -1140,24 +1141,9 @@ func (mf *ModelsFile) SelectModel(providerID, id string) (ModelMeta, error) {
 	}
 	cacheEndpointRejected := m.CacheEndpointRejected
 	catalogBaseURL := m.BaseURL
-	modelCompat := m.Compat
 	if override, exists := p.ModelOverrides[id]; exists {
-		var overrideObject map[string]json.RawMessage
-		if err := json.Unmarshal(override, &overrideObject); err != nil || overrideObject == nil {
-			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
-		}
-		var overrideCompat modelmeta.Compat
-		if raw, hasCompat := overrideObject["compat"]; hasCompat {
-			if err := json.Unmarshal(raw, &overrideCompat); err != nil {
-				return ModelMeta{}, fmt.Errorf("invalid compatibility override for model %q", id)
-			}
-		}
-		if err := json.Unmarshal(override, &m); err != nil {
-			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
-		}
-		m.Compat = mergeCompat(modelCompat, overrideCompat)
-		if m.Input != nil {
-			m.InputImage = containsString(m.Input, "image")
+		if err := m.applyOverride(override); err != nil {
+			return ModelMeta{}, err
 		}
 	}
 	m.Compat = mergeCompat(p.Compat, m.Compat)
@@ -1250,24 +1236,9 @@ func (mf *ModelsFile) selectConfiguredModel(providerID, id string, provider Prov
 		return ModelMeta{}, fmt.Errorf("model %q needs explicit metadata in models.json providers.%s.models", id, providerID)
 	}
 	model.InputImage = containsString(model.Input, "image")
-	modelCompat := model.Compat
 	if override, exists := provider.ModelOverrides[id]; exists {
-		var overrideObject map[string]json.RawMessage
-		if err := json.Unmarshal(override, &overrideObject); err != nil || overrideObject == nil {
-			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
-		}
-		var overrideCompat modelmeta.Compat
-		if raw, hasCompat := overrideObject["compat"]; hasCompat {
-			if err := json.Unmarshal(raw, &overrideCompat); err != nil {
-				return ModelMeta{}, fmt.Errorf("invalid compatibility override for model %q", id)
-			}
-		}
-		if err := json.Unmarshal(override, &model); err != nil {
-			return ModelMeta{}, fmt.Errorf("invalid metadata override for model %q", id)
-		}
-		model.Compat = mergeCompat(modelCompat, overrideCompat)
-		if model.Input != nil {
-			model.InputImage = containsString(model.Input, "image")
+		if err := model.applyOverride(override); err != nil {
+			return ModelMeta{}, err
 		}
 	}
 	model.Compat = mergeCompat(provider.Compat, model.Compat)
@@ -1313,6 +1284,36 @@ func (mf *ModelsFile) selectConfiguredModel(providerID, id string, provider Prov
 	}
 	model.Headers = headers
 	return model, nil
+}
+
+func (m *ModelMeta) applyOverride(override json.RawMessage) error {
+	id := m.ID
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(override, &fields); err != nil || fields == nil {
+		return fmt.Errorf("invalid metadata override for model %q", id)
+	}
+	var overrideCompat modelmeta.Compat
+	if raw, exists := fields["compat"]; exists {
+		if err := json.Unmarshal(raw, &overrideCompat); err != nil {
+			return fmt.Errorf("invalid compatibility override for model %q", id)
+		}
+	}
+
+	// The base model is a shallow copy. JSON decoding reuses maps and slices,
+	// even when it later returns an error. Keep the source model unchanged.
+	m.Input = slices.Clone(m.Input)
+	m.Headers = maps.Clone(m.Headers)
+	m.ThinkingLevelMap = maps.Clone(m.ThinkingLevelMap)
+	baseCompat := m.Compat
+	m.Compat = nil
+	if err := json.Unmarshal(override, m); err != nil {
+		return fmt.Errorf("invalid metadata override for model %q", id)
+	}
+	m.Compat = mergeCompat(baseCompat, overrideCompat)
+	if m.Input != nil {
+		m.InputImage = containsString(m.Input, "image")
+	}
+	return nil
 }
 
 func mergeCompat(base, override modelmeta.Compat) modelmeta.Compat {
