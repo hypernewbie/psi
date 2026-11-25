@@ -49,6 +49,10 @@ durable settlement, then summarizes without replaying the interrupted prompt.
 The terminal command response is emitted when the operation ends, while reads
 and `abort` stay responsive. A second `compact` is refused until the first
 terminal response.
+A response that fails with a transient error is retried like in the terminal
+UI: clients receive `auto_retry_start` before each wait and one
+`auto_retry_end` with `success`, `attempt`, and, on failure, `finalError`.
+`abort` cancels a wait and ends the retry with `Retry cancelled`.
 `prompt` expands a `/skill:<name> [args]` message before any user event, queue,
 store, or provider side effect. An unknown, unreadable, or oversized skill
 returns an error response instead of submitting the unexpanded command.

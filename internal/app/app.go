@@ -1982,6 +1982,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 	var outputErr error
 	var runOutcome string
 	var visibleRunText bool
+	// retryFailure is Pi's "Retry failed after N attempts" report. It is set
+	// when the retries of this run end in failure and replaces the bare run
+	// error in the end-of-run notice.
+	var retryFailure string
 	var bumpAwaitingStart bool
 	var toolSpacing toolBatchSpacing
 	finishTools := func() {
@@ -2039,6 +2043,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 		spinnerIndex = 0
 		lastSpinner = time.Now()
 		console.Status(activityFrame())
+	}
+	// retryCountdown is the retry indicator while a backoff wait runs. Pi's
+	// RetryStatusIndicator counts the wait down until the retried response
+	// replaces it with the working indicator.
+	var retryCountdown *retryIndicator
+	showRetry := func(attempt, maximum int, delay time.Duration) {
+		retryCountdown = &retryIndicator{attempt: attempt, maximum: maximum, delay: delay, started: time.Now()}
+		setActivity(formatRetryActivity(attempt, maximum, delay))
 	}
 	cancelRun := func() {
 		if !busy || cancel == nil {
@@ -2409,6 +2421,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				console.SetLoopStatus(r.loops.StatusLine())
 			}
 			if r.state != StateCancelling {
+				if retryCountdown != nil {
+					// The retried response is streaming: the working indicator
+					// replaces the retry indicator.
+					retryCountdown = nil
+					setActivity("Working")
+				}
 				console.SetThinking(true)
 			}
 		case event.ThinkingDelta:
@@ -2440,7 +2458,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			stream.Delta(ev.Text)
 		case event.RunStart:
-			runOutcome, visibleRunText = "", false
+			runOutcome, visibleRunText, retryFailure = "", false, ""
 			bumpAwaitingStart = false
 			bridge.runStarting = false
 			r.clearInFlight()
@@ -2461,16 +2479,37 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.Retry:
 			if r.state != StateCancelling {
 				r.state = StateWaiting
-				setActivity(formatRetryActivity(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond))
+				showRetry(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond)
+			}
+		case event.AutoRetryStart:
+			// The failed attempt is over. Close its stream block so the cause,
+			// the retry indicator, and the retried response follow its partial
+			// text. Pi shows the cause with the failed response; the run-end
+			// notice comes much later, so state it here as well.
+			thinkingStream.Close()
+			stream.Close()
+			console.SetThinking(false)
+			notice(terminal.NoticeError, ev.Text)
+			if r.state != StateCancelling {
+				r.state = StateWaiting
+				showRetry(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond)
+			}
+		case event.AutoRetryEnd:
+			// A failed end is reported once the run settles; a success needs no
+			// notice, because the retried response is already on screen.
+			retryCountdown = nil
+			if ev.Err != nil {
+				retryFailure = fmt.Sprintf("Retry failed after %d attempts: %s", ev.RetryAttempt, ev.Err.Error())
 			}
 		case event.SummarizationRetryScheduled:
 			notice(terminal.NoticeError, ev.Text)
 			if r.state != StateCancelling {
 				r.state = StateWaiting
-				setActivity(formatRetryActivity(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond))
+				showRetry(ev.RetryAttempt, ev.RetryMaximum, time.Duration(ev.RetryDelayMs)*time.Millisecond)
 			}
 		case event.SummarizationRetryAttemptStart:
 			if r.state != StateCancelling {
+				retryCountdown = nil
 				r.state = StateCompacting
 				setActivity(compactionActivity(ev.State))
 			}
@@ -2609,7 +2648,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.EnsureTranscriptGap()
 			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: display})
 		}
-		runOutcome, visibleRunText = "", false
+		runOutcome, visibleRunText, retryFailure = "", false, ""
 		ctx, stop := context.WithCancel(context.Background())
 		cancel, busy, compacting = stop, true, compact
 		compactionCountAtStart = r.ac.Snapshot().CompactionCount
@@ -3196,6 +3235,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 			console.BeginFrame()
 			thinkingStream.Flush()
 			stream.Flush()
+			if retryCountdown != nil {
+				if text := retryCountdown.text(time.Now()); text != activityText {
+					activityText = text
+					console.Status(activityFrame())
+				}
+			}
 			if busy && activityText != "" && time.Since(lastSpinner) >= 80*time.Millisecond {
 				spinnerIndex = (spinnerIndex + 1) % len(spinnerFrames)
 				lastSpinner = time.Now()
@@ -3373,6 +3418,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			finishTools()
 			r.activeTools = nil
+			retryCountdown = nil
 			if !exiting {
 				setActivity("")
 			} else {
@@ -3389,6 +3435,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 				if runOutcome == event.OutcomeUnsaved {
 					r.state = StateStorageBlocked
 					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new.")
+				} else if retryFailure != "" {
+					// Pi reports an aborted retry as a failed one.
+					notice(terminal.NoticeError, retryFailure)
 				} else if visibleRunText && runOutcome == event.OutcomeInterrupted {
 					notice(terminal.NoticeWarning, "The run was interrupted. Any streamed partial response was saved with an interrupted outcome; review it before continuing.")
 				} else if visibleRunText {
@@ -3398,6 +3447,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 			} else if err != nil {
 				var noWork *agent.CompactionNoWorkError
+				// Retries that ended in failure report their own outcome, like
+				// Pi's auto_retry_end message.
+				failureText := err.Error()
+				if retryFailure != "" {
+					failureText = retryFailure
+				}
 				switch {
 				case errors.As(err, &noWork):
 					message := "Nothing to compact yet. Recent conversation is already within the retained budget."
@@ -3417,11 +3472,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 					r.state = StateStorageBlocked
 					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new. "+err.Error())
 				case runOutcome == event.OutcomeInterrupted && visibleRunText:
-					notice(terminal.NoticeError, err.Error())
+					notice(terminal.NoticeError, failureText)
 				case visibleRunText && runOutcome == event.OutcomeDurable:
 					notice(terminal.NoticeWarning, "The visible response was saved, but the operation did not complete. "+err.Error())
 				default:
-					notice(terminal.NoticeError, err.Error())
+					notice(terminal.NoticeError, failureText)
 				}
 			}
 			if manualCompleted || (err == nil && !bumpBeforeStart && (compacting || compactionCommitted)) {

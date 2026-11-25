@@ -1,5 +1,32 @@
 # Recovery
 
+Automatic retry: when a model response fails with a transient error, psi
+retries the response before the turn ends, as Pi does. Transient errors are
+rate limits, provider overload, server and gateway failures, connection
+failures, and a stream that drops before it completes. psi prints the cause,
+then `Retrying (n/max) in Ns... (escape to cancel)` while it waits. The default
+budget is three retries. The wait starts at 2 s, doubles for each retry, and is
+capped at 60 s (`retry` in [Configuration](config.md)).
+
+The failed attempt keeps its visible partial text in the transcript and is
+omitted from the model context, so the retried request sends the same context
+as the failed one. After a reload, the transcript marks each omitted attempt
+with `[session] Context edited (model context updated, transcript preserved).`
+
+`Esc` cancels the wait and the turn ends with `Retry failed after n attempts:
+Retry cancelled`. When the budget is spent, or a retried response fails with an
+error that is not transient, the turn ends with `Retry failed after n
+attempts:` and the cause. A response that fails with a non-transient error on
+its first attempt is not retried and reports the cause alone. Each retry can
+bill the provider again.
+
+Automatic retry never retries a cancelled run, a context-limit error
+([context-limit recovery](compaction.md) compacts instead), quota, budget, and
+billing exhaustion, or an authentication or request-validation failure.
+Rate-limit and server failures that arrive before a response starts streaming
+are retried at the provider layer first, under the same budget and with the
+same indicator; a `Retry-After` header sets that wait.
+
 Retry a failed turn: when a request fails or is interrupted before the turn
 finishes, one empty `Enter`, `/b`, or `/bump` retries it without adding a prompt.
 Explicit commands can also request another response after a completed or

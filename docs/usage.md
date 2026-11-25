@@ -61,14 +61,19 @@ Type a request and press `Enter`. An empty `Enter` retries an unfinished turn (f
 Tool calls appear as they run, followed by their result. Commands and file
 changes are not approved one by one; review the transcript and the diff.
 
-- `Esc` cancels the current run.
+- `Esc` cancels the current run, including the wait before an automatic retry.
 - `/session` prints the session file, workspace, provider, model, thinking
   level, and usage counters.
 
 ## Retry a failed turn or ask for another response
 
-If a model request fails or is interrupted before the turn finishes, psi can
-retry it without adding another prompt. Press `Enter` on an empty editor or use
+Psi retries a failed response by itself first. A transient provider or network
+failure, or a stream that drops before it completes, is retried up to three
+times. psi prints the cause and a countdown, and `Esc` cancels the wait. See
+[Recovery](recovery.md) for the rules.
+
+When the turn still ends without an answer, psi can retry it without adding
+another prompt. Press `Enter` on an empty editor or use
 `/b` or `/bump`. Explicit commands can also request another response after a
 completed or output-limited answer. A successful bump uses the current
 model, thinking level, tools, system prompt, and compaction policy, and keeps

@@ -27,6 +27,18 @@ const (
 	CompactionEnd                  Type = "compaction_end"
 	Usage                          Type = "usage"
 	Error                          Type = "error"
+
+	// AutoRetryStart and AutoRetryEnd are Pi's auto_retry_start and
+	// auto_retry_end: a failed assistant response is retried after
+	// RetryDelayMs, then one event reports the outcome of every retry.
+	// AutoRetryStart carries the cause of the failed response in Text and its
+	// durable session entry in CommittedID, which the retry omits from the
+	// model context. AutoRetryEnd has a nil Err for success, the error of the
+	// response that ended the retries, or the cancellation of a retry.
+	// They are separate from Retry (provider-layer) and Summarization*
+	// (compaction) retries, which never report themselves as auto-retry.
+	AutoRetryStart Type = "auto_retry_start"
+	AutoRetryEnd   Type = "auto_retry_end"
 )
 
 // Event is one bounded, observable unit with explicit ordering.

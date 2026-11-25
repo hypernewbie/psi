@@ -46,7 +46,7 @@ never change `--docs`; it reads embedded bytes only.
 | Display | `editorPaddingX`, `outputPad`, `softWrap`, `autocompleteMaxVisible`, `markdown.codeBlockIndent`, `contextUsageDisplay` | bounded inline spacing, committed-output wrapping, code-block indent, and footer context caption |
 | Reasoning display | `hideThinkingBlock` | `true` collapses reasoning blocks to one `Thinking...` label; `Ctrl+T` toggles and saves it |
 | Shell | `shellPath`, `shellCommandPrefix` | `shellPath` overrides `bash` shell discovery (Windows defaults to Git Bash before `PATH`); `shellCommandPrefix` prepends `bash` commands; project values require consent |
-| Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`, `retry.maxAgentDelayMs` | default idle timeout 300000 ms; 0 disables it; at most 10 retries; summary retries default to 2s exponential backoff capped at 60s |
+| Network | `httpIdleTimeoutMs`, `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`, `retry.maxAgentDelayMs` | default idle timeout 300000 ms; 0 disables it; at most 10 retries; response and summary retries default to 2s exponential backoff capped at 60s |
 | Instructions | user/project files | see below |
 | Models | provider `baseUrl`, `models[]`, `modelOverrides`, `thinkingLevelMap` | bundled catalog and Pi cache; no network refresh |
 | Auth | `auth.json` entries, env refs | no `!command` execution |
@@ -55,7 +55,7 @@ never change `--docs`; it reads embedded bytes only.
 
 Web tools read `web-search.json`, not `settings.json`. See [Web access](web.md) for keys, enablement, and limits.
 
-`retry.enabled` and `retry.maxRetries` control provider retries and transient summary retries. Summary backoff uses `retry.baseDelayMs` (default 2000) and `retry.maxAgentDelayMs` (default 60000). Quota, billing, and account-limit errors are not retried.
+`retry.enabled` and `retry.maxRetries` set the budget of three retry layers: the provider layer retries rate-limit and transport failures that arrive before a response starts streaming, the agent retries a response that fails with a transient error, and compaction retries a transient summary failure. The default budget is 3. Response and summary backoff uses `retry.baseDelayMs` (default 2000) and `retry.maxAgentDelayMs` (default 60000). Quota, billing, and account-limit errors are not retried. See [Recovery](recovery.md).
 
 Model-specific compaction reserves use the exact `provider/model` key. For example:
 

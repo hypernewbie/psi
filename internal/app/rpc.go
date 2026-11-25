@@ -243,6 +243,24 @@ func (s *rpcRunner) sink(ev event.Event) {
 			"maxAttempts": ev.RetryMaximum, "delayMs": ev.RetryDelayMs,
 			"errorMessage": ev.RetryClass,
 		})
+	case event.AutoRetryStart:
+		// Pi emits the failed response's message_end before auto_retry_start.
+		s.publishOmittedAttempt(ev.CommittedID)
+		s.emit(map[string]any{
+			"type": "auto_retry_start", "attempt": ev.RetryAttempt,
+			"maxAttempts": ev.RetryMaximum, "delayMs": ev.RetryDelayMs,
+			"errorMessage": ev.Text,
+		})
+	case event.AutoRetryEnd:
+		// Pi emits message_end for the response that ended the retries before
+		// auto_retry_end. That response is durable already, so publish it now
+		// instead of at the next sweep.
+		s.sweepDurable()
+		end := map[string]any{"type": "auto_retry_end", "success": ev.Err == nil, "attempt": ev.RetryAttempt}
+		if ev.Err != nil {
+			end["finalError"] = ev.Err.Error()
+		}
+		s.emit(end)
 	case event.SummarizationRetryScheduled:
 		s.emit(map[string]any{
 			"type": "summarization_retry_scheduled", "attempt": ev.RetryAttempt,
@@ -309,18 +327,44 @@ func (s *rpcRunner) sweepDurable() {
 		if msg.Role != "assistant" && msg.Role != "toolResult" {
 			continue
 		}
-		raw, err := json.Marshal(msg)
-		if err != nil {
-			continue
-		}
-		var body any
-		if err := json.Unmarshal(raw, &body); err != nil {
+		body := rpcMessageBody(msg)
+		if body == nil {
 			continue
 		}
 		if msg.Role != "assistant" {
 			s.emit(map[string]any{"type": "message_start", "message": body})
 		}
 		s.emit(map[string]any{"type": "message_end", "message": body})
+	}
+}
+
+// rpcMessageBody is one durable message in pi's wire shape, or nil when it
+// cannot be encoded.
+func rpcMessageBody(msg session.AgentMessage) any {
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+	var body any
+	if json.Unmarshal(raw, &body) != nil {
+		return nil
+	}
+	return body
+}
+
+// publishOmittedAttempt closes the failed response that an automatic retry
+// just omitted from the projection. The durable sweep reads the projection,
+// so it can no longer see this entry; it is read by ID instead. Its
+// message_start already went out when the attempt began.
+func (s *rpcRunner) publishOmittedAttempt(entryID string) {
+	entry := s.r.store.GetEntry(entryID)
+	if entry == nil {
+		return
+	}
+	for _, msg := range session.EntryToContextMessages(entry) {
+		if body := rpcMessageBody(msg); body != nil {
+			s.emit(map[string]any{"type": "message_end", "message": body})
+		}
 	}
 }
 

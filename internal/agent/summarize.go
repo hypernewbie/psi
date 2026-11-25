@@ -434,32 +434,15 @@ func (l *Loop) sendSummaryRequest(ctx context.Context, prov provider.Provider, r
 		if attempt >= cfg.RetryAttempts || !provider.IsRetryableError(err) {
 			return resp, err
 		}
-		delayMs := cfg.RetryBaseDelayMs
-		for i := 0; i < attempt && delayMs > 0; i++ {
-			if delayMs > int(^uint(0)>>1)/2 {
-				delayMs = int(^uint(0) >> 1)
-				break
-			}
-			delayMs *= 2
-		}
-		if delayMs > cfg.RetryMaxAgentDelayMs {
-			delayMs = cfg.RetryMaxAgentDelayMs
-		}
-		if delayMs < 0 {
-			delayMs = 0
-		}
-		maxTimerDelayMs := int64(^uint64(0)>>1) / int64(time.Millisecond)
-		if int64(delayMs) > maxTimerDelayMs {
-			delayMs = int(maxTimerDelayMs)
-		}
+		delay := retryDelayMs(cfg.RetryBaseDelayMs, attempt+1, cfg.RetryMaxAgentDelayMs)
 		retried = true
 		l.sink(event.Event{Type: event.SummarizationRetryScheduled, RetryAttempt: attempt + 1,
-			RetryMaximum: cfg.RetryAttempts, RetryDelayMs: int64(delayMs), Text: err.Error()})
-		if delayMs == 0 {
+			RetryMaximum: cfg.RetryAttempts, RetryDelayMs: delay.Milliseconds(), Text: err.Error()})
+		if delay <= 0 {
 			l.sink(event.Event{Type: event.SummarizationRetryAttemptStart, State: summaryRetryReason(cfg.SummaryRetryReason)})
 			continue
 		}
-		timer := time.NewTimer(time.Duration(delayMs) * time.Millisecond)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

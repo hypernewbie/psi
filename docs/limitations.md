@@ -156,6 +156,15 @@ An unknown, unreadable, or oversized `/skill:` invocation is refused rather than
 
 Context-limit recovery permits at most one compaction and retry before visible partial output.
 
+An automatic retry omits each failed response from the model context. A reloaded
+transcript marks every omission with
+`[session] Context edited (model context updated, transcript preserved).`.
+Pi shows the failed response with its error instead and prints no marker.
+Pi also labels a retried response that the user cancels
+`Aborted after N retry attempt(s)`; psi reports only
+`Retry failed after n attempts: Retry cancelled`. The Phi bridge shows a retry
+as a busy run and has no retry indicator.
+
 Live provider service acceptance has not run.
 
 The `anthropic-messages` protocol sends no prompt-cache markers. Pi marks the instruction prompt, the last tool, and the last conversation message, so the endpoint caches that prefix. psi sends those markers only on the OpenRouter Anthropic-style Completions route. A request on the Anthropic Messages protocol pays the full input price for the prefix.

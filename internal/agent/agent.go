@@ -80,10 +80,11 @@ type Config struct {
 	// CompactionProvider optionally supplies a separate model/provider for the
 	// summary call. The normal provider remains active for resumed user work.
 	CompactionProvider func() (provider.Provider, provider.ModelMeta, func(), error)
-	// RetryAttempts bounds agent-level retries of transient summarization
-	// errors, mirroring Pi's settings.retry.maxRetries. The provider layer
-	// retries pre-stream HTTP failures separately; this policy covers summary
-	// requests that die mid-stream.
+	// RetryAttempts bounds agent-level retries of transient errors in a model
+	// response and in summarization, mirroring Pi's settings.retry.maxRetries
+	// (retry.enabled false means 0). The provider layer retries pre-stream
+	// HTTP failures separately; this policy covers responses and summary
+	// requests that fail after the request started.
 	RetryAttempts        int
 	RetryBaseDelayMs     int
 	RetryMaxAgentDelayMs int
@@ -109,6 +110,11 @@ type Loop struct {
 	followUps    []UserInput
 	steeringMode string
 	followUpMode string
+	// retryAttempt counts the automatic retries scheduled for the response
+	// that is failing now (Pi's _retryAttempt). It resets when the retried
+	// response is no longer an error or the run gives up. Only the run
+	// goroutine reads and writes it.
+	retryAttempt int
 	// pendingBytes counts decoded image bytes still owned by queued or
 	// temporarily delivering steering input.
 	pendingBytes uint64
@@ -634,6 +640,11 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 	defer func() {
 		if runErr != nil {
 			l.finalizeFailure(ctx, &cfg, &outcome, &runErr)
+			if ctx.Err() != nil {
+				l.endAutoRetry(errRetryCancelled)
+			} else {
+				l.endAutoRetry(runErr)
+			}
 		}
 		// A saved assistant response can restore its own model on replay.
 		// Reassert the selected model even when there is no next turn.
@@ -747,6 +758,8 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 			var pe *provider.ProviderError
 			if ctx.Err() == nil && streamed.Len() == 0 && cfg.AutoCompact && errors.As(err, &pe) && pe.Kind == provider.ErrContextLimit && recovery.CanRetry() {
 				recovery.NoteAttempt()
+				// Pi reports the failed retries before it recovers from the overflow.
+				l.endAutoRetry(err)
 				if cerr := l.compactWithReason(ctx, cfg, "", event.CompactionOverflow); cerr != nil {
 					if IsCompactionNoWork(cerr) {
 						return err
@@ -767,9 +780,31 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				outcome = event.OutcomeUnsaved
 				return errors.Join(cause, perr)
 			}
-			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
+			failedID, aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg)
+			if aerr != nil {
 				outcome = event.OutcomeUnsaved
 				return errors.Join(cause, aerr)
+			}
+			if ctx.Err() == nil {
+				retrying, rerr := l.scheduleAutoRetry(ctx, cfg, failedID, cause)
+				if rerr != nil {
+					outcome = event.OutcomeUnsaved
+					return errors.Join(cause, rerr)
+				}
+				if retrying {
+					// Pi's continue() sends a queued follow-up in place of the failed
+					// request. Steering is delivered by the turn boundary below.
+					if len(l.PendingSteering()) == 0 {
+						if _, derr := l.deliverFollowUp(); derr != nil {
+							return derr
+						}
+					}
+					continue
+				}
+				// A cancelled wait ends the run like every other cancellation.
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 			}
 			return cause
 		}
@@ -781,7 +816,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				cause = ctx.Err()
 				stop = "aborted"
 			}
-			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
+			if _, aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
 				outcome = event.OutcomeUnsaved
 				return errors.Join(cause, aerr)
 			}
@@ -809,7 +844,7 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 				cause = ctx.Err()
 				stop = "aborted"
 			}
-			if aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
+			if _, aerr := l.savePartial(streamed.String(), streamedThinking.String(), stop, cause.Error(), cfg); aerr != nil {
 				outcome = event.OutcomeUnsaved
 				return errors.Join(cause, aerr)
 			}
@@ -867,6 +902,11 @@ func (l *Loop) run(ctx context.Context, cfg Config, skipInitialSteeringPoll bool
 		// Persistence precedes bookkeeping: a later failure must not make a
 		// saved answer unsaved. Provider failures remain interrupted below.
 		outcome = event.OutcomeDurable
+		// Pi closes the retries with success as soon as a response is no longer
+		// an error, before any output limit or queue handling can end the run.
+		if resp.StopReason != "error" {
+			l.endAutoRetry(nil)
+		}
 		// A provider may return reasoning only in the final response. Show the
 		// part that never arrived as a delta, before the text tail, so the
 		// transcript keeps the content order. A mismatch never fails the turn.
@@ -1031,16 +1071,18 @@ func (l *Loop) emitChunked(text string, typ event.Type, outcome string) {
 // arrived before the failure is kept with the text, like Pi's partial message.
 // toSessionAssistant orders the thinking block before the text block. The
 // surfaced failure reason is stored on the same assistant record so a resumed
-// session keeps the cause without a visible duplicate marker.
-func (l *Loop) savePartial(text, thinking, stop, reason string, cfg Config) error {
+// session keeps the cause without a visible duplicate marker. It returns the
+// ID of the stored entry, or "" when there was nothing visible to store.
+func (l *Loop) savePartial(text, thinking, stop, reason string, cfg Config) (string, error) {
 	if strings.TrimSpace(text) == "" && strings.TrimSpace(thinking) == "" {
-		return nil
+		return "", nil
 	}
 	partial := &provider.Response{Text: text, Thinking: thinking, StopReason: stop}
-	if _, err := l.store.AppendMessage(toFailureAssistant(partial, cfg, reason)); err != nil {
-		return fmt.Errorf("storage failure, stopping: %w (unsaved partial output %d bytes)", err, len(text)+len(thinking))
+	id, err := l.store.AppendMessage(toFailureAssistant(partial, cfg, reason))
+	if err != nil {
+		return "", fmt.Errorf("storage failure, stopping: %w (unsaved partial output %d bytes)", err, len(text)+len(thinking))
 	}
-	return nil
+	return id, nil
 }
 
 // toFailureAssistant adds the durable failure reason and Pi's one-empty-text

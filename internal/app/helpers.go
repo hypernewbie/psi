@@ -198,16 +198,40 @@ func continuable(proj *session.Projection) string {
 	return "ok"
 }
 
-// compactionActivity returns Pi's compaction indicator text for a compaction
-// compactionActivity returns Pi's compaction indicator text. Pi distinguishes
-// a manual compaction from an automatic one and names the overflow reason.
-// formatRetryActivity returns Pi's retry indicator text: a countdown in
-// seconds with the default interrupt binding.
+// formatRetryActivity returns Pi's RetryStatusIndicator text for the start
+// of a retry: the backoff as a countdown in seconds with the default
+// interrupt binding.
 func formatRetryActivity(attempt, maximum int, delay time.Duration) string {
-	seconds := int(math.Ceil(delay.Seconds()))
+	return formatRetryCountdown(attempt, maximum, int(math.Ceil(delay.Seconds())))
+}
+
+// formatRetryCountdown is Pi's retry line with seconds left in the wait. Pi's
+// CountdownTimer shows zero once the wait is over.
+func formatRetryCountdown(attempt, maximum, seconds int) string {
+	if seconds < 0 {
+		seconds = 0
+	}
 	return fmt.Sprintf("Retrying (%d/%d) in %ds... (escape to cancel)", attempt, maximum, seconds)
 }
 
+// retryIndicator is the state of Pi's RetryStatusIndicator while a backoff
+// wait runs.
+type retryIndicator struct {
+	attempt, maximum int
+	delay            time.Duration
+	started          time.Time
+}
+
+// text is the retry line at now. Pi's CountdownTimer starts at the rounded-up
+// wait and drops one second at each full second, then stays at zero until the
+// retried response replaces the indicator.
+func (c *retryIndicator) text(now time.Time) string {
+	seconds := int(math.Ceil(c.delay.Seconds())) - int(now.Sub(c.started)/time.Second)
+	return formatRetryCountdown(c.attempt, c.maximum, seconds)
+}
+
+// compactionActivity returns Pi's compaction indicator text. Pi distinguishes
+// a manual compaction from an automatic one and names the overflow reason.
 func compactionActivity(state string) string {
 	switch state {
 	case event.CompactionThreshold, event.CompactionAdaptive, event.CompactionEndTurn:
