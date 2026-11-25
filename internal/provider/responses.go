@@ -225,9 +225,9 @@ func (c *ResponsesClient) sendResponses(ctx context.Context, baseURL string, com
 		// body-read errors. Keep partial output, but not that diagnostic text.
 		var wrapped error
 		if builtInOpenAI {
-			wrapped = errors.New("OpenAI Responses stream interrupted (not retried)")
+			wrapped = errors.New("OpenAI Responses stream interrupted")
 		} else {
-			wrapped = fmt.Errorf("OpenAI Responses stream interrupted (not retried): %s", c.redact(err.Error(), token))
+			wrapped = fmt.Errorf("OpenAI Responses stream interrupted: %s", c.redact(err.Error(), token))
 		}
 		if result != nil {
 			return result, &StreamInterrupt{Partial: result, Err: wrapped}

@@ -187,7 +187,7 @@ func TestCompletionsRetryOnlyBeforeStreamAndNeverRetryPartial(t *testing.T) {
 	select {
 	case err := <-done:
 		var interrupted *StreamInterrupt
-		if !errors.As(err, &interrupted) || !strings.Contains(err.Error(), "not retried") {
+		if !errors.As(err, &interrupted) || !strings.Contains(err.Error(), "stream interrupted") {
 			t.Fatalf("partial stream error = %T %v", err, err)
 		}
 	case <-time.After(3 * time.Second):

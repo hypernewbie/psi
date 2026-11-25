@@ -186,7 +186,7 @@ func (c *Client) doOnce(ctx context.Context, raw []byte, onDelta func(Delta), re
 	if err != nil {
 		// Once HTTP streaming starts, never invisibly replay an incomplete turn.
 		// Deliberately do not wrap a retryable ProviderError here.
-		serr := fmt.Errorf("provider stream interrupted (not retried): %s", c.redact(err.Error()))
+		serr := fmt.Errorf("provider stream interrupted: %s", c.redact(err.Error()))
 		if result != nil {
 			return result, &StreamInterrupt{Partial: result, Err: serr}
 		}

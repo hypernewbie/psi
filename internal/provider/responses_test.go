@@ -422,7 +422,7 @@ func TestResponsesInterruptedStreamIsNeverRetried(t *testing.T) {
 	select {
 	case err := <-done:
 		var interrupted *StreamInterrupt
-		if !errors.As(err, &interrupted) || interrupted.Partial.Text != "partial" || !strings.Contains(err.Error(), "not retried") || requests.Load() != 1 {
+		if !errors.As(err, &interrupted) || interrupted.Partial.Text != "partial" || !strings.Contains(err.Error(), "stream interrupted") || requests.Load() != 1 {
 			t.Fatalf("interrupted Responses result = %T %v, requests %d", err, err, requests.Load())
 		}
 	case <-time.After(3 * time.Second):

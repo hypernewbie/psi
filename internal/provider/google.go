@@ -96,7 +96,7 @@ func (c *GoogleClient) sendGoogle(ctx context.Context, baseURL string, body []by
 	result, err := parseGoogleSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(err.Error())
-		wrapped := fmt.Errorf("Google Generative AI stream interrupted (not retried): %s", message)
+		wrapped := fmt.Errorf("Google Generative AI stream interrupted: %s", message)
 		if result != nil {
 			return result, &StreamInterrupt{Partial: result, Err: wrapped}
 		}

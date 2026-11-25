@@ -77,7 +77,7 @@ func (c *CompletionsClient) sendCompletions(ctx context.Context, raw []byte, req
 	result, err := parseCompletionsSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(err.Error())
-		wrapped := fmt.Errorf("OpenAI Completions stream interrupted (not retried): %s", message)
+		wrapped := fmt.Errorf("OpenAI Completions stream interrupted: %s", message)
 		if result != nil {
 			return result, &StreamInterrupt{Partial: result, Err: wrapped}
 		}

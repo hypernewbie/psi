@@ -5,10 +5,10 @@ import (
 	"regexp"
 )
 
-// Retry classification for one-off calls such as compaction summaries, ported
-// from Pi's isRetryableAssistantError (packages/ai/src/utils/retry.ts). This
-// classifies failures only; callers own the retry budget, backoff, reporting,
-// and cancellation handling.
+// Retry classification for a failed model response or a compaction summary,
+// ported from Pi's isRetryableAssistantError (packages/ai/src/utils/retry.ts).
+// This classifies failures only; callers own the retry budget, backoff,
+// reporting, and cancellation handling.
 
 var zhipuUsageLimitPattern = regexp.MustCompile(`(?i)"code"\s*:\s*"?1308(?:[^0-9]|$)`)
 
@@ -48,25 +48,25 @@ var retryableTransientPatterns = []*regexp.Regexp{
 	// id or byte count.
 	regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:429|500|502|503|504|520|524)(?:[^a-z0-9]|$)`),
 	regexp.MustCompile(`(?i)service.?(?:is.?)?(?:temporarily.?)?unavailable`),
-	regexp.MustCompile(`(?i)server.error`),
-	regexp.MustCompile(`(?i)internal.error`),
+	regexp.MustCompile(`(?i)server.?error`),
+	regexp.MustCompile(`(?i)internal.?error`),
 
 	// Wrapper and gateway text for transient upstream failures.
 	regexp.MustCompile(`(?i)provider.?returned.?(?:an.?)?error`),
 	regexp.MustCompile(`(?i)exceeded request buffer limit while retrying upstream`),
 	regexp.MustCompile(`(?i)unable to forward upstream`),
-	regexp.MustCompile(`(?i)upstream.request.failed`),
+	regexp.MustCompile(`(?i)upstream.?request.?failed`),
 	regexp.MustCompile(`(?i)upstream_stream_read_error`),
 	regexp.MustCompile(`(?i)stream was interrupted`),
 	regexp.MustCompile(`(?i)http/?2 stream failed`),
 
 	// Network, proxy, and transport failures, including Go's net errors and
 	// relayed Node fetch text.
-	regexp.MustCompile(`(?i)network.error`),
-	regexp.MustCompile(`(?i)connection.error`),
-	regexp.MustCompile(`(?i)connection.refused`),
+	regexp.MustCompile(`(?i)network.?error`),
+	regexp.MustCompile(`(?i)connection.?error`),
+	regexp.MustCompile(`(?i)connection.?refused`),
 	regexp.MustCompile(`(?i)connection.reset`),
-	regexp.MustCompile(`(?i)connection.lost`),
+	regexp.MustCompile(`(?i)connection.?lost`),
 	regexp.MustCompile(`(?i)connection closed`),
 	regexp.MustCompile(`(?i)other side closed`),
 	regexp.MustCompile(`(?i)unexpected EOF`),
@@ -77,15 +77,15 @@ var retryableTransientPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)getaddrinfo`),
 	regexp.MustCompile(`(?i)ENOTFOUND`),
 	regexp.MustCompile(`(?i)EAI_AGAIN`),
-	regexp.MustCompile(`(?i)upstream.connect`),
+	regexp.MustCompile(`(?i)upstream.?connect`),
 	regexp.MustCompile(`(?i)reset before headers`),
 	regexp.MustCompile(`(?i)socket hang up`),
 	regexp.MustCompile(`(?i)socket connection was closed`),
-	regexp.MustCompile(`(?i)timed.?out`),
+	regexp.MustCompile(`(?i)timed? out`),
 	regexp.MustCompile(`(?i)timeout`),
 	regexp.MustCompile(`(?i)terminated`),
-	regexp.MustCompile(`(?i)websocket.closed`),
-	regexp.MustCompile(`(?i)websocket.error`),
+	regexp.MustCompile(`(?i)websocket.?closed`),
+	regexp.MustCompile(`(?i)websocket.?error`),
 
 	// Premature stream endings from adapters and gateways.
 	regexp.MustCompile(`(?i)stream interrupted`),
@@ -94,6 +94,7 @@ var retryableTransientPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)stream ended before a terminal response event`),
 	regexp.MustCompile(`(?i)http2 request did not get a response`),
 	regexp.MustCompile(`(?i)stream disconnected before completion`),
+	regexp.MustCompile(`(?i)cut short after the reply had begun`),
 	regexp.MustCompile(`(?i)pending stream has been canceled`),
 
 	// Provider-requested retry delays and explicit retry guidance.
@@ -111,9 +112,10 @@ var retryableTransientPatterns = []*regexp.Regexp{
 // IsRetryableError reports whether a failed provider call looks like a
 // transient provider or transport failure worth retrying. Typed rate-limit
 // and transport errors are retryable, and mid-stream interruptions always
-// are. Quota, budget, and billing exhaustion is never retryable; auth,
-// validation, and context-limit failures fail fast. The caller still handles
-// cancellation and context overflow separately.
+// are when Pi's transport patterns match their text. Quota, budget, and
+// billing exhaustion is never retryable; auth, validation, and context-limit
+// failures fail fast. The caller still handles cancellation and context
+// overflow separately.
 func IsRetryableError(err error) bool {
 	if err == nil {
 		return false

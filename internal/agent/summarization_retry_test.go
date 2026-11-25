@@ -20,7 +20,7 @@ func TestSummaryRequestRetriesTransientStreamFailure(t *testing.T) {
 	var events []event.Event
 	loop := New(store, reg, fake, func(e event.Event) { events = append(events, e) })
 	fake.Errors = []error{
-		&provider.StreamInterrupt{Partial: &provider.Response{Text: "partial"}, Err: providerErr("provider stream interrupted (not retried): stream terminated")},
+		&provider.StreamInterrupt{Partial: &provider.Response{Text: "partial"}, Err: providerErr("provider stream interrupted: stream terminated")},
 		nil,
 	}
 	fake.Responses = []*provider.Response{nil, {Text: "checkpoint", StopReason: "stop"}}
@@ -51,7 +51,7 @@ func TestSummaryRequestStopsRetryingAfterBudget(t *testing.T) {
 	store, reg, fake, _, _ := testSetup(t)
 	var events []event.Event
 	loop := New(store, reg, fake, func(e event.Event) { events = append(events, e) })
-	interrupt := &provider.StreamInterrupt{Err: providerErr("OpenAI Completions stream interrupted (not retried): unexpected EOF")}
+	interrupt := &provider.StreamInterrupt{Err: providerErr("OpenAI Completions stream interrupted: unexpected EOF")}
 	fake.Errors = []error{interrupt, interrupt, interrupt, interrupt}
 	cfg := Config{Model: modelMeta(), RetryAttempts: 2, RetryBaseDelayMs: 0, RetryMaxAgentDelayMs: 60_000}
 

@@ -124,7 +124,7 @@ func (c *MistralClient) sendMistral(ctx context.Context, raw []byte, req Request
 	result, err := parseMistralSSE(resp.Body, c.IdleTimeout, ctx, onDelta, req)
 	if err != nil {
 		message := c.redact(err.Error())
-		wrapped := fmt.Errorf("Mistral stream interrupted (not retried): %s", message)
+		wrapped := fmt.Errorf("Mistral stream interrupted: %s", message)
 		if result != nil {
 			return result, &StreamInterrupt{Partial: result, Err: wrapped}
 		}

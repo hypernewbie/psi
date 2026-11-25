@@ -32,9 +32,9 @@ func TestIsRetryableErrorClassification(t *testing.T) {
 		{"zhipu 1308 numeric", fmt.Errorf(`gateway said {"code":1308,"message":"balance exhausted"}`), false},
 		{"zhipu 1308 string", fmt.Errorf(`gateway said {"code":"1308","message":"balance exhausted"}`), false},
 		{"zhipu code 13080 with throttle", fmt.Errorf(`HTTP 429: {"code":13080,"message":"rate limit"}`), true},
-		{"stream interrupt with partial", &StreamInterrupt{Partial: &Response{Text: "partial"}, Err: errors.New("provider stream interrupted (not retried): idle timeout")}, true},
-		{"completions interrupt", fmt.Errorf("OpenAI Completions stream interrupted (not retried): stream terminated"), true},
-		{"google interrupt", fmt.Errorf("Google Generative AI stream interrupted (not retried): unexpected EOF"), true},
+		{"stream interrupt with partial", &StreamInterrupt{Partial: &Response{Text: "partial"}, Err: errors.New("provider stream interrupted: idle timeout")}, true},
+		{"completions interrupt", fmt.Errorf("OpenAI Completions stream interrupted: stream terminated"), true},
+		{"google interrupt", fmt.Errorf("Google Generative AI stream interrupted: unexpected EOF"), true},
 		{"idle timeout", fmt.Errorf("idle timeout reading provider stream"), true},
 		{"connection refused", fmt.Errorf("dial tcp: connection refused"), true},
 		{"connection reset", fmt.Errorf("read: connection reset by peer"), true},
@@ -42,6 +42,14 @@ func TestIsRetryableErrorClassification(t *testing.T) {
 		{"overloaded", fmt.Errorf("provider overloaded, try again"), true},
 		{"gateway upstream", fmt.Errorf("provider returned an error: upstream_request_failed"), true},
 		{"explicit retry guidance", fmt.Errorf("The server had an error; please retry your request"), true},
+		// Pi's separators are optional ("server.?error"): the words also match
+		// with no character between them, and "timed? out" covers "time out".
+		{"server error without separator", fmt.Errorf("gateway servererror"), true},
+		{"internal error without separator", fmt.Errorf("upstream internalerror"), true},
+		{"network error without separator", fmt.Errorf("fetch networkerror"), true},
+		{"time out", fmt.Errorf("Time out while connecting"), true},
+		// Relayed wording of a dropped stream (Pi issue 11879).
+		{"stream cut short after the reply began", fmt.Errorf("Claude Code's stream from Anthropic was cut short after the reply had begun"), true},
 		{"status code in text", fmt.Errorf("gateway returned 502 for this request"), true},
 		{"status code in request id", fmt.Errorf("request id req-4290123 failed"), false},
 		{"deterministic message", fmt.Errorf("model does not support thinking level"), false},
