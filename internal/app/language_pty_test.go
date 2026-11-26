@@ -565,7 +565,7 @@ func TestActualAppLanguageStreamFailure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	reviewSettings(t, agentDir, server.URL)
-	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","language":"zh","compaction":{"enabled":false}}`)
+	writeAppFile(t, filepath.Join(agentDir, "settings.json"), `{"defaultProvider":"anthropic","defaultModel":"m","language":"zh","compaction":{"enabled":false},"retry":{"enabled":false}}`)
 
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project")
 	waitLanguageEditorReady(t, q)
