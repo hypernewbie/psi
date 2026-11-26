@@ -4,11 +4,13 @@ package app
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -19,9 +21,13 @@ import (
 
 	"github.com/charmbracelet/x/vt"
 	"golang.org/x/sys/windows"
+
+	"github.com/hypernewbie/psi/internal/session"
 )
 
 const procThreadAttributePseudoConsole = 0x00020016
+
+var conptyBinary = flag.String("psi-test-binary", "", "Run the ConPTY regression against this executable instead of the test helper")
 
 // TestActualWindowsConPTYInteraction exercises the real interactive entrypoint
 // with console input/output. Cross-compilation alone does not cover this path.
@@ -93,11 +99,19 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	args := " -test.run=^TestAppProcess$"
+	if *conptyBinary != "" {
+		exe, err = filepath.Abs(*conptyBinary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args = " --deny-project --tools read,bash,fetch_content"
+	}
 	appName, err := windows.UTF16PtrFromString(exe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	commandLine, err := windows.UTF16PtrFromString(windows.EscapeArg(exe) + " -test.run=^TestAppProcess$")
+	commandLine, err := windows.UTF16PtrFromString(windows.EscapeArg(exe) + args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +230,27 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 	drain()
 	raw.Reset()
 	const draftText = "draft" // Non-hex letters cannot occur in the session UUID header.
+	const bangCommand = "printf 'CONPTY_%s\\n' BANG"
+	const privateCommand = "printf 'CONPTY_%s\\n' PRIVATE"
+	for _, tc := range []struct{ input, output string }{
+		{"!" + bangCommand, "CONPTY_BANG"},
+		{"!!" + privateCommand, "CONPTY_PRIVATE"},
+	} {
+		write(tc.input + "\r")
+		waitFor(tc.output, func(text string) bool {
+			return strings.Contains(text, tc.output) && conptyEditorReady(screen)
+		})
+	}
+	const cancelCommand = "sleep 30 & : > shell-started; wait"
+	write("!" + cancelCommand + "\r")
+	waitFor("shell process started", func(_ string) bool {
+		_, err := os.Stat(filepath.Join(work, "shell-started"))
+		return err == nil
+	})
+	write("\x03")
+	waitFor("cancelled shell", func(text string) bool {
+		return strings.Contains(text, "(cancelled)") && conptyEditorReady(screen)
+	})
 	write(draftText)
 	waitFor("typed draft", func(text string) bool { return strings.Contains(text, draftText) })
 	expectedDraft := draftText
@@ -347,7 +382,35 @@ func TestActualWindowsConPTYInteraction(t *testing.T) {
 		t.Fatal("psi did not settle and exit under ConPTY")
 	}
 	drain()
-	assertAbortedQuitSession(t, work, agentDir)
+	sessionFile := assertAbortedQuitSession(t, work, agentDir)
+	_, entries, _, err := session.ReadFileEntries(sessionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shells []*session.BashExecutionMessage
+	for _, entry := range entries {
+		if entry.Message != nil && entry.Message.Message.BashExecution != nil {
+			shells = append(shells, entry.Message.Message.BashExecution)
+		}
+	}
+	if len(shells) != 3 {
+		t.Fatalf("saved shell executions = %d, want 3", len(shells))
+	}
+	for i, want := range []struct {
+		command, output string
+		excluded        bool
+	}{
+		{bangCommand, "CONPTY_BANG\n", false},
+		{privateCommand, "CONPTY_PRIVATE\n", true},
+	} {
+		got := shells[i]
+		if got.Command != want.command || got.Output != want.output || got.ExcludeFromContext == nil || *got.ExcludeFromContext != want.excluded || got.Cancelled || got.ExitCode == nil || *got.ExitCode != 0 {
+			t.Fatalf("saved shell %d = %+v, want %+v and exit code 0", i, got, want)
+		}
+	}
+	if got := shells[2]; got.Command != cancelCommand || !got.Cancelled || got.ExitCode != nil {
+		t.Fatalf("saved cancelled shell = %+v", got)
+	}
 	// The inline session must never switch to the alternate screen. Full
 	// viewport clears inside synchronized output (2026h/l) are expected:
 	// they rebuild the main screen on resize.

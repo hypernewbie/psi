@@ -30,6 +30,13 @@ func transcriptDocumentBlock(it session.TranscriptItem) terminal.DocumentBlock {
 		block.Kind, block.Label = terminal.DocumentMetadata, "[session] "
 	case session.KindHistoryBoundary:
 		block.Kind = terminal.DocumentBoundary
+	case session.KindShell:
+		block.Kind = terminal.DocumentShell
+		block.Shell = &terminal.ShellDisplay{
+			Command: it.Command, Output: it.Text, State: it.ToolState,
+			ExitCode: it.ExitCode, Excluded: it.Excluded,
+			Truncated: it.Truncated, FullOutputPath: it.FullOutputPath,
+		}
 	case session.KindNotice:
 		block.Kind = terminal.DocumentRaw
 	default:

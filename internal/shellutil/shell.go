@@ -1,5 +1,6 @@
-// Package shellutil resolves shell executables and invocation arguments
-// following Pi's cross-platform shell rules.
+// Package shellutil resolves shell executables and invocation arguments.
+// Windows discovery follows Pi; Unix deliberately keeps the inherited login
+// shell instead of preferring Bash.
 // Reference: temp/pi-mono/packages/coding-agent/src/utils/shell.ts
 package shellutil
 
@@ -7,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
@@ -35,29 +37,47 @@ var PowerShellArgs = []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy
 
 type resolver struct {
 	goos       string
+	cwd        string
 	getenv     func(string) string
 	pathExists func(string) bool
 	lookPath   func(string) string
+	// lookupErr is the error-aware lookup used for explicit selectors. Nil
+	// falls back to lookPath; production uses exec.LookPath on Unix so
+	// exec.ErrDot stays a failed lookup.
+	lookupErr func(string) (string, error)
 }
 
 func defaultResolver() resolver {
-	return resolver{
+	r := resolver{
 		goos:       runtime.GOOS,
 		getenv:     os.Getenv,
 		pathExists: platformPathExists,
 		lookPath:   platformLookPath,
 	}
+	if runtime.GOOS != "windows" {
+		r.lookupErr = exec.LookPath
+	}
+	return r
 }
 
-// GetShellConfig resolves the bash shell configuration for the host platform
-// and an optional explicit shell path.
+// GetShellConfig resolves the shell configuration for the host platform and
+// an optional explicit shell path.
 //
-// Resolution order matches Pi:
-//   - User-specified shellPath (or PSI_SHELL fallback supplied by callers)
-//   - On Windows: Git Bash in ProgramFiles / ProgramFiles(x86), then bash.exe on PATH
-//   - On Unix: /bin/bash, then bash on PATH, then sh
+// Explicit shellPath or PSI_SHELL wins on every platform. On Windows the
+// automatic order is Git Bash in ProgramFiles / ProgramFiles(x86), then
+// bash.exe on PATH. On Unix the automatic order is the inherited SHELL, then
+// sh; this is a deliberate psi difference from Pi's Bash-first order.
 func GetShellConfig(customShellPath string) (Config, error) {
-	return defaultResolver().getShellConfig(customShellPath)
+	return GetShellConfigForDir(customShellPath, "")
+}
+
+// GetShellConfigForDir resolves the shell for a command that will run in cwd.
+// Relative explicit selectors anchor to cwd without lexical cleaning, so
+// link/../shell keeps its native meaning.
+func GetShellConfigForDir(customShellPath, cwd string) (Config, error) {
+	r := defaultResolver()
+	r.cwd = cwd
+	return r.getShellConfig(customShellPath)
 }
 
 // GetPowerShellConfig resolves PowerShell on Windows, preferring PowerShell 7
@@ -102,17 +122,11 @@ func PathExists(path string) bool {
 
 func (r resolver) getShellConfig(customShellPath string) (Config, error) {
 	if customShellPath != "" {
-		// Resolve a bare executable name (such as PSI_SHELL=bash) on PATH first
-		// so a same-named entry in the working directory cannot shadow it.
-		if !strings.ContainsAny(customShellPath, `/\`) {
-			if found := r.findExecutable(customShellPath); found != "" {
-				return r.bashShellConfig(found), nil
-			}
+		shell, err := r.resolveExplicit(customShellPath)
+		if err != nil {
+			return Config{}, fmt.Errorf("Custom shell path not found: %s: %w", customShellPath, err)
 		}
-		if r.pathExists(customShellPath) {
-			return r.bashShellConfig(customShellPath), nil
-		}
-		return Config{}, fmt.Errorf("Custom shell path not found: %s", customShellPath)
+		return r.bashShellConfig(shell), nil
 	}
 
 	if r.goos == "windows" {
@@ -151,15 +165,118 @@ func (r resolver) getShellConfig(customShellPath string) (Config, error) {
 		)
 	}
 
-	if r.pathExists("/bin/bash") {
-		return r.bashShellConfig("/bin/bash"), nil
+	// psi deliberately follows the inherited login-shell hint, then sh. It
+	// does not prefer Bash; shellPath or PSI_SHELL selects Bash explicitly.
+	// This is the approved Unix difference from Pi's Bash-first order.
+	if inherited := r.getenv("SHELL"); inherited != "" {
+		if shell, err := r.resolveExplicit(inherited); err == nil {
+			return r.bashShellConfig(shell), nil
+		}
 	}
-	if bashOnPath := r.findExecutable("bash"); bashOnPath != "" {
-		return r.bashShellConfig(bashOnPath), nil
+	shell, err := r.findExecutableChecked("sh")
+	if err != nil {
+		return Config{}, fmt.Errorf("no usable shell found: SHELL is unset or unusable and sh is unavailable: %w", err)
 	}
-	return Config{Shell: "sh", Args: []string{"-c"}}, nil
+	return Config{Shell: shell, Args: []string{"-c"}}, nil
 }
 
+// resolveExplicit resolves one executable selector. A selector with a
+// separator anchors to the immutable command cwd without lexical cleaning;
+// bare names use the platform PATH and never fall back to the working
+// directory (exec.ErrDot is a failed lookup).
+func (r resolver) resolveExplicit(selector string) (string, error) {
+	if selector == "" {
+		return "", errors.New("empty executable")
+	}
+	if r.goos == "windows" {
+		switch {
+		case isWindowsAbsolute(selector):
+			if !r.pathExists(selector) {
+				return "", fmt.Errorf("%s does not exist", selector)
+			}
+			return selector, nil
+		case isWindowsRooted(selector), isWindowsDriveRelative(selector):
+			// Native start keeps these forms; a bad one becomes an
+			// infrastructure result there.
+			return selector, nil
+		case hasWindowsSeparator(selector):
+			if r.cwd == "" {
+				return "", errors.New("a relative shell path requires a working directory")
+			}
+			candidate := joinWindowsSelector(r.cwd, selector)
+			if !r.pathExists(candidate) {
+				return "", fmt.Errorf("%s does not exist", candidate)
+			}
+			return candidate, nil
+		default:
+			return r.findExecutableChecked(selector)
+		}
+	}
+	// This branch resolves Unix selectors, even when a test runs it on Windows.
+	if strings.ContainsRune(selector, '/') {
+		path := selector
+		if !strings.HasPrefix(path, "/") {
+			if r.cwd == "" {
+				return "", errors.New("a relative shell path requires a working directory")
+			}
+			path = r.cwd + "/" + selector
+		}
+		if !r.pathExists(path) {
+			return "", fmt.Errorf("%s does not exist", path)
+		}
+		return path, nil
+	}
+	return r.findExecutableChecked(selector)
+}
+
+// findExecutableChecked resolves a bare executable name on PATH. Any lookup
+// error, including exec.ErrDot, is a failed lookup; the current directory is
+// never admitted implicitly.
+func (r resolver) findExecutableChecked(name string) (string, error) {
+	var found string
+	if r.lookupErr != nil {
+		resolved, err := r.lookupErr(name)
+		if err != nil {
+			return "", err
+		}
+		found = resolved
+	} else if r.lookPath != nil {
+		found = r.lookPath(name)
+	}
+	if found == "" {
+		return "", fmt.Errorf("%s not found on PATH", name)
+	}
+	if r.goos == "windows" && !r.pathExists(found) {
+		return "", fmt.Errorf("%s is not executable", found)
+	}
+	return found, nil
+}
+
+func hasWindowsSeparator(path string) bool {
+	return strings.ContainsAny(path, `\/`)
+}
+
+func isWindowsAbsolute(path string) bool {
+	return isDriveRooted(path) || strings.HasPrefix(path, `\\`)
+}
+
+func isWindowsRooted(path string) bool {
+	return len(path) > 0 && (path[0] == '\\' || path[0] == '/') && !strings.HasPrefix(path, `\\`)
+}
+
+func isWindowsDriveRelative(path string) bool {
+	return len(path) >= 2 && path[1] == ':' && !isDriveRooted(path)
+}
+
+// joinWindowsSelector joins a relative selector to cwd without cleaning its
+// components, so native path interpretation stays intact.
+func joinWindowsSelector(cwd, selector string) string {
+	trimmed := strings.TrimRight(cwd, `\/`)
+	if trimmed == "" {
+		return selector
+	}
+	return trimmed + `\` + selector
+}
 func (r resolver) getPowerShellConfig() (Config, error) {
 	if r.goos != "windows" {
 		return Config{}, errors.New("The powershell tool is only available on Windows.")

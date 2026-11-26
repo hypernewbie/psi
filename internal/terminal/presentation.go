@@ -294,6 +294,9 @@ type DisplaySettings struct {
 	// of the collapsed view. Both flags come from the same in-memory Ctrl+O
 	// state and are never persisted.
 	ExpandWeb bool
+	// ExpandShell shows the retained shell output tail instead of the collapsed
+	// 20-logical-line preview. It uses the same in-memory Ctrl+O state.
+	ExpandShell bool
 }
 
 func DefaultDisplaySettings() DisplaySettings {

@@ -24,7 +24,23 @@ Tools run with the current OS user permissions.
 Project consent and workspace paths do not provide a sandbox.
 Per-tool approval, a permission-policy language, and automatic Git operations are excluded.
 The shell tool intentionally inherits the psi process environment.
-Regression shell processes instead use an isolated environment.
+Interactive `!command` uses the same environment and permissions. Regression
+shell processes instead use an isolated environment.
+
+Interactive shell limits: the editor admits one running shell at a time and up
+to eight running plus pending results. A shell that completes during a model
+run is appended only at the model boundary. The terminal preview uses bounded
+plain-text rows, not Pi's exact bordered component. `!!command` exclusion is a
+provider-context boundary, not secret storage: the local JSONL file still
+contains the command and output. RPC streams sanitized updates, but the local
+capture can hold raw bytes and is never displayed automatically.
+
+The shell resolver differs from Pi on Unix: psi uses inherited `SHELL`, then
+`sh`, rather than Bash first. `PSI_SHELL` remains a psi-specific explicit
+override. On Windows, psi discovers Git Bash and uses a Job Object for process
+tree cleanup when it can attach one. Otherwise cleanup is best-effort and
+descendants can outlive cancellation. Legacy WSL `System32`/`Sysnative`
+launchers take the command on stdin instead of `-c`.
 
 ## Phi integration
 

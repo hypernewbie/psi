@@ -48,6 +48,12 @@ func TestCommandTable(t *testing.T) {
 	if !strings.Contains(terminal.HotkeysText(), "\n") || strings.Contains(terminal.HotkeysText(), `\n`) {
 		t.Errorf("/hotkeys must render separate lines: %q", terminal.HotkeysText())
 	}
+	if !strings.Contains(terminal.HotkeysText(), "!command") || !strings.Contains(terminal.HotkeysText(), "!!command") {
+		t.Errorf("/hotkeys must document interactive shell commands: %q", terminal.HotkeysText())
+	}
+	if help := helpText("test"); !strings.Contains(help, "!command") || !strings.Contains(help, "!!command") {
+		t.Errorf("CLI help must document interactive shell commands: %q", help)
+	}
 	// Skill + unknown.
 	if cmd, ok := terminal.ParseCommand("/skill:review fix"); !ok || cmd.Name != "skill:review" {
 		t.Errorf("skill parse: %v %v", cmd, ok)
@@ -716,7 +722,24 @@ func TestHotkeysDescribeThinkingSaveScope(t *testing.T) {
 
 func TestHotkeysDescribeExpansionScope(t *testing.T) {
 	text := terminal.HotkeysText()
-	if !strings.Contains(text, "Ctrl+O expand/collapse skill blocks and web cards (not saved)") {
+	if !strings.Contains(text, "Ctrl+O expand/collapse shell output, skill blocks, and web cards (not saved)") {
 		t.Fatalf("/hotkeys is missing the web and skill expansion key: %q", text)
+	}
+}
+
+// TestHotkeysTextKeepsResumedTranscriptVisible pins the /hotkeys wrapped-row
+// budget. A 40-row terminal shows a resumed session's last user row above two
+// consecutive /hotkeys outputs only while the block stays within this budget;
+// one extra wrapped row scrolls that row off-screen. The transcript writer
+// hard-wraps at the terminal width, so a line costs ceil(len/width) rows, and
+// counting bytes instead of cells only ever overcounts, which fails safe.
+func TestHotkeysTextKeepsResumedTranscriptVisible(t *testing.T) {
+	const width, budget = 80, 15
+	rows := 0
+	for _, line := range strings.Split(terminal.HotkeysText(), "\n") {
+		rows += (len(line) + width - 1) / width
+	}
+	if rows > budget {
+		t.Fatalf("/hotkeys renders %d rows at width %d, over the %d-row budget; shorten the text so a resumed transcript stays visible", rows, width, budget)
 	}
 }

@@ -95,6 +95,35 @@ func IsExitKeyword(line string) bool {
 	return strings.EqualFold(t, "quit") || strings.EqualFold(t, "exit")
 }
 
+// ShellCommand is one interactive bang-prefixed shell submission. Exclude
+// means !!: the result is saved locally but excluded from model context.
+type ShellCommand struct {
+	Command string
+	Exclude bool
+}
+
+// ParseShellCommand recognizes only interactive editor "!command" and
+// "!!command" submissions. Empty prefixes are ordinary prompt text; triple
+// bang means an excluded command whose text starts with one bang.
+func ParseShellCommand(line string) (ShellCommand, bool) {
+	t := strings.TrimSpace(line)
+	if strings.HasPrefix(t, "!!") {
+		command := strings.TrimSpace(t[2:])
+		if command == "" {
+			return ShellCommand{}, false
+		}
+		return ShellCommand{Command: command, Exclude: true}, true
+	}
+	if strings.HasPrefix(t, "!") {
+		command := strings.TrimSpace(t[1:])
+		if command == "" {
+			return ShellCommand{}, false
+		}
+		return ShellCommand{Command: command}, true
+	}
+	return ShellCommand{}, false
+}
+
 // ParseCommand splits "/name arg". An unknown /command is ordinary user
 // text, like Pi: it is sent to the model as a prompt.
 func ParseCommand(line string) (*Command, bool) {
@@ -141,15 +170,19 @@ func CommandTakesArgument(name string) bool {
 }
 
 // HotkeysText renders the keyboard shortcuts, like Pi's /hotkeys command.
+// The joined lines must stay within the wrapped-row budget asserted by
+// TestHotkeysTextKeepsResumedTranscriptVisible: a 40-row terminal shows the
+// resumed transcript above two /hotkeys outputs only while the block keeps
+// its current footprint.
 func HotkeysText() string {
 	return strings.Join([]string{
 		"Keys (fixed, no Kitty required):",
 		"  Enter submit (empty retries an unfinished turn) · /b, /bump request another response · Ctrl+J newline · Left/Right grapheme · Up/Down visual rows",
 		"  quit or exit alone asks for confirmation; submit either again to exit; any other submission cancels; /quit exits immediately",
 		"  Ctrl+P cycle model · Ctrl+L select model · Home/End line · Ctrl+A/E line · Ctrl+Home/End doc · Backspace/Delete grapheme",
-		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion",
-		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+O expand/collapse skill blocks and web cards (not saved) · Ctrl+C cancels run (idle: clear draft, empty exits)",
-		"  In /thinking: Ctrl+S saves the highlighted level as the global default",
-		"  Ctrl+D delete/exit · paste literal, no submit",
+		"  Ctrl+W word · Ctrl+U/K line · Tab complete /command /skill:name · Esc cancels picker/completion and a running shell",
+		"  Ctrl+X stops the loop and aborts its turn · Shift+Tab cycle thinking · Ctrl+T hide/show reasoning · Ctrl+O expand/collapse shell output, skill blocks, and web cards (not saved) · Ctrl+C cancels run (idle: clear draft, empty exits)",
+		"  In /thinking: Ctrl+S saves the highlighted level as the global default · Ctrl+D delete/exit · paste literal, no submit",
+		"  !command runs locally with live output · !!command excludes it from the model",
 	}, "\n")
 }

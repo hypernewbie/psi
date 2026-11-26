@@ -38,11 +38,14 @@ func bridgeSnapshot(r *runtime) pibridge.Snapshot {
 	prepWork := r.bridgeWork != nil && r.bridgeWork()
 	snap.HasCompact = true
 	queued := r.compactPending
+	if r.shellActive {
+		queued = true
+	}
 	if r.queuedInputs != nil && r.queuedInputs() > 0 {
 		queued = true
 	}
 	snap.Compact = pibridge.CompactReadiness{
-		Idle:       r.state == StateIdle && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork,
+		Idle:       r.state == StateIdle && !r.shellActive && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork,
 		HasPending: queued,
 		Active:     r.compactActive,
 		Pending:    r.compactPending,
@@ -56,7 +59,7 @@ func bridgeSnapshot(r *runtime) pibridge.Snapshot {
 		HasRunID:       true,
 		ContextRev:     r.contextRev,
 		HasContextRev:  true,
-		Idle:           r.state == StateIdle && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork,
+		Idle:           r.state == StateIdle && !r.shellActive && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork,
 		HasPending:     queued,
 		CompactActive:  r.compactActive,
 		CompactPending: r.compactPending,
@@ -73,7 +76,7 @@ func bridgeSnapshot(r *runtime) pibridge.Snapshot {
 		// work for this capability even though no run owns it.
 		recovered := len(r.recovery) > 0
 		ready := pibridge.AttachmentReadiness{
-			Idle:             r.state == StateIdle && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork && !recovered,
+			Idle:             r.state == StateIdle && !r.shellActive && !r.compactActive && !r.compactPending && !r.reloadPending && !prepWork && !recovered,
 			HasPending:       queued || recovered,
 			CompactionActive: r.compactActive,
 			BridgePending:    prepWork || r.compactPending || r.reloadPending,

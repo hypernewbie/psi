@@ -788,7 +788,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 			for _, ex := range s.entries {
 				if ex.Kind == "message" {
 					r := ex.Message.Message.Role
-					if r == "user" || r == "assistant" {
+					if r == "user" || r == "assistant" || r == "bashExecution" {
 						hasConversation = true
 						break
 					}
@@ -796,7 +796,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 			}
 			if !hasConversation && e.Kind == "message" {
 				r := e.Message.Message.Role
-				if r == "user" || r == "assistant" {
+				if r == "user" || r == "assistant" || r == "bashExecution" {
 					hasConversation = true
 				}
 			}
@@ -806,7 +806,7 @@ func (s *Store) appendLocked(e *Entry, payload any) (err error) {
 				}
 				s.flushed = true
 			}
-			// Setup-only entries stay in memory (no file) until first user/assistant message.
+			// Setup-only entries stay in memory (no file) until the first user, assistant, or shell entry.
 		} else {
 			f, err := s.openDurable(s.file, os.O_RDWR|os.O_APPEND, 0o600)
 			if err != nil {

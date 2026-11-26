@@ -35,14 +35,22 @@ psi --mode rpc
 psi has two modes. The default is interactive, inline, and needs a terminal on
 stdin; redirected stdin fails with `noninteractive input: psi needs a terminal
 (no print/RPC mode)`. `--mode rpc` runs headless, reading JSONL commands on
-stdin and writing JSONL events on stdout: `prompt`, `abort`, `get_state`,
-`get_available_models`, `set_model`, `get_available_thinking_levels`,
-`set_thinking_level`, `compact`, `get_session_stats`, and
-`extension_ui_response`. `get_available_models` lists only providers with a
-usable credential, the same rule as `/model`; an eligible keyless endpoint
-counts as usable. `get_available_thinking_levels`
+stdin and writing JSONL events on stdout: `prompt`, `bash`, `abort_bash`,
+`abort`, `get_state`, `get_available_models`, `set_model`,
+`get_available_thinking_levels`, `set_thinking_level`, `compact`,
+`get_session_stats`, and `extension_ui_response`. `get_available_models` lists
+only providers with a usable credential, the same rule as `/model`; an eligible
+keyless endpoint counts as usable. `get_available_thinking_levels`
 lists the live model's advertised levels; `set_thinking_level` accepts any
 level the model can apply and clamps it when the model does not advertise it.
+`bash` accepts `command` and optional `excludeFromContext`; it streams
+`bash_execution_update` frames, then returns `output`, optional `exitCode`,
+`cancelled`, `truncated`, and a retained `fullOutputPath` when truncated. A
+nonzero exit or cancellation is an outcome, not a protocol failure. RPC admits
+up to eight outstanding direct shells and lets them overlap a model run; a
+result that completes during a run is appended at the model boundary. A
+deferred append failure is reported as `extension_error`. `abort_bash` cancels
+all active direct shells and leaves the model running; `abort` stays model-only.
 `compact` admits one manual operation; `customInstructions` is optional and at
 most 4096 UTF-8 bytes. During an active run it cancels the run once, waits for
 durable settlement, then summarizes without replaying the interrupted prompt.

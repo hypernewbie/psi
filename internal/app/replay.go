@@ -74,6 +74,13 @@ func renderTimelineItems(emit func(string) bool, items []session.TranscriptItem,
 			lines = terminal.FormatMetadataMessage("[session] ", it.Text, width, noColor, display, palette...)
 		case session.KindHistoryBoundary:
 			lines = []string{"--- " + terminal.Sanitize(it.Text) + " ---", ""}
+		case session.KindShell:
+			lines = terminal.FormatShellBlock(terminal.ShellDisplay{
+				Command: it.Command, Output: it.Text, State: it.ToolState,
+				ExitCode: it.ExitCode, Excluded: it.Excluded,
+				Truncated: it.Truncated, FullOutputPath: it.FullOutputPath,
+				Expanded: display.ExpandShell,
+			}, width, noColor, palette...)
 		case session.KindNotice:
 			lines = []string{terminal.Sanitize(it.Text)}
 		}

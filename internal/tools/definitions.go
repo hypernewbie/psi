@@ -26,7 +26,7 @@ func Definitions(names []string) []provider.ToolDef {
 				"oldText": str("Unique exact text from the original file"), "newText": str("Replacement text"),
 			}, "oldText", "newText")},
 		}, "path", "edits")},
-		Bash: {Name: Bash, Description: "Run a shell command in the workspace. Returns the last 2000 lines or 50 KiB, with a full-output file when truncated. No default timeout.", Schema: obj(map[string]any{
+		Bash: {Name: Bash, Description: "Run a command in the selected shell. Returns the last 2000 lines or 50 KiB, with a full-output file when truncated. No default timeout. The tool name does not guarantee Bash syntax; use the selected shell's syntax and explicitly invoke an available sh or bash when needed.", Schema: obj(map[string]any{
 			"command": str("Shell command"), "timeout": map[string]any{"type": "number", "exclusiveMinimum": 0, "description": "Optional timeout in seconds"},
 		}, "command")},
 		PowerShell: {Name: PowerShell, Description: "Run a PowerShell command in the workspace. Returns the last 2000 lines or 50 KiB, with a full-output file when truncated. No default timeout.", Schema: obj(map[string]any{

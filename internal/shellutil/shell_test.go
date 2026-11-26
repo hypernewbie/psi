@@ -1,7 +1,10 @@
 package shellutil
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -187,29 +190,38 @@ func TestWindowsStoreAliasesAndUnixChecks(t *testing.T) {
 		t.Fatalf("rejected pwsh alias fallback = (%+v, %v), want %q", cfg, err, windowsPS)
 	}
 
-	// Unix resolution: /bin/bash -> bash on PATH -> sh, and missing explicit path fails.
+	// Unix resolution: inherited SHELL -> sh. Bash is never preferred, and a
+	// missing explicit path fails without fallback.
 	rUnix := resolver{
-		goos:       "linux",
-		getenv:     func(string) string { return "" },
-		pathExists: func(p string) bool { return p == "/bin/bash" },
+		goos: "linux",
+		getenv: func(key string) string {
+			if key == "SHELL" {
+				return "/usr/bin/fish"
+			}
+			return ""
+		},
+		pathExists: func(p string) bool { return p == "/usr/bin/fish" },
 		lookPath:   func(string) string { return "" },
 	}
-	if cfg, err := rUnix.getShellConfig(""); err != nil || cfg.Shell != "/bin/bash" {
-		t.Fatalf("unix /bin/bash = (%+v, %v)", cfg, err)
+	if cfg, err := rUnix.getShellConfig(""); err != nil || cfg.Shell != "/usr/bin/fish" {
+		t.Fatalf("unix SHELL = (%+v, %v)", cfg, err)
 	}
-	rUnix.pathExists = func(string) bool { return false }
+	rUnix.getenv = func(string) string { return "" }
 	rUnix.lookPath = func(name string) string {
-		if name == "bash" {
-			return "/usr/local/bin/bash"
+		if name == "sh" {
+			return "/bin/sh"
 		}
 		return ""
 	}
-	if cfg, err := rUnix.getShellConfig(""); err != nil || cfg.Shell != "/usr/local/bin/bash" {
-		t.Fatalf("unix PATH bash = (%+v, %v)", cfg, err)
-	}
-	rUnix.lookPath = func(string) string { return "" }
-	if cfg, err := rUnix.getShellConfig(""); err != nil || cfg.Shell != "sh" {
+	if cfg, err := rUnix.getShellConfig(""); err != nil || cfg.Shell != "/bin/sh" {
 		t.Fatalf("unix sh fallback = (%+v, %v)", cfg, err)
+	}
+	// No implicit Bash preference: with only /bin/bash present and no sh,
+	// automatic resolution fails.
+	rUnix.lookPath = func(string) string { return "" }
+	rUnix.pathExists = func(p string) bool { return p == "/bin/bash" }
+	if cfg, err := rUnix.getShellConfig(""); err == nil {
+		t.Fatalf("unix implicit bash = %+v, want failure", cfg)
 	}
 	if _, err := rUnix.getShellConfig("/missing/bash"); err == nil || !strings.Contains(err.Error(), "Custom shell path not found: /missing/bash") {
 		t.Fatalf("missing custom shell error = %v", err)
@@ -342,5 +354,153 @@ func TestNativeWindowsPrefersGitBashWhenInstalled(t *testing.T) {
 	}
 	if cfg.CommandTransport == TransportStdin {
 		t.Fatalf("Git Bash should use argv transport, got %+v", cfg)
+	}
+}
+
+func TestUnixShellDiscoveryFollowsInheritedShell(t *testing.T) {
+	base := func() resolver {
+		return resolver{
+			goos: "linux",
+			cwd:  "/work",
+			getenv: func(key string) string {
+				if key == "SHELL" {
+					return "/usr/bin/fish"
+				}
+				return ""
+			},
+			pathExists: func(p string) bool { return p == "/usr/bin/fish" || p == "/bin/zsh" },
+			lookPath: func(name string) string {
+				if name == "sh" {
+					return "/bin/sh"
+				}
+				return ""
+			},
+		}
+	}
+
+	t.Run("fish", func(t *testing.T) {
+		cfg, err := base().getShellConfig("")
+		if err != nil || cfg.Shell != "/usr/bin/fish" || !reflect.DeepEqual(cfg.Args, []string{"-c"}) {
+			t.Fatalf("fish = (%+v, %v)", cfg, err)
+		}
+	})
+
+	t.Run("zsh", func(t *testing.T) {
+		r := base()
+		r.getenv = func(key string) string {
+			if key == "SHELL" {
+				return "/bin/zsh"
+			}
+			return ""
+		}
+		cfg, err := r.getShellConfig("")
+		if err != nil || cfg.Shell != "/bin/zsh" {
+			t.Fatalf("zsh = (%+v, %v)", cfg, err)
+		}
+	})
+
+	t.Run("unusable SHELL falls to sh", func(t *testing.T) {
+		r := base()
+		r.getenv = func(key string) string {
+			if key == "SHELL" {
+				return "/missing/fish"
+			}
+			return ""
+		}
+		cfg, err := r.getShellConfig("")
+		if err != nil || cfg.Shell != "/bin/sh" {
+			t.Fatalf("fallback = (%+v, %v)", cfg, err)
+		}
+	})
+
+	t.Run("missing sh fails", func(t *testing.T) {
+		r := base()
+		r.getenv = func(string) string { return "" }
+		r.lookPath = func(string) string { return "" }
+		if cfg, err := r.getShellConfig(""); err == nil {
+			t.Fatalf("missing sh = %+v, want failure", cfg)
+		}
+	})
+}
+
+func TestShellConfigCwdRelativeSelectors(t *testing.T) {
+	cwd := "/stored/session"
+	for _, tc := range []struct {
+		selector string
+		want     string
+	}{
+		{"./helper", cwd + "/./helper"},
+		{"../bin/fish", cwd + "/../bin/fish"},
+		{"link/../helper", cwd + "/link/../helper"},
+		{"/opt/shell", "/opt/shell"},
+	} {
+		r := resolver{
+			goos:       "linux",
+			cwd:        cwd,
+			getenv:     func(string) string { return "" },
+			pathExists: func(p string) bool { return p == tc.want },
+			lookPath:   func(string) string { return "" },
+		}
+		cfg, err := r.getShellConfig(tc.selector)
+		if err != nil || cfg.Shell != tc.want {
+			t.Fatalf("selector %q = (%+v, %v), want %q", tc.selector, cfg, err, tc.want)
+		}
+	}
+}
+
+func TestShellConfigWindowsNativeSelectors(t *testing.T) {
+	cwd := `C:\work`
+	r := resolver{
+		goos:   "windows",
+		cwd:    cwd,
+		getenv: func(string) string { return "" },
+		pathExists: func(p string) bool {
+			return p == cwd+`\.\helper.exe` || p == `C:\tools\bash.exe`
+		},
+		lookPath: func(string) string { return "" },
+	}
+	if cfg, err := r.getShellConfig(`.\helper.exe`); err != nil || cfg.Shell != cwd+`\.\helper.exe` {
+		t.Fatalf("relative helper = (%+v, %v)", cfg, err)
+	}
+	if cfg, err := r.getShellConfig(`C:\tools\bash.exe`); err != nil || cfg.Shell != `C:\tools\bash.exe` {
+		t.Fatalf("absolute = (%+v, %v)", cfg, err)
+	}
+	for _, selector := range []string{`\tools\bash.exe`, `C:tools\bash.exe`} {
+		if cfg, err := r.getShellConfig(selector); err != nil || cfg.Shell != selector {
+			t.Fatalf("native selector %q = (%+v, %v)", selector, cfg, err)
+		}
+	}
+}
+
+func TestShellConfigRejectsErrDotLookups(t *testing.T) {
+	r := resolver{
+		goos:       "linux",
+		cwd:        "/work",
+		pathExists: func(string) bool { return false },
+		getenv: func(key string) string {
+			if key == "SHELL" {
+				return "tool"
+			}
+			return ""
+		},
+		lookupErr: func(name string) (string, error) {
+			switch name {
+			case "tool":
+				return "", fmt.Errorf("cannot run executable found relative to current directory: %w", exec.ErrDot)
+			case "sh":
+				return "/bin/sh", nil
+			default:
+				return "", exec.ErrNotFound
+			}
+		},
+	}
+	// An unusable inherited SHELL falls back to sh, whose lookup must work.
+	cfg, err := r.getShellConfig("")
+	if err != nil || cfg.Shell != "/bin/sh" {
+		t.Fatalf("SHELL ErrDot fallback = (%+v, %v)", cfg, err)
+	}
+	// An explicit ErrDot lookup is a failure, never an implicit cwd shell.
+	if _, err := r.getShellConfig("tool"); !errors.Is(err, exec.ErrDot) {
+		t.Fatalf("explicit ErrDot = %v", err)
 	}
 }
