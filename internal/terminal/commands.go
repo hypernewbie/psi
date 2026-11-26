@@ -33,6 +33,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "thinking", Description: "Set thinking level", ArgumentHint: "<level>"},
 	{Name: "name", Description: "Set session display name"},
 	{Name: "session", Description: "Show session info and stats"},
+	{Name: "usage", Description: "Show provider usage with account choices", ArgumentHint: "[provider]"},
 	{Name: "hotkeys", Description: "Show all keyboard shortcuts"},
 	{Name: "clone", Description: "Duplicate the current session at the current position"},
 	{Name: "trust", Description: "Save project trust decision for future sessions"},
@@ -134,7 +135,7 @@ func ParseCommand(line string) (*Command, bool) {
 // handler reads an argument; every other spelling is ordinary user text.
 func CommandTakesArgument(name string) bool {
 	switch name {
-	case "model", "thinking", "name", "compact", "ac", "autocompact", "loop", "login", "mcp":
+	case "model", "thinking", "name", "compact", "ac", "autocompact", "loop", "login", "mcp", "usage":
 		return true
 	}
 	return false

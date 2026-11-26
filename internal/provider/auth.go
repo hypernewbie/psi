@@ -39,14 +39,22 @@ func SelectProviderAPIKey(env map[string]string, authPath, providerID, configure
 }
 
 // SelectProviderAPIKeyInput resolves one provider's API key with the
-// models.json field presence and strictness that the caller observed.
+// models.json field presence and strictness that the caller observed. The
+// background context is unchanged; callers that own a bounded usage job use
+// SelectProviderAPIKeyInputContext so its deadline also bounds the auth lease.
 func SelectProviderAPIKeyInput(env map[string]string, authPath, providerID string, input APIKeyInput) (key, source string, err error) {
+	return SelectProviderAPIKeyInputContext(context.Background(), env, authPath, providerID, input)
+}
+
+// SelectProviderAPIKeyInputContext resolves one provider's API key with the
+// caller's cancellation and deadline, which cap the shared auth lease wait.
+func SelectProviderAPIKeyInputContext(ctx context.Context, env map[string]string, authPath, providerID string, input APIKeyInput) (key, source string, err error) {
 	spec, builtin := providerregistry.Lookup(providerID)
 	if builtin && spec.Auth != providerregistry.AuthAPIKey && spec.Auth != providerregistry.AuthAPIKeyOrOAuth {
 		return "", "", fmt.Errorf("provider %q does not use API-key authentication", providerID)
 	}
 	authPath = resolveAuthPath(env, authPath)
-	entries, err := AuthEntries(authPath)
+	entries, err := AuthEntriesContext(ctx, authPath)
 	if err != nil {
 		return "", "", err
 	}
@@ -101,8 +109,14 @@ func resolveAuthPath(env map[string]string, authPath string) string {
 // The caller owns the returned raw-message allocations and must call
 // ReleaseAuthEntries after the last credential read.
 func AuthEntries(authPath string) (map[string]json.RawMessage, error) {
+	return AuthEntriesContext(context.Background(), authPath)
+}
+
+// AuthEntriesContext is AuthEntries with the caller's cancellation and
+// deadline, which bound the shared auth lease wait.
+func AuthEntriesContext(ctx context.Context, authPath string) (map[string]json.RawMessage, error) {
 	authReads.Add(1)
-	data, readErr := readAuthShared(authPath)
+	data, readErr := readAuthSharedContext(ctx, authPath)
 	if readErr != nil {
 		if authPathAbsent(authPath, readErr) {
 			return nil, nil
@@ -313,7 +327,14 @@ func envLookup(env map[string]string) func(string) (string, bool) {
 // inspects a partial writer document (F01). Missing files still fall back to
 // environment credentials upstream. The wait is bounded for startup use.
 func readAuthShared(authPath string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	return readAuthSharedContext(context.Background(), authPath)
+}
+
+// readAuthSharedContext bounds the shared auth lease by the earlier of the
+// caller's deadline and the five-second startup bound. Context cancellation
+// bounds the lease wait only; an OS read already in progress may still return.
+func readAuthSharedContext(ctx context.Context, authPath string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	unlock, _, err := acquireAuthLock(ctx, authPath+".lock", 0, 0, 0)
 	if err != nil {

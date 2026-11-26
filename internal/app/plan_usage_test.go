@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,16 @@ func usePlanQuotaClient(r *runtime, kind, api string) *provider.Client {
 	case "anthropic-messages":
 		p := provider.NewClient(base, "synthetic-key", 0, 0)
 		r.prov, client = p, p
+	}
+	if client != nil {
+		r.quotaInstall = quotaInstallation{
+			provider: kind,
+			model:    r.ov.Model,
+			api:      api,
+			base:     strings.TrimRight(base, "/"),
+			keySHA:   sha256.Sum256([]byte(client.APIKey)),
+			hasKey:   client.APIKey != "",
+		}
 	}
 	return client
 }
@@ -101,7 +113,7 @@ func TestPlanQuotaShowsAllGoWindowsAndSwitches(t *testing.T) {
 		t.Fatalf("old provider remained visible: %q", got)
 	}
 	q.handleResult(quotaResult{kind: "zai", generation: q.generation, usage: provider.QuotaUsageResult{Outcome: provider.QuotaUsageSupported, Status: 200, Sample: true, UsedPercent: 25, StartedAt: start}})
-	if got, _, _ := q.presentation(r); got != "GLM 75%" {
+	if got, _, _ := q.presentation(r); got != "[███████▌░░] GLM 5h 75% Left" {
 		t.Fatalf("GLM footer = %q", got)
 	}
 }
