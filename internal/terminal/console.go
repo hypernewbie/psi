@@ -464,7 +464,7 @@ func (c *Console) SetPresentation(snapshot PresentationSnapshot) {
 		c.thinkingStream.noColor = snapshot.NoColor
 		c.thinkingStream.SetTheme(snapshot.Theme)
 		c.thinkingStream.SetDisplay(snapshot.Display)
-		c.thinkingStream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+		c.thinkingStream.SetStyle(thinkingStyle())
 		if snapshot.Display.HideThinking {
 			c.thinkingRows = nil
 			// The redraw renders the ledger block as the label; a later delta
@@ -1170,7 +1170,7 @@ func (c *Console) ThinkingWrite(p []byte) (int, error) {
 		c.thinkingStream = NewMarkdownStream(c.thinkingWidth, c.presentation.NoColor)
 		c.thinkingStream.SetTheme(c.presentation.Theme)
 		c.thinkingStream.SetDisplay(c.presentation.Display)
-		c.thinkingStream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+		c.thinkingStream.SetStyle(thinkingStyle())
 	}
 	// The stream's sanitizer retains incomplete UTF-8 and control sequences.
 	stable, _ := c.thinkingStream.Feed(string(p))

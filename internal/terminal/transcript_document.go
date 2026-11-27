@@ -120,7 +120,7 @@ func FormatThinkingBlock(source string, width int, noColor bool, display Display
 	}
 	stream := NewMarkdownStream(max(1, width), noColor)
 	stream.SetDisplay(display)
-	stream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+	stream.SetStyle(thinkingStyle())
 	if len(palette) > 0 {
 		stream.SetTheme(palette[0])
 	}

@@ -171,7 +171,7 @@ func RenderMarkdownWithDisplay(source string, width int, noColor bool, display D
 func RenderThinkingMarkdown(source string, width int, noColor bool, display DisplaySettings, palette ...*pitheme.Theme) []string {
 	stream := NewMarkdownStream(width, noColor)
 	stream.SetDisplay(display)
-	stream.SetStyle(mdStyle{token: TokenThinkingText, italic: true})
+	stream.SetStyle(thinkingStyle())
 	if len(palette) > 0 {
 		stream.SetTheme(palette[0])
 	}
@@ -282,6 +282,11 @@ type mdStyle struct {
 	bold      bool
 	italic    bool
 	underline bool
+	// keepSoftBreaks keeps a paragraph's source line breaks as line breaks
+	// even when softWrap joins them for prose. Pi's Markdown always keeps
+	// them; a reasoning block keeps them too, because a reasoning line
+	// structure is part of the text.
+	keepSoftBreaks bool
 }
 
 func (s mdStyle) span(text string) StyledSpan {
@@ -295,6 +300,15 @@ func (s mdStyle) withBold() mdStyle { s.bold = true; return s }
 func (s mdStyle) withItalic() mdStyle { s.italic = true; return s }
 
 func (s mdStyle) withUnderline() mdStyle { s.underline = true; return s }
+
+func (s mdStyle) withKeptSoftBreaks() mdStyle { s.keepSoftBreaks = true; return s }
+
+// thinkingStyle is the Markdown style of a reasoning block. Pi renders
+// reasoning as Markdown, and its Markdown keeps a paragraph's source line
+// breaks as line breaks.
+func thinkingStyle() mdStyle {
+	return mdStyle{token: TokenThinkingText, italic: true, keepSoftBreaks: true}
+}
 
 type mdTextRun struct {
 	text  []byte
@@ -384,7 +398,7 @@ func (r *markdownInlineRenderer) walk(node ast.Node, style mdStyle) {
 		if x.HardLineBreak() {
 			r.add("\n", style)
 		} else if x.SoftLineBreak() {
-			if r.softBreaks {
+			if r.softBreaks && !style.keepSoftBreaks {
 				// Soft mode joins a paragraph's source lines so copying the
 				// terminal's wrapped output does not insert a newline.
 				r.add(" ", style)
