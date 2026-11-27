@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hypernewbie/psi/internal/session"
 )
@@ -25,6 +26,7 @@ func TestActualAppModelSwitchAppliesToTheNextRequestInTurn(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	release := make(chan struct{})
+	firstReceived := make(chan struct{})
 	var mu sync.Mutex
 	var models []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +45,11 @@ func TestActualAppModelSwitchAppliesToTheNextRequestInTurn(t *testing.T) {
 			// Hold the first request open so the switch lands while it is
 			// in flight. The response is a tool call, so the next request
 			// belongs to the same run.
+			select {
+			case <-firstReceived:
+			default:
+				close(firstReceived)
+			}
 			<-release
 			write := func(name string, data any) {
 				b, _ := json.Marshal(data)
@@ -68,6 +75,13 @@ func TestActualAppModelSwitchAppliesToTheNextRequestInTurn(t *testing.T) {
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--tools", "read")
 	q.prompt()
 	q.write("START_SWITCH\r")
+	// Wait for the request to reach the provider, so the switch lands while
+	// it is in flight and not before it starts.
+	select {
+	case <-firstReceived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first request never reached the provider")
+	}
 	q.write("/model anthropic/m2\r")
 	q.wait("Model: m2")
 	close(release)
@@ -90,6 +104,7 @@ func TestActualAppModelSwitchDuringCompaction(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	agentDir := filepath.Join(home, "agent")
 	release := make(chan struct{})
+	summaryReceived := make(chan struct{})
 	var mu sync.Mutex
 	var kinds, models []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +127,11 @@ func TestActualAppModelSwitchDuringCompaction(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		if kind == "summary" {
 			// Hold the summary open so the switch lands while it runs.
+			select {
+			case <-summaryReceived:
+			default:
+				close(summaryReceived)
+			}
 			<-release
 			writeAnthropicTestResponse(w, "summary", "SUMMARY")
 			return
@@ -136,6 +156,13 @@ func TestActualAppModelSwitchDuringCompaction(t *testing.T) {
 	q := startReviewPTY(t, home, work, agentDir, "--deny-project", "--no-tools", "--session", store.File())
 	q.prompt()
 	q.write("/compact\r")
+	// Wait for the summary request to reach the provider, so the switch
+	// lands while the summary runs and not before it starts.
+	select {
+	case <-summaryReceived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the summary request never reached the provider")
+	}
 	q.write("/model anthropic/m2\r")
 	q.wait("Model: m2")
 	close(release)

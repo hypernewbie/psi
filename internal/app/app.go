@@ -467,7 +467,7 @@ Session storage (Unix): new directories and missing parents use mode 0700. Exist
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 A bare quit or exit asks for confirmation; submit either word again to leave. Any other submission cancels. Use /quit to exit immediately or when the confirmation cannot fit.
-During a run, /session, /hotkeys, and /name work without cancelling it. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
+During a run, /session, /hotkeys, /name, and /dequeue work without cancelling it. /dequeue returns the queued messages to the editor. Unknown slash text queues like ordinary input. See --docs keyboard for command and queue behavior.
 Use -- before a message that starts with a hyphen.
 Tool-selection flags affect only the tools listed under --tools.
 The optional powershell tool is off by default and available on Windows only; enable it with --tools or defaultTools (for example ["-bash", "+powershell"]).

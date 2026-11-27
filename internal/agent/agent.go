@@ -333,9 +333,11 @@ func (l *Loop) ClearCompactionQueue() []string {
 	var out []string
 	for _, input := range l.compactionSteering {
 		out = append(out, input.Display)
+		l.pendingBytes -= input.ImageBytes
 	}
 	for _, input := range l.compactionFollowUps {
 		out = append(out, input.Display)
+		l.pendingBytes -= input.ImageBytes
 	}
 	l.compactionSteering, l.compactionFollowUps = nil, nil
 	return out

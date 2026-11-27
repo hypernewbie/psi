@@ -237,8 +237,8 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	if cfg.ACPolicy != nil {
 		cfg.ACPolicy.SetCompacting(true)
 	}
-	l.sink(event.Event{Type: event.CompactionStart, State: reason})
 	l.compacting.Store(true)
+	l.sink(event.Event{Type: event.CompactionStart, State: reason})
 	defer func() {
 		l.compacting.Store(false)
 		l.sink(event.Event{Type: event.CompactionEnd, State: reason, Err: runErr})
