@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -960,14 +961,21 @@ func (c *Console) Flush() {
 
 // SetSteeringRows shows the queued steering messages above the editor, like
 // Pi's pendingMessages container: one leading blank row, then one dim row per
-// queued message. An empty slice clears the block.
+// queued message. An empty slice clears the block. Unchanged rows keep the
+// current frame: a redraw would rebuild the whole tail for nothing.
 func (c *Console) SetSteeringRows(texts []string) {
+	if slices.Equal(c.steeringTexts, texts) {
+		return
+	}
 	c.steeringTexts = append(c.steeringTexts[:0], texts...)
 	c.Draw()
 }
 
 // SetFollowUpRows shows queued messages that wait for the current run to end.
 func (c *Console) SetFollowUpRows(texts []string) {
+	if slices.Equal(c.followUpTexts, texts) {
+		return
+	}
 	c.followUpTexts = append(c.followUpTexts[:0], texts...)
 	c.Draw()
 }
