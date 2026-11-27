@@ -978,7 +978,7 @@ func (c *Console) renderSteeringRows(width int) {
 		return
 	}
 	width = max(1, width-1)
-	rows := make([]string, 0, len(c.steeringTexts)+len(c.followUpTexts)+1)
+	rows := make([]string, 0, len(c.steeringTexts)+len(c.followUpTexts)+2)
 	rows = append(rows, "")
 	appendRow := func(label, text string) {
 		row := StyledRow{Spans: []StyledSpan{{Text: label, Token: TokenMuted}, {Text: TruncateToWidth(Sanitize(text), max(1, width-CellWidth(label))), Token: TokenMuted}}}
@@ -990,6 +990,11 @@ func (c *Console) renderSteeringRows(width int) {
 	for _, text := range c.followUpTexts {
 		appendRow("Follow-up: ", text)
 	}
+	// Pi's pending area names the action that takes the queued messages back
+	// to the editor. psi has no keybinding layer, so the command stands in
+	// for Pi's dequeue key.
+	hint := StyledRow{Spans: []StyledSpan{{Text: "↳ /dequeue to edit all queued messages", Token: TokenMuted}}}
+	rows = append(rows, FormatStyledRow(hint, width, c.presentation.NoColor, c.presentation.Theme))
 	c.steeringRows = rows
 }
 

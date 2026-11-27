@@ -42,6 +42,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "compact", Description: "Manually compact the session context"},
 	{Name: "b", Description: "Request another response without a new prompt"},
 	{Name: "bump", Description: "Request another response without a new prompt"},
+	{Name: "dequeue", Description: "Restore queued messages to the editor"},
 	{Name: "resume", Description: "Resume another session"},
 	{Name: "reload", Description: "Reload themes, display settings, prompt inputs, skills, queue modes, the local model catalog, and MCP configuration"},
 	{Name: "mcp", Description: "Show MCP server and tool status"},

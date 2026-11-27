@@ -94,7 +94,7 @@ Resume (every form shows current-view history before the next prompt):
 ./psi --no-session
 ```
 
-Inline commands: `/login /logout /model /thinking /name /session /hotkeys /clone /new /compact /resume /reload /quit /ac /autocompact /loop /loop-stop /skill:name`.
+Inline commands: `/login /logout /model /thinking /name /session /hotkeys /clone /new /compact /dequeue /resume /reload /quit /ac /autocompact /loop /loop-stop /skill:name`.
 `/name [name]` sets or shows the session display name. `/clone` copies the current branch to a new session file.
 `/resume` opens the searchable workspace picker; use arrows or PageUp/PageDown, Enter to select, Escape to cancel.
 `/help`, `/version`, and `/history` are not commands. Use `./psi --help` and `./psi --version` for CLI information. Unknown slash commands are sent as ordinary prompts, like Pi.

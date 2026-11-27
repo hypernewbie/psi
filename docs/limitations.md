@@ -140,7 +140,7 @@ During a run, the editor stays active and `Enter` queues a steering message, as 
 `Alt+Enter` queues follow-up messages until the run ends. `steeringMode` and `followUpMode`
 select `one-at-a-time` (Pi's default, one message per turn) or `all`; the
 `/settings` picker does not list these values, so edit `settings.json` instead.
-`/ac`, `/autocompact`, `/compact`, `/loop-stop`, and `/skill:<name>` have busy-run handling.
+`/ac`, `/autocompact`, `/compact`, `/dequeue`, `/loop-stop`, and `/skill:<name>` have busy-run handling.
 `/model`, `/thinking`, and `/settings` work during a run. Request settings apply to the next request.
 `/session`, `/hotkeys`, and `/name` run immediately without cancelling the run.
 `/quit` releases the terminal first, then the run settles behind it and the process exits.

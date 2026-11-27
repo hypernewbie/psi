@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -110,6 +111,14 @@ type Loop struct {
 	followUps    []UserInput
 	steeringMode string
 	followUpMode string
+	// compactionSteering and compactionFollowUps hold the messages typed
+	// while a compaction runs. Pi keeps them apart from the run's own
+	// queues, so the summary is generated without them; they join the run's
+	// queues once the checkpoint is committed.
+	compactionSteering  []UserInput
+	compactionFollowUps []UserInput
+	// compacting reports that a compaction is running right now.
+	compacting atomic.Bool
 	// retryAttempt counts the automatic retries scheduled for the response
 	// that is failing now (Pi's _retryAttempt). It resets when the retried
 	// response is no longer an error or the run gives up. Only the run
@@ -250,6 +259,85 @@ func (l *Loop) PendingFollowUp() []string {
 	for i, input := range l.followUps {
 		out[i] = input.Display
 	}
+	return out
+}
+
+// Compacting reports that a compaction is running right now. The application
+// uses it to hold a message typed during a compaction in the compaction
+// queue, like Pi's isCompacting check.
+func (l *Loop) Compacting() bool { return l.compacting.Load() }
+
+// QueueDuringCompaction holds a message typed while a compaction runs. Pi
+// keeps such a message out of the run's own queues so the summary is
+// generated without it; the message joins the run's queue once the
+// checkpoint is committed.
+func (l *Loop) QueueDuringCompaction(input UserInput, followUp bool) {
+	if input.Empty() {
+		return
+	}
+	if input.Display == "" {
+		input.Display = input.Text()
+	}
+	l.steerMu.Lock()
+	if followUp {
+		l.compactionFollowUps = append(l.compactionFollowUps, input)
+	} else {
+		l.compactionSteering = append(l.compactionSteering, input)
+	}
+	l.pendingBytes += input.ImageBytes
+	l.steerMu.Unlock()
+}
+
+// PendingCompactionSteering returns the messages typed during a compaction
+// that steer the current turn.
+func (l *Loop) PendingCompactionSteering() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	out := make([]string, len(l.compactionSteering))
+	for i, input := range l.compactionSteering {
+		out[i] = input.Display
+	}
+	return out
+}
+
+// PendingCompactionFollowUp returns the messages typed during a compaction
+// that wait for the run to end.
+func (l *Loop) PendingCompactionFollowUp() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	out := make([]string, len(l.compactionFollowUps))
+	for i, input := range l.compactionFollowUps {
+		out[i] = input.Display
+	}
+	return out
+}
+
+// flushCompactionQueue moves the messages typed during a compaction into the
+// run's own queues. It runs once the checkpoint is committed, so the
+// summary never sees them and the run delivers them with its next turn.
+func (l *Loop) flushCompactionQueue() {
+	l.steerMu.Lock()
+	steering := l.compactionSteering
+	followUps := l.compactionFollowUps
+	l.compactionSteering, l.compactionFollowUps = nil, nil
+	l.steering = append(l.steering, steering...)
+	l.followUps = append(l.followUps, followUps...)
+	l.steerMu.Unlock()
+}
+
+// ClearCompactionQueue removes the messages typed during a compaction and
+// returns them, so the application can hand the text back to the editor.
+func (l *Loop) ClearCompactionQueue() []string {
+	l.steerMu.Lock()
+	defer l.steerMu.Unlock()
+	var out []string
+	for _, input := range l.compactionSteering {
+		out = append(out, input.Display)
+	}
+	for _, input := range l.compactionFollowUps {
+		out = append(out, input.Display)
+	}
+	l.compactionSteering, l.compactionFollowUps = nil, nil
 	return out
 }
 

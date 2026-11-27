@@ -2398,6 +2398,42 @@ func (r *runtime) repl(console *terminal.Console) error {
 		_, after, _, _ := console.FrameStats()
 		r.eventFrames += after - before
 	}
+	// showQueuedMessages refreshes the pending rows above the editor. Pi
+	// shows the run's own queue and the messages typed during a compaction
+	// in one place, each with its own label.
+	showQueuedMessages := func() {
+		var steering, followUp []string
+		if activeLoop != nil {
+			steering = activeLoop.PendingSteering()
+			followUp = activeLoop.PendingFollowUp()
+			steering = append(steering, activeLoop.PendingCompactionSteering()...)
+			followUp = append(followUp, activeLoop.PendingCompactionFollowUp()...)
+		}
+		console.SetSteeringRows(steering)
+		console.SetFollowUpRows(followUp)
+	}
+	// dequeueCommand takes the queued messages back to the editor, like Pi's
+	// app.message.dequeue. The messages leave the run's own queue and the
+	// compaction queue, so the user can edit them before they run.
+	dequeueCommand := func() {
+		var texts []string
+		if activeLoop != nil {
+			texts = append(texts, r.takeSteering(activeLoop)...)
+			texts = append(texts, activeLoop.ClearFollowUp()...)
+			texts = append(texts, activeLoop.ClearCompactionQueue()...)
+		}
+		if len(texts) == 0 {
+			console.Status("No queued messages to restore")
+			return
+		}
+		restoreQueuedDraft(texts)
+		showQueuedMessages()
+		plural := ""
+		if len(texts) > 1 {
+			plural = "s"
+		}
+		console.Status(fmt.Sprintf("Restored %d queued message%s to editor", len(texts), plural))
+	}
 	applyEvent := func(ev event.Event) {
 		if ev.Generation != 0 && ev.Generation != r.generation {
 			return
@@ -2466,10 +2502,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case event.SteeringDelivered, event.FollowUpDelivered:
 			// A delivered queued message becomes a normal user turn. Remove it
 			// from the appropriate dim queue and append its durable transcript row.
-			if activeLoop != nil {
-				console.SetSteeringRows(activeLoop.PendingSteering())
-				console.SetFollowUpRows(activeLoop.PendingFollowUp())
-			}
+			showQueuedMessages()
 			console.EnsureTranscriptGap()
 			_ = out.AppendDocumentBlock(terminal.DocumentBlock{Kind: terminal.DocumentUser, Text: ev.Text})
 		case event.RunEnd:
@@ -2902,11 +2935,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if busy {
 			if followUp {
 				activeLoop.FollowUpWithProvenance(expanded, invocation, "skill")
-				console.SetFollowUpRows(activeLoop.PendingFollowUp())
 			} else {
 				activeLoop.SteerWithProvenance(expanded, invocation, "skill")
-				console.SetSteeringRows(activeLoop.PendingSteering())
 			}
+			showQueuedMessages()
 			r.bumpContextRev()
 			r.draw(console)
 			return
@@ -3392,12 +3424,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			if lateQueueLoop != nil {
 				activeLoop = lateQueueLoop
-				console.SetSteeringRows(activeLoop.PendingSteering())
-				console.SetFollowUpRows(activeLoop.PendingFollowUp())
+				showQueuedMessages()
 			} else {
 				activeLoop = nil
-				console.SetSteeringRows(nil)
-				console.SetFollowUpRows(nil)
+				showQueuedMessages()
 			}
 			if r.selector != nil || r.settingsPicker != nil {
 				pickerRecovery = append(pickerRecovery, undelivered...)
@@ -4174,6 +4204,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 					submitNativeSkill(cmd, text, input.FollowUp)
 					continue
 				}
+				// /dequeue takes the queued messages back to the editor, like
+				// Pi's dequeue key.
+				if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "dequeue" {
+					dequeueCommand()
+					r.draw(console)
+					continue
+				}
 				// AC policy commands update session-local policy; /ac compact
 				// reserves a compaction and cancels this run before summarizing.
 				if strings.HasPrefix(strings.TrimSpace(text), "/") {
@@ -4267,13 +4304,18 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 				}
 				if activeLoop != nil {
-					if input.FollowUp {
+					if activeLoop.Compacting() {
+						// A message typed during a compaction waits for the
+						// checkpoint. Pi keeps it out of the run's queue so
+						// the summary is generated without it.
+						activeLoop.QueueDuringCompaction(agent.UserInput{Content: text, Display: text}, input.FollowUp)
+						console.Status("Queued message for after compaction")
+					} else if input.FollowUp {
 						activeLoop.FollowUp(text)
-						console.SetFollowUpRows(activeLoop.PendingFollowUp())
 					} else {
 						activeLoop.Steer(text)
-						console.SetSteeringRows(activeLoop.PendingSteering())
 					}
+					showQueuedMessages()
 					r.bumpContextRev()
 				}
 				r.draw(console)
@@ -4394,6 +4436,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				if cmd.Name == "trust" {
 					openTrust()
+					continue
+				}
+				if cmd.Name == "dequeue" {
+					dequeueCommand()
+					r.draw(console)
 					continue
 				}
 				if cmd.Name == "settings" {

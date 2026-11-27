@@ -169,7 +169,7 @@ func TestSteeringRowsRenderAboveEditorLikePendingMessages(t *testing.T) {
 	if border < 5 {
 		t.Fatalf("queued rows or borders missing: %q", rows)
 	}
-	if strings.TrimSpace(rows[border-5]) != "" || !strings.Contains(rows[border-4], "Steering: first steer") || !strings.Contains(rows[border-3], "Steering: second steer") || !strings.Contains(rows[border-2], "Follow-up: later follow-up") || strings.TrimSpace(rows[border-1]) != "" {
+	if strings.TrimSpace(rows[border-6]) != "" || !strings.Contains(rows[border-5], "Steering: first steer") || !strings.Contains(rows[border-4], "Steering: second steer") || !strings.Contains(rows[border-3], "Follow-up: later follow-up") || !strings.Contains(rows[border-2], "/dequeue to edit all queued messages") || strings.TrimSpace(rows[border-1]) != "" {
 		t.Fatalf("queued block does not match Pi's pending rows: %q", rows)
 	}
 	c.SetSteeringRows(nil)

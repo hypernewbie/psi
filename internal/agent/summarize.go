@@ -229,13 +229,20 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	applyLiveSettings(&cfg, l)
 	prepared, err := l.CheckCompaction(cfg)
 	if err != nil {
+		// Nothing to compact: the messages typed during the attempt still
+		// belong to the run.
+		l.flushCompactionQueue()
 		return err
 	}
 	if cfg.ACPolicy != nil {
 		cfg.ACPolicy.SetCompacting(true)
 	}
 	l.sink(event.Event{Type: event.CompactionStart, State: reason})
-	defer func() { l.sink(event.Event{Type: event.CompactionEnd, State: reason, Err: runErr}) }()
+	l.compacting.Store(true)
+	defer func() {
+		l.compacting.Store(false)
+		l.sink(event.Event{Type: event.CompactionEnd, State: reason, Err: runErr})
+	}()
 	record := func(err error) {
 		if cfg.ACPolicy == nil {
 			return
@@ -273,6 +280,10 @@ func (l *Loop) compactWithReason(ctx context.Context, cfg Config, focus, reason 
 	cfg.SummaryRetryReason = reason
 	err = l.compactPrepared(ctx, cfg, focus, prepared, summaryProvider, summaryModel, overrideUsed)
 	record(err)
+	// The checkpoint is committed (or the summary failed without changing
+	// the context): the messages typed during the compaction join the run's
+	// queue now, like Pi's flush after the compaction.
+	l.flushCompactionQueue()
 	return err
 }
 
