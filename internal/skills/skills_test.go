@@ -90,7 +90,7 @@ func TestRepoAddSlashCommandSkill(t *testing.T) {
 	if got[0].FilePath != dstPath {
 		t.Fatalf("skill path = %q, want %q", got[0].FilePath, dstPath)
 	}
-	if prompt := FormatForPrompt(got); prompt != "" {
+	if prompt := FormatForPrompt(got, "en"); prompt != "" {
 		t.Fatalf("explicit-only skill was advertised in the prompt: %q", prompt)
 	}
 	if _, err := Invoke(got, "add-slash-command", ""); err != nil {
@@ -123,16 +123,30 @@ func TestMalformedAndCollision(t *testing.T) {
 
 func TestAdvertiseExcludesExplicit(t *testing.T) {
 	skills := []Skill{
-		{Name: "auto", Description: "auto skill", FilePath: "/a/SKILL.md"},
+		{Name: "auto", Description: "auto <skill> & \"quoted\"", FilePath: "/a/SKILL.md"},
 		{Name: "manual", Description: "manual", FilePath: "/b/SKILL.md", Disable: true},
 	}
-	prompt := FormatForPrompt(skills)
-	if !contains(prompt, "auto") || contains(prompt, "manual") {
-		t.Errorf("explicit-only must be excluded from advertisement: %q", prompt)
-	}
-	// Full body never advertised.
-	if contains(prompt, "secret-body") {
-		t.Errorf("body leaked")
+	for _, tt := range []struct {
+		language string
+		wrapper  string
+	}{
+		{language: "en", wrapper: "The following skills provide specialized instructions for specific tasks."},
+		{language: "zh", wrapper: "以下技能为特定任务提供专用指令。"},
+	} {
+		prompt := FormatForPrompt(skills, tt.language)
+		if !contains(prompt, "auto") || contains(prompt, "manual") {
+			t.Errorf("%s: explicit-only skill must be excluded from advertisement: %q", tt.language, prompt)
+		}
+		if !contains(prompt, tt.wrapper) {
+			t.Errorf("%s: wrapper missing: %q", tt.language, prompt)
+		}
+		if !contains(prompt, `auto &lt;skill&gt; &amp; &quot;quoted&quot;`) || !contains(prompt, `<location>/a/SKILL.md</location>`) {
+			t.Errorf("%s: escaped metadata changed: %q", tt.language, prompt)
+		}
+		// Full body never advertised.
+		if contains(prompt, "secret-body") {
+			t.Errorf("%s: body leaked", tt.language)
+		}
 	}
 }
 

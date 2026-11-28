@@ -49,7 +49,7 @@ import (
 type Options struct {
 	Help, Version, Continue, Resume                                      bool
 	SessionPath, SessionID, Provider, Model, Thinking, SessionDir, Tools string
-	Name, ExcludeTools, Mode, TUIMode, SystemPrompt                      string
+	Name, ExcludeTools, Mode, TUIMode, SystemPrompt, Language            string
 	AppendSystemPrompts                                                  []string
 	ListModels                                                           bool
 	ListModelsFilter                                                     string
@@ -67,7 +67,7 @@ var cliValueFlags = map[string]bool{
 	"session-dir": true, "tools": true, "t": true, "theme": true,
 	"use-theme": true, "name": true, "n": true, "exclude-tools": true,
 	"xt": true, "mode": true, "tui-mode": true, "system-prompt": true,
-	"append-system-prompt": true,
+	"append-system-prompt": true, "language": true,
 }
 
 var cliBoolFlags = map[string]bool{
@@ -248,6 +248,13 @@ func Parse(args []string) (Options, *flag.FlagSet, error) {
 	fs.StringVar(&o.SystemPrompt, "system-prompt", "", "set the system prompt text or file path")
 	fs.Func("append-system-prompt", "append system prompt text or file path (repeatable)", func(value string) error {
 		o.AppendSystemPrompts = append(o.AppendSystemPrompts, value)
+		return nil
+	})
+	fs.Func("language", "built-in prompt language: en or zh (Psi-only, this run only)", func(value string) error {
+		if !config.ValidLanguage(value) {
+			return fmt.Errorf("--language must be \"en\" or \"zh\"")
+		}
+		o.Language = value
 		return nil
 	})
 	fs.Func("list-models", "list models from the local Pi catalog (optional search text)", func(value string) error {
@@ -464,6 +471,9 @@ Pi-compatible options:
 Interactive credential setup: /login selects a provider; OpenAI opens ChatGPT sign-in, OpenAI Codex offers browser or device code sign-in in a dedicated panel, and other supported providers use a masked API-key prompt. Codex browser sign-in accepts a masked redirect URL or code; in device code mode, Enter opens the verification page. Esc cancels Codex sign-in, and Ctrl+D cancels and quits. /logout removes the selected stored API key or OAuth credential and attempts OAuth revocation. See docs/security.md for credential handling.
 Session storage (Unix): new directories and missing parents use mode 0700. Existing directory modes are preserved.
 
+Psi-only options:
+  --language <en|zh>         Built-in system-prompt language for this run (prompt text only)
+
 Positional messages are sent in order after the terminal starts. Options can appear before or after messages.
 Interactive Enter submits; an empty Enter retries an unfinished turn when idle, while /b and /bump request another response from the current context. Refused bumps stay silent and busy bumps are discarded; started runs report failures normally.
 A bare quit or exit asks for confirmation; submit either word again to leave. Any other submission cancels. Use /quit to exit immediately or when the confirmation cannot fit.
@@ -667,7 +677,7 @@ func Run(args []string, version string) error {
 			}
 		}
 		if r.authErr != nil {
-			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.authErr.Error()+" (offline commands still work; /login [provider], /logout, /model to select, /session for status)", 80, noColorEnvironment(), r.theme) {
+			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.localized("notice.auth-offline-suffix", r.authErr.Error()), 80, noColorEnvironment(), r.theme) {
 				fmt.Fprintln(startupOut, line)
 			}
 		}
@@ -1924,7 +1934,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		themeChanges = watch.changes
 		defer watch.Close()
 	} else {
-		notice(terminal.NoticeWarning, "Theme file watching is unavailable; use /reload to apply theme changes.")
+		notice(terminal.NoticeWarning, r.localized("notice.theme-watch-unavailable"))
 	}
 	stream := terminal.NewStreamer(terminal.StreamOutput{Console: console}, true)
 	thinkingStream := terminal.NewStreamer(terminal.ThinkingOutput{Console: console}, true)
@@ -2078,7 +2088,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	showLoginStatus := func(text string) {
 		if login.panel != nil {
-			*login.panel = codexLoginPanel{status: text}
+			*login.panel = codexLoginPanel{status: text, chinese: login.panel.chinese}
 		} else {
 			console.Status(text)
 		}
@@ -2117,9 +2127,9 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.codexLogin = nil
 			console.ClearPickerRows()
 		}
-		cancelledText := owned.label + " sign-in cancelled."
+		cancelledText := r.localized("notice.signin-cancelled", owned.label)
 		if owned.closeBrowser {
-			cancelledText += " Close the browser tab."
+			cancelledText += " " + r.localized("notice.close-browser-tab")
 		}
 		wasSecret := owned.secretActive
 		if owned.secretActive {
@@ -2134,7 +2144,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		switch {
 		case owned.cancelled && result.err == nil:
-			notice(terminal.NoticeWarning, owned.label+" sign-in saved, but model activation was skipped after cancel. Use /model to select a model.")
+			notice(terminal.NoticeWarning, r.localized("notice.signin-saved-activation-skipped", owned.label))
 		case owned.cancelled && errors.Is(result.err, context.Canceled):
 			notice(terminal.NoticeInfo, cancelledText)
 		case owned.cancelled:
@@ -2142,7 +2152,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			notice(terminal.NoticeError, result.err.Error())
 		case result.err == nil:
 			if r.store != owned.store {
-				notice(terminal.NoticeWarning, owned.label+" sign-in saved, but the session changed. Use /model to select a model.")
+				notice(terminal.NoticeWarning, r.localized("notice.signin-saved-session-changed", owned.label))
 			} else {
 				kind, text := owned.activate()
 				notice(kind, text)
@@ -2389,7 +2399,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			r.state = StateIdle
 		}
 	} else {
-		print("error: " + err.Error())
+		print(r.localized("notice.error-prefix") + err.Error())
 		r.state = StateIdle
 	}
 	recordEventFrames := func(update func()) {
@@ -2532,7 +2542,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			// notice, because the retried response is already on screen.
 			retryCountdown = nil
 			if ev.Err != nil {
-				retryFailure = fmt.Sprintf("Retry failed after %d attempts: %s", ev.RetryAttempt, ev.Err.Error())
+				retryFailure = fmt.Sprintf(r.localized("notice.retry-failed"), ev.RetryAttempt, ev.Err.Error())
 			}
 		case event.SummarizationRetryScheduled:
 			notice(terminal.NoticeError, ev.Text)
@@ -2596,7 +2606,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			if ev.Err != nil && r.state != StateCancelling && ev.State != event.CompactionManual && ev.State != event.CompactionOverflow {
 				// Pi reports a failed auto-compaction and keeps the session alive;
 				// manual and overflow failures surface through the run error path.
-				notice(terminal.NoticeWarning, "Auto-compaction failed: "+ev.Err.Error())
+				notice(terminal.NoticeWarning, r.localized("notice.auto-compaction-failed", ev.Err.Error()))
 			}
 			if r.state != StateCancelling {
 				r.state = StateWaiting
@@ -2640,7 +2650,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 	startInputMode := func(input agent.UserInput, focus string, mode inputMode, silent bool) (bool, string) {
 		if login != nil {
 			if !silent {
-				notice(terminal.NoticeError, "Finish or cancel the "+login.label+" sign-in before submitting.")
+				notice(terminal.NoticeError, r.localized("notice.finish-signin-first", login.label))
 			}
 			return false, "login"
 		}
@@ -2650,7 +2660,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		if err := r.store.WriteError(); err != nil {
 			r.state = StateStorageBlocked
 			if !silent {
-				notice(terminal.NoticeError, "Storage is blocked: "+err.Error()+" (open a checked copy or /new)")
+				notice(terminal.NoticeError, r.localized("notice.storage-blocked-new", err.Error()))
 			}
 			return false, "storage"
 		}
@@ -2871,10 +2881,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return err
 		}
 		if r.loops != nil && r.loops.Snapshot().Active {
-			return fmt.Errorf("stop the active loop before signing in")
+			return r.localizedError("login.stop-loop")
 		}
 		if r.queuedInputs != nil && r.queuedInputs() > 0 {
-			return fmt.Errorf("finish the queued input before signing in")
+			return r.localizedError("login.finish-queued")
 		}
 		cancelACEndTurn()
 		ctx, stop := context.WithCancel(context.Background())
@@ -2899,13 +2909,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 	}
 	startCodexBrowserLogin := func() error {
 		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, codexBind: r.codexBind, browser: r.codexBrowser, rename: r.codexRename}
-		return startOAuthLogin("OpenAI Codex", true, &codexLoginPanel{}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+		return startOAuthLogin("OpenAI Codex", true, &codexLoginPanel{chinese: r.chineseUI()}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runCodexLogin(ctx, req, updates)
 		})
 	}
 	startCodexDeviceLogin := func() error {
 		req := oauthLoginRequest{agentDir: r.agentDir, transport: r.codexTransport, browser: r.codexBrowser, rename: r.codexRename, wait: r.codexWait}
-		return startOAuthLogin("OpenAI Codex", false, &codexLoginPanel{}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
+		return startOAuthLogin("OpenAI Codex", false, &codexLoginPanel{chinese: r.chineseUI()}, r.activateCodexLogin, func(ctx context.Context, updates chan<- oauthLoginUpdate) oauthLoginResult {
 			return runCodexDeviceLogin(ctx, req, updates)
 		})
 	}
@@ -2926,7 +2936,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		expanded, err := skills.Invoke(r.skills, name, cmd.Arg)
 		if err != nil {
-			print("error: " + err.Error())
+			print(r.localized("notice.error-prefix") + err.Error())
 			console.Editor.RestoreDraft(submittedDraft, submittedCursor)
 			console.RefreshCompletion()
 			r.draw(console)
@@ -2995,7 +3005,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			return errors.New("cannot compact while exiting")
 		}
 		if login != nil {
-			return errors.New("finish or cancel the " + login.label + " sign-in before compacting")
+			return r.localizedError("login.before-compacting", login.label)
 		}
 		if r.reloadPending {
 			return errors.New("wait for the pending reload before compacting")
@@ -3016,7 +3026,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			}
 			return nil
 		}
-		notice(terminal.NoticeInfo, "Cancelling the run for compaction.")
+		notice(terminal.NoticeInfo, r.localized("notice.cancelling-for-compaction"))
 		cancelRun()
 		return nil
 	}
@@ -3024,14 +3034,14 @@ func (r *runtime) repl(console *terminal.Console) error {
 	bridge.reloadRun = func() error {
 		_, err := r.handleReloadCommand("", io.Discard)
 		if err != nil {
-			notice(terminal.NoticeWarning, "Resource reload failed. "+err.Error())
+			notice(terminal.NoticeWarning, r.localized("notice.resource-reload-failed", err.Error()))
 		}
 		r.draw(console)
 		return err
 	}
 	checkAndStartEndTurnCompact := func() {
 		if writeErr := r.store.WriteError(); writeErr != nil {
-			notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
+			notice(terminal.NoticeError, r.localized("notice.storage-blocked-new", writeErr.Error()))
 			return
 		}
 		checker := agent.New(r.store, r.reg, r.prov, nil)
@@ -3089,11 +3099,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 		}
 		state, stopped, err := r.loops.Stop("Stopped by user")
 		if err != nil {
-			notice(terminal.NoticeError, "Could not stop loop: "+err.Error())
+			notice(terminal.NoticeError, r.localized("notice.loop-stop-failed", err.Error()))
 		} else if !stopped {
-			notice(terminal.NoticeInfo, "No active loop")
+			notice(terminal.NoticeInfo, r.localized("notice.no-active-loop"))
 		} else {
-			notice(terminal.NoticeWarning, fmt.Sprintf("Loop stopped after %d iteration(s)", state.CurrentStep+1))
+			notice(terminal.NoticeWarning, r.localized("notice.loop-stopped", state.CurrentStep+1))
 		}
 		console.SetLoopStatus(r.loops.StatusLine())
 		r.draw(console)
@@ -3251,7 +3261,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 		case <-themeChanges:
 			if err := r.reloadTheme(); err != nil {
 				if err.Error() != lastThemeWatchError {
-					notice(terminal.NoticeWarning, "Theme reload failed; the last valid theme remains active. "+err.Error())
+					notice(terminal.NoticeWarning, r.localized("notice.theme-reload-failed", err.Error()))
 					lastThemeWatchError = err.Error()
 				}
 				continue
@@ -3352,10 +3362,10 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 			} else {
 				if update.link != "" {
-					notice(terminal.NoticeInfo, "Complete "+login.label+" sign-in in your browser: "+update.link)
+					notice(terminal.NoticeInfo, r.localized("notice.signin-browser", login.label, update.link))
 				}
 				if update.manualOpen {
-					notice(terminal.NoticeInfo, "The browser did not open automatically. Open the sign-in link above on this machine.")
+					notice(terminal.NoticeInfo, r.localized("notice.signin-browser-manual"))
 				}
 			}
 			r.draw(console)
@@ -3411,7 +3421,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 			var undelivered []string
 			var lateQueueLoop *agent.Loop
 			if r.recoverInFlight() > 0 {
-				notice(terminal.NoticeWarning, "An attachment prompt was not delivered. Phi keeps a saved copy you can restore.")
+				notice(terminal.NoticeWarning, r.localized("notice.attachment-undelivered"))
 			}
 			if activeLoop != nil {
 				pendingSteering := activeLoop.PendingSteering()
@@ -3464,16 +3474,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 			} else if errors.Is(err, context.Canceled) {
 				if runOutcome == event.OutcomeUnsaved {
 					r.state = StateStorageBlocked
-					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new.")
+					notice(terminal.NoticeError, r.localized("notice.unsaved-output"))
 				} else if retryFailure != "" {
 					// Pi reports an aborted retry as a failed one.
 					notice(terminal.NoticeError, retryFailure)
 				} else if visibleRunText && runOutcome == event.OutcomeInterrupted {
-					notice(terminal.NoticeWarning, "The run was interrupted. Any streamed partial response was saved with an interrupted outcome; review it before continuing.")
+					notice(terminal.NoticeWarning, r.localized("notice.run-interrupted"))
 				} else if visibleRunText {
-					notice(terminal.NoticeWarning, "Visible output was saved, but the operation was cancelled.")
+					notice(terminal.NoticeWarning, r.localized("notice.visible-saved-cancelled"))
 				} else {
-					notice(terminal.NoticeWarning, "Request cancelled.")
+					notice(terminal.NoticeWarning, r.localized("notice.request-cancelled"))
 				}
 			} else if err != nil {
 				var noWork *agent.CompactionNoWorkError
@@ -3485,12 +3495,12 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				switch {
 				case errors.As(err, &noWork):
-					message := "Nothing to compact yet. Recent conversation is already within the retained budget."
+					message := r.localized("notice.nothing-to-compact-recent")
 					switch noWork.Disposition {
 					case agent.CompactionEmpty:
-						message = "Nothing to compact yet. The session has no conversation history."
+						message = r.localized("notice.nothing-to-compact-empty")
 					case agent.CompactionAlreadyDone:
-						message = "Nothing to compact yet. This session is already compacted."
+						message = r.localized("notice.nothing-to-compact-done")
 					}
 					if acManual {
 						if proj, projErr := r.store.Projection(); projErr == nil && session.CanBump(proj.Flat) {
@@ -3500,11 +3510,11 @@ func (r *runtime) repl(console *terminal.Console) error {
 					notice(terminal.NoticeInfo, message)
 				case runOutcome == event.OutcomeUnsaved:
 					r.state = StateStorageBlocked
-					notice(terminal.NoticeError, "UNSAVED output. Storage is blocked; do not continue this session. Open a checked copy or use /new. "+err.Error())
+					notice(terminal.NoticeError, r.localized("notice.unsaved-output-detail", err.Error()))
 				case runOutcome == event.OutcomeInterrupted && visibleRunText:
 					notice(terminal.NoticeError, failureText)
 				case visibleRunText && runOutcome == event.OutcomeDurable:
-					notice(terminal.NoticeWarning, "The visible response was saved, but the operation did not complete. "+err.Error())
+					notice(terminal.NoticeWarning, r.localized("notice.visible-saved-incomplete", err.Error()))
 				default:
 					notice(terminal.NoticeError, failureText)
 				}
@@ -3563,13 +3573,13 @@ func (r *runtime) repl(console *terminal.Console) error {
 			manualStarted := false
 			if manualCompact != nil {
 				if manualCompact.cancelled {
-					notice(terminal.NoticeInfo, "Compaction cancelled.")
+					notice(terminal.NoticeInfo, r.localized("notice.compaction-cancelled"))
 					finishManualCompact(context.Canceled)
 				} else if startErr := startManualCompactWorker(); startErr != nil {
-					notice(terminal.NoticeError, "Compaction could not start. "+startErr.Error())
+					notice(terminal.NoticeError, r.localized("notice.compaction-not-started", startErr.Error()))
 					if writeErr := r.store.WriteError(); writeErr != nil {
 						r.state = StateStorageBlocked
-						notice(terminal.NoticeError, "Storage is blocked: "+writeErr.Error()+" (open a checked copy or /new)")
+						notice(terminal.NoticeError, r.localized("notice.storage-blocked-new", writeErr.Error()))
 					}
 					finishManualCompact(startErr)
 				} else {
@@ -3714,7 +3724,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				if cancelled {
 					cancelLogin()
-					showLoginStatus("Cancelling " + login.label + " sign-in…")
+					showLoginStatus(r.localized("login.codex-cancelling", login.label))
 					r.draw(console)
 					continue
 				}
@@ -3724,16 +3734,16 @@ func (r *runtime) repl(console *terminal.Console) error {
 					submit := login.submit
 					var submitErr error
 					if submit == nil {
-						submitErr = errors.New("OpenAI Codex sign-in input is unavailable; cancel and start again")
+						submitErr = r.localizedError("login.codex-input-unavailable")
 					} else {
 						submitErr = submit(secret)
 					}
 					secretmem.Wipe(secret[:cap(secret)])
 					switch {
 					case submitErr == nil:
-						showLoginStatus("OpenAI Codex sign-in accepted; finishing…")
+						showLoginStatus(r.localized("login.codex-accepted"))
 					case errors.Is(submitErr, provider.ErrCodexLoginClaimed):
-						showLoginStatus("OpenAI Codex sign-in is already completing.")
+						showLoginStatus(r.localized("login.codex-completing"))
 					default:
 						// Invalid input does not cancel the listener. Reopen the
 						// masked field so another paste can still finish.
@@ -3796,7 +3806,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					case key == "\x1b" || key == "\x03":
 						if !login.cancelled {
 							cancelLogin()
-							showLoginStatus("Cancelling " + login.label + " sign-in…")
+							showLoginStatus(r.localized("login.codex-cancelling", login.label))
 							r.draw(console)
 						}
 					case key == "\x04":
@@ -3869,17 +3879,26 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.settingsPicker.Index = index
 					} else if path != nil {
 						if err := r.persistSettingsValue(path, value.Value); err != nil {
-							notice(terminal.NoticeError, "Saved for this session only: "+err.Error())
+							notice(terminal.NoticeError, r.localized("notice.saved-session-only", err.Error()))
+						} else if item.ID == "language" && r.options.Language != "" {
+							notice(terminal.NoticeInfo, r.localized("notice.language-default-stored"))
 						}
 					}
 					if err == nil {
+						// A language change rebuilds every label, description, and
+						// hint; keep the selected row under the cursor.
+						if item.ID == "language" && r.options.Language == "" {
+							index := r.settingsPicker.Index
+							r.settingsPicker = r.newSettingsPicker()
+							r.settingsPicker.Index = index
+						}
 						if item.ID == "theme" || item.ID == "color-mode" {
 							if watch != nil {
 								watch.SetSelected(r.selectedUserThemePath())
 							}
 						}
 						if item.ID == "theme" && r.options.UseTheme != "" {
-							notice(terminal.NoticeInfo, "Stored the default theme; --use-theme keeps the current display.")
+							notice(terminal.NoticeInfo, r.localized("notice.theme-default-stored"))
 						}
 					}
 					console.RequestFullRedraw()
@@ -3930,7 +3949,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							closeSelector(false)
 							continue
 						}
-						notice(terminal.NoticeInfo, "Saved default thinking level: "+selected.ID)
+						notice(terminal.NoticeInfo, r.localized("notice.thinking-default-saved", selected.ID))
 						closeSelector(false)
 						continue
 					case "\r":
@@ -3943,7 +3962,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							providerID, modelID, found := strings.Cut(target, "/")
 							providerID, modelID = strings.TrimSpace(providerID), strings.TrimSpace(modelID)
 							if !found || providerID == "" || modelID == "" {
-								notice(terminal.NoticeError, "invalid model "+target)
+								notice(terminal.NoticeError, r.localized("notice.invalid-model", target))
 								r.modelThinkingTarget = ""
 								closeSelector(false)
 								openSettings()
@@ -3993,7 +4012,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						}
 						// Only model and thinking pickers can apply changes during a run.
 						if busy {
-							notice(terminal.NoticeInfo, "Finish or cancel the run before using this picker.")
+							notice(terminal.NoticeInfo, r.localized("notice.finish-run-first"))
 							continue
 						}
 						if r.selector.AuthMode == AuthCodexMethods {
@@ -4006,7 +4025,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							case "device":
 								err = startCodexDeviceLogin()
 							default:
-								err = fmt.Errorf("unsupported OpenAI Codex sign-in method: %s", method)
+								err = r.localizedError("login.unsupported-codex-method", method)
 							}
 							if err != nil {
 								notice(terminal.NoticeError, err.Error())
@@ -4033,7 +4052,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							}
 							spec, ok := providerregistry.Lookup(selected.ID)
 							if !ok || spec.Auth != providerregistry.AuthAPIKey {
-								notice(terminal.NoticeError, "unsupported login provider: "+selected.ID)
+								notice(terminal.NoticeError, r.localized("notice.unsupported-login-provider", selected.ID))
 								closeSelector(true)
 								continue
 							}
@@ -4114,7 +4133,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				// Ctrl+T toggles Pi's reasoning visibility, also during a run.
 				r.settings.HideThinkingBlock = !r.settings.HideThinkingBlock
 				if err := r.persistSettingsValue([]string{"hideThinkingBlock"}, r.settings.HideThinkingBlock); err != nil {
-					notice(terminal.NoticeError, "Saved for this session only: "+err.Error())
+					notice(terminal.NoticeError, r.localized("notice.saved-session-only", err.Error()))
 				}
 				r.footerKey = ""
 				console.RequestFullRedraw()
@@ -4224,7 +4243,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "settings" {
 						if strings.TrimSpace(cmd.Arg) != "" {
-							notice(terminal.NoticeError, "use /settings")
+							notice(terminal.NoticeError, r.localized("notice.use-settings"))
 						} else {
 							openSettings()
 						}
@@ -4238,7 +4257,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					}
 					if cmd, ok := terminal.ParseCommand(text); ok && cmd.Name == "loop-stop" {
 						if strings.TrimSpace(cmd.Arg) != "" {
-							notice(terminal.NoticeError, "use /loop-stop")
+							notice(terminal.NoticeError, r.localized("notice.use-loop-stop"))
 							r.draw(console)
 						} else {
 							stopLoopCommand()
@@ -4261,7 +4280,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						arg := strings.TrimSpace(cmd.Arg)
 						if arg != "" && r.modelArgumentKnown(arg) {
 							if _, err := r.command(cmd, out); err != nil {
-								print("error: " + err.Error())
+								print(r.localized("notice.error-prefix") + err.Error())
 							}
 							r.draw(console)
 							continue
@@ -4277,7 +4296,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 							continue
 						}
 						if _, err := r.command(cmd, out); err != nil {
-							print("error: " + err.Error())
+							print(r.localized("notice.error-prefix") + err.Error())
 						}
 						r.draw(console)
 						continue
@@ -4287,7 +4306,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						switch cmd.Name {
 						case "session", "hotkeys", "name":
 							if _, err := r.command(cmd, out); err != nil {
-								print("error: " + err.Error())
+								print(r.localized("notice.error-prefix") + err.Error())
 							}
 							r.draw(console)
 							continue
@@ -4347,7 +4366,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				if cmd.Name == "loop" {
 					if err := r.store.WriteError(); err != nil {
-						notice(terminal.NoticeError, "Storage is blocked: "+err.Error())
+						notice(terminal.NoticeError, r.localized("notice.storage-blocked", err.Error()))
 						console.Editor.RestoreDraft(text, len([]rune(text)))
 						console.RefreshCompletion()
 						r.draw(console)
@@ -4375,7 +4394,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				if cmd.Name == "loop-stop" {
 					if strings.TrimSpace(cmd.Arg) != "" {
-						notice(terminal.NoticeError, "use /loop-stop")
+						notice(terminal.NoticeError, r.localized("notice.use-loop-stop"))
 						r.draw(console)
 					} else {
 						stopLoopCommand()
@@ -4406,7 +4425,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 						r.refreshModelsForPicker(notice)
 						selector := modelSelector(r)
 						if len(selector.Items) == 0 {
-							notice(terminal.NoticeInfo, "No credentialed models. Run /login or set a provider API key.")
+							notice(terminal.NoticeInfo, r.localized("notice.no-credentialed-models"))
 							r.draw(console)
 							continue
 						}
@@ -4445,7 +4464,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 				}
 				if cmd.Name == "settings" {
 					if strings.TrimSpace(cmd.Arg) != "" {
-						notice(terminal.NoticeError, "use /settings")
+						notice(terminal.NoticeError, r.localized("notice.use-settings"))
 						r.draw(console)
 						continue
 					}
@@ -4457,7 +4476,7 @@ func (r *runtime) repl(console *terminal.Console) error {
 					watch.SetSelected(r.selectedUserThemePath())
 				}
 				if err != nil {
-					print("error: " + err.Error())
+					print(r.localized("notice.error-prefix") + err.Error())
 				}
 				if quit {
 					return nil
@@ -4533,7 +4552,7 @@ func (r *runtime) command(cmd *terminal.Command, out io.Writer) (bool, error) {
 	case "thinking":
 		return r.handleThinkingCommand(cmd.Arg, out)
 	default:
-		return false, fmt.Errorf("unknown command")
+		return false, r.localizedError("error.unknown-command")
 	}
 }
 
@@ -4603,7 +4622,7 @@ func (r *runtime) handleSessionCommand(arg string, out io.Writer) (bool, error) 
 
 func (r *runtime) handleReloadCommand(arg string, out io.Writer) (bool, error) {
 	if strings.TrimSpace(arg) != "" {
-		return false, fmt.Errorf("use /reload")
+		return false, r.localizedError("error.use-reload")
 	}
 	if err := r.reloadTheme(); err != nil {
 		return false, err
@@ -4617,11 +4636,11 @@ func (r *runtime) handleReloadCommand(arg string, out io.Writer) (bool, error) {
 	if r.lifecycle != nil && r.lifecycle.console != nil {
 		r.lifecycle.console.SetTerminalColorSchemeNotifications(r.themeFollowsAppearance() && !noColorEnvironment())
 	}
-	status := "Reloaded themes, display settings, prompt inputs, skills, and queue modes"
+	status := r.localized("notice.reloaded-resources")
 	if modelsErr != nil {
-		printWarningText(out, "models.json error: "+modelsErr.Error())
+		printWarningText(out, r.localized("notice.models-json-error", modelsErr.Error()))
 	} else {
-		status += "; refreshed model catalog"
+		status += r.localized("notice.reloaded-model-catalog")
 	}
 	printStatusText(out, status)
 	return false, nil
@@ -4656,7 +4675,7 @@ func (r *runtime) handleNameCommand(arg string, out io.Writer) (bool, error) {
 		if current := r.store.SessionName(); current != "" {
 			printStatusText(out, "Session name: "+current)
 		} else {
-			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, "Usage: /name <name>", 80, noColorEnvironment(), r.theme) {
+			for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.localized("notice.usage-name"), 80, noColorEnvironment(), r.theme) {
 				fmt.Fprintln(out, line)
 			}
 		}
@@ -4667,7 +4686,7 @@ func (r *runtime) handleNameCommand(arg string, out io.Writer) (bool, error) {
 		return false, err
 	}
 	if sanitized != arg {
-		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, fmt.Sprintf("Session name was normalized from %q to %q", arg, sanitized), 80, noColorEnvironment(), r.theme) {
+		for _, line := range terminal.FormatNotice(terminal.NoticeWarning, r.localized("notice.session-name-normalized", arg, sanitized), 80, noColorEnvironment(), r.theme) {
 			fmt.Fprintln(out, line)
 		}
 	}
@@ -4677,7 +4696,7 @@ func (r *runtime) handleNameCommand(arg string, out io.Writer) (bool, error) {
 
 func (r *runtime) handleCloneCommand(arg string, out io.Writer) (bool, error) {
 	if strings.TrimSpace(arg) != "" {
-		return false, fmt.Errorf("use /clone")
+		return false, r.localizedError("error.use-clone")
 	}
 	// Pi's /clone forks at the current leaf into a new session file and
 	// reports the outcome as a status message.
@@ -4731,10 +4750,10 @@ func (r *runtime) handleModelCommand(arg string, out io.Writer) (bool, error) {
 	} else if len(parts) == 2 {
 		next.Provider, next.Model = parts[0], parts[1]
 	} else {
-		return false, fmt.Errorf("use /model [provider/]model")
+		return false, r.localizedError("error.use-model")
 	}
 	if strings.TrimSpace(next.Model) == "" {
-		return false, fmt.Errorf("use /model [provider/]model")
+		return false, r.localizedError("error.use-model")
 	}
 	next.ThinkingExplicit = false
 	candidate := *r
@@ -4774,7 +4793,7 @@ func (r *runtime) handleThinkingCommand(arg string, out io.Writer) (bool, error)
 		}
 	}
 	if level == "" {
-		return false, fmt.Errorf("Unknown thinking level %q. Available levels: %s.", strings.TrimSpace(arg), strings.Join(levels, ", "))
+		return false, r.localizedError("error.unknown-thinking-level", strings.TrimSpace(arg), strings.Join(levels, ", "))
 	}
 	if level == r.ov.Thinking {
 		print("Thinking level: " + level)

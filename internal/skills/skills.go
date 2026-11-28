@@ -316,8 +316,9 @@ func validateName(name string) []string {
 }
 
 // FormatForPrompt advertises name/description/path without the body.
+// language "zh" selects the Chinese wrapper; other values use English.
 // Excludes disable-model-invocation skills from automatic advertisement.
-func FormatForPrompt(skills []Skill) string {
+func FormatForPrompt(skills []Skill, language string) string {
 	var vis []Skill
 	for _, s := range skills {
 		if !s.Disable {
@@ -327,10 +328,18 @@ func FormatForPrompt(skills []Skill) string {
 	if len(vis) == 0 {
 		return ""
 	}
+	selector, loader, relativePaths := "The following skills provide specialized instructions for specific tasks.",
+		"Use the read tool to load a skill's file when the task matches its description.",
+		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands."
+	if language == "zh" {
+		selector = "以下技能为特定任务提供专用指令。"
+		loader = "当任务符合某项技能的描述时，使用 read 工具加载该技能的文件。"
+		relativePaths = "技能文件引用相对路径时，以技能目录（SKILL.md 所在目录，即该文件路径的 dirname）为基准解析，并在工具命令中使用解析后的绝对路径。"
+	}
 	var sb strings.Builder
-	sb.WriteString("\n\nThe following skills provide specialized instructions for specific tasks.\n")
-	sb.WriteString("Use the read tool to load a skill's file when the task matches its description.\n")
-	sb.WriteString("When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n")
+	sb.WriteString("\n\n" + selector + "\n")
+	sb.WriteString(loader + "\n")
+	sb.WriteString(relativePaths + "\n")
 	sb.WriteString("\n<available_skills>\n")
 	for _, s := range vis {
 		sb.WriteString("  <skill>\n")

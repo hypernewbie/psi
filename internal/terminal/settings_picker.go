@@ -33,8 +33,12 @@ func (i SettingsItem) Current() (SettingsValue, bool) {
 // SettingsPicker is a bounded inline list. It shares the picker region with
 // the selector and never touches configuration or the filesystem.
 type SettingsPicker struct {
-	Items        []SettingsItem
-	Index        int
+	Items []SettingsItem
+	Index int
+	// Hint and ShortHint let the caller localize the key help. Empty values
+	// keep the English defaults.
+	Hint         string
+	ShortHint    string
 	visibleCount int
 }
 
@@ -178,8 +182,14 @@ func (p *SettingsPicker) Rows(width, rowBudget int, noColor bool, palette ...*pi
 		appendRow("  "+TruncateToWidth(descText, max(1, width-3)), TokenMuted)
 	}
 	if help {
-		hint := FitHint(width, "Enter/Space change · Esc close", "Enter change · Esc")
-		appendRow(hint, TokenMuted)
+		hint, shortHint := p.Hint, p.ShortHint
+		if hint == "" {
+			hint = "Enter/Space change · Esc close"
+		}
+		if shortHint == "" {
+			shortHint = "Enter change · Esc"
+		}
+		appendRow(FitHint(width, hint, shortHint), TokenMuted)
 	}
 	return rows
 }

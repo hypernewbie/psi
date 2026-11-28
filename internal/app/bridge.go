@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/hypernewbie/psi/internal/agent"
@@ -175,7 +174,7 @@ func (r *runtime) takeSteering(loop *agent.Loop) []string {
 	}
 	r.noteRecovery(structured...)
 	if len(structured) > 0 && r.recoveryNotify != nil {
-		r.recoveryNotify("An undelivered attachment prompt was not sent. Phi keeps a saved copy you can restore.")
+		r.recoveryNotify(r.localized("notice.attachment-not-sent"))
 	}
 	return texts
 }
@@ -229,7 +228,7 @@ func (r *runtime) clearRecovery() {
 	count := len(r.recovery)
 	r.recovery = nil
 	if r.recoveryNotify != nil {
-		r.recoveryNotify(fmt.Sprintf("%d undelivered attachment prompt(s) were discarded when the session changed", count))
+		r.recoveryNotify(r.localized("notice.attachments-discarded", count))
 	}
 }
 

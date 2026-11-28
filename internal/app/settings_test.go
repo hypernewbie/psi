@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -96,7 +98,7 @@ func TestSettingsPickerRows(t *testing.T) {
 	for i, item := range picker.Items {
 		labels[i] = item.Label
 	}
-	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Soft wrap", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode", "Context usage", "Default thinking level per model"}
+	want := []string{"Auto-compact", "Editor padding", "Output padding", "Hide thinking", "Soft wrap", "Autocomplete max items", "Code block indent", "Quiet startup", "Theme", "Color mode", "Context usage", "Language", "Default thinking level per model"}
 	if strings.Join(labels, "|") != strings.Join(want, "|") {
 		t.Fatalf("labels = %v", labels)
 	}
@@ -106,6 +108,102 @@ func TestSettingsPickerRows(t *testing.T) {
 	}
 	if last.Description != "Override the default thinking level for specific models" {
 		t.Fatalf("model thinking description = %q", last.Description)
+	}
+	language := picker.Items[len(picker.Items)-2]
+	if language.ID != "language" {
+		t.Fatalf("language item ID = %q", language.ID)
+	}
+	values := make([]string, 0, len(language.Values))
+	for _, value := range language.Values {
+		values = append(values, fmt.Sprint(value.Value)+"="+value.Label)
+	}
+	if got, want := strings.Join(values, "|"), "en=English|zh=简体中文"; got != want {
+		t.Fatalf("language values = %q, want %q", got, want)
+	}
+}
+
+func settingsItemsByID(entries []settingsEntry) map[string]terminal.SettingsItem {
+	items := make(map[string]terminal.SettingsItem, len(entries))
+	for _, entry := range entries {
+		items[entry.item.ID] = entry.item
+	}
+	return items
+}
+
+func TestSettingsEntriesUseStoredLanguage(t *testing.T) {
+	r := testSettingsRuntime(t)
+	r.settings.Language = config.LanguageChinese
+	items := settingsItemsByID(r.settingsEntries())
+
+	if got := items["auto-compact"].Label; got != "自动压缩" {
+		t.Fatalf("auto-compact label = %q", got)
+	}
+	if got := items["auto-compact"].Description; got != "上下文将满时自动压缩。" {
+		t.Fatalf("auto-compact description = %q", got)
+	}
+	if got := items["auto-compact"].Values[0].Label; got != "关" {
+		t.Fatalf("off label = %q", got)
+	}
+	if got := items["auto-compact"].Values[1].Label; got != "开" {
+		t.Fatalf("on label = %q", got)
+	}
+	if got := items["context-usage"].Values[0].Label; got != "百分比" {
+		t.Fatalf("percent label = %q", got)
+	}
+	if got := items["model-thinking"].Values[0].Label; got != "未设置" {
+		t.Fatalf("model thinking summary = %q", got)
+	}
+	if got := items["language"].Description; got != "内置提示词语言。" {
+		t.Fatalf("language description = %q", got)
+	}
+	picker := r.newSettingsPicker()
+	if !strings.Contains(picker.Hint, "更改") || !strings.Contains(picker.ShortHint, "更改") {
+		t.Fatalf("picker hints = %q / %q", picker.Hint, picker.ShortHint)
+	}
+
+	// A CLI override changes the UI language, not the stored default.
+	r.options.Language = config.LanguageEnglish
+	items = settingsItemsByID(r.settingsEntries())
+	if got := items["auto-compact"].Label; got != "Auto-compact" {
+		t.Fatalf("CLI override label = %q", got)
+	}
+	if r.settings.Language != config.LanguageChinese {
+		t.Fatalf("stored language changed to %q", r.settings.Language)
+	}
+}
+
+// TestSettingsLocalizationCoversEveryRow fails when a settings row is added
+// without a Chinese label or description, or when a catalog key is missing.
+func TestSettingsLocalizationCoversEveryRow(t *testing.T) {
+	labels := func(language string) map[string]terminal.SettingsItem {
+		r := testSettingsRuntime(t)
+		r.settings.Language = language
+		return settingsItemsByID(r.settingsEntries())
+	}
+	english, chinese := labels(config.LanguageEnglish), labels(config.LanguageChinese)
+	for id, en := range english {
+		zh, ok := chinese[id]
+		if !ok {
+			t.Fatalf("row %q missing in Chinese entries", id)
+		}
+		if en.Label == "" || en.Description == "" {
+			t.Fatalf("row %q has empty English text", id)
+		}
+		if zh.Label == "" || zh.Description == "" {
+			t.Fatalf("row %q has empty Chinese text", id)
+		}
+		if strings.Contains(en.Label, "settings.") || strings.Contains(en.Description, "settings.") {
+			t.Fatalf("row %q falls back to a catalog key in English", id)
+		}
+		if strings.Contains(zh.Label, "settings.") || strings.Contains(zh.Description, "settings.") {
+			t.Fatalf("row %q falls back to a catalog key in Chinese", id)
+		}
+		if zh.Label == en.Label {
+			t.Errorf("row %q label is not translated", id)
+		}
+		if zh.Description == en.Description {
+			t.Errorf("row %q description is not translated", id)
+		}
 	}
 }
 
@@ -753,4 +851,207 @@ func TestModelThinkingLevelItemsIncludeClearRow(t *testing.T) {
 	if clear.FirstMessage != "Revert to global default (off)" {
 		t.Fatalf("empty clear description = %q", clear.FirstMessage)
 	}
+}
+
+func TestApplyLanguageSetting(t *testing.T) {
+	r := testSettingsRuntime(t)
+	r.settings.Language = config.LanguageEnglish
+	r.settings.DefaultTools = []string{"read"}
+	r.prompt, r.sections = "OLD_PROMPT", []config.PromptSection{{Name: "old", Body: "OLD"}}
+	r.cfg.System, r.cfg.Sections = "OLD_CFG", []config.PromptSection{{Name: "old-cfg", Body: "OLD_CFG"}}
+	settingsPath := filepath.Join(r.agentDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"unknown":{"keep":true},"language":"en"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := r.applySetting("language", terminal.SettingsValue{Label: "简体中文", Value: config.LanguageChinese}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(path, ".") != "language" {
+		t.Fatalf("path = %v", path)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+	if r.cfg.System != r.prompt || !reflect.DeepEqual(r.cfg.Sections, r.sections) {
+		t.Fatal("cfg prompt fields were not rebuilt with the prompt")
+	}
+	if strings.Join(r.settings.DefaultTools, ",") != "read" {
+		t.Fatalf("tools changed: %v", r.settings.DefaultTools)
+	}
+	if err := r.persistSettingsValue(path, config.LanguageChinese); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["language"] != config.LanguageChinese {
+		t.Fatalf("language not persisted: %s", data)
+	}
+	unknown, _ := stored["unknown"].(map[string]any)
+	if unknown["keep"] != true {
+		t.Fatalf("unknown key lost: %s", data)
+	}
+
+	t.Run("consented project override returns after reload", func(t *testing.T) {
+		r := testSettingsRuntime(t)
+		r.projectTrust = projectTrusted
+		r.settings.Language = config.LanguageChinese
+		r.settings.DefaultTools = []string{"read"}
+		userPath := filepath.Join(r.agentDir, "settings.json")
+		projectPath := filepath.Join(r.store.Cwd(), ".pi", "settings.json")
+		writeAppFile(t, userPath, `{"language":"en","defaultTools":["read"]}`)
+		writeAppFile(t, projectPath, `{"language":"zh"}`)
+		if err := r.reloadResources(); err != nil {
+			t.Fatal(err)
+		}
+		assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+
+		path, err := r.applySetting("language", terminal.SettingsValue{Label: "English", Value: config.LanguageEnglish}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertPromptLanguage(t, r.prompt, config.LanguageEnglish)
+		if err := r.persistSettingsValue(path, config.LanguageEnglish); err != nil {
+			t.Fatal(err)
+		}
+		userData, err := os.ReadFile(userPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(userData), `"language":"en"`) {
+			t.Fatalf("menu choice did not update the user file: %s", userData)
+		}
+		projectData, err := os.ReadFile(projectPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(projectData) != `{"language":"zh"}` {
+			t.Fatalf("project file changed: %s", projectData)
+		}
+		if err := r.reloadResources(); err != nil {
+			t.Fatal(err)
+		}
+		assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+	})
+
+	t.Run("invalid values keep state", func(t *testing.T) {
+		for _, override := range []string{"", config.LanguageChinese} {
+			r := testSettingsRuntime(t)
+			r.options.Language = override
+			r.settings.Language = config.LanguageEnglish
+			r.prompt, r.sections = "OLD_PROMPT", []config.PromptSection{{Name: "old", Body: "OLD"}}
+			r.cfg.System, r.cfg.Sections = "OLD_CFG", []config.PromptSection{{Name: "old-cfg", Body: "OLD_CFG"}}
+			before := r.settings
+			for _, value := range []terminal.SettingsValue{{Label: "fr", Value: "fr"}, {Label: "true", Value: true}, {Label: "ZH", Value: "ZH"}} {
+				path, err := r.applySetting("language", value, nil)
+				if err == nil || path != nil {
+					t.Fatalf("override %q accepted %v: path=%v err=%v", override, value, path, err)
+				}
+			}
+			if r.prompt != "OLD_PROMPT" || r.cfg.System != "OLD_CFG" || !reflect.DeepEqual(r.settings, before) {
+				t.Fatalf("invalid value changed state: %+v", r.settings)
+			}
+			if _, err := os.Stat(filepath.Join(r.agentDir, "settings.json")); !os.IsNotExist(err) {
+				t.Fatalf("invalid value wrote a file: %v", err)
+			}
+		}
+	})
+}
+
+func TestApplyLanguageFailureKeepsState(t *testing.T) {
+	r := testSettingsRuntime(t)
+	r.settings.DefaultTools = []string{"read"}
+	settingsPath := filepath.Join(r.agentDir, "settings.json")
+	writeAppFile(t, settingsPath, `{"language":"en","defaultTools":["read"]}`)
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	beforeSettingsData, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforePrompt, beforeSections, beforeSkills := r.prompt, r.sections, r.skills
+	beforeSystem, beforeCfgSections := r.cfg.System, r.cfg.Sections
+	beforeSettings := r.settings
+
+	if err := os.Mkdir(filepath.Join(r.agentDir, "AGENTS.override.md"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.applySetting("language", terminal.SettingsValue{Label: "简体中文", Value: config.LanguageChinese}, nil)
+	if err == nil || path != nil {
+		t.Fatalf("instruction read error accepted: path=%v err=%v", path, err)
+	}
+	afterSettingsData, readErr := os.ReadFile(settingsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(afterSettingsData) != string(beforeSettingsData) {
+		t.Fatalf("settings file changed on failure: %s", afterSettingsData)
+	}
+	if r.prompt != beforePrompt || !reflect.DeepEqual(r.sections, beforeSections) || !reflect.DeepEqual(r.skills, beforeSkills) ||
+		r.cfg.System != beforeSystem || !reflect.DeepEqual(r.cfg.Sections, beforeCfgSections) || !reflect.DeepEqual(r.settings, beforeSettings) {
+		t.Fatal("failed language change modified live state")
+	}
+}
+
+func TestApplyLanguageCLIOverride(t *testing.T) {
+	r := testSettingsRuntime(t)
+	r.settings.Language = config.LanguageEnglish
+	r.options.Language = config.LanguageChinese
+	r.prompt, r.sections = "OLD_PROMPT", []config.PromptSection{{Name: "old", Body: "OLD"}}
+	r.cfg.System = "OLD_CFG"
+	if err := os.Mkdir(filepath.Join(r.agentDir, "AGENTS.override.md"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.applySetting("language", terminal.SettingsValue{Label: "简体中文", Value: config.LanguageChinese}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(path, ".") != "language" {
+		t.Fatalf("path = %v", path)
+	}
+	if r.settings.Language != config.LanguageChinese {
+		t.Fatalf("stored default = %q", r.settings.Language)
+	}
+	if r.prompt != "OLD_PROMPT" || r.cfg.System != "OLD_CFG" {
+		t.Fatal("CLI override rebuilt the active prompt")
+	}
+	if effectivePromptLanguage(r.options, r.settings) != config.LanguageChinese {
+		t.Fatal("CLI override no longer effective")
+	}
+}
+
+func TestLanguagePersistenceFailureKeepsSession(t *testing.T) {
+	r := testSettingsRuntime(t)
+	r.settings.DefaultTools = []string{"read"}
+	settingsPath := filepath.Join(r.agentDir, "settings.json")
+	writeAppFile(t, settingsPath, `{"language":"en","defaultTools":["read"]}`)
+	if err := r.reloadResources(); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte(`{"broken":`)
+	if err := os.WriteFile(settingsPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.applySetting("language", terminal.SettingsValue{Label: "简体中文", Value: config.LanguageChinese}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageChinese)
+	if err := r.persistSettingsValue(path, config.LanguageChinese); err == nil {
+		t.Fatal("corrupt settings file was overwritten")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(corrupt) {
+		t.Fatalf("corrupt file changed: %q", after)
+	}
+	assertPromptLanguage(t, r.prompt, config.LanguageChinese)
 }

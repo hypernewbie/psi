@@ -203,7 +203,7 @@ func openOAuthLoginBrowser(ctx context.Context, authURL string) error {
 // names the model family in the no-model error.
 func (r *runtime) activateOAuthLogin(providerID, label, provider string) (terminal.NoticeKind, string) {
 	if r.authErr == nil && r.ov.Provider != providerID {
-		return terminal.NoticeInfo, "Signed in to " + label + ". Model unchanged: " + r.ov.Provider + "/" + r.ov.Model
+		return terminal.NoticeInfo, r.localized("login.activate-model-unchanged", label, r.ov.Provider, r.ov.Model)
 	}
 	next := config.StartupOverrides{Provider: providerID, Thinking: r.ov.Thinking, ThinkingExplicit: true}
 	if r.ov.Provider == providerID {
@@ -215,7 +215,7 @@ func (r *runtime) activateOAuthLogin(providerID, label, provider string) (termin
 		next.ThinkingExplicit = false
 		meta, err := r.models.SelectModel(providerID, "")
 		if err != nil {
-			return terminal.NoticeError, "Signed in to " + label + ", but no " + provider + " model is available: " + err.Error()
+			return terminal.NoticeError, r.localized("login.activate-no-model", label, provider, err)
 		}
 		next.Model = meta.ID
 	}
@@ -225,20 +225,20 @@ func (r *runtime) activateOAuthLogin(providerID, label, provider string) (termin
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
-		return terminal.NoticeError, "Signed in to " + label + ", but model activation failed: " + err.Error() + ". Use /model to select a model."
+		return terminal.NoticeError, r.localized("login.activate-failed", label, err)
 	}
 	if candidate.authErr != nil {
 		if candidate.prov != nil {
 			candidate.prov.CloseIdle()
 		}
-		return terminal.NoticeError, "Signed in to " + label + ", but model activation failed: " + candidate.authErr.Error() + ". Use /model to select a model."
+		return terminal.NoticeError, r.localized("login.activate-failed", label, candidate.authErr)
 	}
 	if candidate.ov.Provider != r.ov.Provider || candidate.ov.Model != r.ov.Model {
 		if err := r.selectModel(&candidate); err != nil {
 			if candidate.prov != nil {
 				candidate.prov.CloseIdle()
 			}
-			return terminal.NoticeError, "Signed in to " + label + ", but the session update failed: " + err.Error()
+			return terminal.NoticeError, r.localized("login.activate-session-failed", label, err)
 		}
 	} else {
 		r.adoptConfiguration(&candidate)
@@ -247,5 +247,5 @@ func (r *runtime) activateOAuthLogin(providerID, label, provider string) (termin
 	if r.ac != nil {
 		r.ac.ResetGrowth()
 	}
-	return terminal.NoticeInfo, "Signed in to " + label + ". Model: " + candidate.ov.Provider + "/" + candidate.ov.Model
+	return terminal.NoticeInfo, r.localized("login.activate-model", label, candidate.ov.Provider, candidate.ov.Model)
 }

@@ -77,7 +77,7 @@ func TestBuildPromptSectionsBoundaries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sections := BuildPromptSections(tt.cwd, tt.instructions, tt.skills, tt.tools, tt.base, tt.custom, tt.appends)
+			sections := BuildPromptSections(tt.cwd, tt.instructions, tt.skills, tt.tools, tt.base, tt.custom, tt.appends, LanguageEnglish)
 			got := make([]string, 0, len(sections))
 			for _, s := range sections {
 				got = append(got, s.Name)
@@ -122,7 +122,7 @@ func TestMCPPromptSectionIsDataOnly(t *testing.T) {
 }
 
 func TestNoToolsKeepsOnlyFixedRules(t *testing.T) {
-	sections := BuildPromptSections("/workspace", nil, nil, nil, "", false, nil)
+	sections := BuildPromptSections("/workspace", nil, nil, nil, "", false, nil, LanguageEnglish)
 	for _, s := range sections {
 		if s.Name == "tools" {
 			t.Fatalf("tools section present without tools: %q", s.Body)
@@ -142,16 +142,22 @@ func TestRenderSectionsGolden(t *testing.T) {
 		{Path: "/workspace/AGENTS.md", Kind: "agents", Content: "project context"},
 		{Path: "/workspace/.pi/APPEND_SYSTEM.md", Kind: "append-system", Content: "file appendix"},
 	}
-	sections := BuildPromptSections("/workspace", instructions, []string{"<available_skills>\n<skill>demo</skill>\n</available_skills>"}, []string{"read", "bash", "edit", "write"}, "", false, []string{"extra rules"})
-	rendered := strings.ReplaceAll(RenderSections(sections), "/workspace", "<workspace>")
-
-	goldenPath := filepath.Join("testdata", "prompt_full.golden")
-	want, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatalf("read golden (create it from this failure's got value): %v", err)
-	}
-	if rendered+"\n" != string(want) {
-		t.Fatalf("rendered prompt drifted from %s:\n got %q\nwant %q", goldenPath, rendered+"\n", string(want))
+	// Reuse one input set across en -> zh -> en so cross-language state cannot
+	// leak through package data.
+	for _, language := range []string{LanguageEnglish, LanguageChinese, LanguageEnglish} {
+		sections := BuildPromptSections("/workspace", instructions, []string{"<available_skills>\n<skill>demo</skill>\n</available_skills>"}, []string{"read", "bash", "edit", "write"}, "", false, []string{"extra rules"}, language)
+		rendered := strings.ReplaceAll(RenderSections(sections), "/workspace", "<workspace>")
+		goldenPath := filepath.Join("testdata", "prompt_full.golden")
+		if language == LanguageChinese {
+			goldenPath = filepath.Join("testdata", "prompt_full_zh.golden")
+		}
+		want, err := os.ReadFile(goldenPath)
+		if err != nil {
+			t.Fatalf("read golden (create it from this failure's got value): %v", err)
+		}
+		if rendered+"\n" != string(want) {
+			t.Fatalf("rendered %s prompt drifted from %s:\n got %q\nwant %q", language, goldenPath, rendered+"\n", string(want))
+		}
 	}
 }
 
@@ -178,14 +184,14 @@ func TestSystemFileReplacesPreambleOnly(t *testing.T) {
 
 func TestCwdSectionPreservesWhitespace(t *testing.T) {
 	const cwd = "/home/user/my project "
-	sections := BuildPromptSections(cwd, nil, nil, []string{"read"}, "", false, nil)
+	sections := BuildPromptSections(cwd, nil, nil, []string{"read"}, "", false, nil, LanguageEnglish)
 	if rendered := RenderSections(sections); !strings.Contains(rendered, "<cwd>\n"+cwd+"\n</cwd>") {
 		t.Fatalf("cwd whitespace was not preserved: %q", rendered)
 	}
 }
 
 func TestSessionHistoryPromptGuidance(t *testing.T) {
-	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read_session"}, "", false, nil))
+	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read_session"}, "", false, nil, LanguageEnglish))
 	for _, want := range []string{
 		"read_session: Read a narrow raw excerpt",
 		"Use read_session only for a specific missing fact",
@@ -199,7 +205,7 @@ func TestSessionHistoryPromptGuidance(t *testing.T) {
 
 func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
 	tools := defaultSettings().DefaultTools
-	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, tools, "", false, nil))
+	prompt := RenderSections(BuildPromptSections("/workspace", nil, nil, tools, "", false, nil, LanguageEnglish))
 	for _, want := range []string{
 		"web_search: Search the web with one to three queries",
 		"fetch_content: Fetch one or up to 20 public HTTP(S) URLs",
@@ -225,7 +231,7 @@ func TestWebToolGuidanceFollowsCanonicalOrder(t *testing.T) {
 }
 
 func TestPowerShellPromptGuidanceMatchesPi(t *testing.T) {
-	psOnly := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read", "powershell"}, "", false, nil))
+	psOnly := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read", "powershell"}, "", false, nil, LanguageEnglish))
 	if !strings.Contains(psOnly, "- powershell: Execute PowerShell commands") {
 		t.Fatalf("missing powershell snippet: %s", psOnly)
 	}
@@ -236,7 +242,7 @@ func TestPowerShellPromptGuidanceMatchesPi(t *testing.T) {
 		t.Fatalf("unexpected bash rule in powershell-only prompt: %s", psOnly)
 	}
 
-	both := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read", "bash", "powershell"}, "", false, nil))
+	both := RenderSections(BuildPromptSections("/workspace", nil, nil, []string{"read", "bash", "powershell"}, "", false, nil, LanguageEnglish))
 	if !strings.Contains(both, "- Use bash or PowerShell for file operations like listing, searching, and finding files") {
 		t.Fatalf("missing combined bash+powershell rule: %s", both)
 	}

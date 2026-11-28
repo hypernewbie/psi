@@ -28,6 +28,7 @@ See [providers](providers.md) for endpoints, eligibility, and limits.
 ```sh
 psi
 psi "review the diff in this folder"
+psi --language zh
 psi --continue
 psi --mode rpc
 ```
@@ -56,7 +57,9 @@ UI: clients receive `auto_retry_start` before each wait and one
 `prompt` expands a `/skill:<name> [args]` message before any user event, queue,
 store, or provider side effect. An unknown, unreadable, or oversized skill
 returns an error response instead of submitting the unexpanded command.
-It has no terminal UI, theme, or picker.
+It has no terminal UI, theme, or picker. RPC events carry visible assistant
+text and tool calls; reasoning/thinking deltas are not emitted. Reasoning
+remains available in the interactive terminal and in persisted session records.
 
 Print mode (`--print/-p`), Pi's JSON event mode, HTML export, and `@file`
 arguments are not supported.
@@ -236,8 +239,21 @@ client for one run. See [MCP servers](mcp.md).
 
 ## Prompts and process
 
+- `--language en|zh` selects the built-in system-prompt language for this run.
+  `en` is the default; `zh` means Simplified Chinese. The flag overrides
+  project and user settings, survives `/reload`, and applies to a resumed
+  session instead of its stored prompt. It localizes prompt text, the
+  `/settings` labels, descriptions, prose value labels, and key hint,
+  app-authored terminal notices, command usage errors, the `error:` prefix, and
+  login, logout, and OAuth sign-in text. Theme names, config literals, terminal
+  chrome (including notice kind labels), replay and offline banners, embedded
+  docs, user files, skill metadata, skill bodies, compaction prompts, tool
+  schemas, CLI help text, and error details from lower layers stay unchanged.
+  Pi has no such flag; it is Psi-only.
 - `--system-prompt <text|file>` replaces the base preamble. A path that exists
-  is read as a file.
+  is read as a file. Custom prompt text suppresses the built-in tools, rules,
+  and docs, so it does not receive the Chinese reply rule; project-context and
+  skills wrappers can still change language.
 - `--append-system-prompt <text|file>` appends a section, repeatable.
 - `-a`, `--approve` trusts project-local resources for this run.
 - `-na`, `--no-approve` denies them. Escape and `Ctrl+C` at the prompt also
